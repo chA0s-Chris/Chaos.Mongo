@@ -25,6 +25,6 @@
     <PackageVersion Include="NUnit.Analyzers" Version="4.11.2" />
     <PackageVersion Include="NUnit3TestAdapter" Version="5.2.0" />
     <PackageVersion Include="System.IO.Hashing" Version="9.0.11" />
-    <PackageVersion Include="Testcontainers.MongoDb" Version="4.8.1" />
+    <PackageVersion Include="Testcontainers.MongoDb" Version="4.9.0" />
   </ItemGroup>
 </Project>
