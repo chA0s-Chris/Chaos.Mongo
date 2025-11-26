@@ -8,12 +8,13 @@ on:
         required: true
         default: '0.1.0'
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
-  ci:
+  release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
 
     env:
       VERSION: ${{ github.event.inputs.version }}
