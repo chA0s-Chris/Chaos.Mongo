@@ -48,10 +48,20 @@ public sealed class MongoQueueBuilder<TPayload>
 
         Validate();
 
-        var handlerFactory = _payloadHandlerFactory ??
-                             (serviceProvider => serviceProvider.GetRequiredService<IMongoQueuePayloadHandler<TPayload>>());
-
-        _services.AddTransient(handlerFactory);
+        // Register the payload handler
+        if (_payloadHandlerType is not null)
+        {
+            _services.AddTransient(typeof(IMongoQueuePayloadHandler<TPayload>), _payloadHandlerType);
+        }
+        else if (_payloadHandlerFactory is not null)
+        {
+            _services.AddTransient(_payloadHandlerFactory);
+        }
+        else
+        {
+            // This should never happen due to Validate(), but adding for safety
+            throw new InvalidOperationException("Payload handler type or factory must be specified.");
+        }
 
         var queueDefinition = new MongoQueueDefinition
         {
@@ -80,7 +90,8 @@ public sealed class MongoQueueBuilder<TPayload>
             return new MongoQueue<TPayload>(finalQueueDefinition, subscriptionFactory, publisher);
         });
 
-        _services.AddSingleton<IMongoQueue>(serviceProvider => serviceProvider.GetRequiredService<IMongoQueue<TPayload>>());
+        _services.AddSingleton<IMongoQueue>(serviceProvider =>
+                                                serviceProvider.GetRequiredService<IMongoQueue<TPayload>>());
 
         _isRegistered = true;
     }
@@ -144,7 +155,10 @@ public sealed class MongoQueueBuilder<TPayload>
     /// <param name="payloadHandlerType">The type of payload handler to use.</param>
     /// <returns>This builder instance for method chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="payloadHandlerType"/> is null.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when <paramref name="payloadHandlerType"/> is not a non-abstract class implementing <see cref="IMongoQueuePayloadHandler{TPayload}"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="payloadHandlerType"/> is not a non-abstract
+    /// class implementing <see cref="IMongoQueuePayloadHandler{TPayload}"/>.
+    /// </exception>
     public MongoQueueBuilder<TPayload> WithPayloadHandler(Type payloadHandlerType)
     {
         ArgumentNullException.ThrowIfNull(payloadHandlerType);
@@ -153,7 +167,8 @@ public sealed class MongoQueueBuilder<TPayload>
             payloadHandlerType.IsAbstract ||
             !typeof(IMongoQueuePayloadHandler<TPayload>).IsAssignableFrom(payloadHandlerType))
         {
-            throw new InvalidOperationException($"Payload handler type must be a non-abstract class implementing {nameof(IMongoQueuePayloadHandler<TPayload>)}.");
+            throw new InvalidOperationException(
+                $"Payload handler type must be a non-abstract class implementing {nameof(IMongoQueuePayloadHandler<>)}.");
         }
 
         _payloadHandlerType = payloadHandlerType;
@@ -166,7 +181,8 @@ public sealed class MongoQueueBuilder<TPayload>
     /// <param name="payloadHandlerFactory">The factory for creating payload handlers.</param>
     /// <returns>This builder instance for method chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="payloadHandlerFactory"/> is null.</exception>
-    public MongoQueueBuilder<TPayload> WithPayloadHandler(Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>> payloadHandlerFactory)
+    public MongoQueueBuilder<TPayload> WithPayloadHandler(
+        Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>> payloadHandlerFactory)
     {
         ArgumentNullException.ThrowIfNull(payloadHandlerFactory);
         _payloadHandlerFactory = payloadHandlerFactory;
@@ -197,7 +213,8 @@ public sealed class MongoQueueBuilder<TPayload>
     {
         if (_services.Any(s => s.ServiceType == typeof(IMongoQueue<TPayload>)))
         {
-            throw new InvalidOperationException($"A registration for a MongoDB queue with payload {typeof(TPayload).Name} already exists.");
+            throw new InvalidOperationException(
+                $"A registration for a MongoDB queue with payload {typeof(TPayload).Name} already exists.");
         }
 
         if (_payloadHandlerType is null && _payloadHandlerFactory is null)
