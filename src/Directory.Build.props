@@ -7,7 +7,7 @@
     <PackageId>Chaos.Mongo</PackageId>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageIcon>mongo.png</PackageIcon>
-    <Description>Chaos.Mongo -</Description>
+    <Description>A comprehensive MongoDB library for .NET featuring database migrations, distributed locking, message queues, and database configurators with built-in support for dependency injection.</Description>
     <Authors>Christian Flessa</Authors>
     <Copyright>Copyright © 2025 Christian Flessa</Copyright>
     <PackageProjectUrl>https://github.com/chA0s-Chris/Chaos.Mongo</PackageProjectUrl>
