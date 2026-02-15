@@ -26,6 +26,6 @@
     <PackageVersion Include="SemanticVersioning" Version="3.0.0" />
     <PackageVersion Include="System.IO.Hashing" Version="10.0.0" />
     <PackageVersion Include="Testcontainers.MongoDb" Version="4.10.0" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="coverlet.collector" Version="8.0.0" />
   </ItemGroup>
 </Project>
