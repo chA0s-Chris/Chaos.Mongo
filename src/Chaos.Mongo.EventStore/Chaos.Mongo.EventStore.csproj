@@ -1,0 +1,5 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Chaos.Mongo\Chaos.Mongo.csproj" />
+  </ItemGroup>
+</Project>
