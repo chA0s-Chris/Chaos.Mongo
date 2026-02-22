@@ -82,6 +82,7 @@
 &amp;lt;/profile&amp;gt;&lt;/RIDER_SETTINGS&gt;&lt;UpgradedBackendToFrontendHtml&gt;True&lt;/UpgradedBackendToFrontendHtml&gt;&lt;CSReformatInactiveBranches&gt;True&lt;/CSReformatInactiveBranches&gt;&lt;/Profile&gt;</s:String>
 	<s:String x:Key="/Default/CodeStyle/CodeCleanup/SilentCleanupProfile/@EntryValue">Zorn</s:String>
 	<s:Boolean x:Key="/Default/CodeStyle/CodeFormatting/CSharpCodeStyle/APPLY_ON_COMPLETION/@EntryValue">True</s:Boolean>
+	<s:Int64 x:Key="/Default/CodeStyle/CodeFormatting/CSharpFormat/WRAP_LIMIT/@EntryValue">160</s:Int64>
 	<s:String x:Key="/Default/CodeStyle/CSharpFileLayoutPatterns/Pattern/@EntryValue">&lt;Patterns xmlns="urn:schemas-jetbrains-com:member-reordering-patterns"&gt;&#xD;
   &lt;TypePattern DisplayName="Non-reorderable types" Priority="99999999" RemoveRegions="All"&gt;&#xD;
     &lt;TypePattern.Match&gt;&#xD;

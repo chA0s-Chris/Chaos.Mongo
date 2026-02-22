@@ -21,7 +21,7 @@ tab_width = 2
 [*.cs]
 charset = utf-8
 
-file_header_template = Copyright (c) 2025 Christian Flessa. All rights reserved.\nThis file is licensed under the MIT license. See LICENSE in the project root for more information.
+file_header_template = Copyright (c) 2025-2026 Christian Flessa. All rights reserved.\nThis file is licensed under the MIT license. See LICENSE in the project root for more information.
 
 dotnet_style_operator_placement_when_wrapping = end_of_line
 dotnet_style_coalesce_expression = true:suggestion
