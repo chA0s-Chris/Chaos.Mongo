@@ -47,10 +47,10 @@ public static class MongoBuilderExtensions
                                                                   sp.GetRequiredService<MongoEventStoreOptions<TAggregate>>()));
 
         // Register IEventStore<TAggregate>
-        builder.Services.AddSingleton<IEventStore<TAggregate>, MongoEventStore<TAggregate>>();
+        builder.Services.AddScoped<IEventStore<TAggregate>, MongoEventStore<TAggregate>>();
 
         // Register IAggregateRepository<TAggregate>
-        builder.Services.AddSingleton<IAggregateRepository<TAggregate>, MongoAggregateRepository<TAggregate>>();
+        builder.Services.AddScoped<IAggregateRepository<TAggregate>, MongoAggregateRepository<TAggregate>>();
 
         return builder;
     }
