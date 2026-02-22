@@ -52,7 +52,9 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         {
             @event.AggregateType = _aggregateTypeName;
             if (@event.CreatedUtc == default)
+            {
                 @event.CreatedUtc = now;
+            }
         }
 
         var aggregateId = eventList[0].AggregateId;
@@ -69,15 +71,39 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             CreatedUtc = now
         };
 
-        // 2. Apply events in memory (may throw MongoEventValidationException)
+        // 2. Validate events: same aggregate, sequential versions
+        var expectedVersion = aggregate.Version + 1;
         foreach (var @event in eventList)
-            @event.Execute(aggregate);
+        {
+            if (@event.AggregateId != aggregateId)
+            {
+                throw new ArgumentException(
+                    $"All events must target the same aggregate. Expected '{aggregateId}', but found '{@event.AggregateId}'.",
+                    nameof(events));
+            }
 
-        // 3. Update version
+            if (@event.Version != expectedVersion)
+            {
+                throw new ArgumentException(
+                    $"Events must have sequential versions starting from {aggregate.Version + 1}. " +
+                    $"Expected version {expectedVersion}, but found {@event.Version}.",
+                    nameof(events));
+            }
+
+            expectedVersion++;
+        }
+
+        // 3. Apply events in memory (may throw MongoEventValidationException)
+        foreach (var @event in eventList)
+        {
+            @event.Execute(aggregate);
+        }
+
+        // 4. Update version
         var lastVersion = eventList[^1].Version;
         aggregate.Version = lastVersion;
 
-        // 4. Persist changes inside transaction
+        // 5. Persist changes inside transaction
         try
         {
             await _mongoHelper.ExecuteInTransaction(
@@ -85,10 +111,10 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 {
                     var eventsCollection = GetEventsCollection();
 
-                    // 4a. Insert events
+                    // 5a. Insert events
                     await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
 
-                    // 4b. Upsert read model
+                    // 5b. Upsert read model
                     await readModelCollection.ReplaceOneAsync(
                         session,
                         Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
@@ -99,7 +125,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                         },
                         ct);
 
-                    // 4c. Create checkpoint if needed
+                    // 5c. Create checkpoint if needed
                     if (_options.CheckpointsEnabled && lastVersion % _options.CheckpointInterval == 0)
                     {
                         var checkpointCollection = GetCheckpointCollection();
@@ -111,7 +137,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                         await checkpointCollection.InsertOneAsync(session, checkpoint, cancellationToken: ct);
                     }
 
-                    // 4d. Invoke user callback for additional transactional operations
+                    // 5d. Invoke user callback for additional transactional operations
                     if (onBeforeCommit is not null)
                         await onBeforeCommit(session, helper, ct);
                 },
@@ -144,10 +170,11 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<Event<TAggregate>> GetEventStream(Guid aggregateId,
-                                                                    Int64 fromVersion = 0,
-                                                                    Int64? toVersion = null,
-                                                                    [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<Event<TAggregate>> GetEventStream(
+        Guid aggregateId,
+        Int64 fromVersion = 0,
+        Int64? toVersion = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var eventsCollection = GetEventsCollection();
 

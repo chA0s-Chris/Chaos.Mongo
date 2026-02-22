@@ -33,7 +33,8 @@ public abstract class Event<TAggregate> where TAggregate : class, IAggregate
 
     /// <summary>
     /// Gets or sets the monotonically increasing version per aggregate.
-    /// Set by the event store.
+    /// Must be set by the caller to sequential values starting from the aggregate's current version + 1.
+    /// The event store validates that versions are sequential with no gaps.
     /// </summary>
     public Int64 Version { get; set; }
 

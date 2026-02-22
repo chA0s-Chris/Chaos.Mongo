@@ -16,6 +16,10 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// </summary>
     /// <remarks>
     ///     <para>
+    ///     All events must target the same aggregate (same <see cref="Event{TAggregate}.AggregateId"/>)
+    ///     and must have sequential versions starting from the aggregate's current version + 1.
+    ///     </para>
+    ///     <para>
     ///     Events are first applied to the aggregate in memory to validate that the aggregate's
     ///     current state permits the operations. If validation succeeds, the events are persisted
     ///     within a transaction along with the updated read model and optional checkpoint.
@@ -30,14 +34,19 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     ///     additional transactional operations (e.g., inserting into a transactional outbox).
     ///     </para>
     /// </remarks>
-    /// <param name="events">The events to append.</param>
+    /// <param name="events">
+    /// The events to append. Must all target the same aggregate with sequential versions.
+    /// </param>
     /// <param name="onBeforeCommit">
     /// An optional callback invoked within the transaction before commit. Receives the session handle
     /// and <see cref="IMongoHelper"/> for performing additional transactional operations.
     /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The version of the last inserted event.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="events"/> is empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="events"/> is empty, contains events for different aggregates,
+    /// or has non-sequential versions.
+    /// </exception>
     /// <exception cref="MongoEventValidationException">
     /// Thrown when an event cannot be applied because the aggregate's state does not permit it.
     /// </exception>
@@ -60,10 +69,11 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <param name="toVersion">The maximum version (inclusive). Defaults to null (no upper bound).</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>An async enumerable of events ordered by version.</returns>
-    IAsyncEnumerable<Event<TAggregate>> GetEventStream(Guid aggregateId,
-                                                       Int64 fromVersion = 0,
-                                                       Int64? toVersion = null,
-                                                       CancellationToken cancellationToken = default);
+    IAsyncEnumerable<Event<TAggregate>> GetEventStream(
+        Guid aggregateId,
+        Int64 fromVersion = 0,
+        Int64? toVersion = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the expected next version for the specified aggregate.

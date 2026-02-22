@@ -17,7 +17,7 @@ public class EventStoreIntegrationTests
     private IMongoHelper _mongoHelper;
 
     [Test]
-    public async Task AppendEventsAsync_DuplicateEventId_ThrowsConcurrencyExceptionWithIsIdAffected()
+    public async Task AppendEventsAsync_DuplicateEventId_ThrowsMongoDuplicateEventException()
     {
         var aggregateId = Guid.NewGuid();
         var eventId = Guid.NewGuid();
@@ -49,7 +49,7 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
-    public async Task AppendEventsAsync_DuplicateVersion_ThrowsConcurrencyException()
+    public async Task AppendEventsAsync_DuplicateVersion_ThrowsArgumentException()
     {
         var aggregateId = Guid.NewGuid();
 
@@ -65,7 +65,7 @@ public class EventStoreIntegrationTests
             }
         ]);
 
-        // Try to insert another event with the same version
+        // Try to insert another event with the same version - now caught by validation
         var act = () => _eventStore.AppendEventsAsync(
         [
             new OrderShippedEvent
@@ -76,7 +76,8 @@ public class EventStoreIntegrationTests
             }
         ]);
 
-        await act.Should().ThrowAsync<MongoConcurrencyException>();
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*sequential*Expected version 2*");
     }
 
     [Test]
@@ -85,6 +86,34 @@ public class EventStoreIntegrationTests
         var act = () => _eventStore.AppendEventsAsync(Array.Empty<Event<OrderAggregate>>());
 
         await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_MixedAggregates_ThrowsArgumentException()
+    {
+        var aggregateId1 = Guid.NewGuid();
+        var aggregateId2 = Guid.NewGuid();
+
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId1,
+                Version = 1,
+                CustomerName = "Test",
+                TotalAmount = 10.00m
+            },
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId2,
+                Version = 2
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*same aggregate*");
     }
 
     [Test]
@@ -121,6 +150,80 @@ public class EventStoreIntegrationTests
         aggregate.Version.Should().Be(2);
         aggregate.Status.Should().Be("Shipped");
         aggregate.CustomerName.Should().Be("Bob");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_NonSequentialVersions_ThrowsArgumentException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Test",
+                TotalAmount = 10.00m
+            },
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 3 // Gap: should be 2
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*sequential*");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_RaceCondition_ThrowsMongoConcurrencyException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        // Create initial aggregate
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "RaceTest",
+                TotalAmount = 100.00m
+            }
+        ]);
+
+        // Simulate race condition: another process already inserted version 2
+        // before our AppendEventsAsync starts its transaction.
+        // This simulates: Process A reads aggregate (v1), Process B commits v2, Process A tries to commit v2
+        var eventsCollection = _mongoHelper.Database.GetCollection<Event<OrderAggregate>>("Orders_Events");
+        await eventsCollection.InsertOneAsync(new OrderCompletedEvent
+        {
+            Id = Guid.NewGuid(),
+            AggregateId = aggregateId,
+            AggregateType = "OrderAggregate",
+            Version = 2,
+            CreatedUtc = DateTime.UtcNow
+        });
+
+        // Now try to append version 2 - validation will pass (reads stale aggregate at v1)
+        // but the transaction will hit duplicate key error on insert
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 2
+            }
+        ]);
+
+        await act.Should().ThrowAsync<MongoConcurrencyException>()
+                 .WithMessage("*concurrency conflict*");
     }
 
     [Test]
@@ -255,6 +358,39 @@ public class EventStoreIntegrationTests
         var aggregate = await _eventRepository.GetAsync(aggregateId);
         aggregate!.Status.Should().Be("Shipped");
         aggregate.Version.Should().Be(2);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_VersionNotContinuingFromAggregate_ThrowsArgumentException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        // Create aggregate with version 1
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Test",
+                TotalAmount = 10.00m
+            }
+        ]);
+
+        // Try to append with version 3 instead of 2
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 3 // Should be 2
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*sequential*Expected version 2*");
     }
 
     [Test]
