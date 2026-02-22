@@ -6,23 +6,26 @@ Extend `Chaos.Mongo` with a new project `Chaos.Mongo.EventStore` that provides e
 
 ## Acceptance Criteria
 
-- [ ] New project `Chaos.Mongo.EventStore` exists, references `Chaos.Mongo`, and is included in the solution
-- [ ] `Aggregate` base class with `Id` (Guid) and `Version` (Int64) properties
-- [ ] `Event<TAggregate>` base class with `Id`, `CreatedUtc`, `AggregateType`, `AggregateId`, `Version`, and abstract `Execute(TAggregate)` method
-- [ ] `EventStoreException` and `EventStoreConcurrencyException` (with `IsIdAffected`) exception types
-- [ ] `IEventStore<TAggregate>` interface with `GetExpectedNextVersionAsync`, `AppendEventsAsync`, and `GetEventStream` methods
-- [ ] `IRepository<TAggregate>` interface with `GetAsync` and `GetAtVersionAsync` methods for querying aggregate state
-- [ ] `EventStore<TAggregate>` implementation that uses `IMongoHelper` for collection access and transactions
-- [ ] Each aggregate type uses its own events collection and its own read-model collection
-- [ ] Unique compound index on `(AggregateId, Version)` in each events collection to enforce concurrency
-- [ ] `AppendEventsAsync` inserts events and updates the read model within a single transaction
-- [ ] Duplicate-key `MongoWriteException` is caught and rethrown as `EventStoreConcurrencyException`
-- [ ] MongoDB discriminators are configured at runtime for each event type so polymorphic serialization works correctly
-- [ ] Event discriminator names are customizable via `WithEvent<T>(string? discriminator)` and default to the class name (not full name) if not specified
-- [ ] `GuidSerializer` with `GuidRepresentation.Standard` is registered during initialization if not already present (guard against duplicate registration)
-- [ ] User-facing configuration API (builder pattern on `MongoBuilder`) to register aggregate types and their event types
-- [ ] Optional checkpoint support: periodic snapshot read models stored every N versions, configurable per aggregate type
-- [ ] Automated tests are written (unit tests and integration tests using Testcontainers)
+- [x] New project `Chaos.Mongo.EventStore` exists, references `Chaos.Mongo`, and is included in the solution
+- [x] `IAggregate` interface with `Id` (Guid), `Version` (Int64), and `CreatedUtc` (DateTime) properties
+- [x] `Aggregate` base class implementing `IAggregate`
+- [x] `Event<TAggregate>` base class with `Id`, `CreatedUtc`, `AggregateType`, `AggregateId`, `Version`, and abstract `Execute(TAggregate)` method
+- [x] Exception types in `Errors` namespace: `MongoEventStoreException` (base), `MongoConcurrencyException` (version conflict), `MongoDuplicateEventException` (event ID conflict), `MongoEventValidationException` (event cannot be applied to aggregate state)
+- [x] `IEventStore<TAggregate>` interface with `GetExpectedNextVersionAsync`, `AppendEventsAsync` (with optional transactional callback), and `GetEventStream` methods
+- [x] `IAggregateRepository<TAggregate>` interface with `GetAsync`, `GetAtVersionAsync`, and `Collection` property for direct MongoDB access
+- [x] `MongoEventStore<TAggregate>` implementation using `IMongoHelper.ExecuteInTransaction` for transaction handling
+- [x] Each aggregate type uses its own events collection and its own read-model collection
+- [x] Unique compound index on `(AggregateId, Version)` in each events collection to enforce concurrency
+- [x] `AppendEventsAsync` validates events by applying them to the aggregate outside the transaction, then persists within a transaction
+- [x] Duplicate-key errors are caught and rethrown as `MongoConcurrencyException` (version conflict) or `MongoDuplicateEventException` (event ID conflict)
+- [x] MongoDB discriminators are configured at runtime for each event type so polymorphic serialization works correctly
+- [x] Event discriminator names are customizable via `WithEvent<T>(string? discriminator)` and default to the class name (not full name) if not specified
+- [x] `GuidSerializer` with `GuidRepresentation.Standard` is registered during initialization if not already present (guard against duplicate registration)
+- [x] User-facing configuration API (builder pattern on `MongoBuilder`) to register aggregate types and their event types
+- [x] Optional checkpoint support: periodic snapshot read models stored every N versions, configurable per aggregate type
+- [x] Checkpoint documents use composite `CheckpointId` record struct as `_id`, configured via `BsonClassMap` (not attributes)
+- [x] Transactional callback support: `AppendEventsAsync` accepts optional `onBeforeCommit` callback for side-effects (e.g., transactional outbox)
+- [x] Automated tests written (46 integration and unit tests using Testcontainers)
 
 ## Technical Details
 
@@ -32,85 +35,104 @@ Extend `Chaos.Mongo` with a new project `Chaos.Mongo.EventStore` that provides e
 
 ### Core Types
 
-**`Aggregate`** — Abstract base class for all aggregate root types. Must have a parameterless constructor.
+**`IAggregate`** — Interface for all aggregate root types, allowing custom implementations beyond the base class.
 
-- `Guid Id` — The aggregate identifier. Configure as `BsonId` via class map in code (not via attribute) to keep the base class free of MongoDB dependencies.
-- `Int64 Version { get; set; }` — The version of the aggregate after the last applied event. Mutable so the event store can update it after applying events. Named `Version` instead of `EventVersion` for brevity since it's unambiguous in this context.
+- `Guid Id { get; set; }` — The aggregate identifier.
+- `Int64 Version { get; set; }` — The version of the aggregate after the last applied event.
+- `DateTime CreatedUtc { get; set; }` — Timestamp when the aggregate was first created.
+
+**`Aggregate`** — Abstract base class implementing `IAggregate`. Must have a parameterless constructor. Configure `Id` as `BsonId` via class map in code (not via attribute) to keep the base class free of MongoDB dependencies.
 
 The recommended pattern is that the first event for any aggregate should be a creation event (e.g., `OrderCreatedEvent`) that initializes the aggregate's required state.
 
-**`Event<TAggregate>`** — Abstract base class for domain events.
+**`Event<TAggregate>`** — Abstract base class for domain events. Constrained to `where TAggregate : class, IAggregate, new()`.
 
 - `Guid Id` — Unique event identifier. Configure as `BsonId` via class map in code. Used for idempotency: if a caller retries an append operation with the same event ID, the duplicate is detected and rejected. MongoDB automatically creates a unique index on the `_id` field.
 - `DateTime CreatedUtc` — Timestamp; set automatically by the event store on append if not provided.
 - `String AggregateType` — Discriminator string for the aggregate type; set automatically by the event store.
 - `Guid AggregateId` — The aggregate this event belongs to.
-- `Int64 Version` — Monotonically increasing version per aggregate; set by the event store.
-- `abstract void Execute(TAggregate aggregate)` — Applies this event's changes to the given aggregate instance.
+- `Int64 Version` — Monotonically increasing version per aggregate; set by the caller.
+- `abstract void Execute(TAggregate aggregate)` — Applies this event's changes to the given aggregate instance. May throw `MongoEventValidationException` if the aggregate's current state does not permit the operation.
 
-**Exceptions**
+**Exceptions** (in `Errors` namespace)
 
-- `EventStoreException` — Base exception.
-- `EventStoreConcurrencyException` — Thrown when a unique-index violation occurs during event insertion. `IsIdAffected` indicates whether the duplicate key error was on the event `_id` field (true = idempotency issue, event ID already exists) or on the `(AggregateId, Version)` compound index (false = concurrency issue, another process inserted an event for that aggregate version). When `IsIdAffected` is true, the caller typically does nothing (the event was already processed). When false, the caller should retry with a new version.
+- `MongoEventStoreException` — Base exception for all event store errors.
+- `MongoConcurrencyException` — Thrown when a duplicate-key error occurs on the `(AggregateId, Version)` compound index. Another process inserted an event for that aggregate version. The caller should retry with a new version.
+- `MongoDuplicateEventException` — Thrown when a duplicate-key error occurs on the event `_id` field. The event was already processed (idempotency). The caller typically does nothing.
+- `MongoEventValidationException` — Thrown when an event cannot be applied because the aggregate's state does not permit it. Events throw this from `Execute()` when preconditions aren't met. No events are persisted when this occurs.
 
 ### Interface: `IEventStore<TAggregate>`
 
 Use a generic interface rather than a non-generic `IEventStore` so each aggregate type gets its own DI registration and its own strongly-typed event store instance.
 
-```
+```csharp
 Task<Int64> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken ct)
-Task<Int64> AppendEventsAsync(IEnumerable<Event<TAggregate>> events, CancellationToken ct)
+Task<Int64> AppendEventsAsync(
+    IEnumerable<Event<TAggregate>> events,
+    Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
+    CancellationToken ct = default)
 IAsyncEnumerable<Event<TAggregate>> GetEventStream(Guid aggregateId, Int64 fromVersion, Int64? toVersion, CancellationToken ct)
 ```
 
 - `GetExpectedNextVersionAsync` — Queries the events collection for the highest `Version` for the given `AggregateId` and returns `maxVersion + 1` (or `1` if no events exist). **Important:** This returns the *expected* next version based on current state, not a reserved slot. Concurrent callers may receive the same value; only the first to insert will succeed (enforced by the unique index).
-- `AppendEventsAsync` — Within a transaction: inserts all events, then rebuilds/updates the read model by applying events to the current aggregate state, and upserts the aggregate document in the read-model collection. Returns the new version after the last inserted event.
-- `GetEventStream` — Returns events for an aggregate ordered by `Version`, optionally bounded by `fromVersion`/`toVersion`. If checkpoints are enabled and a suitable checkpoint exists, streaming can begin from the checkpoint's version instead of `fromVersion = 0`.
+- `AppendEventsAsync` — Validates events by applying them to the aggregate in memory first. If validation succeeds, persists within a transaction: inserts events, upserts read model, creates checkpoint if needed, and invokes optional `onBeforeCommit` callback. Returns the new version after the last inserted event. The optional callback enables transactional side-effects like inserting into a transactional outbox.
+- `GetEventStream` — Returns events for an aggregate ordered by `Version`, optionally bounded by `fromVersion`/`toVersion`.
 
-### Interface: `IRepository<TAggregate>`
+### Interface: `IAggregateRepository<TAggregate>`
 
 Separate from the event store, a repository provides access to aggregate state:
 
-```
+```csharp
 Task<TAggregate?> GetAsync(Guid aggregateId, CancellationToken ct)
 Task<TAggregate?> GetAtVersionAsync(Guid aggregateId, Int64 version, CancellationToken ct)
+IMongoCollection<TAggregate> Collection { get; }
 ```
 
-- `GetAsync` — Returns the current read model for the aggregate, or `null` if not found.
+- `GetAsync` — Returns the current read model for the aggregate, or `null` if not found. Sets `CreatedUtc` from the first event if the aggregate exists.
 - `GetAtVersionAsync` — Reconstructs the aggregate state at a specific version. Uses checkpoints if available (loads nearest checkpoint ≤ target version, then replays remaining events). Returns `null` if the aggregate doesn't exist or has no events up to that version.
+- `Collection` — Exposes the underlying `IMongoCollection<TAggregate>` for advanced queries on the read model.
 
-The repository reads from the read-model and checkpoint collections but does not write to them. It provides a clean separation: `IEventStore` is for appending events; `IRepository` is for querying aggregate state.
+The repository reads from the read-model and checkpoint collections but does not write to them. It provides a clean separation: `IEventStore` is for appending events; `IAggregateRepository` is for querying aggregate state.
 
 ### Collections
 
 For a given aggregate type `TAggregate`:
 
-- **Events collection**: `IMongoDatabase.GetCollection<Event<TAggregate>>(name)` — name derived from configuration or convention (e.g., `"OrderAggregate_Events"`).
-- **Read-model collection**: `IMongoDatabase.GetCollection<TAggregate>(name)` — e.g., `"OrderAggregate"`.
-- **Checkpoint collection** (optional): `IMongoDatabase.GetCollection<TAggregate>(name)` — e.g., `"OrderAggregate_checkpoints"`. Checkpoint documents contain the full aggregate state plus a `Version` field indicating up to which version they are valid.
+- **Events collection**: `IMongoDatabase.GetCollection<Event<TAggregate>>(name)` — name derived from configuration (e.g., `"Orders_Events"`). Default suffix: `_Events`.
+- **Read-model collection**: `IMongoDatabase.GetCollection<TAggregate>(name)` — e.g., `"Orders"`. Uses the collection prefix directly.
+- **Checkpoint collection** (optional): `IMongoDatabase.GetCollection<CheckpointDocument<TAggregate>>(name)` — e.g., `"Orders_Checkpoints"`. Default suffix: `_Checkpoints`.
+
+**`CheckpointDocument<TAggregate>`** wraps the aggregate state with a composite ID:
+
+- `CheckpointId Id` — Composite record struct `CheckpointId(Guid AggregateId, Int64 Version)` configured as `BsonId` via `BsonClassMap` (not attribute).
+- `TAggregate State` — The full aggregate state at that version.
 
 Use `IMongoHelper.Database` to access collections directly by name rather than through `IMongoHelper.GetCollection<T>()`, since the event store manages its own collection naming.
 
 ### Concurrency and Idempotency via Unique Indexes
 
-**Idempotency:** Event `Id` is configured as `BsonId`, so MongoDB automatically creates a unique index on `_id`. This prevents duplicate events with the same ID from being inserted.
+**Idempotency:** Event `Id` is configured as `BsonId`, so MongoDB automatically creates a unique index on `_id`. Duplicate events with the same ID result in `MongoDuplicateEventException`.
 
-**Concurrency:** Create a unique compound index on `{ AggregateId: 1, Version: 1 }` in each events collection. This is the core concurrency mechanism: two concurrent processes calling `GetExpectedNextVersionAsync` may get the same version, but only the first `InsertMany` will succeed. The second will fail with a duplicate-key error, which the implementation catches and wraps in `EventStoreConcurrencyException`.
+**Concurrency:** A unique compound index named `AggregateIdWithVersionUnique` on `{ AggregateId: 1, Version: 1 }` in each events collection is the core concurrency mechanism. Two concurrent processes calling `GetExpectedNextVersionAsync` may get the same version, but only the first `InsertMany` will succeed. The second will fail with a duplicate-key error, wrapped as `MongoConcurrencyException`.
 
-Index creation should happen during event store initialization — either via an `IMongoConfigurator` registered automatically when the user configures an aggregate, or as part of the event store's first use. Prefer the configurator approach for consistency with the existing `Chaos.Mongo` patterns.
+Index creation happens via `MongoEventStoreConfigurator`, an `IMongoConfigurator` registered automatically when the user configures an aggregate. The index name is exposed via `IndexNames.AggregateIdWithVersionUnique` for reference.
 
-### Read-Model Update in Transaction
+### AppendEventsAsync Implementation
 
-`AppendEventsAsync` implementation:
+`AppendEventsAsync` validates events before persisting, keeping transactions short:
 
-1. Start a transaction via `IMongoHelper.Client.StartSessionAsync()` + `session.WithTransactionAsync(...)`.
-2. Insert the events into the events collection.
-3. Load the current read model for the aggregate from the database, or create a new instance via parameterless constructor if none exists.
-4. Keep the aggregate instance in memory and apply each new event via `event.Execute(aggregate)`. Do not re-fetch from the database between events.
-5. Update the aggregate's `Version` property to match the last event's version.
-6. Upsert the aggregate document in the read-model collection.
-7. If checkpoints are enabled, check whether a new checkpoint should be created (i.e., `newVersion % checkpointInterval == 0`), and if so, insert a checkpoint document.
-8. Commit the transaction. If a duplicate-key error occurs during event insertion, the transaction is aborted and `EventStoreConcurrencyException` is thrown.
+**Validation Phase** (outside transaction):
+1. Set `AggregateType` and `CreatedUtc` on each event (if not already set).
+2. Load the current read model from the database, or create a new instance via parameterless constructor if none exists. Set `CreatedUtc` on new aggregates.
+3. Apply each event via `event.Execute(aggregate)`. Events may throw `MongoEventValidationException` if the aggregate's state does not permit the operation.
+4. Update the aggregate's `Version` property to match the last event's version.
+
+**Persistence Phase** (inside transaction via `IMongoHelper.ExecuteInTransaction`):
+1. Insert the events into the events collection.
+2. Upsert the aggregate document in the read-model collection.
+3. If checkpoints are enabled and `newVersion % checkpointInterval == 0`, insert a checkpoint document.
+4. If `onBeforeCommit` callback is provided, invoke it for additional transactional operations.
+5. Commit the transaction. If a duplicate-key error occurs, wrap and rethrow as `MongoConcurrencyException` or `MongoDuplicateEventException`.
 
 ### Discriminator Configuration
 
@@ -130,33 +152,44 @@ The user may have already configured their own `GuidSerializer` via `MongoOption
 
 ### Configuration / DI Registration
 
-Extend `MongoBuilder` with a new method (or provide an extension method from the `Chaos.Mongo.EventStore` namespace):
+Extend `MongoBuilder` with `WithEventStore<TAggregate>` extension method (in `MongoBuilderExtensions`):
 
 ```csharp
-builder.WithEventStore<OrderAggregate>(es =>
-{
-    es.WithEvent<OrderCreatedEvent>("OrderCreated")      // discriminator name; optional, defaults to class name
-      .WithEvent<OrderShippedEvent>("OrderShipped")
-      .WithCollectionPrefix("Orders")                    // optional; defaults to aggregate type name
-      .WithCheckpoints(interval: 100);                   // optional; disabled by default
-});
+services.AddMongo(connectionString)
+    .WithEventStore<OrderAggregate>(es => es
+        .WithEvent<OrderCreatedEvent>("OrderCreated")      // discriminator name; optional, defaults to class name
+        .WithEvent<OrderShippedEvent>("OrderShipped")
+        .WithCollectionPrefix("Orders")                    // optional; defaults to aggregate type name
+        .WithCheckpoints(interval: 100)                    // optional; disabled by default
+        .WithEventsCollectionSuffix("_Events")             // optional; default is "_Events"
+        .WithCheckpointCollectionSuffix("_Checkpoints"));  // optional; default is "_Checkpoints"
 ```
 
+**`MongoEventStoreBuilder<TAggregate>`** provides fluent configuration:
+- `WithEvent<TEvent>(string? discriminator)` — Registers an event type with optional discriminator
+- `WithCollectionPrefix(string prefix)` — Sets collection name prefix
+- `WithCheckpoints(int interval)` — Enables checkpoints at specified version interval
+- `WithEventsCollectionSuffix(string suffix)` — Sets events collection suffix
+- `WithCheckpointCollectionSuffix(string suffix)` — Sets checkpoint collection suffix
+
+**`MongoEventStoreOptions<TAggregate>`** stores configuration (made public for testing/inspection).
+
 This registers:
-- `IEventStore<OrderAggregate>` as a singleton in DI (backed by `EventStore<OrderAggregate>`)
-- An `IMongoConfigurator` that creates the unique index on the events collection
-- BsonClassMap registrations for `Event<OrderAggregate>`, `OrderCreatedEvent`, `OrderShippedEvent`, and `OrderAggregate`
-- Event discriminators: `OrderCreatedEvent` → `"OrderCreated"`, `OrderShippedEvent` → `"OrderShipped"`
+- `IEventStore<OrderAggregate>` as scoped (backed by `MongoEventStore<OrderAggregate>`)
+- `IAggregateRepository<OrderAggregate>` as scoped (backed by `MongoAggregateRepository<OrderAggregate>`)
+- `MongoEventStoreOptions<OrderAggregate>` as singleton
+- `MongoEventStoreConfigurator<OrderAggregate>` as `IMongoConfigurator` for index creation
+- BsonClassMap registrations via `MongoEventStoreSerializationSetup` for `Event<TAggregate>`, all registered event types, `Aggregate`, `CheckpointDocument<TAggregate>`, and `CheckpointId`
 - `GuidSerializer` with `GuidRepresentation.Standard` (if not already registered)
 
 ### Checkpoints
 
 A checkpoint is a snapshot of an aggregate's state at a specific version. When enabled:
 
-- A checkpoint collection (e.g., `"OrderAggregate_Checkpoints"`) stores aggregate documents keyed by `(Id, Version)`.
+- A checkpoint collection (e.g., `"Orders_Checkpoints"`) stores `CheckpointDocument<TAggregate>` documents with composite `CheckpointId { AggregateId, Version }` as `_id`.
 - During `AppendEventsAsync`, after updating the read model, if `newVersion % checkpointInterval == 0`, insert a checkpoint.
-- When rebuilding an aggregate (outside of the normal read-model path), the event store can load the nearest checkpoint ≤ the target version and replay only the remaining events.
-- `GetEventStream` itself doesn't use checkpoints (it returns raw events), but a future or companion method for loading aggregate state can leverage them.
+- `IAggregateRepository.GetAtVersionAsync` uses checkpoints: loads nearest checkpoint ≤ target version, then replays remaining events.
+- `GetEventStream` itself doesn't use checkpoints (it returns raw events).
 
 Checkpoint creation happens within the same transaction as event insertion and read-model update.
 

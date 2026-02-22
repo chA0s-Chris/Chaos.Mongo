@@ -1,6 +1,6 @@
 # AGENTS.md for AI Plans
 
-In this folder, we only keep Markdown files for AI plans. Each file has a four-digit prefix which corresponds to the GitHab issue number.
+In this folder, we only keep Markdown files for AI plans. Each file has a four-digit prefix which corresponds to the GitHub issue number.
 
 ## How to Write Plans
 
