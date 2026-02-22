@@ -18,6 +18,9 @@ public static class MongoDbTestContainer
         await _gate.WaitAsync();
         try
         {
+            if (_container is { State: TestcontainersStates.Running })
+                return _container;
+
             _container = new MongoDbBuilder()
                          .WithImage("mongo:8")
                          .WithReplicaSet()

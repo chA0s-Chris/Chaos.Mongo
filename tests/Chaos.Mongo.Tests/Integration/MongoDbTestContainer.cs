@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025 Christian Flessa. All rights reserved.
+﻿// Copyright (c) 2025-2026 Christian Flessa. All rights reserved.
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Integration;
 
@@ -18,9 +18,12 @@ public static class MongoDbTestContainer
         await _gate.WaitAsync();
         try
         {
+            if (_container is { State: TestcontainersStates.Running })
+                return _container;
+
             _container = new MongoDbBuilder()
                          .WithImage("mongo:8")
-                         .WithReplicaSet("rs0")
+                         .WithReplicaSet()
                          .Build();
 
             await _container.StartAsync();
