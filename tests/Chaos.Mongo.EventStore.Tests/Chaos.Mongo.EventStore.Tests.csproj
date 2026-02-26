@@ -2,8 +2,19 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chaos.Mongo.EventStore\Chaos.Mongo.EventStore.csproj" />
   </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0'">
+    <Compile Remove="BooksApi\**\*.cs" />
+    <Compile Remove="Integration\BooksApiIntegrationTests.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Chaos.Testing" />
     <PackageReference Include="Testcontainers.MongoDb" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
   </ItemGroup>
 </Project>
