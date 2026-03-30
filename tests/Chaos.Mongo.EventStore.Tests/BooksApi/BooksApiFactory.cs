@@ -54,7 +54,6 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
             async (
                 CreateBookRequest request,
                 IEventStore<BookAggregate> eventStore,
-                IAggregateRepository<BookAggregate> repository,
                 CancellationToken cancellationToken) =>
             {
                 if (request.Id == Guid.Empty ||
@@ -77,19 +76,16 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
 
                 try
                 {
-                    await eventStore.AppendEventsAsync(
+                    var created = await eventStore.AppendEventsAsync(
                         [createEvent],
                         cancellationToken: cancellationToken);
+
+                    return Results.Created($"/books/{request.Id}", BookResponse.FromAggregate(created));
                 }
                 catch (Exception e) when (e is ArgumentException or MongoEventValidationException or MongoConcurrencyException)
                 {
                     return Results.Conflict("Book already exists.");
                 }
-
-                var created = await repository.GetAsync(request.Id, cancellationToken);
-                return created is null
-                    ? Results.Problem("Book creation did not produce a read model.")
-                    : Results.Created($"/books/{request.Id}", BookResponse.FromAggregate(created));
             });
 
         app.MapPatch(
@@ -121,7 +117,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
 
                 try
                 {
-                    await eventStore.AppendEventsAsync(
+                    var updated = await eventStore.AppendEventsAsync(
                         [
                             new BookMetadataSetEvent
                             {
@@ -132,14 +128,13 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                             }
                         ],
                         cancellationToken: cancellationToken);
+
+                    return Results.Ok(BookResponse.FromAggregate(updated));
                 }
                 catch (MongoConcurrencyException)
                 {
                     return Results.Conflict("Book was modified concurrently.");
                 }
-
-                var updated = await repository.GetAsync(bookId, cancellationToken);
-                return updated is null ? Results.NotFound() : Results.Ok(BookResponse.FromAggregate(updated));
             });
 
         app.MapGet(
@@ -179,7 +174,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
 
                 try
                 {
-                    await eventStore.AppendEventsAsync(
+                    var updated = await eventStore.AppendEventsAsync(
                         [
                             new BookUpdatedEvent
                             {
@@ -192,14 +187,13 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                             }
                         ],
                         cancellationToken: cancellationToken);
+
+                    return Results.Ok(BookResponse.FromAggregate(updated));
                 }
                 catch (MongoConcurrencyException)
                 {
                     return Results.Conflict("Book was modified concurrently.");
                 }
-
-                var updated = await repository.GetAsync(bookId, cancellationToken);
-                return updated is null ? Results.NotFound() : Results.Ok(BookResponse.FromAggregate(updated));
             });
 
         app.MapPost(
@@ -231,7 +225,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
 
                 try
                 {
-                    await eventStore.AppendEventsAsync(
+                    var updated = await eventStore.AppendEventsAsync(
                         [
                             new BookEditionAddedEvent
                             {
@@ -244,6 +238,8 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                             }
                         ],
                         cancellationToken: cancellationToken);
+
+                    return Results.Ok(BookResponse.FromAggregate(updated));
                 }
                 catch (MongoEventValidationException ex)
                 {
@@ -253,9 +249,6 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                 {
                     return Results.Conflict("Book was modified concurrently.");
                 }
-
-                var updated = await repository.GetAsync(bookId, cancellationToken);
-                return updated is null ? Results.NotFound() : Results.Ok(BookResponse.FromAggregate(updated));
             });
 
         app.MapPatch(
@@ -288,7 +281,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
 
                 try
                 {
-                    await eventStore.AppendEventsAsync(
+                    var updated = await eventStore.AppendEventsAsync(
                         [
                             new BookEditionUpdatedEvent
                             {
@@ -301,6 +294,8 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                             }
                         ],
                         cancellationToken: cancellationToken);
+
+                    return Results.Ok(BookResponse.FromAggregate(updated));
                 }
                 catch (MongoEventValidationException ex)
                 {
@@ -310,9 +305,6 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                 {
                     return Results.Conflict("Book was modified concurrently.");
                 }
-
-                var updated = await repository.GetAsync(bookId, cancellationToken);
-                return updated is null ? Results.NotFound() : Results.Ok(BookResponse.FromAggregate(updated));
             });
 
         app.MapDelete(
@@ -333,7 +325,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
 
                 try
                 {
-                    await eventStore.AppendEventsAsync(
+                    var deleted = await eventStore.AppendEventsAsync(
                         [
                             new BookDeletedEvent
                             {
@@ -343,6 +335,8 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                             }
                         ],
                         cancellationToken: cancellationToken);
+
+                    return Results.Ok(BookResponse.FromAggregate(deleted));
                 }
                 catch (MongoEventValidationException ex)
                 {
@@ -352,9 +346,6 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                 {
                     return Results.Conflict("Book was modified concurrently.");
                 }
-
-                var deleted = await repository.GetAsync(bookId, cancellationToken);
-                return deleted is null ? Results.NotFound() : Results.Ok(BookResponse.FromAggregate(deleted));
             });
 
         app.MapGet(

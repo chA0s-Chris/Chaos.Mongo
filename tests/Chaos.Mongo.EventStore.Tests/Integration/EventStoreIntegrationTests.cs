@@ -292,12 +292,8 @@ public class EventStoreIntegrationTests
             }
         };
 
-        var resultVersion = await _eventStore.AppendEventsAsync(events);
+        var aggregate = await _eventStore.AppendEventsAsync(events);
 
-        resultVersion.Should().Be(1);
-
-        // Verify read model
-        var aggregate = await _eventRepository.GetAsync(aggregateId);
         aggregate.Should().NotBeNull();
         aggregate.Id.Should().Be(aggregateId);
         aggregate.Version.Should().Be(1);

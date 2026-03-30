@@ -36,7 +36,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         => _mongoHelper.Database.GetCollection<TAggregate>(_options.ReadModelCollectionName);
 
     /// <inheritdoc/>
-    public async Task<Int64> AppendEventsAsync(
+    public async Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
         Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken cancellationToken = default)
@@ -143,7 +143,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 },
                 cancellationToken: cancellationToken);
 
-            return lastVersion;
+            return aggregate;
         }
         catch (MongoException ex)
             when (ex is MongoCommandException { Code: 11000 } or

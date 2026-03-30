@@ -33,6 +33,11 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     ///     after all event store operations complete but before the transaction commits. This allows
     ///     additional transactional operations (e.g., inserting into a transactional outbox).
     ///     </para>
+    ///     <para>
+    ///     The returned aggregate is a commit-time snapshot: it reflects the state after all events
+    ///     have been applied and the transaction has committed. Callers may read its properties freely,
+    ///     but mutations to the returned object will not be persisted back to the database.
+    ///     </para>
     /// </remarks>
     /// <param name="events">
     /// The events to append. Must all target the same aggregate with sequential versions.
@@ -42,7 +47,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// and <see cref="IMongoHelper"/> for performing additional transactional operations.
     /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The version of the last inserted event.</returns>
+    /// <returns>The aggregate with all events applied, as it was at commit time.</returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="events"/> is empty, contains events for different aggregates,
     /// or has non-sequential versions.
@@ -56,7 +61,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <exception cref="MongoDuplicateEventException">
     /// Thrown when an event with the same ID already exists.
     /// </exception>
-    Task<Int64> AppendEventsAsync(
+    Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
         Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken cancellationToken = default);
