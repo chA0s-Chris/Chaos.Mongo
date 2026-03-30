@@ -96,6 +96,16 @@ public static class MongoEventStoreSerializationSetup
             BsonClassMap.RegisterClassMap(classMap);
         }
 
+        // Register CheckpointId
+        if (!BsonClassMap.IsClassMapRegistered(typeof(CheckpointId)))
+        {
+            BsonClassMap.RegisterClassMap<CheckpointId>(cm =>
+            {
+                cm.AutoMap();
+                cm.MapMember(c => c.AggregateId).SetSerializer(_guidStandardSerializer);
+            });
+        }
+
         // Register CheckpointDocument<TAggregate>
         var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
         if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
