@@ -52,7 +52,6 @@ public static class MongoEventStoreSerializationSetup
                     {
                         cm.AutoMap();
                         cm.MapIdMember(a => a.Id).SetSerializer(_guidStandardSerializer);
-                        cm.SetIsRootClass(true);
                     });
                 }
 
