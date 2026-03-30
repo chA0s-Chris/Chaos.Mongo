@@ -6,7 +6,7 @@ namespace Chaos.Mongo.EventStore;
 /// Abstract base class for domain events targeting a specific aggregate type.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type this event applies to.</typeparam>
-public abstract class Event<TAggregate> where TAggregate : class, IAggregate
+public abstract class Event<TAggregate> where TAggregate : class, IAggregate, new()
 {
     /// <summary>
     /// Gets or sets the identifier of the aggregate this event belongs to.
