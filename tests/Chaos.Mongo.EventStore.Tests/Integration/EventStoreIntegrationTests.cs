@@ -11,8 +11,8 @@ using Testcontainers.MongoDb;
 
 public class EventStoreIntegrationTests
 {
+    private IAggregateRepository<OrderAggregate> _aggregateRepository;
     private MongoDbContainer _container;
-    private IAggregateRepository<OrderAggregate> _eventRepository;
     private IEventStore<OrderAggregate> _eventStore;
     private IMongoHelper _mongoHelper;
 
@@ -145,7 +145,7 @@ public class EventStoreIntegrationTests
             }
         ]);
 
-        var aggregate = await _eventRepository.GetAsync(aggregateId);
+        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
         aggregate.Should().NotBeNull();
         aggregate.Version.Should().Be(2);
         aggregate.Status.Should().Be("Shipped");
@@ -153,7 +153,7 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
-    public async Task AppendEventsAsync_MultiplEventsInSingleBatch_PersistsAllAtomically()
+    public async Task AppendEventsAsync_MultipleEventsInSingleBatch_PersistsAllAtomically()
     {
         var aggregateId = Guid.NewGuid();
 
@@ -198,7 +198,7 @@ public class EventStoreIntegrationTests
         events[2].Should().BeOfType<OrderCompletedEvent>();
 
         // Verify read model matches
-        var readModel = await _eventRepository.GetAsync(aggregateId);
+        var readModel = await _aggregateRepository.GetAsync(aggregateId);
         readModel!.Version.Should().Be(3);
         readModel.Status.Should().Be("Completed");
     }
@@ -402,7 +402,7 @@ public class EventStoreIntegrationTests
         events.Should().HaveCount(2);
 
         // Verify aggregate state unchanged
-        var aggregate = await _eventRepository.GetAsync(aggregateId);
+        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
         aggregate!.Status.Should().Be("Shipped");
         aggregate.Version.Should().Be(2);
     }
@@ -516,7 +516,7 @@ public class EventStoreIntegrationTests
         events.Should().BeEmpty();
 
         // Verify no read model was persisted
-        var aggregate = await _eventRepository.GetAsync(aggregateId);
+        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
         aggregate.Should().BeNull();
     }
 
@@ -690,8 +690,8 @@ public class EventStoreIntegrationTests
             }
         ]);
 
-        var agg1 = await _eventRepository.GetAsync(aggregateId1);
-        var agg2 = await _eventRepository.GetAsync(aggregateId2);
+        var agg1 = await _aggregateRepository.GetAsync(aggregateId1);
+        var agg2 = await _aggregateRepository.GetAsync(aggregateId2);
 
         agg1!.CustomerName.Should().Be("Alice");
         agg2!.CustomerName.Should().Be("Bob");
@@ -706,14 +706,14 @@ public class EventStoreIntegrationTests
     [Test]
     public async Task Repository_GetAsync_NoAggregate_ReturnsNull()
     {
-        var result = await _eventRepository.GetAsync(Guid.NewGuid());
+        var result = await _aggregateRepository.GetAsync(Guid.NewGuid());
         result.Should().BeNull();
     }
 
     [Test]
     public async Task Repository_GetAtVersionAsync_NoEvents_ReturnsNull()
     {
-        var result = await _eventRepository.GetAtVersionAsync(Guid.NewGuid(), 1);
+        var result = await _aggregateRepository.GetAtVersionAsync(Guid.NewGuid(), 1);
         result.Should().BeNull();
     }
 
@@ -755,13 +755,13 @@ public class EventStoreIntegrationTests
         ]);
 
         // Get state at version 1
-        var atV1 = await _eventRepository.GetAtVersionAsync(aggregateId, 1);
+        var atV1 = await _aggregateRepository.GetAtVersionAsync(aggregateId, 1);
         atV1.Should().NotBeNull();
         atV1.Version.Should().Be(1);
         atV1.Status.Should().Be("Created");
 
         // Get state at version 2
-        var atV2 = await _eventRepository.GetAtVersionAsync(aggregateId, 2);
+        var atV2 = await _aggregateRepository.GetAtVersionAsync(aggregateId, 2);
         atV2.Should().NotBeNull();
         atV2.Version.Should().Be(2);
         atV2.Status.Should().Be("Shipped");
@@ -787,7 +787,7 @@ public class EventStoreIntegrationTests
                  .BuildServiceProvider();
 
         _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
-        _eventRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
+        _aggregateRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
         _mongoHelper = sp.GetRequiredService<IMongoHelper>();
 
         // Manually run configurators to create indexes

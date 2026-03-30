@@ -75,7 +75,11 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
         where TEvent : Event<TAggregate>
     {
         var eventType = typeof(TEvent);
-        discriminator ??= eventType.Name;
+        if (discriminator is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(discriminator);
+        else
+            discriminator = eventType.Name;
+
         Options.EventTypes[eventType] = discriminator;
         return this;
     }
