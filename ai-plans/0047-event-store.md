@@ -67,15 +67,15 @@ Use a generic interface rather than a non-generic `IEventStore` so each aggregat
 
 ```csharp
 Task<Int64> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken ct)
-Task<Int64> AppendEventsAsync(
+Task<TAggregate> AppendEventsAsync(
     IEnumerable<Event<TAggregate>> events,
-    Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
+    Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
     CancellationToken ct = default)
 IAsyncEnumerable<Event<TAggregate>> GetEventStream(Guid aggregateId, Int64 fromVersion, Int64? toVersion, CancellationToken ct)
 ```
 
 - `GetExpectedNextVersionAsync` — Queries the events collection for the highest `Version` for the given `AggregateId` and returns `maxVersion + 1` (or `1` if no events exist). **Important:** This returns the *expected* next version based on current state, not a reserved slot. Concurrent callers may receive the same value; only the first to insert will succeed (enforced by the unique index).
-- `AppendEventsAsync` — Validates events by applying them to the aggregate in memory first. If validation succeeds, persists within a transaction: inserts events, upserts read model, creates checkpoint if needed, and invokes optional `onBeforeCommit` callback. Returns the new version after the last inserted event. The optional callback enables transactional side-effects like inserting into a transactional outbox.
+- `AppendEventsAsync` — Validates events by applying them to the aggregate in memory first. If validation succeeds, persists within a transaction: inserts events, upserts read model, creates checkpoint if needed, and invokes optional `onBeforeCommit` callback. Returns the aggregate as a commit-time snapshot with all events applied. The optional callback receives the session, the committed aggregate, and `IMongoHelper`, enabling transactional side-effects like inserting into a transactional outbox.
 - `GetEventStream` — Returns events for an aggregate ordered by `Version`, optionally bounded by `fromVersion`/`toVersion`.
 
 ### Interface: `IAggregateRepository<TAggregate>`
