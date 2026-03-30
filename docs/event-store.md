@@ -219,12 +219,12 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     
     Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
-        Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
+        Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken ct = default);
     
     IAsyncEnumerable<Event<TAggregate>> GetEventStream(
         Guid aggregateId,
-        long fromVersion = 1,
+        long fromVersion = 0,
         long? toVersion = null,
         CancellationToken ct = default);
 }
@@ -456,7 +456,7 @@ Use the `onBeforeCommit` callback to insert outbox messages within the same tran
 ```csharp
 await _eventStore.AppendEventsAsync(
     [new OrderCreatedEvent { ... }],
-    onBeforeCommit: async (session, helper, ct) =>
+    onBeforeCommit: async (session, aggregate, helper, ct) =>
     {
         var outbox = helper.GetCollection<OutboxMessage>();
         await outbox.InsertOneAsync(session, new OutboxMessage

@@ -43,8 +43,8 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// The events to append. Must all target the same aggregate with sequential versions.
     /// </param>
     /// <param name="onBeforeCommit">
-    /// An optional callback invoked within the transaction before commit. Receives the session handle
-    /// and <see cref="IMongoHelper"/> for performing additional transactional operations.
+    /// An optional callback invoked within the transaction before commit. Receives the session handle,
+    /// the committed aggregate, and <see cref="IMongoHelper"/> for performing additional transactional operations.
     /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The aggregate with all events applied, as it was at commit time.</returns>
@@ -63,7 +63,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// </exception>
     Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
-        Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
+        Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

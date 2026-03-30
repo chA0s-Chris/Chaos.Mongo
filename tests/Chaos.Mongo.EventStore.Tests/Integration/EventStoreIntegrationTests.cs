@@ -407,7 +407,7 @@ public class EventStoreIntegrationTests
                     TotalAmount = 50.00m
                 }
             ],
-            async (session, _, ct) =>
+            async (session, _, _, ct) =>
             {
                 var message = new OutboxMessage
                 {

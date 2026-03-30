@@ -38,7 +38,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     /// <inheritdoc/>
     public async Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
-        Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
+        Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(events);
@@ -139,7 +139,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
                     // 5d. Invoke user callback for additional transactional operations
                     if (onBeforeCommit is not null)
-                        await onBeforeCommit(session, helper, ct);
+                        await onBeforeCommit(session, aggregate, helper, ct);
                 },
                 cancellationToken: cancellationToken);
 
