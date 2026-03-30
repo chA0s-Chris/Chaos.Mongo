@@ -1,6 +1,6 @@
-﻿// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
-namespace Chaos.Mongo.Tests.Integration;
+namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using DotNet.Testcontainers.Containers;
 using Testcontainers.MongoDb;

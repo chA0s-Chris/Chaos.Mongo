@@ -63,3 +63,5 @@ nunit-*.xml
 
 # signing key
 Chaos.Mongo.snk
+
+/tmp/

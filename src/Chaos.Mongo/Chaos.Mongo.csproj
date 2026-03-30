@@ -1,4 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Chaos.Mongo</PackageId>
+    <Description>A comprehensive MongoDB library for .NET featuring database migrations, distributed locking, message queues, and database configurators with built-in support for dependency injection.</Description>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />

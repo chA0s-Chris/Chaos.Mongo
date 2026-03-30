@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Chaos.Mongo.EventStore</PackageId>
+    <Description>Event sourcing extension for Chaos.Mongo, providing aggregate-based event stores with MongoDB.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Chaos.Mongo\Chaos.Mongo.csproj" />
+  </ItemGroup>
+</Project>

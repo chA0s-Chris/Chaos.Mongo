@@ -11,6 +11,7 @@ A comprehensive MongoDB library for .NET that simplifies working with MongoDB by
 - 🗄️ **Database Migrations** - Version-controlled database schema changes with automatic execution and history tracking
 - 🔒 **Distributed Locking** - MongoDB-based distributed locks for coordinating work across multiple instances
 - 📬 **Message Queues** - MongoDB-backed message queues with automatic retry and error handling
+- 📖 **Event Store** - Event sourcing with automatic read model updates, concurrency control, and checkpoints
 - ⚙️ **Database Configurators** - Automated database initialization and index management
 - 💉 **Dependency Injection** - First-class support for Microsoft.Extensions.DependencyInjection
 - 🔄 **Transaction Support** - Helper methods for working with MongoDB transactions
@@ -26,6 +27,7 @@ A comprehensive MongoDB library for .NET that simplifies working with MongoDB by
   - [Database Configurators](#database-configurators)
   - [Distributed Locking](#distributed-locking)
   - [Message Queues](#message-queues)
+  - [Event Store](#event-store)
   - [Transaction Support](#transaction-support)
 - [Configuration](#configuration)
 - [Advanced Usage](#advanced-usage)
@@ -486,6 +488,85 @@ public class QueueManager
     }
 }
 ```
+
+### Event Store
+
+Event sourcing capabilities backed by MongoDB. Available in the `Chaos.Mongo.EventStore` package.
+
+```bash
+dotnet add package Chaos.Mongo.EventStore
+```
+
+#### Quick Example
+
+```csharp
+// Define your aggregate
+public class OrderAggregate : Aggregate
+{
+    public string CustomerName { get; set; } = string.Empty;
+    public string Status { get; set; } = "Pending";
+}
+
+// Define events
+public class OrderCreatedEvent : Event<OrderAggregate>
+{
+    public string CustomerName { get; set; } = string.Empty;
+
+    public override void Execute(OrderAggregate aggregate)
+    {
+        aggregate.CustomerName = CustomerName;
+        aggregate.Status = "Created";
+    }
+}
+
+// Register the event store
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithEventStore<OrderAggregate>(es => es
+        .WithEvent<OrderCreatedEvent>("OrderCreated")
+        .WithCollectionPrefix("Orders"));
+
+// Use the event store
+public class OrderService
+{
+    private readonly IEventStore<OrderAggregate> _eventStore;
+    private readonly IAggregateRepository<OrderAggregate> _repository;
+
+    public async Task<Guid> CreateOrderAsync(string customer)
+    {
+        var orderId = Guid.CreateVersion7();
+        var version = await _eventStore.GetExpectedNextVersionAsync(orderId);
+
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.CreateVersion7(),
+                AggregateId = orderId,
+                Version = version,
+                CustomerName = customer
+            }
+        ]);
+
+        return orderId;
+    }
+
+    public async Task<OrderAggregate?> GetOrderAsync(Guid orderId)
+    {
+        return await _repository.GetAsync(orderId);
+    }
+}
+```
+
+#### Key Features
+
+- **Append-only event streams** with automatic versioning
+- **Read model maintenance** within the same transaction as event writes
+- **Optimistic concurrency** via unique `(AggregateId, Version)` index
+- **Idempotency** via unique event IDs
+- **Optional checkpoints** for faster aggregate reconstruction
+- **Transactional callbacks** for patterns like transactional outbox
+
+📚 **[Full Event Store Documentation](./docs/event-store.md)**
 
 ### Transaction Support
 
