@@ -153,6 +153,57 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_MultiplEventsInSingleBatch_PersistsAllAtomically()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        var aggregate = await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "BatchTest",
+                TotalAmount = 75.00m
+            },
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 2
+            },
+            new OrderCompletedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 3
+            }
+        ]);
+
+        // Verify return value reflects all events applied
+        aggregate.Should().NotBeNull();
+        aggregate.Version.Should().Be(3);
+        aggregate.CustomerName.Should().Be("BatchTest");
+        aggregate.Status.Should().Be("Completed");
+
+        // Verify all events were persisted
+        var events = new List<Event<OrderAggregate>>();
+        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+            events.Add(evt);
+
+        events.Should().HaveCount(3);
+        events[0].Should().BeOfType<OrderCreatedEvent>();
+        events[1].Should().BeOfType<OrderShippedEvent>();
+        events[2].Should().BeOfType<OrderCompletedEvent>();
+
+        // Verify read model matches
+        var readModel = await _eventRepository.GetAsync(aggregateId);
+        readModel!.Version.Should().Be(3);
+        readModel.Status.Should().Be("Completed");
+    }
+
+    [Test]
     public async Task AppendEventsAsync_NonSequentialVersions_ThrowsArgumentException()
     {
         var aggregateId = Guid.NewGuid();
@@ -434,6 +485,49 @@ public class EventStoreIntegrationTests
             events.Add(evt);
 
         events.Should().HaveCount(1);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_WithOnBeforeCommitFailure_RollsBackEntireTransaction()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        var act = () => _eventStore.AppendEventsAsync(
+            [
+                new OrderCreatedEvent
+                {
+                    Id = Guid.NewGuid(),
+                    AggregateId = aggregateId,
+                    Version = 1,
+                    CustomerName = "RollbackTest",
+                    TotalAmount = 50.00m
+                }
+            ],
+            (_, _, _, _) => throw new InvalidOperationException("Callback failure"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage("Callback failure");
+
+        // Verify no events were persisted
+        var events = new List<Event<OrderAggregate>>();
+        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+            events.Add(evt);
+
+        events.Should().BeEmpty();
+
+        // Verify no read model was persisted
+        var aggregate = await _eventRepository.GetAsync(aggregateId);
+        aggregate.Should().BeNull();
+    }
+
+    [Test]
+    public async Task GetEventStream_NonExistentAggregate_ReturnsEmptyStream()
+    {
+        var events = new List<Event<OrderAggregate>>();
+        await foreach (var evt in _eventStore.GetEventStream(Guid.NewGuid()))
+            events.Add(evt);
+
+        events.Should().BeEmpty();
     }
 
     [Test]
