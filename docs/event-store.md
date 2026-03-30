@@ -120,12 +120,12 @@ public class OrderService
         _repository = repository;
     }
 
-    public async Task<Guid> CreateOrderAsync(string customer, decimal amount)
+    public async Task<OrderAggregate> CreateOrderAsync(string customer, decimal amount)
     {
         var orderId = Guid.CreateVersion7();
         var version = await _eventStore.GetExpectedNextVersionAsync(orderId);
 
-        await _eventStore.AppendEventsAsync(
+        return await _eventStore.AppendEventsAsync(
         [
             new OrderCreatedEvent
             {
@@ -136,8 +136,6 @@ public class OrderService
                 TotalAmount = amount
             }
         ]);
-
-        return orderId;
     }
 
     public async Task<OrderAggregate?> GetOrderAsync(Guid orderId)
@@ -219,7 +217,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 {
     Task<long> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken ct = default);
     
-    Task<long> AppendEventsAsync(
+    Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
         Func<IClientSessionHandle, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken ct = default);
@@ -233,7 +231,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 ```
 
 - **`GetExpectedNextVersionAsync`**: Returns the next expected version for an aggregate (highest existing version + 1, or 1 if new)
-- **`AppendEventsAsync`**: Validates and persists events within a transaction, returns the new version
+- **`AppendEventsAsync`**: Validates and persists events within a transaction, returns the updated aggregate as a commit-time snapshot
 - **`GetEventStream`**: Returns events for an aggregate, optionally bounded by version range
 
 ### Aggregate Repository
@@ -342,11 +340,11 @@ public override void Execute(OrderAggregate aggregate)
 ### Appending Events
 
 ```csharp
-public async Task ShipOrderAsync(Guid orderId)
+public async Task<OrderAggregate> ShipOrderAsync(Guid orderId)
 {
     var version = await _eventStore.GetExpectedNextVersionAsync(orderId);
 
-    await _eventStore.AppendEventsAsync(
+    return await _eventStore.AppendEventsAsync(
     [
         new OrderShippedEvent
         {
@@ -363,12 +361,13 @@ public async Task ShipOrderAsync(Guid orderId)
 ```csharp
 var version = await _eventStore.GetExpectedNextVersionAsync(orderId);
 
-await _eventStore.AppendEventsAsync(
+var aggregate = await _eventStore.AppendEventsAsync(
 [
     new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId, Version = version, ProductId = "P1" },
     new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId, Version = version + 1, ProductId = "P2" },
     new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId, Version = version + 2, ProductId = "P3" }
 ]);
+// aggregate is a commit-time snapshot with all three events applied
 ```
 
 ### Reading Events
@@ -419,7 +418,7 @@ public async Task UpdateWithRetryAsync(Guid aggregateId, Action<OrderAggregate> 
             var version = await _eventStore.GetExpectedNextVersionAsync(aggregateId);
             
             // Prepare event based on current state...
-            await _eventStore.AppendEventsAsync([event]);
+            var updated = await _eventStore.AppendEventsAsync([event]);
             return;
         }
         catch (MongoConcurrencyException) when (attempt < maxRetries - 1)
@@ -484,7 +483,8 @@ This ensures the outbox message is only persisted if the events are successfully
 ```csharp
 try
 {
-    await _eventStore.AppendEventsAsync(events);
+    var aggregate = await _eventStore.AppendEventsAsync(events);
+    // aggregate is a commit-time snapshot — read freely, but mutations won't persist
 }
 catch (MongoConcurrencyException ex)
 {
