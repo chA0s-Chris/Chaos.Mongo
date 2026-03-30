@@ -34,6 +34,13 @@ public static class MongoBuilderExtensions
 
         var options = esBuilder.Options;
 
+        if (options.EventTypes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"At least one event type must be registered for aggregate type {typeof(TAggregate).Name}. " +
+                "Use WithEvent<TEvent>() to register event types.");
+        }
+
         // Register serialization (discriminators, GuidSerializer)
         MongoEventStoreSerializationSetup.EnsureGuidSerializer();
         MongoEventStoreSerializationSetup.RegisterClassMaps(options);

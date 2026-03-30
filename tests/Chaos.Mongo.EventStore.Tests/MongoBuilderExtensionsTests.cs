@@ -24,6 +24,18 @@ public class MongoBuilderExtensionsTests
     }
 
     [Test]
+    public void WithEventStore_NoEventTypesRegistered_ThrowsInvalidOperationException()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        var act = () => builder.WithEventStore<TestAggregate>(_ => { });
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*at least one event type*TestAggregate*");
+    }
+
+    [Test]
     public void WithEventStore_NullBuilder_ThrowsArgumentNullException()
     {
         MongoBuilder builder = null!;
