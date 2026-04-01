@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chaos.Mongo.Outbox\Chaos.Mongo.Outbox.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Chaos.Testing" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+    <PackageReference Include="Testcontainers.MongoDb" />
+  </ItemGroup>
+</Project>
