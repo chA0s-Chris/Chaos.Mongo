@@ -4,6 +4,7 @@ namespace Chaos.Mongo.Outbox;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 /// <summary>
@@ -60,7 +61,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
     }
 
     private async Task HandleFailureAsync(IMongoCollection<OutboxMessage> collection,
-                                          MongoDB.Bson.ObjectId messageId,
+                                          ObjectId messageId,
                                           String lockId,
                                           Int32 currentRetryCount,
                                           Exception exception)
@@ -223,6 +224,8 @@ public sealed class OutboxProcessor : IOutboxProcessor
         // Atomically claim the message
         var claimFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, message.Id) &
                           Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Pending) &
+                          (Builders<OutboxMessage>.Filter.Eq(m => m.NextAttemptUtc, null) |
+                           Builders<OutboxMessage>.Filter.Lte(m => m.NextAttemptUtc, now)) &
                           (Builders<OutboxMessage>.Filter.Eq(m => m.IsLocked, false) |
                            Builders<OutboxMessage>.Filter.Lte(m => m.LockedUtc, staleLockThreshold));
 
@@ -289,7 +292,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
     }
 
     private async Task TryReleaseLockAsync(IMongoCollection<OutboxMessage> collection,
-                                           MongoDB.Bson.ObjectId messageId,
+                                           ObjectId messageId,
                                            String lockId)
     {
         try
