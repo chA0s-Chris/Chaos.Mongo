@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.Configuration;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -247,19 +248,24 @@ public class OutboxIntegrationTests
         }
 
         // Start processor
-        var publisher = _serviceProvider.GetRequiredService<IOutboxPublisher>() as TestOutboxPublisher;
+        var publisher = (TestOutboxPublisher)_serviceProvider.GetRequiredService<IOutboxPublisher>();
         var processor = _serviceProvider.GetRequiredService<IOutboxProcessor>();
+        var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
         await processor.StartAsync();
 
-        await WaitUntilAsync(() => Task.FromResult(publisher!.PublishedMessages.Count >= 5));
+        await WaitUntilAsync(async () =>
+        {
+            var count = await collection.CountDocumentsAsync(
+                Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Processed));
+            return count >= 5;
+        });
 
         await processor.StopAsync();
 
         // Verify all published
-        publisher!.PublishedMessages.Should().HaveCount(5);
+        publisher.PublishedMessages.Should().HaveCount(5);
 
         // Verify all marked processed
-        var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
         var messages = await collection.Find(FilterDefinition<OutboxMessage>.Empty).ToListAsync();
         messages.Should().AllSatisfy(m => m.State.Should().Be(OutboxMessageState.Processed));
     }
@@ -279,19 +285,24 @@ public class OutboxIntegrationTests
         // Start processor
         var publisher = _serviceProvider.GetRequiredService<IOutboxPublisher>() as TestOutboxPublisher;
         var processor = _serviceProvider.GetRequiredService<IOutboxProcessor>();
+        var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
         await processor.StartAsync();
 
-        await WaitUntilAsync(() => Task.FromResult(publisher!.PublishedMessages.Count >= 1));
+        await WaitUntilAsync(async () =>
+        {
+            var count = await collection.CountDocumentsAsync(
+                Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Processed));
+            return count >= 1;
+        });
 
         await processor.StopAsync();
 
         // Verify the message was published
         publisher!.PublishedMessages.Should().HaveCount(1);
-        publisher.PublishedMessages[0].Type.Should().Be("TestPayload");
-        publisher.PublishedMessages[0].CorrelationId.Should().Be("corr-1");
+        publisher.PublishedMessages.First().Type.Should().Be("TestPayload");
+        publisher.PublishedMessages.First().CorrelationId.Should().Be("corr-1");
 
         // Verify message is marked as processed
-        var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
         var message = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
         message.State.Should().Be(OutboxMessageState.Processed);
         message.ProcessedUtc.Should().NotBeNull();
@@ -338,7 +349,7 @@ public class OutboxIntegrationTests
         _options = _serviceProvider.GetRequiredService<OutboxOptions>();
 
         // Run configurators to create indexes
-        foreach (var configurator in _serviceProvider.GetServices<Configuration.IMongoConfigurator>())
+        foreach (var configurator in _serviceProvider.GetServices<IMongoConfigurator>())
             await configurator.ConfigureAsync(_mongoHelper);
     }
 
