@@ -305,7 +305,8 @@ public sealed class OutboxProcessor : IOutboxProcessor
                                                        .Set(m => m.LockedUtc, null)
                                                        .Set(m => m.LockId, null);
 
-            await collection.UpdateOneAsync(releaseFilter, releaseUpdate);
+            using var releaseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await collection.UpdateOneAsync(releaseFilter, releaseUpdate, cancellationToken: releaseTimeout.Token);
         }
         catch (Exception ex)
         {
