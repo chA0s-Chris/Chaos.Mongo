@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using Moq;
 using NUnit.Framework;
@@ -245,6 +246,67 @@ public class OutboxProcessorTests
         await sut.StopAsync();
 
         VerifyLoggedWarning("permanently failed");
+    }
+
+    [Test]
+    public async Task ProcessMessage_PublishFails_SchedulesRetryAtMaxDelayWhenBackoffWouldOverflow()
+    {
+        _options = new()
+        {
+            CollectionName = "TestOutbox",
+            BatchSize = 10,
+            MaxRetries = 40,
+            PollingInterval = TimeSpan.FromMilliseconds(50),
+            LockTimeout = TimeSpan.FromMinutes(5),
+            RetryBackoffInitialDelay = TimeSpan.FromHours(8),
+            RetryBackoffMaxDelay = TimeSpan.FromDays(2)
+        };
+
+        _databaseMock
+            .Setup(d => d.GetCollection<OutboxMessage>(_options.CollectionName, null))
+            .Returns(_collectionMock.Object);
+
+        var message = CreatePendingMessage(30);
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+
+        _publisherMock
+            .Setup(p => p.PublishAsync(It.IsAny<OutboxMessage>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Broker down"));
+
+        UpdateDefinition<OutboxMessage>? capturedUpdate = null;
+        var resultMock = new Mock<UpdateResult>();
+        resultMock.Setup(r => r.ModifiedCount).Returns(1);
+
+        _collectionMock
+            .Setup(c => c.UpdateOneAsync(
+                       It.IsAny<FilterDefinition<OutboxMessage>>(),
+                       It.IsAny<UpdateDefinition<OutboxMessage>>(),
+                       It.IsAny<UpdateOptions>(),
+                       It.IsAny<CancellationToken>()))
+            .Callback<FilterDefinition<OutboxMessage>, UpdateDefinition<OutboxMessage>, UpdateOptions, CancellationToken>((_, update, _, _) =>
+                    capturedUpdate = update)
+            .ReturnsAsync(resultMock.Object);
+
+        var expectedNextAttemptUtc = _timeProvider.GetUtcNow().UtcDateTime.Add(_options.RetryBackoffMaxDelay);
+        var expectedStoredNextAttemptUtc = new DateTime(
+            expectedNextAttemptUtc.Ticks - (expectedNextAttemptUtc.Ticks % TimeSpan.TicksPerMillisecond),
+            DateTimeKind.Utc);
+        var sut = CreateSut();
+
+        await sut.StartAsync();
+        await WaitForProcessingAsync();
+        await sut.StopAsync();
+
+        capturedUpdate.Should().NotBeNull();
+
+        var serializerRegistry = BsonSerializer.SerializerRegistry;
+        var documentSerializer = serializerRegistry.GetSerializer<OutboxMessage>();
+        var renderContext = new RenderArgs<OutboxMessage>(documentSerializer, serializerRegistry);
+        var renderedUpdate = capturedUpdate!.Render(renderContext);
+        var scheduledNextAttemptUtc = renderedUpdate["$set"][nameof(OutboxMessage.NextAttemptUtc)].AsBsonDateTime.ToUniversalTime();
+
+        scheduledNextAttemptUtc.Should().Be(expectedStoredNextAttemptUtc);
     }
 
     [Test]

@@ -49,9 +49,25 @@ public sealed class OutboxProcessor : IOutboxProcessor
 
     private DateTime ComputeNextAttemptUtc(Int32 retryCount)
     {
-        // Exponential backoff: initialDelay * 2^(retryCount - 1), capped at maxDelay
-        var delayTicks = _options.RetryBackoffInitialDelay.Ticks * (1L << Math.Min(retryCount - 1, 30));
-        var delay = TimeSpan.FromTicks(Math.Min(delayTicks, _options.RetryBackoffMaxDelay.Ticks));
+        var delay = _options.RetryBackoffInitialDelay;
+        var maxDelay = _options.RetryBackoffMaxDelay;
+
+        if (delay > maxDelay)
+        {
+            delay = maxDelay;
+        }
+
+        for (var attempt = 1; attempt < retryCount && delay < maxDelay; attempt++)
+        {
+            if (delay.Ticks > maxDelay.Ticks / 2)
+            {
+                delay = maxDelay;
+                break;
+            }
+
+            delay = TimeSpan.FromTicks(delay.Ticks * 2);
+        }
+
         return _timeProvider.GetUtcNow().UtcDateTime.Add(delay);
     }
 
