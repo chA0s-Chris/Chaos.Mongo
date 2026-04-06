@@ -15,6 +15,8 @@ public static class OutboxSerializationSetup
     /// <param name="options">The outbox options containing message type registrations.</param>
     public static void RegisterClassMaps(OutboxOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         // Register the OutboxMessage class map
         if (!BsonClassMap.IsClassMapRegistered(typeof(OutboxMessage)))
         {
