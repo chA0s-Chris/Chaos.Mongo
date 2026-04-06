@@ -4,7 +4,6 @@ namespace Chaos.Mongo.Outbox;
 
 using Chaos.Mongo.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using System.Collections.Immutable;
 
 /// <summary>
 /// Extension methods for <see cref="MongoBuilder"/> to register outbox services.
@@ -31,13 +30,11 @@ public static class MongoBuilderExtensions
         configure(outboxBuilder);
         outboxBuilder.Validate();
 
-        var options = outboxBuilder.Options;
-
-        // Build the frozen type lookup
-        options.MessageTypeLookup = options.MessageTypes.ToImmutableDictionary();
-
         // Register serialization (class maps for OutboxMessage and payload types)
-        OutboxSerializationSetup.RegisterClassMaps(options);
+        OutboxSerializationSetup.RegisterClassMaps(outboxBuilder.MessageTypes);
+
+        // Build the frozen options
+        var options = outboxBuilder.Build();
 
         // Register options as singleton
         builder.Services.AddSingleton(options);

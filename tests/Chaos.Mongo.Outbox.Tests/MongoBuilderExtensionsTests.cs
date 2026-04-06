@@ -167,7 +167,7 @@ public class MongoBuilderExtensionsTests
 
         options.Should().NotBeNull();
         options.CollectionName.Should().Be("MyOutbox");
-        options.MessageTypes.Should().ContainKey(typeof(TestPayload));
+        options.MessageTypeLookup.Should().ContainKey(typeof(TestPayload));
     }
 
     [Test]

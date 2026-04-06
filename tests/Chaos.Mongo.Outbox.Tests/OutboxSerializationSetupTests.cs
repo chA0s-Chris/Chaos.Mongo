@@ -11,17 +11,14 @@ public class OutboxSerializationSetupTests
     [Test]
     public void RegisterClassMaps_CalledTwice_DoesNotThrow()
     {
-        var options = new OutboxOptions
+        var messageTypes = new Dictionary<Type, String>
         {
-            MessageTypes =
-            {
-                [typeof(TestPayload)] = "TestPayload"
-            }
+            [typeof(TestPayload)] = "TestPayload"
         };
 
-        OutboxSerializationSetup.RegisterClassMaps(options);
+        OutboxSerializationSetup.RegisterClassMaps(messageTypes);
 
-        var act = () => OutboxSerializationSetup.RegisterClassMaps(options);
+        var act = () => OutboxSerializationSetup.RegisterClassMaps(messageTypes);
 
         act.Should().NotThrow();
     }
@@ -29,15 +26,12 @@ public class OutboxSerializationSetupTests
     [Test]
     public void RegisterClassMaps_RegistersOutboxMessageClassMap()
     {
-        var options = new OutboxOptions
+        var messageTypes = new Dictionary<Type, String>
         {
-            MessageTypes =
-            {
-                [typeof(TestPayload)] = "TestPayload"
-            }
+            [typeof(TestPayload)] = "TestPayload"
         };
 
-        OutboxSerializationSetup.RegisterClassMaps(options);
+        OutboxSerializationSetup.RegisterClassMaps(messageTypes);
 
         BsonClassMap.IsClassMapRegistered(typeof(OutboxMessage)).Should().BeTrue();
     }
@@ -45,16 +39,13 @@ public class OutboxSerializationSetupTests
     [Test]
     public void RegisterClassMaps_RegistersPayloadTypeClassMaps()
     {
-        var options = new OutboxOptions
+        var messageTypes = new Dictionary<Type, String>
         {
-            MessageTypes =
-            {
-                [typeof(TestPayload)] = "TestPayload",
-                [typeof(AnotherTestPayload)] = "AnotherPayload"
-            }
+            [typeof(TestPayload)] = "TestPayload",
+            [typeof(AnotherTestPayload)] = "AnotherPayload"
         };
 
-        OutboxSerializationSetup.RegisterClassMaps(options);
+        OutboxSerializationSetup.RegisterClassMaps(messageTypes);
 
         BsonClassMap.IsClassMapRegistered(typeof(TestPayload)).Should().BeTrue();
         BsonClassMap.IsClassMapRegistered(typeof(AnotherTestPayload)).Should().BeTrue();

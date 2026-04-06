@@ -3,16 +3,22 @@
 namespace Chaos.Mongo.Outbox;
 
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Immutable;
 
 /// <summary>
 /// Provides a fluent builder for configuring the transactional outbox.
 /// </summary>
 public sealed class OutboxBuilder
 {
-    /// <summary>
-    /// Gets the configured options. Used internally after builder configuration is complete.
-    /// </summary>
-    public OutboxOptions Options { get; } = new();
+    private Boolean _autoStartProcessor;
+    private Int32 _batchSize = OutboxOptions.DefaultBatchSize;
+    private String _collectionName = OutboxOptions.DefaultCollectionName;
+    private TimeSpan _lockTimeout = OutboxOptions.DefaultLockTimeout;
+    private Int32 _maxRetries = OutboxOptions.DefaultMaxRetries;
+    private TimeSpan _pollingInterval = OutboxOptions.DefaultPollingInterval;
+    private TimeSpan? _retentionPeriod;
+    private TimeSpan _retryBackoffInitialDelay = OutboxOptions.DefaultRetryBackoffInitialDelay;
+    private TimeSpan _retryBackoffMaxDelay = OutboxOptions.DefaultRetryBackoffMaxDelay;
 
     /// <summary>
     /// Gets the publisher service lifetime.
@@ -25,6 +31,32 @@ public sealed class OutboxBuilder
     public Type? PublisherType { get; private set; }
 
     /// <summary>
+    /// Gets the registered message types mapped to their discriminator names.
+    /// </summary>
+    internal Dictionary<Type, String> MessageTypes { get; } = new();
+
+    /// <summary>
+    /// Builds the immutable <see cref="OutboxOptions"/> from the current builder state.
+    /// </summary>
+    /// <returns>A frozen <see cref="OutboxOptions"/> instance.</returns>
+    public OutboxOptions Build()
+    {
+        return new()
+        {
+            AutoStartProcessor = _autoStartProcessor,
+            BatchSize = _batchSize,
+            CollectionName = _collectionName,
+            LockTimeout = _lockTimeout,
+            MaxRetries = _maxRetries,
+            MessageTypeLookup = MessageTypes.ToImmutableDictionary(),
+            PollingInterval = _pollingInterval,
+            RetentionPeriod = _retentionPeriod,
+            RetryBackoffInitialDelay = _retryBackoffInitialDelay,
+            RetryBackoffMaxDelay = _retryBackoffMaxDelay
+        };
+    }
+
+    /// <summary>
     /// Validates the builder configuration.
     /// </summary>
     public void Validate()
@@ -35,7 +67,7 @@ public sealed class OutboxBuilder
                 "An IOutboxPublisher implementation must be registered. Use WithPublisher<T>() to register one.");
         }
 
-        if (Options.MessageTypes.Count == 0)
+        if (MessageTypes.Count == 0)
         {
             throw new InvalidOperationException(
                 "At least one message type must be registered. Use WithMessage<TPayload>() to register message types.");
@@ -48,7 +80,7 @@ public sealed class OutboxBuilder
     /// <returns>This builder instance for method chaining.</returns>
     public OutboxBuilder WithAutoStartProcessor()
     {
-        Options.AutoStartProcessor = true;
+        _autoStartProcessor = true;
         return this;
     }
 
@@ -63,7 +95,7 @@ public sealed class OutboxBuilder
         if (batchSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(batchSize), "Batch size must be greater than 0.");
 
-        Options.BatchSize = batchSize;
+        _batchSize = batchSize;
         return this;
     }
 
@@ -76,7 +108,7 @@ public sealed class OutboxBuilder
     public OutboxBuilder WithCollectionName(String collectionName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collectionName);
-        Options.CollectionName = collectionName;
+        _collectionName = collectionName;
         return this;
     }
 
@@ -91,7 +123,7 @@ public sealed class OutboxBuilder
         if (lockTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(lockTimeout), "Lock timeout must be positive.");
 
-        Options.LockTimeout = lockTimeout;
+        _lockTimeout = lockTimeout;
         return this;
     }
 
@@ -106,7 +138,7 @@ public sealed class OutboxBuilder
         if (maxRetries < 0)
             throw new ArgumentOutOfRangeException(nameof(maxRetries), "Max retries must be non-negative.");
 
-        Options.MaxRetries = maxRetries;
+        _maxRetries = maxRetries;
         return this;
     }
 
@@ -128,7 +160,7 @@ public sealed class OutboxBuilder
         else
             discriminator = payloadType.Name;
 
-        Options.MessageTypes[payloadType] = discriminator;
+        MessageTypes[payloadType] = discriminator;
         return this;
     }
 
@@ -143,7 +175,7 @@ public sealed class OutboxBuilder
         if (pollingInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(pollingInterval), "Polling interval must be positive.");
 
-        Options.PollingInterval = pollingInterval;
+        _pollingInterval = pollingInterval;
         return this;
     }
 
@@ -185,7 +217,7 @@ public sealed class OutboxBuilder
         if (retentionPeriod <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(retentionPeriod), "Retention period must be positive.");
 
-        Options.RetentionPeriod = retentionPeriod;
+        _retentionPeriod = retentionPeriod;
         return this;
     }
 
@@ -202,8 +234,8 @@ public sealed class OutboxBuilder
         if (maxDelay <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(maxDelay), "Max delay must be positive.");
 
-        Options.RetryBackoffInitialDelay = initialDelay;
-        Options.RetryBackoffMaxDelay = maxDelay;
+        _retryBackoffInitialDelay = initialDelay;
+        _retryBackoffMaxDelay = maxDelay;
         return this;
     }
 }

@@ -12,10 +12,10 @@ public static class OutboxSerializationSetup
     /// <summary>
     /// Registers BsonClassMaps for <see cref="OutboxMessage"/> and all configured payload types.
     /// </summary>
-    /// <param name="options">The outbox options containing message type registrations.</param>
-    public static void RegisterClassMaps(OutboxOptions options)
+    /// <param name="messageTypes">The registered message types mapped to their discriminator names.</param>
+    public static void RegisterClassMaps(IDictionary<Type, String> messageTypes)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(messageTypes);
 
         // Register the OutboxMessage class map
         if (!BsonClassMap.IsClassMapRegistered(typeof(OutboxMessage)))
@@ -28,7 +28,7 @@ public static class OutboxSerializationSetup
         }
 
         // Register each payload type so the driver can serialize them to BsonDocument
-        foreach (var (payloadType, _) in options.MessageTypes)
+        foreach (var (payloadType, _) in messageTypes)
         {
             if (BsonClassMap.IsClassMapRegistered(payloadType))
                 continue;

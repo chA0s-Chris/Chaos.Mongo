@@ -9,6 +9,24 @@ using NUnit.Framework;
 public class OutboxBuilderTests
 {
     [Test]
+    public void Build_DefaultValues_AreCorrect()
+    {
+        var builder = new OutboxBuilder();
+        var options = builder.Build();
+
+        options.CollectionName.Should().Be(OutboxOptions.DefaultCollectionName);
+        options.MaxRetries.Should().Be(OutboxOptions.DefaultMaxRetries);
+        options.RetryBackoffInitialDelay.Should().Be(OutboxOptions.DefaultRetryBackoffInitialDelay);
+        options.RetryBackoffMaxDelay.Should().Be(OutboxOptions.DefaultRetryBackoffMaxDelay);
+        options.RetentionPeriod.Should().BeNull();
+        options.BatchSize.Should().Be(OutboxOptions.DefaultBatchSize);
+        options.PollingInterval.Should().Be(OutboxOptions.DefaultPollingInterval);
+        options.LockTimeout.Should().Be(OutboxOptions.DefaultLockTimeout);
+        options.AutoStartProcessor.Should().BeFalse();
+        options.MessageTypeLookup.Should().BeEmpty();
+    }
+
+    [Test]
     public void FluentChaining_AllMethodsReturnBuilder()
     {
         var builder = new OutboxBuilder();
@@ -26,23 +44,6 @@ public class OutboxBuilderTests
                      .WithAutoStartProcessor();
 
         result.Should().BeSameAs(builder);
-    }
-
-    [Test]
-    public void Options_DefaultValues_AreCorrect()
-    {
-        var builder = new OutboxBuilder();
-
-        builder.Options.CollectionName.Should().Be("Outbox");
-        builder.Options.MaxRetries.Should().Be(5);
-        builder.Options.RetryBackoffInitialDelay.Should().Be(TimeSpan.FromSeconds(5));
-        builder.Options.RetryBackoffMaxDelay.Should().Be(TimeSpan.FromMinutes(5));
-        builder.Options.RetentionPeriod.Should().BeNull();
-        builder.Options.BatchSize.Should().Be(100);
-        builder.Options.PollingInterval.Should().Be(TimeSpan.FromSeconds(5));
-        builder.Options.LockTimeout.Should().Be(TimeSpan.FromMinutes(5));
-        builder.Options.AutoStartProcessor.Should().BeFalse();
-        builder.Options.MessageTypes.Should().BeEmpty();
     }
 
     [Test]
@@ -86,7 +87,7 @@ public class OutboxBuilderTests
 
         builder.WithAutoStartProcessor();
 
-        builder.Options.AutoStartProcessor.Should().BeTrue();
+        builder.Build().AutoStartProcessor.Should().BeTrue();
     }
 
     [Test]
@@ -96,7 +97,7 @@ public class OutboxBuilderTests
 
         builder.WithBatchSize(50);
 
-        builder.Options.BatchSize.Should().Be(50);
+        builder.Build().BatchSize.Should().Be(50);
     }
 
     [Test]
@@ -132,7 +133,7 @@ public class OutboxBuilderTests
 
         builder.WithCollectionName("MyOutbox");
 
-        builder.Options.CollectionName.Should().Be("MyOutbox");
+        builder.Build().CollectionName.Should().Be("MyOutbox");
     }
 
     [Test]
@@ -142,7 +143,7 @@ public class OutboxBuilderTests
 
         builder.WithLockTimeout(TimeSpan.FromMinutes(10));
 
-        builder.Options.LockTimeout.Should().Be(TimeSpan.FromMinutes(10));
+        builder.Build().LockTimeout.Should().Be(TimeSpan.FromMinutes(10));
     }
 
     [Test]
@@ -174,7 +175,7 @@ public class OutboxBuilderTests
 
         builder.WithMaxRetries(3);
 
-        builder.Options.MaxRetries.Should().Be(3);
+        builder.Build().MaxRetries.Should().Be(3);
     }
 
     [Test]
@@ -184,8 +185,9 @@ public class OutboxBuilderTests
 
         builder.WithMessage<TestPayload>();
 
-        builder.Options.MessageTypes.Should().ContainKey(typeof(TestPayload));
-        builder.Options.MessageTypes[typeof(TestPayload)].Should().Be("TestPayload");
+        var options = builder.Build();
+        options.MessageTypeLookup.Should().ContainKey(typeof(TestPayload));
+        options.MessageTypeLookup[typeof(TestPayload)].Should().Be("TestPayload");
     }
 
     [Test]
@@ -205,7 +207,7 @@ public class OutboxBuilderTests
 
         builder.WithMessage<TestPayload>("CustomName");
 
-        builder.Options.MessageTypes[typeof(TestPayload)].Should().Be("CustomName");
+        builder.Build().MessageTypeLookup[typeof(TestPayload)].Should().Be("CustomName");
     }
 
     [Test]
@@ -215,7 +217,7 @@ public class OutboxBuilderTests
 
         builder.WithPollingInterval(TimeSpan.FromSeconds(10));
 
-        builder.Options.PollingInterval.Should().Be(TimeSpan.FromSeconds(10));
+        builder.Build().PollingInterval.Should().Be(TimeSpan.FromSeconds(10));
     }
 
     [Test]
@@ -267,7 +269,7 @@ public class OutboxBuilderTests
 
         builder.WithRetentionPeriod(TimeSpan.FromDays(7));
 
-        builder.Options.RetentionPeriod.Should().Be(TimeSpan.FromDays(7));
+        builder.Build().RetentionPeriod.Should().Be(TimeSpan.FromDays(7));
     }
 
     [Test]
@@ -289,8 +291,9 @@ public class OutboxBuilderTests
 
         builder.WithRetryBackoff(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(10));
 
-        builder.Options.RetryBackoffInitialDelay.Should().Be(TimeSpan.FromSeconds(10));
-        builder.Options.RetryBackoffMaxDelay.Should().Be(TimeSpan.FromMinutes(10));
+        var options = builder.Build();
+        options.RetryBackoffInitialDelay.Should().Be(TimeSpan.FromSeconds(10));
+        options.RetryBackoffMaxDelay.Should().Be(TimeSpan.FromMinutes(10));
     }
 
     [Test]
