@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Outbox;
 
 using Chaos.Mongo.Configuration;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 /// <summary>
@@ -10,6 +11,8 @@ using MongoDB.Driver;
 /// </summary>
 public sealed class OutboxConfigurator : IMongoConfigurator
 {
+    private const String FailedTtlIndexName = "IX_Outbox_FailedUtc_TTL";
+    private const String ProcessedTtlIndexName = "IX_Outbox_ProcessedUtc_TTL";
     private readonly OutboxOptions _options;
 
     /// <summary>
@@ -48,9 +51,11 @@ public sealed class OutboxConfigurator : IMongoConfigurator
                 Builders<OutboxMessage>.IndexKeys.Ascending(m => m.ProcessedUtc),
                 new CreateIndexOptions<OutboxMessage>
                 {
-                    Name = "IX_Outbox_ProcessedUtc_TTL",
+                    Name = ProcessedTtlIndexName,
                     ExpireAfter = _options.RetentionPeriod.Value,
-                    PartialFilterExpression = Builders<OutboxMessage>.Filter.Ne(m => m.ProcessedUtc, null)
+                    PartialFilterExpression = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Processed) &
+                                              Builders<OutboxMessage>.Filter.Exists(nameof(OutboxMessage.ProcessedUtc)) &
+                                              Builders<OutboxMessage>.Filter.Type(nameof(OutboxMessage.ProcessedUtc), BsonType.DateTime)
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(processedTtlIndex, cancellationToken: cancellationToken);
@@ -59,12 +64,19 @@ public sealed class OutboxConfigurator : IMongoConfigurator
                 Builders<OutboxMessage>.IndexKeys.Ascending(m => m.FailedUtc),
                 new CreateIndexOptions<OutboxMessage>
                 {
-                    Name = "IX_Outbox_FailedUtc_TTL",
+                    Name = FailedTtlIndexName,
                     ExpireAfter = _options.RetentionPeriod.Value,
-                    PartialFilterExpression = Builders<OutboxMessage>.Filter.Ne(m => m.FailedUtc, null)
+                    PartialFilterExpression = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Failed) &
+                                              Builders<OutboxMessage>.Filter.Exists(nameof(OutboxMessage.FailedUtc)) &
+                                              Builders<OutboxMessage>.Filter.Type(nameof(OutboxMessage.FailedUtc), BsonType.DateTime)
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(failedTtlIndex, cancellationToken: cancellationToken);
+        }
+        else
+        {
+            await collection.Indexes.DropOneIfExistsAsync(ProcessedTtlIndexName, cancellationToken);
+            await collection.Indexes.DropOneIfExistsAsync(FailedTtlIndexName, cancellationToken);
         }
     }
 }

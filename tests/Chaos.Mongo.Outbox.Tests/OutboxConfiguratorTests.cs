@@ -10,7 +10,7 @@ using NUnit.Framework;
 public class OutboxConfiguratorTests
 {
     [Test]
-    public async Task ConfigureAsync_WithoutRetentionPeriod_CreatesOnlyPollingIndex()
+    public async Task ConfigureAsync_WithoutRetentionPeriod_CreatesPollingIndexAndDropsManagedTtlIndexes()
     {
         var options = new OutboxOptions
         {
@@ -37,6 +37,14 @@ public class OutboxConfiguratorTests
                 It.IsAny<CreateIndexModel<OutboxMessage>>(),
                 It.IsAny<CreateOneIndexOptions>(),
                 It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        indexManagerMock.Verify(
+            m => m.DropOneAsync("IX_Outbox_ProcessedUtc_TTL", It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        indexManagerMock.Verify(
+            m => m.DropOneAsync("IX_Outbox_FailedUtc_TTL", It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
