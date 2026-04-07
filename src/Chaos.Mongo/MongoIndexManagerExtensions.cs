@@ -76,4 +76,92 @@ public static class MongoIndexManagerExtensions
             return await indexManager.CreateOneAsync(session, model, options, cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Drops an index if it exists.
+    /// Missing index or collection errors are ignored.
+    /// </summary>
+    /// <typeparam name="TDocument">The type of the document.</typeparam>
+    /// <param name="indexManager">The index manager.</param>
+    /// <param name="name">The name of the index to drop.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <exception cref="MongoCommandException">
+    /// Thrown when an error occurs that is not related to a missing index or
+    /// collection.
+    /// </exception>
+    public static async Task DropOneIfExistsAsync<TDocument>(this IMongoIndexManager<TDocument> indexManager,
+                                                             String name,
+                                                             CancellationToken cancellationToken = default)
+        => await ExecuteDropOneAsync(() => indexManager.DropOneAsync(name, cancellationToken));
+
+    /// <summary>
+    /// Drops an index if it exists.
+    /// Missing index or collection errors are ignored.
+    /// </summary>
+    /// <typeparam name="TDocument">The type of the document.</typeparam>
+    /// <param name="indexManager">The index manager.</param>
+    /// <param name="name">The name of the index to drop.</param>
+    /// <param name="options">The options for dropping the index.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <exception cref="MongoCommandException">
+    /// Thrown when an error occurs that is not related to a missing index or
+    /// collection.
+    /// </exception>
+    public static async Task DropOneIfExistsAsync<TDocument>(this IMongoIndexManager<TDocument> indexManager,
+                                                             String name,
+                                                             DropIndexOptions options,
+                                                             CancellationToken cancellationToken = default)
+        => await ExecuteDropOneAsync(() => indexManager.DropOneAsync(name, options, cancellationToken));
+
+    /// <summary>
+    /// Drops an index within a session if it exists.
+    /// Missing index or collection errors are ignored.
+    /// </summary>
+    /// <typeparam name="TDocument">The type of the document.</typeparam>
+    /// <param name="indexManager">The index manager.</param>
+    /// <param name="session">The client session.</param>
+    /// <param name="name">The name of the index to drop.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <exception cref="MongoCommandException">
+    /// Thrown when an error occurs that is not related to a missing index or
+    /// collection.
+    /// </exception>
+    public static async Task DropOneIfExistsAsync<TDocument>(this IMongoIndexManager<TDocument> indexManager,
+                                                             IClientSessionHandle session,
+                                                             String name,
+                                                             CancellationToken cancellationToken = default)
+        => await ExecuteDropOneAsync(() => indexManager.DropOneAsync(session, name, cancellationToken));
+
+    /// <summary>
+    /// Drops an index within a session if it exists.
+    /// Missing index or collection errors are ignored.
+    /// </summary>
+    /// <typeparam name="TDocument">The type of the document.</typeparam>
+    /// <param name="indexManager">The index manager.</param>
+    /// <param name="session">The client session.</param>
+    /// <param name="name">The name of the index to drop.</param>
+    /// <param name="options">The options for dropping the index.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <exception cref="MongoCommandException">
+    /// Thrown when an error occurs that is not related to a missing index or
+    /// collection.
+    /// </exception>
+    public static async Task DropOneIfExistsAsync<TDocument>(this IMongoIndexManager<TDocument> indexManager,
+                                                             IClientSessionHandle session,
+                                                             String name,
+                                                             DropIndexOptions options,
+                                                             CancellationToken cancellationToken = default)
+        => await ExecuteDropOneAsync(() => indexManager.DropOneAsync(session, name, options, cancellationToken));
+
+    private static async Task ExecuteDropOneAsync(Func<Task> dropOne)
+    {
+        try
+        {
+            await dropOne.Invoke();
+        }
+        catch (MongoCommandException e) when (e.CodeName is "IndexNotFound" or "NamespaceNotFound")
+        {
+            // ignore missing index
+        }
+    }
 }
