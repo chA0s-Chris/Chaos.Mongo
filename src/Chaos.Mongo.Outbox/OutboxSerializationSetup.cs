@@ -23,7 +23,16 @@ public static class OutboxSerializationSetup
             BsonClassMap.RegisterClassMap<OutboxMessage>(cm =>
             {
                 cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
                 cm.MapIdMember(m => m.Id);
+                cm.GetMemberMap(m => m.CorrelationId).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.Error).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.FailedUtc).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.LockedUtc).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.LockId).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.NextAttemptUtc).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.ProcessedUtc).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.RetryCount).SetIgnoreIfDefault(true);
             });
         }
 
