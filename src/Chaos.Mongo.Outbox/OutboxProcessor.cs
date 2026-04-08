@@ -170,16 +170,22 @@ public sealed class OutboxProcessor : IOutboxProcessor
         using var scope = _serviceScopeFactory.CreateScope();
         var publisher = scope.ServiceProvider.GetRequiredService<IOutboxPublisher>();
 
+        var processedMessageCount = 0;
+
         foreach (var message in messages)
         {
             if (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug("Outbox processor cancellation requested");
                 break;
+            }
 
             await ProcessMessageAsync(collection, message, publisher, cancellationToken);
+            processedMessageCount++;
         }
 
-        _logger.LogDebug("Completed processing batch of {MessageCount} outbox messages", messages.Count);
-        return messages.Count;
+        _logger.LogDebug("Completed processing batch of {MessageCount} outbox messages", processedMessageCount);
+        return processedMessageCount;
     }
 
     private async Task ProcessLoopAsync(CancellationToken cancellationToken)
