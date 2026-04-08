@@ -96,10 +96,10 @@ public sealed class OutboxProcessor : IOutboxProcessor
                                                    .Set(m => m.FailedUtc, _timeProvider.GetUtcNow().UtcDateTime)
                                                    .Set(m => m.RetryCount, newRetryCount)
                                                    .Set(m => m.Error, exception.Message)
-                                                   .Set(m => m.NextAttemptUtc, null)
                                                    .Set(m => m.IsLocked, false)
-                                                   .Set(m => m.LockedUtc, null)
-                                                   .Set(m => m.LockId, null);
+                                                   .Unset(m => m.NextAttemptUtc)
+                                                   .Unset(m => m.LockedUtc)
+                                                   .Unset(m => m.LockId);
 
             _logger.LogWarning(
                 "Outbox message {MessageId} permanently failed after {RetryCount} attempts",
@@ -115,8 +115,8 @@ public sealed class OutboxProcessor : IOutboxProcessor
                                                    .Set(m => m.Error, exception.Message)
                                                    .Set(m => m.NextAttemptUtc, nextAttemptUtc)
                                                    .Set(m => m.IsLocked, false)
-                                                   .Set(m => m.LockedUtc, null)
-                                                   .Set(m => m.LockId, null);
+                                                   .Unset(m => m.LockedUtc)
+                                                   .Unset(m => m.LockId);
 
             _logger.LogWarning(
                 "Outbox message {MessageId} failed (attempt {RetryCount}/{MaxRetries}); next attempt at {NextAttemptUtc}",
@@ -280,8 +280,9 @@ public sealed class OutboxProcessor : IOutboxProcessor
                                                        .Set(m => m.State, OutboxMessageState.Processed)
                                                        .Set(m => m.ProcessedUtc, _timeProvider.GetUtcNow().UtcDateTime)
                                                        .Set(m => m.IsLocked, false)
-                                                       .Set(m => m.LockedUtc, null)
-                                                       .Set(m => m.LockId, null);
+                                                       .Unset(m => m.NextAttemptUtc)
+                                                       .Unset(m => m.LockedUtc)
+                                                       .Unset(m => m.LockId);
 
             var successResult = await collection.UpdateOneAsync(successFilter, successUpdate, cancellationToken: cancellationToken);
 
@@ -321,8 +322,8 @@ public sealed class OutboxProcessor : IOutboxProcessor
 
             var releaseUpdate = Builders<OutboxMessage>.Update
                                                        .Set(m => m.IsLocked, false)
-                                                       .Set(m => m.LockedUtc, null)
-                                                       .Set(m => m.LockId, null);
+                                                       .Unset(m => m.LockedUtc)
+                                                       .Unset(m => m.LockId);
 
             using var releaseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             await collection.UpdateOneAsync(releaseFilter, releaseUpdate, cancellationToken: releaseTimeout.Token);
