@@ -95,6 +95,7 @@ public class OutboxProcessorTests
     public async Task ProcessLoop_MongoException_ContinuesAfterDelay()
     {
         var callCount = 0;
+        var exceptionThrown = CreateSignal();
         var retryObserved = CreateSignal();
 
         // First call to Find throws MongoException, subsequent calls return empty
@@ -106,7 +107,10 @@ public class OutboxProcessorTests
             .Callback(() =>
             {
                 if (callCount++ == 0)
+                {
+                    exceptionThrown.TrySetResult(true);
                     throw new MongoException("Transient error");
+                }
 
                 retryObserved.TrySetResult(true);
             })
@@ -121,7 +125,10 @@ public class OutboxProcessorTests
             .Returns((FilterDefinition<OutboxMessage> _, FindOptions<OutboxMessage, OutboxMessage> _, CancellationToken _) =>
             {
                 if (callCount++ == 0)
+                {
+                    exceptionThrown.TrySetResult(true);
                     throw new MongoException("Transient error");
+                }
 
                 retryObserved.TrySetResult(true);
 
@@ -131,8 +138,17 @@ public class OutboxProcessorTests
         var sut = CreateSut();
         await sut.StartAsync();
 
-        // Advance time past the 5-second retry delay
-        _timeProvider.Advance(TimeSpan.FromSeconds(6));
+        // Wait until the exception is thrown, then advance fake time in small steps.
+        // This gives the background task a chance to register its Task.Delay timer
+        // before each advance, avoiding the race where Advance() fires before the
+        // timer is created.
+        await WaitForSignalAsync(exceptionThrown);
+        for (var i = 0; i < 12 && !retryObserved.Task.IsCompleted; i++)
+        {
+            await Task.Yield();
+            _timeProvider.Advance(TimeSpan.FromMilliseconds(500));
+        }
+
         await WaitForSignalAsync(retryObserved);
         await sut.StopAsync();
 
@@ -144,6 +160,7 @@ public class OutboxProcessorTests
     public async Task ProcessLoop_UnexpectedException_ContinuesAfterDelay()
     {
         var callCount = 0;
+        var exceptionThrown = CreateSignal();
         var retryObserved = CreateSignal();
 
         _collectionMock
@@ -154,7 +171,10 @@ public class OutboxProcessorTests
             .Callback(() =>
             {
                 if (callCount++ == 0)
+                {
+                    exceptionThrown.TrySetResult(true);
                     throw new InvalidOperationException("Something unexpected");
+                }
 
                 retryObserved.TrySetResult(true);
             })
@@ -168,7 +188,10 @@ public class OutboxProcessorTests
             .Returns((FilterDefinition<OutboxMessage> _, FindOptions<OutboxMessage, OutboxMessage> _, CancellationToken _) =>
             {
                 if (callCount++ == 0)
+                {
+                    exceptionThrown.TrySetResult(true);
                     throw new InvalidOperationException("Something unexpected");
+                }
 
                 retryObserved.TrySetResult(true);
 
@@ -178,7 +201,17 @@ public class OutboxProcessorTests
         var sut = CreateSut();
         await sut.StartAsync();
 
-        _timeProvider.Advance(TimeSpan.FromSeconds(6));
+        // Wait until the exception is thrown, then advance fake time in small steps.
+        // This gives the background task a chance to register its Task.Delay timer
+        // before each advance, avoiding the race where Advance() fires before the
+        // timer is created.
+        await WaitForSignalAsync(exceptionThrown);
+        for (var i = 0; i < 12 && !retryObserved.Task.IsCompleted; i++)
+        {
+            await Task.Yield();
+            _timeProvider.Advance(TimeSpan.FromMilliseconds(500));
+        }
+
         await WaitForSignalAsync(retryObserved);
         await sut.StopAsync();
 
