@@ -48,6 +48,10 @@ dotnet add package Chaos.Mongo.Outbox
 
 MongoDB transaction support is required. The outbox is intended for replica set or sharded deployments where multi-document transactions are available.
 
+Persisting a message and delivering a message are separate concerns:
+`IOutbox` writes the message atomically within your MongoDB transaction, while `IOutboxProcessor` is responsible for publishing pending messages.
+To actually deliver messages, the processor must be running, either via `WithAutoStartProcessor()` or manual startup with `IOutboxProcessor.StartAsync()`.
+
 ## Quick Start
 
 ### 1. Define Message Payloads
@@ -184,7 +188,7 @@ public interface IOutboxPublisher
 
 | Property | Description |
 |----------|-------------|
-| `Id` | MongoDB `ObjectId` used for approximate insertion ordering |
+| `Id` | MongoDB `ObjectId` used as a tie-breaker after `NextAttemptUtc` and `LockedUtc` when selecting eligible messages |
 | `Type` | Message discriminator registered via `WithMessage<TPayload>()` |
 | `Payload` | Raw `BsonDocument` payload |
 | `CorrelationId` | Optional correlation identifier |
@@ -295,6 +299,9 @@ public class OutboxAdminService
 ```
 
 If you manage the processor yourself, ensure configurators have already run so the outbox indexes exist. The usual approach is to enable `MongoOptions.RunConfiguratorsOnStartup`.
+
+If the processor is not running, outbox messages remain persisted in `Pending` state and are not delivered.
+This is expected behavior: the outbox guarantees atomic persistence on write, and a running processor is what provides eventual delivery.
 
 ## Writing Messages
 

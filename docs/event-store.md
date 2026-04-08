@@ -451,25 +451,28 @@ catch (MongoDuplicateEventException)
 
 ## Transactional Outbox Pattern
 
-Use the `onBeforeCommit` callback to insert outbox messages within the same transaction:
+Use the `onBeforeCommit` callback to enqueue outbox messages within the same transaction:
 
 ```csharp
 await _eventStore.AppendEventsAsync(
     [new OrderCreatedEvent { ... }],
     onBeforeCommit: async (session, aggregate, helper, ct) =>
     {
-        var outbox = helper.GetCollection<OutboxMessage>();
-        await outbox.InsertOneAsync(session, new OutboxMessage
-        {
-            Id = Guid.CreateVersion7(),
-            Type = "OrderCreated",
-            Payload = JsonSerializer.Serialize(new { OrderId = orderId }),
-            CreatedUtc = DateTime.UtcNow
-        }, cancellationToken: ct);
+        await _outbox.AddMessageAsync(
+            session,
+            new OrderPlacedMessage
+            {
+                OrderId = aggregate.Id,
+                CustomerName = aggregate.CustomerName,
+                TotalAmount = aggregate.TotalAmount
+            },
+            correlationId: aggregate.Id.ToString(),
+            cancellationToken: ct);
     });
 ```
 
 This ensures the outbox message is only persisted if the events are successfully committed.
+Register the outbox separately via `WithOutbox(...)` and inject `IOutbox` into the service that appends events.
 
 ## Exception Handling
 

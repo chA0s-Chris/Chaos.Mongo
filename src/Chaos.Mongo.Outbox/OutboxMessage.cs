@@ -37,7 +37,7 @@ public class OutboxMessage
 
     /// <summary>
     /// Gets or sets the MongoDB document identifier.
-    /// Used to sort eligible messages in approximate insertion order within a single processor.
+    /// Used as a tie-breaker after retry scheduling and lock timing when sorting eligible messages.
     /// </summary>
     public ObjectId Id { get; set; }
 
