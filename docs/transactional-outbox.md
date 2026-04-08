@@ -387,7 +387,9 @@ If a processor crashes while holding a lock, another processor can reclaim the m
 
 ### Ordering
 
-The processor queries eligible pending messages in ascending `_id` order, which gives approximate insertion ordering within a single processor.
+The processor queries eligible pending messages ordered by `NextAttemptUtc`, then `LockedUtc`, then ascending `_id`.
+
+In practice, this means messages whose scheduled retry time is due earlier are considered first, reclaimed stale locks are ordered by their lock time, and `_id` only provides approximate insertion ordering among messages with the same scheduling and lock state.
 
 Strict global ordering is not guaranteed because:
 
