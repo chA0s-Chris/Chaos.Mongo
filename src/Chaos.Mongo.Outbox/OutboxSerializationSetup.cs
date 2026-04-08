@@ -44,6 +44,7 @@ public static class OutboxSerializationSetup
 
             var classMap = new BsonClassMap(payloadType);
             classMap.AutoMap();
+            classMap.SetIgnoreExtraElements(true);
             BsonClassMap.RegisterClassMap(classMap);
         }
     }
