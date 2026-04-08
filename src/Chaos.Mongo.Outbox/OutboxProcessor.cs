@@ -142,14 +142,17 @@ public sealed class OutboxProcessor : IOutboxProcessor
         // Query for eligible messages:
         // State == Pending AND (NextAttemptUtc is null OR NextAttemptUtc <= now)
         // AND (IsLocked == false OR LockedUtc <= staleLockThreshold)
-        // ORDER BY _id ASC, LIMIT batchSize
+        // ORDER BY NextAttemptUtc ASC, LockedUtc ASC, _id ASC, LIMIT batchSize
         var filter = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Pending) &
                      (Builders<OutboxMessage>.Filter.Eq(m => m.NextAttemptUtc, null) |
                       Builders<OutboxMessage>.Filter.Lte(m => m.NextAttemptUtc, now)) &
                      (Builders<OutboxMessage>.Filter.Eq(m => m.IsLocked, false) |
                       Builders<OutboxMessage>.Filter.Lte(m => m.LockedUtc, staleLockThreshold));
 
-        var sort = Builders<OutboxMessage>.Sort.Ascending(m => m.Id);
+        var sort = Builders<OutboxMessage>.Sort
+                                          .Ascending(m => m.NextAttemptUtc)
+                                          .Ascending(m => m.LockedUtc)
+                                          .Ascending(m => m.Id);
 
         var messages = await collection
                              .Find(filter)
