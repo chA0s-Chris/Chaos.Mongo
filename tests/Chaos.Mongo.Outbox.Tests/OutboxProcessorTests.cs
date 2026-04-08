@@ -72,6 +72,7 @@ public class OutboxProcessorTests
     public async Task HandleFailure_OwnershipLostDuringUpdate_LogsWarning()
     {
         var message = CreatePendingMessage();
+        var processingCompleted = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
 
@@ -80,11 +81,11 @@ public class OutboxProcessorTests
             .ThrowsAsync(new InvalidOperationException("Broker down"));
 
         // Failure update returns ModifiedCount == 0 → ownership was lost
-        SetupUpdateOneResult(0);
+        SetupUpdateOneResult(0, () => processingCompleted.TrySetResult(true));
 
         var sut = CreateSut();
         await sut.StartAsync();
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(processingCompleted);
         await sut.StopAsync();
 
         VerifyLoggedWarning("failure update skipped");
@@ -94,6 +95,7 @@ public class OutboxProcessorTests
     public async Task ProcessLoop_MongoException_ContinuesAfterDelay()
     {
         var callCount = 0;
+        var retryObserved = CreateSignal();
 
         // First call to Find throws MongoException, subsequent calls return empty
         _collectionMock
@@ -105,6 +107,8 @@ public class OutboxProcessorTests
             {
                 if (callCount++ == 0)
                     throw new MongoException("Transient error");
+
+                retryObserved.TrySetResult(true);
             })
             .Returns(CreateEmptyCursor());
 
@@ -119,6 +123,8 @@ public class OutboxProcessorTests
                 if (callCount++ == 0)
                     throw new MongoException("Transient error");
 
+                retryObserved.TrySetResult(true);
+
                 return Task.FromResult(CreateEmptyAsyncCursor());
             });
 
@@ -127,7 +133,7 @@ public class OutboxProcessorTests
 
         // Advance time past the 5-second retry delay
         _timeProvider.Advance(TimeSpan.FromSeconds(6));
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(retryObserved);
         await sut.StopAsync();
 
         // The processor should have survived the exception (no unhandled throw)
@@ -138,6 +144,7 @@ public class OutboxProcessorTests
     public async Task ProcessLoop_UnexpectedException_ContinuesAfterDelay()
     {
         var callCount = 0;
+        var retryObserved = CreateSignal();
 
         _collectionMock
             .Setup(c => c.FindSync(
@@ -148,6 +155,8 @@ public class OutboxProcessorTests
             {
                 if (callCount++ == 0)
                     throw new InvalidOperationException("Something unexpected");
+
+                retryObserved.TrySetResult(true);
             })
             .Returns(CreateEmptyCursor());
 
@@ -161,6 +170,8 @@ public class OutboxProcessorTests
                 if (callCount++ == 0)
                     throw new InvalidOperationException("Something unexpected");
 
+                retryObserved.TrySetResult(true);
+
                 return Task.FromResult(CreateEmptyAsyncCursor());
             });
 
@@ -168,7 +179,7 @@ public class OutboxProcessorTests
         await sut.StartAsync();
 
         _timeProvider.Advance(TimeSpan.FromSeconds(6));
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(retryObserved);
         await sut.StopAsync();
 
         VerifyLoggedError("Unexpected error");
@@ -178,6 +189,7 @@ public class OutboxProcessorTests
     public async Task ProcessMessage_CancellationDuringPublish_ReleasesLockAndStops()
     {
         var message = CreatePendingMessage();
+        var lockReleased = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
 
@@ -189,13 +201,13 @@ public class OutboxProcessorTests
             .ThrowsAsync(new OperationCanceledException());
 
         // Lock release update — should be attempted
-        SetupUpdateOneResult(1);
+        SetupUpdateOneResult(1, () => lockReleased.TrySetResult(true));
 
         var sut = CreateSut();
         await sut.StartAsync(cts.Token);
 
         // Wait for the loop to exit after cancellation
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(lockReleased);
         await sut.StopAsync(cts.Token);
 
         // Verify UpdateOneAsync was called (for the lock release)
@@ -212,14 +224,15 @@ public class OutboxProcessorTests
     public async Task ProcessMessage_ClaimFails_SkipsMessageWithoutPublishing()
     {
         var message = CreatePendingMessage();
+        var claimAttempted = CreateSignal();
         SetupFindReturns(message);
 
         // FindOneAndUpdate returns null → claim failed
-        SetupClaimReturns(null);
+        SetupClaimReturns(null, () => claimAttempted.TrySetResult(true));
 
         var sut = CreateSut();
         await sut.StartAsync();
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(claimAttempted);
         await sut.StopAsync();
 
         _publisherMock.Verify(
@@ -231,6 +244,7 @@ public class OutboxProcessorTests
     public async Task ProcessMessage_PublishFails_MarksAsPermanentlyFailedWhenRetriesExhausted()
     {
         var message = CreatePendingMessage(_options.MaxRetries - 1);
+        var failureRecorded = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
 
@@ -238,11 +252,11 @@ public class OutboxProcessorTests
             .Setup(p => p.PublishAsync(It.IsAny<OutboxMessage>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Permanent failure"));
 
-        SetupUpdateOneResult(1);
+        SetupUpdateOneResult(1, () => failureRecorded.TrySetResult(true));
 
         var sut = CreateSut();
         await sut.StartAsync();
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(failureRecorded);
         await sut.StopAsync();
 
         VerifyLoggedWarning("permanently failed");
@@ -274,6 +288,7 @@ public class OutboxProcessorTests
             .Setup(p => p.PublishAsync(It.IsAny<OutboxMessage>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Broker down"));
 
+        var retryScheduled = CreateSignal();
         UpdateDefinition<OutboxMessage>? capturedUpdate = null;
         var resultMock = new Mock<UpdateResult>();
         resultMock.Setup(r => r.ModifiedCount).Returns(1);
@@ -285,7 +300,10 @@ public class OutboxProcessorTests
                        It.IsAny<UpdateOptions>(),
                        It.IsAny<CancellationToken>()))
             .Callback<FilterDefinition<OutboxMessage>, UpdateDefinition<OutboxMessage>, UpdateOptions, CancellationToken>((_, update, _, _) =>
-                    capturedUpdate = update)
+            {
+                capturedUpdate = update;
+                retryScheduled.TrySetResult(true);
+            })
             .ReturnsAsync(resultMock.Object);
 
         var expectedNextAttemptUtc = _timeProvider.GetUtcNow().UtcDateTime.Add(_options.RetryBackoffMaxDelay);
@@ -295,7 +313,7 @@ public class OutboxProcessorTests
         var sut = CreateSut();
 
         await sut.StartAsync();
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(retryScheduled);
         await sut.StopAsync();
 
         capturedUpdate.Should().NotBeNull();
@@ -313,6 +331,7 @@ public class OutboxProcessorTests
     public async Task ProcessMessage_PublishFails_SchedulesRetryWhenRetriesNotExhausted()
     {
         var message = CreatePendingMessage();
+        var retryScheduled = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
 
@@ -321,11 +340,11 @@ public class OutboxProcessorTests
             .ThrowsAsync(new InvalidOperationException("Broker down"));
 
         // HandleFailureAsync update succeeds
-        SetupUpdateOneResult(1);
+        SetupUpdateOneResult(1, () => retryScheduled.TrySetResult(true));
 
         var sut = CreateSut();
         await sut.StartAsync();
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(retryScheduled);
         await sut.StopAsync();
 
         _collectionMock.Verify(
@@ -341,6 +360,7 @@ public class OutboxProcessorTests
     public async Task ProcessMessage_PublishSucceeds_ButOwnershipLost_LogsWarning()
     {
         var message = CreatePendingMessage();
+        var completionUpdateAttempted = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
 
@@ -349,11 +369,11 @@ public class OutboxProcessorTests
             .Returns(Task.CompletedTask);
 
         // Success update returns ModifiedCount == 0 → ownership lost
-        SetupUpdateOneResult(0);
+        SetupUpdateOneResult(0, () => completionUpdateAttempted.TrySetResult(true));
 
         var sut = CreateSut();
         await sut.StartAsync();
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(completionUpdateAttempted);
         await sut.StopAsync();
 
         _publisherMock.Verify(
@@ -428,6 +448,7 @@ public class OutboxProcessorTests
     public async Task TryReleaseLock_WhenUpdateThrows_SwallowsExceptionAndLogsWarning()
     {
         var message = CreatePendingMessage();
+        var lockReleaseAttempted = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
 
@@ -445,12 +466,13 @@ public class OutboxProcessorTests
                        It.IsAny<UpdateDefinition<OutboxMessage>>(),
                        It.IsAny<UpdateOptions>(),
                        It.IsAny<CancellationToken>()))
+            .Callback(() => lockReleaseAttempted.TrySetResult(true))
             .ThrowsAsync(new MongoException("Connection lost during lock release"));
 
         var sut = CreateSut();
         await sut.StartAsync(cts.Token);
 
-        await WaitForProcessingAsync();
+        await WaitForSignalAsync(lockReleaseAttempted);
 
         // The processor should not throw despite the lock release failure
         var act = () => sut.StopAsync(cts.Token);
@@ -505,7 +527,10 @@ public class OutboxProcessorTests
         };
     }
 
-    private static async Task WaitForProcessingAsync(Int32 delayMs = 200) => await Task.Delay(delayMs);
+    private static TaskCompletionSource<Boolean> CreateSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static async Task WaitForSignalAsync(TaskCompletionSource<Boolean> signal)
+        => await signal.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
     private OutboxProcessor CreateSut()
     {
@@ -517,15 +542,17 @@ public class OutboxProcessorTests
             _loggerMock.Object);
     }
 
-    private void SetupClaimReturns(OutboxMessage? result)
+    private void SetupClaimReturns(OutboxMessage? result, Action? callback = null)
     {
         _collectionMock
             .Setup(c => c.FindOneAndUpdateAsync(
                        It.IsAny<FilterDefinition<OutboxMessage>>(),
                        It.IsAny<UpdateDefinition<OutboxMessage>>(),
-                       It.IsAny<FindOneAndUpdateOptions<OutboxMessage>>(),
+                       It.IsAny<FindOneAndUpdateOptions<OutboxMessage, OutboxMessage>>(),
                        It.IsAny<CancellationToken>()))
-            .ReturnsAsync(result!);
+            .Callback<FilterDefinition<OutboxMessage>, UpdateDefinition<OutboxMessage>, FindOneAndUpdateOptions<OutboxMessage, OutboxMessage>,
+                CancellationToken>((_, _, _, _) => callback?.Invoke())
+            .Returns(() => Task.FromResult(result!));
     }
 
     private void SetupFindReturns(params OutboxMessage[] messages)
@@ -550,7 +577,7 @@ public class OutboxProcessorTests
             .ReturnsAsync(CreateEmptyAsyncCursor());
     }
 
-    private void SetupUpdateOneResult(Int64 modifiedCount)
+    private void SetupUpdateOneResult(Int64 modifiedCount, Action? callback = null)
     {
         var resultMock = new Mock<UpdateResult>();
         resultMock.Setup(r => r.ModifiedCount).Returns(modifiedCount);
@@ -561,6 +588,7 @@ public class OutboxProcessorTests
                        It.IsAny<UpdateDefinition<OutboxMessage>>(),
                        It.IsAny<UpdateOptions>(),
                        It.IsAny<CancellationToken>()))
+            .Callback<FilterDefinition<OutboxMessage>, UpdateDefinition<OutboxMessage>, UpdateOptions, CancellationToken>((_, _, _, _) => callback?.Invoke())
             .ReturnsAsync(resultMock.Object);
     }
 
