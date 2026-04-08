@@ -11,6 +11,7 @@ A comprehensive MongoDB library for .NET that simplifies working with MongoDB by
 - 🗄️ **Database Migrations** - Version-controlled database schema changes with automatic execution and history tracking
 - 🔒 **Distributed Locking** - MongoDB-based distributed locks for coordinating work across multiple instances
 - 📬 **Message Queues** - MongoDB-backed message queues with automatic retry and error handling
+- 📨 **Transactional Outbox** - Reliable at-least-once message delivery for external systems using MongoDB transactions
 - 📖 **Event Store** - Event sourcing with automatic read model updates, concurrency control, and checkpoints
 - ⚙️ **Database Configurators** - Automated database initialization and index management
 - 💉 **Dependency Injection** - First-class support for Microsoft.Extensions.DependencyInjection
@@ -27,6 +28,7 @@ A comprehensive MongoDB library for .NET that simplifies working with MongoDB by
   - [Database Configurators](#database-configurators)
   - [Distributed Locking](#distributed-locking)
   - [Message Queues](#message-queues)
+  - [Transactional Outbox](#transactional-outbox)
   - [Event Store](#event-store)
   - [Transaction Support](#transaction-support)
 - [Configuration](#configuration)
@@ -567,6 +569,90 @@ public class OrderService
 - **Transactional callbacks** for patterns like transactional outbox
 
 📚 **[Full Event Store Documentation](./docs/event-store.md)**
+
+### Transactional Outbox
+
+Reliable at-least-once message delivery for external systems. Available in the `Chaos.Mongo.Outbox` package.
+
+```bash
+dotnet add package Chaos.Mongo.Outbox
+```
+
+#### Quick Example
+
+```csharp
+// Define an outbox message payload
+public class OrderPlacedMessage
+{
+    public string CustomerName { get; set; } = string.Empty;
+    public string OrderId { get; set; } = string.Empty;
+}
+
+// Implement a publisher
+public class NotificationsPublisher : IOutboxPublisher
+{
+    public Task PublishAsync(OutboxMessage message, CancellationToken cancellationToken = default)
+    {
+        var payload = message.DeserializePayload<OrderPlacedMessage>();
+        return SendToBrokerAsync(payload, message.CorrelationId, cancellationToken);
+    }
+
+    private static Task SendToBrokerAsync(
+        OrderPlacedMessage payload,
+        string? correlationId,
+        CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+// Register the outbox
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox(o => o
+        .WithPublisher<NotificationsPublisher>()
+        .WithMessage<OrderPlacedMessage>("OrderPlaced")
+        .WithAutoStartProcessor());
+
+// Use the outbox within the same transaction as your write
+public class OrderService
+{
+    private readonly IMongoHelper _mongo;
+    private readonly IOutbox _outbox;
+
+    public OrderService(IMongoHelper mongo, IOutbox outbox)
+    {
+        _mongo = mongo;
+        _outbox = outbox;
+    }
+
+    public async Task CreateOrderAsync(Order order)
+    {
+        await _mongo.ExecuteInTransaction(async (helper, session, ct) =>
+        {
+            var orders = helper.GetCollection<Order>();
+            await orders.InsertOneAsync(session, order, cancellationToken: ct);
+
+            await _outbox.AddMessageAsync(
+                session,
+                new OrderPlacedMessage
+                {
+                    OrderId = order.Id.ToString(),
+                    CustomerName = order.CustomerName
+                },
+                correlationId: order.Id.ToString(),
+                cancellationToken: ct);
+        });
+    }
+}
+```
+
+#### Key Features
+
+- **Atomic writes and messages** within the same MongoDB transaction
+- **At-least-once delivery** via a background processor and user-provided publisher
+- **Typed payload registration** with BSON storage and discriminator-based routing
+- **Retries, backoff, and stale lock recovery** for transient publisher failures
+- **Optional TTL cleanup** for processed and permanently failed messages
+- **Manual or automatic processor lifecycle** depending on your hosting needs
+
+📚 **[Full Transactional Outbox Documentation](./docs/transactional-outbox.md)**
 
 ### Transaction Support
 
