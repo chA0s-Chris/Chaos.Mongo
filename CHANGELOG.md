@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 
 
+
+## v0.3.0 (2026-04-08)
+
+### ✨ Features
+
+- Transactional Outbox (#59) by @chA0s-Chris
+
+
 ## v0.2.0 (2026-03-30)
 
 ### ✨ Features
