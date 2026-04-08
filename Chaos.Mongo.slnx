@@ -24,11 +24,13 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Chaos.Mongo.EventStore/Chaos.Mongo.EventStore.csproj" />
+    <Project Path="src/Chaos.Mongo.Outbox/Chaos.Mongo.Outbox.csproj" />
     <Project Path="src/Chaos.Mongo/Chaos.Mongo.csproj" />
     <File Path="src/Directory.Build.props" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Chaos.Mongo.EventStore.Tests/Chaos.Mongo.EventStore.Tests.csproj" />
+    <Project Path="tests/Chaos.Mongo.Outbox.Tests/Chaos.Mongo.Outbox.Tests.csproj" />
     <Project Path="tests/Chaos.Mongo.Tests/Chaos.Mongo.Tests.csproj" />
     <File Path="tests/Directory.Build.props" />
   </Folder>
