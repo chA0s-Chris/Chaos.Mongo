@@ -91,7 +91,7 @@ jobs:
 
       - name: Commit CHANGELOG.md to new release branch
         if: ${{ env.IS_PRERELEASE == 'false' }}
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v10
         with:
           author_name: 'github-actions[bot]'
           author_email: 'github-actions[bot]@users.noreply.github.com'
