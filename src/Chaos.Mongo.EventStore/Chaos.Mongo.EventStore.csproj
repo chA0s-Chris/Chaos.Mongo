@@ -2,7 +2,11 @@
   <PropertyGroup>
     <PackageId>Chaos.Mongo.EventStore</PackageId>
     <Description>Event sourcing extension for Chaos.Mongo, providing aggregate-based event stores with MongoDB.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../docs/event-store.md" Pack="true" Visible="false" PackagePath="README.md" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Chaos.Mongo\Chaos.Mongo.csproj" />
   </ItemGroup>

@@ -3,8 +3,8 @@
 [![GitHub License](https://img.shields.io/github/license/chA0s-Chris/Chaos.Mongo?style=for-the-badge)](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/LICENSE)
 [![NuGet Version](https://img.shields.io/nuget/v/Chaos.Mongo?style=for-the-badge)](https://www.nuget.org/packages/Chaos.Mongo)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/Chaos.Mongo?style=for-the-badge)](https://www.nuget.org/packages/Chaos.Mongo)
-[![GitHub last commit](https://img.shields.io/github/last-commit/chA0s-Chris/Mongo?style=for-the-badge)](https://github.com/chA0s-Chris/Mongo/commits/)
-[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/chA0s-Chris/Mongo/ci.yml?style=for-the-badge)]()
+[![GitHub last commit](https://img.shields.io/github/last-commit/chA0s-Chris/Chaos.Mongo?style=for-the-badge)](https://github.com/chA0s-Chris/Chaos.Mongo/commits/)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/chA0s-Chris/Chaos.Mongo/ci.yml?style=for-the-badge)]()
 
 A comprehensive MongoDB library for .NET that simplifies working with MongoDB by providing:
 

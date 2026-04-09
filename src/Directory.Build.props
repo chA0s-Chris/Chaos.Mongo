@@ -10,7 +10,6 @@
     <Copyright>Copyright © 2025 Christian Flessa</Copyright>
     <PackageProjectUrl>https://github.com/chA0s-Chris/Chaos.Mongo</PackageProjectUrl>
     <PackageTags>MongoDB</PackageTags>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
     <DefineConstants>$(DefineConstants);$(AdditionalConstants)</DefineConstants>
   </PropertyGroup>
 
@@ -22,7 +21,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="../../README.md" Pack="true" Visible="false" PackagePath="" />
     <None Include="../../dist/mongo.png" Pack="true" Visible="false" PackagePath="" />
   </ItemGroup>
 </Project>
