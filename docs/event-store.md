@@ -1,5 +1,11 @@
 # Chaos.Mongo.EventStore
 
+[![GitHub License](https://img.shields.io/github/license/chA0s-Chris/Chaos.Mongo?style=for-the-badge)](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/LICENSE)
+[![NuGet Version](https://img.shields.io/nuget/v/Chaos.Mongo.EventStore?style=for-the-badge)](https://www.nuget.org/packages/Chaos.Mongo.EventStore)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Chaos.Mongo.EventStore?style=for-the-badge)](https://www.nuget.org/packages/Chaos.Mongo.EventStore)
+[![GitHub last commit](https://img.shields.io/github/last-commit/chA0s-Chris/Mongo?style=for-the-badge)](https://github.com/chA0s-Chris/Mongo/commits/)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/chA0s-Chris/Mongo/ci.yml?style=for-the-badge)]()
+
 Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
 
 ## Table of Contents
