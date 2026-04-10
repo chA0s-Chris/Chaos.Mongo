@@ -77,3 +77,42 @@
 **Deferred Items Not Issued (Yet):**
 - Secondary issues (race in count check, long-running handler locking) — discoverable during #9/#10 PRs
 - Collection naming for DLQ and observability queries — design decision for Phase 2
+
+### 2026-04-10: PR #73 Review Findings Triage
+
+**PR:** #73 — Queue Lock Lease Recovery (Issue #9)  
+**Trigger:** Copilot code review surfaced 6 findings
+
+**Critical Issues Identified:**
+1. **No wake-up after expiry** — Semaphore waits indefinitely; expired locks never retried without new messages. This defeats passive lease recovery. Fix: Add timeout to `WaitAsync` matching lease interval.
+2. **Lock token race** — Long-running handlers can have locks stolen, then overwrite the new lock on completion. Fix: Guard close update with captured `LockedUtc`.
+
+**Test/Cosmetic Issues (valid, low-priority):**
+- ❌ **Test container disposal breaks parallel tests** — ELEVATED TO BLOCKING (see r3066971413 analysis below)
+- `WaitForQueueItemAsync` throws wrong exception type (wrap delay)
+- Duplicated history entry in Eliot's file (dedupe)
+- Short lease in test masks wake-up bug (optional increase)
+
+**Architectural Observation:**
+The ADR assumed passive expiry would "just work" with the existing query filter. What we missed: the processing loop's semaphore-based signaling creates a dependency on external events (inserts) that passive expiry alone can't satisfy. The fix is simple (timed wait), but this is a gap between design and implementation.
+
+**Decision:** Findings #1 and #2 block merge. Remaining findings recommended but not blocking.
+
+### 2026-04-10: PR #73 Review Finding r3066971413 — Deep Dive
+
+**Finding:** Test container disposal in `[OneTimeTearDown]` breaks parallel test execution.
+
+**Analysis:** The test class independently disposes a container managed as a shared singleton by `MongoAssemblySetup.cs` (SetUpFixture pattern). When parallel tests run and this teardown fires, it kills the shared resource while other tests still depend on it. This is a real CI/CD break risk, not a cosmetic issue.
+
+**Root Cause:** `MongoQueueLockExpiryIntegrationTests` has `[OneTimeTearDown] public Task DisposeMongoDbContainer() => _container.DisposeAsync()`. The container returned by `MongoDbTestContainer.StartContainerAsync()` is a singleton managed at assembly level, not per-test-class.
+
+**Precedent:** Other test classes (`MongoMigrationIntegrationTests`, `MongoConfiguratorIntegrationTests`, etc.) correctly call `StartContainerAsync()` WITHOUT a disposal teardown. They rely on `MongoAssemblySetup.StopContainer()` (which calls `MongoDbTestContainer.StopContainerAsync()`) for cleanup.
+
+**Impact:** 
+- Local serial tests: May pass (disposal races with other tests' setup)
+- CI parallel tests: Will fail with timeouts or connection errors
+- Non-deterministic failures in CI pipeline
+
+**Verdict:** VALID AND CRITICAL — blocks merge.
+
+**Recommendation:** Remove the `[OneTimeTearDown]` disposal. The container lifecycle is already managed by the assembly-level fixture. See `.squad/decisions/inbox/nate-pr73-review-thread-r3066971413.md` for full analysis and fix instructions.

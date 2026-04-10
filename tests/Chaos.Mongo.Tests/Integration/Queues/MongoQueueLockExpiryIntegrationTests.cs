@@ -16,10 +16,6 @@ public class MongoQueueLockExpiryIntegrationTests
 {
     private MongoDbContainer _container;
 
-    [OneTimeTearDown]
-    public Task DisposeMongoDbContainer()
-        => _container.DisposeAsync().AsTask();
-
     [OneTimeSetUp]
     public async Task GetMongoDbContainer()
         => _container = await MongoDbTestContainer.StartContainerAsync();
