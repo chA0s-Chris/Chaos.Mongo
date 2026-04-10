@@ -67,6 +67,22 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     /// <inheritdoc/>
     public Boolean IsActive => _isActive && !_isDisposed;
 
+    private FilterDefinition<MongoQueueItem<TPayload>> CreateAvailableQueueItemFilter()
+    {
+        var filterBuilder = Builders<MongoQueueItem<TPayload>>.Filter;
+        var lockExpiryUtc = _timeProvider.GetUtcNow().UtcDateTime - _queueDefinition.LockLeaseTime;
+
+        return filterBuilder.Eq(x => x.IsClosed, false) &
+               (filterBuilder.Eq(x => x.IsLocked, false) |
+                (filterBuilder.Eq(x => x.IsLocked, true) &
+                 (filterBuilder.Eq(x => x.LockedUtc, null) |
+                  filterBuilder.Lt(x => x.LockedUtc, lockExpiryUtc))));
+    }
+
+    private FilterDefinition<MongoQueueItem<TPayload>> CreateAvailableQueueItemFilter(ObjectId queueItemId)
+        => Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.Id, queueItemId) &
+           CreateAvailableQueueItemFilter();
+
     /// <summary>
     /// Ensures that required indexes exist on the queue collection for efficient querying.
     /// </summary>
@@ -78,14 +94,8 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                      .CreateOneOrUpdateAsync(
                          new(Builders<MongoQueueItem<TPayload>>.IndexKeys
                                                                .Ascending(x => x.IsClosed)
-                                                               .Ascending(x => x.IsLocked),
-                             new CreateIndexOptions<MongoQueueItem<TPayload>>
-                             {
-                                 PartialFilterExpression = Builders<MongoQueueItem<TPayload>>.Filter
-                                                                                             .Eq(x => x.IsClosed, false) &
-                                                           Builders<MongoQueueItem<TPayload>>.Filter
-                                                                                             .Eq(x => x.IsLocked, false)
-                             }),
+                                                               .Ascending(x => x.IsLocked)
+                                                               .Ascending(x => x.LockedUtc)),
                          cancellationToken: cancellationToken);
 
     /// <summary>
@@ -141,7 +151,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <remarks>
     /// The queue item is locked during processing and closed after processing has completed.
-    /// If the queue item is already closed or locked, it is skipped.
+    /// If the queue item is already closed or still within its lease, it is skipped.
     /// </remarks>
     private async Task ProcessQueueItemAsync(IMongoCollection<MongoQueueItem<TPayload>> collection,
                                              ObjectId queueItemId,
@@ -152,15 +162,13 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         try
         {
             var queueItem = await collection.FindOneAndUpdateAsync(
-                x => x.Id == queueItemId &&
-                     !x.IsClosed &&
-                     !x.IsLocked,
+                CreateAvailableQueueItemFilter(queueItemId),
                 Builders<MongoQueueItem<TPayload>>.Update
                                                   .Set(x => x.IsLocked, true)
                                                   .Set(x => x.LockedUtc, _timeProvider.GetUtcNow().UtcDateTime),
                 new()
                 {
-                    ReturnDocument = ReturnDocument.After
+                    ReturnDocument = ReturnDocument.Before
                 },
                 cancellationToken);
 
@@ -170,10 +178,18 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 return;
             }
 
+            if (queueItem.IsLocked)
+            {
+                _logger.LogWarning("Recovering expired queue item lock {QueueItemId} with payload {PayloadType}",
+                                   queueItemId,
+                                   typeof(TPayload).FullName);
+            }
+
             var payloadHandler = _payloadHandlerFactory.CreateHandler<TPayload>();
             try
             {
-                _logger.LogDebug("Handling payload {PayloadType} with handler {PayloadHandlerType}", typeof(TPayload).FullName, payloadHandler.GetType().FullName);
+                _logger.LogDebug("Handling payload {PayloadType} with handler {PayloadHandlerType}", typeof(TPayload).FullName,
+                                 payloadHandler.GetType().FullName);
                 await payloadHandler.HandlePayloadAsync(queueItem.Payload, cancellationToken);
             }
             finally
@@ -214,7 +230,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     /// <returns>A task that completes when processing stops.</returns>
     /// <remarks>
     /// This method waits for signals from the change stream monitor or self-signals when more items exist.
-    /// Items are locked during processing using optimistic concurrency to prevent duplicate processing.
+    /// Items are locked during processing using optimistic concurrency with lease expiry.
     /// Failed operations are retried after a delay.
     /// </remarks>
     private async Task ProcessQueueItemsAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, CancellationToken cancellationToken)
@@ -222,9 +238,6 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         _logger.LogInformation("Processing items with payload {PayloadType} for queue {CollectionName}",
                                _queueDefinition.PayloadType.FullName,
                                _queueDefinition.CollectionName);
-
-        var filter = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, false) &
-                     Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsLocked, false);
 
         var sortDefinition = _payloadPrioritizer.CreateSortDefinition<TPayload>();
         var countOptions = new CountOptions
@@ -238,7 +251,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
             {
                 await _signalSemaphore.WaitAsync(cancellationToken);
 
-                var queueItemIds = await collection.Find(filter)
+                var queueItemIds = await collection.Find(CreateAvailableQueueItemFilter())
                                                    .Sort(sortDefinition)
                                                    .Project(x => x.Id)
                                                    .Limit(_queueDefinition.QueryLimit)
@@ -260,7 +273,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 }
 
                 // check if there are unprocessed items left so we don't wait
-                var count = await collection.CountDocumentsAsync(filter, countOptions, cancellationToken);
+                var count = await collection.CountDocumentsAsync(CreateAvailableQueueItemFilter(), countOptions, cancellationToken);
                 if (count > 0)
                 {
                     _signalSemaphore.Release();

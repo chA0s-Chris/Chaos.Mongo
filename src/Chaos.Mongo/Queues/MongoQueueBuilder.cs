@@ -16,6 +16,7 @@ public sealed class MongoQueueBuilder<TPayload>
     private Boolean? _autoStartSubscription;
     private String? _collectionName;
     private Boolean _isRegistered;
+    private TimeSpan? _lockLeaseTime;
     private Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>>? _payloadHandlerFactory;
     private Type? _payloadHandlerType;
     private Int32? _queryLimit;
@@ -66,6 +67,7 @@ public sealed class MongoQueueBuilder<TPayload>
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = _collectionName ?? String.Empty,
+            LockLeaseTime = _lockLeaseTime ?? MongoDefaults.QueueLockLeaseTime,
             PayloadType = _payloadType,
             QueryLimit = _queryLimit ?? MongoDefaults.QueryLimit,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TPayload>),
@@ -120,6 +122,27 @@ public sealed class MongoQueueBuilder<TPayload>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collectionName);
         _collectionName = collectionName;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the amount of time a queue item lock stays valid before it can be recovered.
+    /// </summary>
+    /// <remarks>
+    /// The default lease time is <see cref="MongoDefaults.QueueLockLeaseTime"/>.
+    /// Expired locks are eligible for reprocessing to preserve at-least-once delivery semantics.
+    /// </remarks>
+    /// <param name="leaseTime">The lock lease time.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="leaseTime"/> is less than or equal to zero.</exception>
+    public MongoQueueBuilder<TPayload> WithLockLeaseTime(TimeSpan leaseTime)
+    {
+        if (leaseTime <= TimeSpan.Zero)
+        {
+            throw new ArgumentException("Lock lease time must be greater than 0.", nameof(leaseTime));
+        }
+
+        _lockLeaseTime = leaseTime;
         return this;
     }
 

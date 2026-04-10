@@ -382,6 +382,7 @@ public class MongoQueueTests
         => new()
         {
             CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),

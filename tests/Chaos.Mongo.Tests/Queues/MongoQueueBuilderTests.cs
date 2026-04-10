@@ -5,6 +5,7 @@ namespace Chaos.Mongo.Tests.Queues;
 using Chaos.Mongo.Queues;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NUnit.Framework;
 
 public class MongoQueueBuilderTests
@@ -49,6 +50,44 @@ public class MongoQueueBuilderTests
         // Assert
         countAfterFirst.Should().Be(1);
         countAfterSecond.Should().Be(1);
+    }
+
+    [Test]
+    public async Task RegisterQueue_WithLockLeaseTime_UsesConfiguredLockLeaseTime()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        var lockLeaseTime = TimeSpan.FromSeconds(30);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.WithLockLeaseTime(lockLeaseTime);
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.LockLeaseTime.Should().Be(lockLeaseTime);
+    }
+
+    [Test]
+    public async Task RegisterQueue_WithoutLockLeaseTime_UsesDefaultLockLeaseTime()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.LockLeaseTime.Should().Be(MongoDefaults.QueueLockLeaseTime);
     }
 
     [Test]
@@ -168,6 +207,50 @@ public class MongoQueueBuilderTests
 
         // Assert
         result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithLockLeaseTime_WithNegativeValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithLockLeaseTime(TimeSpan.FromSeconds(-1));
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Lock lease time must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithLockLeaseTime_WithPositiveValue_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithLockLeaseTime(TimeSpan.FromSeconds(30));
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithLockLeaseTime_WithZeroValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithLockLeaseTime(TimeSpan.Zero);
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Lock lease time must be greater than 0.*");
     }
 
     [Test]
@@ -341,6 +424,15 @@ public class MongoQueueBuilderTests
         // Assert
         act.Should().Throw<ArgumentException>()
            .WithMessage("Query limit must be greater than 0.*");
+    }
+
+    private static ServiceCollection CreateServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Mock.Of<IMongoQueueCollectionNameGenerator>());
+        services.AddSingleton(Mock.Of<IMongoQueueSubscriptionFactory>());
+        services.AddSingleton(Mock.Of<IMongoQueuePublisher>());
+        return services;
     }
 
     public abstract class AbstractPayloadHandler : IMongoQueuePayloadHandler<TestPayload>

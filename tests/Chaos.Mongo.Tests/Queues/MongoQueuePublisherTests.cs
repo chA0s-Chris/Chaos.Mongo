@@ -8,6 +8,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using Moq;
 using NUnit.Framework;
+using MongoDefaults = Chaos.Mongo.MongoDefaults;
 
 public class MongoQueuePublisherTests
 {
@@ -47,6 +48,7 @@ public class MongoQueuePublisherTests
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = String.Empty, // Empty collection name
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
@@ -72,6 +74,7 @@ public class MongoQueuePublisherTests
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = null!, // Null collection name
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
@@ -97,6 +100,7 @@ public class MongoQueuePublisherTests
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
@@ -120,6 +124,7 @@ public class MongoQueuePublisherTests
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(AnotherTestPayload), // Different type
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
@@ -168,6 +173,7 @@ public class MongoQueuePublisherTests
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
@@ -212,6 +218,7 @@ public class MongoQueuePublisherTests
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             QueryLimit = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
