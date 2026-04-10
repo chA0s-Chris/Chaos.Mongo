@@ -56,3 +56,24 @@
 2. PR #2: TTL-based retention (lower urgency, gradual storage growth)
 
 **Status:** Ready for development. Eliot to lead #9 implementation, Parker test fixtures ready for TDD approach.
+
+### 2026-04-10: Issue Triage & Phase 2 Planning
+
+**Action:** Updated #9 and #10 GitHub issues with implementation-ready specifications derived from team ADR.
+
+**Issue Updates:**
+- **#9 (Queue lock resilience):** Focused on passive lease expiry, acceptance criteria, API additions, out-of-scope boundaries
+- **#10 (Queue item cleanup):** Focused on TTL-based retention with optional immediate delete, acceptance criteria, API additions
+
+**New Phase 2 Issues Created:**
+- **#71 — Queue dead-letter handling and retry policies** (design-heavy, requires retry count persistence and DLQ routing)
+- **#72 — Queue observability and diagnostics** (cross-cutting, structured logging and metrics)
+
+**Rationale for New Issues:**
+- Retry counting and DLQ handling are substantial scope requiring separate API design decisions
+- Observability is cross-cutting and benefits from team input on telemetry strategy
+- Secondary bugs (count-race, long-handler-lock) remain implementation-time discoveries; not pre-issued to avoid context fragmentation
+
+**Deferred Items Not Issued (Yet):**
+- Secondary issues (race in count check, long-running handler locking) — discoverable during #9/#10 PRs
+- Collection naming for DLQ and observability queries — design decision for Phase 2

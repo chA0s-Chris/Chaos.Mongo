@@ -111,6 +111,34 @@ Both PRs are independent and can be developed in parallel.
 | Lock timeout race condition | Acceptable per "at-least-once" semantics. Document in code. |
 | Performance impact of new indexes | MongoDB TTL efficient. Compound index improves query. |
 
+## Completed Work
+
+### Issue Triage & Phase 2 Planning (2026-04-10)
+
+**Author:** Nate (Lead/Architect)  
+**Status:** Closed  
+**Related Issues:** #9, #10, #71, #72
+
+Updated GitHub issues #9 and #10 with implementation-ready specifications derived from the approved ADR. Created two Phase 2 issues for deferred concerns.
+
+**Issues Updated:**
+- **#9 — Queue Lock Resilience:** Focused on passive lease expiry with acceptance criteria, API additions, and clear out-of-scope boundaries
+- **#10 — Queue Item Cleanup:** Focused on TTL-based retention with optional immediate delete and acceptance criteria
+
+**Phase 2 Issues Created:**
+- **#71 — Queue Dead-Letter Handling and Retry Policies** (design-heavy, requires retry count persistence and DLQ routing)
+- **#72 — Queue Observability and Diagnostics** (cross-cutting, structured logging and metrics)
+
+**Rationale for Phase 2 Deferral:**
+- Retry counting and DLQ handling are substantial scope requiring separate API design decisions
+- Observability is cross-cutting and benefits from team input on telemetry strategy
+- Secondary bugs (count-race, long-handler-lock) remain implementation-time discoveries
+
+**Next Actions:**
+1. Phase 1 (Immediate): Eliot implements #9 (lock expiry), Parker designs tests
+2. Phase 1 (Follow-up): Second PR for #10 (TTL retention) after #9 merges
+3. Phase 2 (Design): Team aligns on #71 and #72 requirements before implementation
+
 ## Governance
 
 - All meaningful changes require team consensus
