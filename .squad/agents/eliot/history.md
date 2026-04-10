@@ -188,3 +188,17 @@
 - Fixes issue #9
 
 **Status:** PR ready for user review and team feedback before merge.
+
+### 2026-04-10: PR #73 Blocker Fixes
+
+**Queue wake-up behavior:**
+- Passive lease recovery still needs a periodic wake-up after the queue goes idle, otherwise expired locks are only retried when a new insert or self-signal arrives.
+- `MongoQueueSubscription` now re-checks the queue at least once per second while idle, capped by the configured lease time, so expired locks wake processing without a new publish.
+
+**Lock ownership guard:**
+- Closing a processed item must be conditional on the same `LockedUtc` value that was written when this consumer acquired the lock.
+- Guarding the final close/unlock update with `(Id, IsClosed=false, IsLocked=true, LockedUtc=acquiredLockUtc)` prevents a slow consumer from clearing a replacement lock after lease expiry.
+
+**Regression coverage:**
+- Lease-expiry recovery test now proves the retry happens after the lease window without another insert.
+- Added a two-consumer integration test that verifies the original handler cannot clear the replacement consumer's renewed lock.

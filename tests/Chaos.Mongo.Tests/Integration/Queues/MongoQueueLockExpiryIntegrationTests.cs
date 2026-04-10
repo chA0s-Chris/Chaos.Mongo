@@ -28,6 +28,7 @@ public class MongoQueueLockExpiryIntegrationTests
     public async Task QueueHandlerFailure_ReprocessesMessageAfterLockLeaseExpires()
     {
         // Arrange
+        var leaseTime = TimeSpan.FromSeconds(2);
         var handler = new RecoveringPayloadHandler();
         var services = new ServiceCollection();
         services.AddNUnitTestLogging();
@@ -38,7 +39,7 @@ public class MongoQueueLockExpiryIntegrationTests
                 .WithQueue<LeasePayload>(queue => queue
                                                   .WithPayloadHandler(_ => handler)
                                                   .WithCollectionName("lease-queue")
-                                                  .WithLockLeaseTime(TimeSpan.FromMilliseconds(250))
+                                                  .WithLockLeaseTime(leaseTime)
                                                   .WithoutAutoStartSubscription());
 
         await using var serviceProvider = services.BuildServiceProvider();
@@ -67,6 +68,8 @@ public class MongoQueueLockExpiryIntegrationTests
         firstAttemptItem.LockedUtc.Should().NotBeNull();
 
         handler.Attempts.Should().Be(2);
+        handler.AttemptStartedAtUtc.Should().HaveCount(2);
+        (handler.AttemptStartedAtUtc[1] - handler.AttemptStartedAtUtc[0]).Should().BeGreaterThanOrEqualTo(leaseTime - TimeSpan.FromMilliseconds(500));
         handler.SuccessfulPayloads.Should().ContainSingle(x => x.Value == "recover-me");
         recoveredItem.IsClosed.Should().BeTrue();
         recoveredItem.IsLocked.Should().BeFalse();
@@ -75,6 +78,83 @@ public class MongoQueueLockExpiryIntegrationTests
 
         // Cleanup
         await queue.StopSubscriptionAsync();
+    }
+
+    [Test]
+    public async Task SlowHandlerCompletion_DoesNotClearReplacementLock()
+    {
+        // Arrange
+        var leaseTime = TimeSpan.FromMilliseconds(750);
+        var uniqueDbName = $"QueueLeaseOwnershipTest_{Guid.NewGuid():N}";
+        var collectionName = "lease-queue";
+        var firstHandler = new BlockingPayloadHandler();
+        var secondHandler = new BlockingPayloadHandler();
+
+        await using var firstServiceProvider = CreateServiceProvider(uniqueDbName, collectionName, leaseTime, firstHandler);
+        await using var secondServiceProvider = CreateServiceProvider(uniqueDbName, collectionName, leaseTime, secondHandler);
+
+        var firstHelper = firstServiceProvider.GetRequiredService<IMongoHelper>();
+        var collection = firstHelper.Database.GetCollection<MongoQueueItem<LeasePayload>>(collectionName);
+        var firstQueue = firstServiceProvider.GetRequiredService<IMongoQueue<LeasePayload>>();
+        var secondQueue = secondServiceProvider.GetRequiredService<IMongoQueue<LeasePayload>>();
+
+        await firstQueue.StartSubscriptionAsync();
+
+        try
+        {
+            // Act
+            await firstQueue.PublishAsync(new()
+            {
+                Value = "handoff-me"
+            });
+
+            await firstHandler.WaitForStart(TimeSpan.FromSeconds(10));
+            var firstLock = await WaitForQueueItemAsync(collection,
+                                                        x => x.Payload.Value == "handoff-me" && x.IsLocked && !x.IsClosed,
+                                                        TimeSpan.FromSeconds(10));
+
+            await secondQueue.StartSubscriptionAsync();
+
+            await secondHandler.WaitForStart(TimeSpan.FromSeconds(10));
+            var replacementLock = await WaitForQueueItemAsync(collection,
+                                                              x => x.Payload.Value == "handoff-me" &&
+                                                                   x.IsLocked &&
+                                                                   !x.IsClosed &&
+                                                                   x.LockedUtc != null &&
+                                                                   x.LockedUtc > firstLock.LockedUtc,
+                                                              TimeSpan.FromSeconds(10));
+
+            firstHandler.Release();
+            await firstHandler.WaitForCompletion(TimeSpan.FromSeconds(10));
+
+            var itemWhileReplacementOwnsLock = await WaitForQueueItemAsync(collection,
+                                                                           x => x.Payload.Value == "handoff-me" &&
+                                                                                x.IsLocked &&
+                                                                                !x.IsClosed &&
+                                                                                x.LockedUtc == replacementLock.LockedUtc,
+                                                                           TimeSpan.FromSeconds(10));
+
+            // Assert
+            itemWhileReplacementOwnsLock.IsClosed.Should().BeFalse();
+            itemWhileReplacementOwnsLock.IsLocked.Should().BeTrue();
+            itemWhileReplacementOwnsLock.LockedUtc.Should().Be(replacementLock.LockedUtc);
+
+            secondHandler.Release();
+            await secondHandler.WaitForCompletion(TimeSpan.FromSeconds(10));
+
+            var closedItem = await WaitForQueueItemAsync(collection,
+                                                         x => x.Payload.Value == "handoff-me" && x.IsClosed,
+                                                         TimeSpan.FromSeconds(10));
+
+            closedItem.IsClosed.Should().BeTrue();
+            closedItem.IsLocked.Should().BeFalse();
+            closedItem.LockedUtc.Should().BeNull();
+        }
+        finally
+        {
+            await secondQueue.StopSubscriptionAsync();
+            await firstQueue.StopSubscriptionAsync();
+        }
     }
 
     [Test]
@@ -121,18 +201,74 @@ public class MongoQueueLockExpiryIntegrationTests
         TimeSpan timeout)
     {
         using var cts = new CancellationTokenSource(timeout);
-        while (!cts.Token.IsCancellationRequested)
+        try
         {
-            var queueItem = await collection.Find(filter).FirstOrDefaultAsync(cts.Token);
-            if (queueItem is not null)
+            while (!cts.Token.IsCancellationRequested)
             {
-                return queueItem;
-            }
+                var queueItem = await collection.Find(filter).FirstOrDefaultAsync(cts.Token);
+                if (queueItem is not null)
+                {
+                    return queueItem;
+                }
 
-            await Task.Delay(100, cts.Token);
+                await Task.Delay(100, cts.Token);
+            }
+        }
+        catch (OperationCanceledException e) when (cts.IsCancellationRequested)
+        {
+            throw new TimeoutException("Queue item did not reach the expected state.", e);
         }
 
         throw new TimeoutException("Queue item did not reach the expected state.");
+    }
+
+    private ServiceProvider CreateServiceProvider(
+        String databaseName,
+        String collectionName,
+        TimeSpan lockLeaseTime,
+        IMongoQueuePayloadHandler<LeasePayload> handler)
+    {
+        var services = new ServiceCollection();
+        services.AddNUnitTestLogging();
+
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        services.AddMongo(url, databaseName)
+                .WithQueue<LeasePayload>(queue => queue
+                                                  .WithPayloadHandler(_ => handler)
+                                                  .WithCollectionName(collectionName)
+                                                  .WithLockLeaseTime(lockLeaseTime)
+                                                  .WithoutAutoStartSubscription());
+
+        return services.BuildServiceProvider();
+    }
+
+    private sealed class BlockingPayloadHandler : IMongoQueuePayloadHandler<LeasePayload>
+    {
+        private readonly SemaphoreSlim _completionSemaphore = new(0);
+        private readonly SemaphoreSlim _releaseSemaphore = new(0);
+        private readonly SemaphoreSlim _startSemaphore = new(0);
+
+        public void Release()
+            => _releaseSemaphore.Release();
+
+        public async Task WaitForCompletion(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            await _completionSemaphore.WaitAsync(cts.Token);
+        }
+
+        public async Task WaitForStart(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            await _startSemaphore.WaitAsync(cts.Token);
+        }
+
+        public async Task HandlePayloadAsync(LeasePayload payload, CancellationToken cancellationToken = default)
+        {
+            _startSemaphore.Release();
+            await _releaseSemaphore.WaitAsync(cancellationToken);
+            _completionSemaphore.Release();
+        }
     }
 
     private sealed class LeasePayload
@@ -149,10 +285,12 @@ public class MongoQueueLockExpiryIntegrationTests
     private sealed class RecoveringPayloadHandler : IMongoQueuePayloadHandler<LeasePayload>
     {
         private readonly SemaphoreSlim _attemptSemaphore = new(0);
+        private readonly List<DateTimeOffset> _attemptStartedAtUtc = [];
         private readonly List<LeasePayload> _successfulPayloads = [];
         private readonly SemaphoreSlim _successSemaphore = new(0);
 
         public Int32 Attempts { get; private set; }
+        public IReadOnlyList<DateTimeOffset> AttemptStartedAtUtc => _attemptStartedAtUtc;
         public IReadOnlyList<LeasePayload> SuccessfulPayloads => _successfulPayloads;
 
         public async Task WaitForAttempts(Int32 count, TimeSpan timeout)
@@ -175,6 +313,7 @@ public class MongoQueueLockExpiryIntegrationTests
 
         public Task HandlePayloadAsync(LeasePayload payload, CancellationToken cancellationToken = default)
         {
+            _attemptStartedAtUtc.Add(DateTimeOffset.UtcNow);
             Attempts++;
             _attemptSemaphore.Release();
 

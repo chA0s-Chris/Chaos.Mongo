@@ -21,6 +21,7 @@ using MongoDB.Driver;
 public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload>
     where TPayload : class, new()
 {
+    private static readonly TimeSpan MaxLeaseRecoveryWakeInterval = TimeSpan.FromSeconds(1);
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
@@ -161,11 +162,12 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
 
         try
         {
+            var acquiredLockUtc = _timeProvider.GetUtcNow().UtcDateTime;
             var queueItem = await collection.FindOneAndUpdateAsync(
                 CreateAvailableQueueItemFilter(queueItemId),
                 Builders<MongoQueueItem<TPayload>>.Update
                                                   .Set(x => x.IsLocked, true)
-                                                  .Set(x => x.LockedUtc, _timeProvider.GetUtcNow().UtcDateTime),
+                                                  .Set(x => x.LockedUtc, acquiredLockUtc),
                 new()
                 {
                     ReturnDocument = ReturnDocument.Before
@@ -206,14 +208,25 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 // ReSharper restore SuspiciousTypeConversion.Global
             }
 
-            await collection.UpdateOneAsync(
-                x => x.Id == queueItemId,
+            var completionFilter = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.Id, queueItemId) &
+                                   Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, false) &
+                                   Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsLocked, true) &
+                                   Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.LockedUtc, acquiredLockUtc);
+            var completionResult = await collection.UpdateOneAsync(
+                completionFilter,
                 Builders<MongoQueueItem<TPayload>>.Update
                                                   .Set(x => x.IsClosed, true)
                                                   .Set(x => x.ClosedUtc, _timeProvider.GetUtcNow().UtcDateTime)
                                                   .Set(x => x.IsLocked, false)
                                                   .Unset(x => x.LockedUtc),
                 cancellationToken: cancellationToken);
+
+            if (completionResult.ModifiedCount == 0)
+            {
+                _logger.LogWarning("Skipping completion for queue item {QueueItemId} with payload {PayloadType} because lock ownership changed",
+                                   queueItemId,
+                                   typeof(TPayload).FullName);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
@@ -240,6 +253,9 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                                _queueDefinition.CollectionName);
 
         var sortDefinition = _payloadPrioritizer.CreateSortDefinition<TPayload>();
+        var leaseRecoveryWakeInterval = _queueDefinition.LockLeaseTime < MaxLeaseRecoveryWakeInterval
+            ? _queueDefinition.LockLeaseTime
+            : MaxLeaseRecoveryWakeInterval;
         var countOptions = new CountOptions
         {
             Limit = 1
@@ -249,7 +265,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         {
             try
             {
-                await _signalSemaphore.WaitAsync(cancellationToken);
+                _ = await _signalSemaphore.WaitAsync(leaseRecoveryWakeInterval, cancellationToken);
 
                 var queueItemIds = await collection.Find(CreateAvailableQueueItemFilter())
                                                    .Sort(sortDefinition)
