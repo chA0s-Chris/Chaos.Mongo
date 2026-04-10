@@ -139,8 +139,22 @@ Updated GitHub issues #9 and #10 with implementation-ready specifications derive
 2. Phase 1 (Follow-up): Second PR for #10 (TTL retention) after #9 merges
 3. Phase 2 (Design): Team aligns on #71 and #72 requirements before implementation
 
+## Team Directives
+
+### Documentation and Branch Discipline (2026-04-10)
+
+**Author:** Christian Flessa  
+**Status:** Directive (team memory)  
+
+1. **Feature Documentation:** Keep documentation up to date with code changes. When adding noteworthy new features, always consider updating the feature documentation (e.g., README).
+
+2. **Issue Branch Discipline:** Always use a corresponding branch for issue work, and do not commit those changes before user review (e.g., `squad/<issue-number>-<slug>` branch with uncommitted changes for PR review).
+
+**Rationale:** Captures user preferences for development workflow and documentation practices.
+
 ## Governance
 
 - All meaningful changes require team consensus
 - Document architectural decisions here
 - Keep history focused on work, decisions focused on direction
+- Team directives capture user preferences for inclusion in team memory

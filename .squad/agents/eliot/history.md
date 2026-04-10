@@ -133,3 +133,42 @@
 - Builder API extended with fluent methods (Eliot implements, Parker tests config flow)
 
 **Status:** Development ready. Clear ownership, locked API contract, test fixtures prepared.
+
+### 2026-04-11: Issue #9 Queue Lock Lease Recovery
+
+**Queue lease recovery pattern:**
+- `MongoQueueDefinition.LockLeaseTime` carries per-queue lease configuration, defaulted in `MongoQueueBuilder<T>` from `MongoDefaults.QueueLockLeaseTime`.
+- `MongoQueueSubscription` now treats open items as processable when they are unlocked or when `IsLocked=true` and `LockedUtc` is missing or older than `now - LockLeaseTime`.
+- Lease recovery stays passive: no unlock write on failure, no scavenger job, and the polling loop reclaims expired items by reacquiring the lock atomically.
+
+**Indexing for queue recovery:**
+- Queue subscriptions now create a compound index on `(IsClosed, IsLocked, LockedUtc)` instead of the old partial unlocked-items index.
+- Recovery tests live in `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`.
+
+### 2026-04-11: Issue #9 Queue Lock Lease Recovery
+
+**Queue lease recovery pattern:**
+- `MongoQueueDefinition.LockLeaseTime` carries per-queue lease configuration, defaulted in `MongoQueueBuilder<T>` from `MongoDefaults.QueueLockLeaseTime`.
+- `MongoQueueSubscription` now treats open items as processable when they are unlocked or when `IsLocked=true` and `LockedUtc` is missing or older than `now - LockLeaseTime`.
+- Lease recovery stays passive: no unlock write on failure, no scavenger job, and the polling loop reclaims expired items by reacquiring the lock atomically.
+
+**Indexing for queue recovery:**
+- Queue subscriptions now create a compound index on `(IsClosed, IsLocked, LockedUtc)` instead of the old partial unlocked-items index.
+- Recovery tests live in `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`.
+
+**User preference:**
+- For issue work, use the dedicated issue branch and leave changes uncommitted for review.
+
+### 2026-04-11: Post-Session Orchestration (Scribe Consolidation)
+
+**Session Work:**
+- Eliot completed Issue #9 implementation on `squad/9-queue-resilience` branch (uncommitted for review)
+- Decisions inbox merged: captured Eliot's implementation note and user directives on documentation and branch discipline
+- Orchestration log created at 2026-04-10T22:01:46Z
+- Session log created with Issue #9 summary and next steps
+
+**Directives Added to decisions.md:**
+- Keep feature documentation current with code changes
+- Use dedicated issue branches with uncommitted changes for review
+
+**Status:** Awaiting user review before merge to main. Phase 2 (Issue #10 TTL retention) ready to begin after approval.
