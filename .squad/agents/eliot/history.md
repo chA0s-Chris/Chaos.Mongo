@@ -172,3 +172,19 @@
 - Use dedicated issue branches with uncommitted changes for review
 
 **Status:** Awaiting user review before merge to main. Phase 2 (Issue #10 TTL retention) ready to begin after approval.
+
+### 2026-04-11: PR Creation for Issue #9 (User Review Cycle)
+
+**Commit:** `9744ed3` — "feat: implement queue lock lease recovery for issue #9"
+
+**Work Completed:**
+- Committed all Issue #9 changes to `squad/9-queue-resilience` with required Co-authored-by trailer
+- Pushed branch to remote: `origin/squad/9-queue-resilience`
+- Created PR #73: "feat: implement queue lock lease recovery (issue #9)"
+
+**PR #73 Details:**
+- Title: Queue lock lease recovery implementation
+- Body: Summarizes passive lease expiry, MongoQueueDefinition additions, builder API, indexing changes, tests, and backward compatibility
+- Fixes issue #9
+
+**Status:** PR ready for user review and team feedback before merge.
