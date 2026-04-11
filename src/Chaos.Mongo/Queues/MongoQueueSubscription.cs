@@ -163,6 +163,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         try
         {
             var acquiredLockUtc = _timeProvider.GetUtcNow().UtcDateTime;
+            var lockExpiryUtc = acquiredLockUtc - _queueDefinition.LockLeaseTime;
             var queueItem = await collection.FindOneAndUpdateAsync(
                 CreateAvailableQueueItemFilter(queueItemId),
                 Builders<MongoQueueItem<TPayload>>.Update
@@ -182,9 +183,12 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
 
             if (queueItem.IsLocked)
             {
-                _logger.LogWarning("Recovering expired queue item lock {QueueItemId} with payload {PayloadType}",
-                                   queueItemId,
-                                   typeof(TPayload).FullName);
+                _logger.LogWarning(
+                    "Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, expiry threshold: {ExpiryThreshold}) with payload {PayloadType}",
+                    queueItemId,
+                    queueItem.LockedUtc?.ToString("O") ?? "null",
+                    lockExpiryUtc.ToString("O"),
+                    typeof(TPayload).FullName);
             }
 
             var payloadHandler = _payloadHandlerFactory.CreateHandler<TPayload>();

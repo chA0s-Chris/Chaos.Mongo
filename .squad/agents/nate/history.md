@@ -116,3 +116,43 @@ The ADR assumed passive expiry would "just work" with the existing query filter.
 **Verdict:** VALID AND CRITICAL — blocks merge.
 
 **Recommendation:** Remove the `[OneTimeTearDown]` disposal. The container lifecycle is already managed by the assembly-level fixture. See `.squad/decisions/inbox/nate-pr73-review-thread-r3066971413.md` for full analysis and fix instructions.
+
+### 2026-04-11: PR #73 Review Finding r3066971461 — Lease Timing Verification
+
+**Finding:** Comment claimed test lease (250ms) was too short to verify independent lease recovery wake-up.
+
+**Status:** **STALE** — Finding already fixed by commit 529c6bc
+
+**What Was Fixed:**
+- Lease time increased: 250ms → 2 seconds
+- Processing loop now has timed wait: `_signalSemaphore.WaitAsync(leaseRecoveryWakeInterval, ...)` (line 268)
+- Test now asserts: `(handler.AttemptStartedAtUtc[1] - handler.AttemptStartedAtUtc[0]) >= (leaseTime - 500ms)`
+
+**Verdict:** Current test is sound. No action required. Test correctly verifies lease expiry recovery happens independently, without relying on new message inserts.
+
+**Documented in:** `.squad/decisions/inbox/nate-pr73-review-r3066971461.md`
+
+### 2026-04-11: PR #73 Diagnostics Quality Review — Log Message Accuracy
+
+**Finding:** Review thread r3067714453 identified log message accuracy issue in queue lock recovery path.
+
+**Issue:** The `MongoQueueSubscription` recovery path treats two distinct lock failure conditions as equivalent:
+- `IsLocked=true` AND `LockedUtc=null` (malformed/orphaned lock state)
+- `IsLocked=true` AND `LockedUtc < lockExpiryUtc` (expired lock state)
+
+Current message says "Recovering **expired** queue item lock" for both cases, misleading operators on actual failure mode.
+
+**Decision:** Update log message to distinguish between null (missing timestamp) and stale timestamp conditions. Include prior `LockedUtc` value and expiry threshold in log output.
+
+**Implementation:** Update line 185-187 in `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs`:
+```csharp
+_logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, threshold: {LockExpiryUtc}) with payload {PayloadType}",
+                   queueItemId,
+                   queueItem.LockedUtc?.ToString("O") ?? "null",
+                   lockExpiryUtc.ToString("O"),
+                   typeof(TPayload).FullName);
+```
+
+**Rationale:** Diagnostics accuracy on critical paths matters. Operators need precise logs to understand lock recovery failure modes. Cost is trivial (single log message). Not deferring to Phase 2 (#72 covers additional observability, but this base case should be accurate in current PR).
+
+**ADR:** Queue Lock Recovery Log Message Accuracy (merged to decisions.md 2026-04-11)
