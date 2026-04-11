@@ -873,6 +873,80 @@ Always use valid conventional commit messages. Format: `{type}(scope): {subject}
 
 ---
 
+### Eliot — Queue Observability Implementation (Issue #72)
+
+**Date:** 2026-04-11  
+**Context:** Issue #72 requested observability for queue runtime after lock-expiry and retention work  
+**Status:** Approved and implemented
+
+#### Decision
+Implement observability using two native mechanisms:
+- Structured `ILogger` messages on lock recovery, retry/terminal failure handling, retention mode configuration, and successful completion
+- `System.Diagnostics.Metrics` instruments under the `Chaos.Mongo.Queues` meter for publish, lock recovery, success/failure, processing duration, and queue age
+
+#### Rationale
+Keeps the change inside `src/Chaos.Mongo/Queues/` with no new DI surface and no health-check abstraction to maintain. Consumers wire the meter into their existing OpenTelemetry or .NET metrics pipeline without Chaos.Mongo choosing ingestion tooling.
+
+---
+
+### Parker — Queue Success Metric Ownership (Issue #72)
+
+**Date:** 2026-04-11  
+**Context:** Issue #72 observability implementation  
+**Status:** Approved and verified
+
+#### Decision
+Queue success diagnostics should count completed queue transitions, not every handler invocation.
+
+#### Rationale
+When a handler returns successfully but lock ownership changed before completion update, the item may already be recovered and completed by another worker. Recording success in that branch would double-count completed items and inflate throughput. Unit test asserts no success metric is emitted when completion is skipped due to lock ownership change.
+
+#### Scope
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs`
+
+---
+
+### Tara — Review #72 Queue Observability (Issue #72)
+
+**Date:** 2026-04-11  
+**Reviewer:** Tara  
+**Branch:** `squad/72-queue-observability-diagnostics`  
+**Status:** Approved with findings, re-reviewed and cleared
+
+#### Initial Review Findings (Low severity)
+
+1. **README omits `chaos.mongo.queue.lock.recovery_age` metric**
+   - The README listed 6 instruments but omitted the `chaos.mongo.queue.lock.recovery_age` histogram (present in `MongoQueueDiagnostics.cs:37`, tested in subscription tests)
+   - **Resolution:** README now documents this metric
+
+2. **Terminal failures logging severity**
+   - Previously `LogError` fired for ALL failures; implementation fires only for retryable ones
+   - Terminal failures (exhausted retries) emit `LogWarning`
+   - **Resolution:** Code now correctly logs terminal failures at `Error` level
+
+#### Re-Review Verification (2026-04-11 follow-up)
+
+Re-review of branch `squad/72-queue-observability-diagnostics` found no remaining issues.
+
+**Verified:**
+- `README.md` now includes `chaos.mongo.queue.lock.recovery_age`
+- `MongoQueueSubscription.HandleFailedQueueItemAsync` logs terminal failures with `LogError`
+- All focused queue tests passed
+- `bash build.sh Test` successful
+
+**Files Reviewed:**
+- `README.md` (metrics documentation)
+- `src/Chaos.Mongo/Queues/MongoQueuePublisher.cs` (publish instrumentation)
+- `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` (failure handling and logging)
+- `src/Chaos.Mongo/Queues/MongoQueueDiagnostics.cs` (instrumentation definitions)
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueuePublisherTests.cs` (publish metrics tests)
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` (subscription tests)
+- `tests/Chaos.Mongo.Tests/Queues/QueueMetricsCollector.cs` (test helper)
+
+**Verdict:** ✅ Ready for merge
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

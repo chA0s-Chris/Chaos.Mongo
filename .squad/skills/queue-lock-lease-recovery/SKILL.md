@@ -19,6 +19,7 @@ Use this pattern when queue work items can remain locked after a handler crash a
    - subscription creates the compound recovery index
    - closed-item retention excludes terminal items from TTL cleanup
 9. When asserting rendered MongoDB filters in tests, verify the allowed backward-compatible behavior (`$ne: true`, `$in: [false, null]`, or explicit false-or-missing clauses as appropriate) instead of locking the test to a single BSON encoding that may change during safe refactors.
+10. For observability, record success metrics only after the close/delete operation succeeds under the same lock ownership check used for correctness, and add a test that proves no success metric is emitted when completion is skipped because ownership changed.
 
 ## Chaos.Mongo file paths
 
