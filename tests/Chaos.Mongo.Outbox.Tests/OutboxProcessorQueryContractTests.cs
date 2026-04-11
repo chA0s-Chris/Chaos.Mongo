@@ -9,6 +9,7 @@ using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
 using System.Reflection;
@@ -28,21 +29,8 @@ public class OutboxProcessorQueryContractTests
     public async Task ProcessBatchAsync_UsesPollingFilterAndSortAlignedWithPollingIndex()
     {
         // Arrange
-        FilterDefinition<OutboxMessage>? capturedFilter = null;
-        FindOptions<OutboxMessage, OutboxMessage>? capturedOptions = null;
-        _collectionMock
-            .Setup(c => c.FindAsync(
-                       It.IsAny<FilterDefinition<OutboxMessage>>(),
-                       It.IsAny<FindOptions<OutboxMessage, OutboxMessage>>(),
-                       It.IsAny<CancellationToken>()))
-            .Callback<FilterDefinition<OutboxMessage>, FindOptions<OutboxMessage, OutboxMessage>, CancellationToken>((filter, options, _) =>
-            {
-                capturedFilter = filter;
-                capturedOptions = options;
-            })
-            .ReturnsAsync(CreateCursor<OutboxMessage>());
-
-        var sut = CreateSut();
+        var (collection, queryCapture) = CapturingMongoCollectionProxy<OutboxMessage>.Create(CreateCursor<OutboxMessage>());
+        var sut = CreateSut(collection);
         var method = GetPrivateMethod("ProcessBatchAsync", typeof(CancellationToken));
 
         // Act
@@ -50,12 +38,12 @@ public class OutboxProcessorQueryContractTests
 
         // Assert
         processedCount.Should().Be(0);
-        capturedFilter.Should().NotBeNull();
-        capturedOptions.Should().NotBeNull();
-        capturedOptions!.Limit.Should().Be(_options.BatchSize);
-        capturedOptions.Sort.Should().NotBeNull();
+        queryCapture.CapturedFilter.Should().NotBeNull();
+        queryCapture.CapturedOptions.Should().NotBeNull();
+        queryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        queryCapture.CapturedOptions.Limit.Should().Be(_options.BatchSize);
 
-        var renderedFilter = Render(capturedFilter!);
+        var renderedFilter = Render(queryCapture.CapturedFilter!);
         ContainsEquality(renderedFilter, nameof(OutboxMessage.State), new BsonInt32((Int32)OutboxMessageState.Pending)).Should().BeTrue();
         ContainsEquality(renderedFilter, nameof(OutboxMessage.IsLocked), BsonBoolean.False).Should().BeTrue();
         ContainsNullEquality(renderedFilter, nameof(OutboxMessage.NextAttemptUtc)).Should().BeTrue();
@@ -68,7 +56,7 @@ public class OutboxProcessorQueryContractTests
                            "$lte",
                            new BsonDateTime(_timeProvider.GetUtcNow().UtcDateTime - _options.LockTimeout)).Should().BeTrue();
 
-        Render(capturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument
+        Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument
         {
             { nameof(OutboxMessage.NextAttemptUtc), 1 },
             { nameof(OutboxMessage.LockedUtc), 1 },
@@ -256,4 +244,95 @@ public class OutboxProcessorQueryContractTests
             _scopeFactoryMock.Object,
             _timeProvider,
             _loggerMock.Object);
+
+    private OutboxProcessor CreateSut(IMongoCollection<OutboxMessage> collection)
+    {
+        var databaseMock = new Mock<IMongoDatabase>();
+        databaseMock
+            .Setup(d => d.GetCollection<OutboxMessage>(_options.CollectionName, null))
+            .Returns(collection);
+
+        var mongoHelperMock = new Mock<IMongoHelper>();
+        mongoHelperMock.Setup(h => h.Database).Returns(databaseMock.Object);
+
+        return new(
+            mongoHelperMock.Object,
+            _options,
+            _scopeFactoryMock.Object,
+            _timeProvider,
+            _loggerMock.Object);
+    }
+
+    private class CapturingMongoCollectionProxy<TDocument> : DispatchProxy
+    {
+        private static readonly IMongoDatabase Database = Mock.Of<IMongoDatabase>();
+        private static readonly IMongoIndexManager<TDocument> IndexManager = Mock.Of<IMongoIndexManager<TDocument>>();
+        private static readonly MongoCollectionSettings Settings = new();
+
+        private IMongoCollection<TDocument> _collection = null!;
+        private IAsyncCursor<TDocument> _cursor = null!;
+
+        public FilterDefinition<TDocument>? CapturedFilter { get; private set; }
+
+        public FindOptions<TDocument, TDocument>? CapturedOptions { get; private set; }
+
+        public static (IMongoCollection<TDocument> Collection, CapturingMongoCollectionProxy<TDocument> Proxy) Create(
+            IAsyncCursor<TDocument> cursor)
+        {
+            var collection = Create<IMongoCollection<TDocument>, CapturingMongoCollectionProxy<TDocument>>();
+            var proxy = (CapturingMongoCollectionProxy<TDocument>)(Object)collection;
+            proxy._collection = collection;
+            proxy._cursor = cursor;
+            return (collection, proxy);
+        }
+
+        protected override Object? Invoke(MethodInfo? targetMethod, Object?[]? args)
+        {
+            ArgumentNullException.ThrowIfNull(targetMethod);
+
+            return targetMethod.Name switch
+            {
+                "FindAsync" when targetMethod.IsGenericMethod => HandleFindAsync(targetMethod.GetGenericArguments()[0], args),
+                "FindSync" when targetMethod.IsGenericMethod => HandleFindSync(targetMethod.GetGenericArguments()[0], args),
+                "get_CollectionNamespace" => new CollectionNamespace(new DatabaseNamespace("Tests"), typeof(TDocument).Name),
+                "get_Database" => Database,
+                "get_DocumentSerializer" => BsonSerializer.SerializerRegistry.GetSerializer<TDocument>(),
+                "get_Indexes" => IndexManager,
+                "get_SearchIndexes" => Mock.Of<IMongoSearchIndexManager>(),
+                "get_Settings" => Settings,
+                "WithReadConcern" or "WithReadPreference" or "WithWriteConcern" => _collection,
+                _ => throw new NotSupportedException($"Method '{targetMethod.Name}' is not supported by the capturing test collection.")
+            };
+        }
+
+        private void CaptureFind(Type projectionType, Object?[]? args, out Int32 filterIndex, out Int32 optionsIndex)
+        {
+            if (projectionType != typeof(TDocument))
+            {
+                throw new NotSupportedException($"Projection '{projectionType}' is not supported by the capturing test collection.");
+            }
+
+            (filterIndex, optionsIndex) = args?.Length switch
+            {
+                3 => (0, 1),
+                4 => (1, 2),
+                _ => throw new NotSupportedException("Unexpected Find invocation shape.")
+            };
+
+            CapturedFilter = (FilterDefinition<TDocument>)args![filterIndex]!;
+            CapturedOptions = (FindOptions<TDocument, TDocument>?)args[optionsIndex];
+        }
+
+        private Object HandleFindAsync(Type projectionType, Object?[]? args)
+        {
+            CaptureFind(projectionType, args, out _, out _);
+            return Task.FromResult(_cursor);
+        }
+
+        private Object HandleFindSync(Type projectionType, Object?[]? args)
+        {
+            CaptureFind(projectionType, args, out _, out _);
+            return _cursor;
+        }
+    }
 }

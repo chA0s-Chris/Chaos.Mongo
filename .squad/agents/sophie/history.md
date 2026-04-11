@@ -76,3 +76,22 @@
 
 **Key:** PR body references issue #71 and explains this as Phase 2 follow-up to completed Phase 1 work (lock expiry and cleanup).
 
+### PR #77 Creation for Issue #76 (2026-04-11)
+
+**Task:** Create PR for `squad/76-index-query-contract-tests` branch for index/query contract test work.
+
+**Verification:**
+- ✅ Branch state: clean, latest commit `0d9b74e` (add contract validation for query filters and sorting logic)
+- ✅ Branch head is positioned on index/query contract test work (Outbox, EventStore, Queue)
+- ✅ No prior PR existed for this branch
+- ✅ Branch is based on main with queue resilience work already merged
+
+**PR Created:**
+- **URL:** https://github.com/chA0s-Chris/Chaos.Mongo/pull/77
+- **Title:** Add index/query contract tests for regression protection
+- **Body:** Comprehensive summary of contract tests for all three features (Outbox, EventStore, Queue) with no explain-plan parsing
+- **Base:** main
+- **State:** OPEN
+
+**Key:** PR directly addresses issue #76 acceptance criteria with tests for index creation and query alignment validation across all features.
+

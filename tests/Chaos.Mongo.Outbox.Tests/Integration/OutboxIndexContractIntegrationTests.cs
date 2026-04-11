@@ -174,14 +174,21 @@ public class OutboxIndexContractIntegrationTests
     private static async Task WaitUntilAsync(Func<Boolean> condition, TimeSpan? timeout = null)
     {
         using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(10));
-        while (!cts.IsCancellationRequested)
+        try
         {
-            if (condition())
+            while (!cts.Token.IsCancellationRequested)
             {
-                return;
-            }
+                if (condition())
+                {
+                    return;
+                }
 
-            await Task.Delay(50, cts.Token);
+                await Task.Delay(50, cts.Token);
+            }
+        }
+        catch (OperationCanceledException e) when (cts.IsCancellationRequested)
+        {
+            throw new TimeoutException("The expected outbox state was not reached.", e);
         }
 
         throw new TimeoutException("The expected outbox state was not reached.");

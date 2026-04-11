@@ -7,8 +7,10 @@ using FluentAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
+using System.Reflection;
 
 public class MongoEventStoreQueryContractTests
 {
@@ -35,39 +37,12 @@ public class MongoEventStoreQueryContractTests
             }
         };
 
-        var checkpointCollectionMock = new Mock<IMongoCollection<CheckpointDocument<OrderAggregate>>>();
-        FilterDefinition<CheckpointDocument<OrderAggregate>>? capturedCheckpointFilter = null;
-        FindOptions<CheckpointDocument<OrderAggregate>, CheckpointDocument<OrderAggregate>>? capturedCheckpointOptions = null;
-        checkpointCollectionMock
-            .Setup(c => c.FindAsync(
-                       It.IsAny<FilterDefinition<CheckpointDocument<OrderAggregate>>>(),
-                       It.IsAny<FindOptions<CheckpointDocument<OrderAggregate>, CheckpointDocument<OrderAggregate>>>(),
-                       It.IsAny<CancellationToken>()))
-            .Callback<FilterDefinition<CheckpointDocument<OrderAggregate>>, FindOptions<CheckpointDocument<OrderAggregate>, CheckpointDocument<OrderAggregate>>,
-                CancellationToken>((filter, findOptions, _) =>
-            {
-                capturedCheckpointFilter = filter;
-                capturedCheckpointOptions = findOptions;
-            })
-            .ReturnsAsync(CreateCursor(checkpoint));
+        var (checkpointCollection, checkpointQueryCapture) =
+            CapturingMongoCollectionProxy<CheckpointDocument<OrderAggregate>>.Create(CreateCursor(checkpoint));
+        var (eventsCollection, eventQueryCapture) =
+            CapturingMongoCollectionProxy<Event<OrderAggregate>>.Create(CreateCursor<Event<OrderAggregate>>());
 
-        var eventsCollectionMock = new Mock<IMongoCollection<Event<OrderAggregate>>>();
-        FilterDefinition<Event<OrderAggregate>>? capturedEventFilter = null;
-        FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>? capturedEventOptions = null;
-        eventsCollectionMock
-            .Setup(c => c.FindAsync(
-                       It.IsAny<FilterDefinition<Event<OrderAggregate>>>(),
-                       It.IsAny<FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>>(),
-                       It.IsAny<CancellationToken>()))
-            .Callback<FilterDefinition<Event<OrderAggregate>>, FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>,
-                CancellationToken>((filter, findOptions, _) =>
-            {
-                capturedEventFilter = filter;
-                capturedEventOptions = findOptions;
-            })
-            .ReturnsAsync(CreateCursor<Event<OrderAggregate>>());
-
-        var sut = CreateAggregateRepository(options, checkpointCollectionMock.Object, eventsCollectionMock.Object);
+        var sut = CreateAggregateRepository(options, checkpointCollection, eventsCollection);
 
         // Act
         var aggregate = await sut.GetAtVersionAsync(aggregateId, 7);
@@ -76,22 +51,22 @@ public class MongoEventStoreQueryContractTests
         aggregate.Should().NotBeNull();
         aggregate.Version.Should().Be(3);
 
-        capturedCheckpointFilter.Should().NotBeNull();
-        capturedCheckpointOptions.Should().NotBeNull();
-        capturedCheckpointOptions!.Sort.Should().NotBeNull();
-        var renderedCheckpointFilter = Render(capturedCheckpointFilter!);
+        checkpointQueryCapture.CapturedFilter.Should().NotBeNull();
+        checkpointQueryCapture.CapturedOptions.Should().NotBeNull();
+        checkpointQueryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        var renderedCheckpointFilter = Render(checkpointQueryCapture.CapturedFilter!);
         ContainsEquality(renderedCheckpointFilter, "_id.AggregateId", CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedCheckpointFilter, "_id.Version", "$lte", new BsonInt64(7)).Should().BeTrue();
-        Render(capturedCheckpointOptions.Sort!).Should().BeEquivalentTo(new BsonDocument("_id.Version", -1));
+        Render(checkpointQueryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument("_id.Version", -1));
 
-        capturedEventFilter.Should().NotBeNull();
-        capturedEventOptions.Should().NotBeNull();
-        capturedEventOptions!.Sort.Should().NotBeNull();
-        var renderedEventFilter = Render(capturedEventFilter!);
+        eventQueryCapture.CapturedFilter.Should().NotBeNull();
+        eventQueryCapture.CapturedOptions.Should().NotBeNull();
+        eventQueryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        var renderedEventFilter = Render(eventQueryCapture.CapturedFilter!);
         ContainsEquality(renderedEventFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(4)).Should().BeTrue();
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(7)).Should().BeTrue();
-        Render(capturedEventOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+        Render(eventQueryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
     }
 
     [Test]
@@ -103,37 +78,24 @@ public class MongoEventStoreQueryContractTests
         {
             CollectionPrefix = "Orders"
         };
-        var eventsCollectionMock = new Mock<IMongoCollection<Event<OrderAggregate>>>();
-        FilterDefinition<Event<OrderAggregate>>? capturedFilter = null;
-        FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>? capturedOptions = null;
-        eventsCollectionMock
-            .Setup(c => c.FindAsync(
-                       It.IsAny<FilterDefinition<Event<OrderAggregate>>>(),
-                       It.IsAny<FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>>(),
-                       It.IsAny<CancellationToken>()))
-            .Callback<FilterDefinition<Event<OrderAggregate>>, FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>,
-                CancellationToken>((filter, findOptions, _) =>
-            {
-                capturedFilter = filter;
-                capturedOptions = findOptions;
-            })
-            .ReturnsAsync(CreateCursor<Event<OrderAggregate>>());
+        var (eventsCollection, queryCapture) =
+            CapturingMongoCollectionProxy<Event<OrderAggregate>>.Create(CreateCursor<Event<OrderAggregate>>());
 
-        var sut = CreateEventStore(options, eventsCollectionMock.Object);
+        var sut = CreateEventStore(options, eventsCollection);
 
         // Act
         await foreach (var _ in sut.GetEventStream(aggregateId, 4, 8)) { }
 
         // Assert
-        capturedFilter.Should().NotBeNull();
-        capturedOptions.Should().NotBeNull();
-        capturedOptions!.Sort.Should().NotBeNull();
+        queryCapture.CapturedFilter.Should().NotBeNull();
+        queryCapture.CapturedOptions.Should().NotBeNull();
+        queryCapture.CapturedOptions!.Sort.Should().NotBeNull();
 
-        var renderedFilter = Render(capturedFilter!);
+        var renderedFilter = Render(queryCapture.CapturedFilter!);
         ContainsEquality(renderedFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedFilter, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(4)).Should().BeTrue();
         ContainsComparison(renderedFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(8)).Should().BeTrue();
-        Render(capturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+        Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
     }
 
     [Test]
@@ -145,37 +107,24 @@ public class MongoEventStoreQueryContractTests
         {
             CollectionPrefix = "Orders"
         };
-        var eventsCollectionMock = new Mock<IMongoCollection<Event<OrderAggregate>>>();
-        FilterDefinition<Event<OrderAggregate>>? capturedFilter = null;
-        FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>? capturedOptions = null;
-        eventsCollectionMock
-            .Setup(c => c.FindAsync(
-                       It.IsAny<FilterDefinition<Event<OrderAggregate>>>(),
-                       It.IsAny<FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>>(),
-                       It.IsAny<CancellationToken>()))
-            .Callback<FilterDefinition<Event<OrderAggregate>>, FindOptions<Event<OrderAggregate>, Event<OrderAggregate>>,
-                CancellationToken>((filter, findOptions, _) =>
-            {
-                capturedFilter = filter;
-                capturedOptions = findOptions;
-            })
-            .ReturnsAsync(CreateCursor<Event<OrderAggregate>>());
+        var (eventsCollection, queryCapture) =
+            CapturingMongoCollectionProxy<Event<OrderAggregate>>.Create(CreateCursor<Event<OrderAggregate>>());
 
-        var sut = CreateEventStore(options, eventsCollectionMock.Object);
+        var sut = CreateEventStore(options, eventsCollection);
 
         // Act
         var nextVersion = await sut.GetExpectedNextVersionAsync(aggregateId);
 
         // Assert
         nextVersion.Should().Be(1);
-        capturedFilter.Should().NotBeNull();
-        capturedOptions.Should().NotBeNull();
-        capturedOptions!.Sort.Should().NotBeNull();
-        capturedOptions.Limit.Should().Be(1);
+        queryCapture.CapturedFilter.Should().NotBeNull();
+        queryCapture.CapturedOptions.Should().NotBeNull();
+        queryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        queryCapture.CapturedOptions.Limit.Should().Be(1);
 
-        var renderedFilter = Render(capturedFilter!);
+        var renderedFilter = Render(queryCapture.CapturedFilter!);
         ContainsEquality(renderedFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
-        Render(capturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), -1));
+        Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), -1));
     }
 
     private static Boolean ContainsComparison(BsonValue value, String field, String comparisonOperator, BsonValue expected)
@@ -290,5 +239,78 @@ public class MongoEventStoreQueryContractTests
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var serializer = serializerRegistry.GetSerializer<CheckpointDocument<OrderAggregate>>();
         return sort.Render(new(serializer, serializerRegistry));
+    }
+
+    private class CapturingMongoCollectionProxy<TDocument> : DispatchProxy
+    {
+        private static readonly IMongoDatabase Database = Mock.Of<IMongoDatabase>();
+        private static readonly IMongoIndexManager<TDocument> IndexManager = Mock.Of<IMongoIndexManager<TDocument>>();
+        private static readonly MongoCollectionSettings Settings = new();
+
+        private IMongoCollection<TDocument> _collection = null!;
+        private IAsyncCursor<TDocument> _cursor = null!;
+
+        public FilterDefinition<TDocument>? CapturedFilter { get; private set; }
+
+        public FindOptions<TDocument, TDocument>? CapturedOptions { get; private set; }
+
+        public static (IMongoCollection<TDocument> Collection, CapturingMongoCollectionProxy<TDocument> Proxy) Create(
+            IAsyncCursor<TDocument> cursor)
+        {
+            var collection = Create<IMongoCollection<TDocument>, CapturingMongoCollectionProxy<TDocument>>();
+            var proxy = (CapturingMongoCollectionProxy<TDocument>)collection;
+            proxy._collection = collection;
+            proxy._cursor = cursor;
+            return (collection, proxy);
+        }
+
+        protected override Object? Invoke(MethodInfo? targetMethod, Object?[]? args)
+        {
+            ArgumentNullException.ThrowIfNull(targetMethod);
+
+            return targetMethod.Name switch
+            {
+                "FindAsync" when targetMethod.IsGenericMethod => HandleFindAsync(targetMethod.GetGenericArguments()[0], args),
+                "FindSync" when targetMethod.IsGenericMethod => HandleFindSync(targetMethod.GetGenericArguments()[0], args),
+                "get_CollectionNamespace" => new CollectionNamespace(new DatabaseNamespace("Tests"), typeof(TDocument).Name),
+                "get_Database" => Database,
+                "get_DocumentSerializer" => BsonSerializer.SerializerRegistry.GetSerializer<TDocument>(),
+                "get_Indexes" => IndexManager,
+                "get_SearchIndexes" => Mock.Of<IMongoSearchIndexManager>(),
+                "get_Settings" => Settings,
+                "WithReadConcern" or "WithReadPreference" or "WithWriteConcern" => _collection,
+                _ => throw new NotSupportedException($"Method '{targetMethod.Name}' is not supported by the capturing test collection.")
+            };
+        }
+
+        private void CaptureFind(Type projectionType, Object?[]? args)
+        {
+            if (projectionType != typeof(TDocument))
+            {
+                throw new NotSupportedException($"Projection '{projectionType}' is not supported by the capturing test collection.");
+            }
+
+            var (filterIndex, optionsIndex) = args?.Length switch
+            {
+                3 => (0, 1),
+                4 => (1, 2),
+                _ => throw new NotSupportedException("Unexpected Find invocation shape.")
+            };
+
+            CapturedFilter = (FilterDefinition<TDocument>)args![filterIndex]!;
+            CapturedOptions = (FindOptions<TDocument, TDocument>?)args[optionsIndex];
+        }
+
+        private Object HandleFindAsync(Type projectionType, Object?[]? args)
+        {
+            CaptureFind(projectionType, args);
+            return Task.FromResult(_cursor);
+        }
+
+        private Object HandleFindSync(Type projectionType, Object?[]? args)
+        {
+            CaptureFind(projectionType, args);
+            return _cursor;
+        }
     }
 }

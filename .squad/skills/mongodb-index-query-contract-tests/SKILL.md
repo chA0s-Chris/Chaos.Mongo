@@ -18,6 +18,7 @@ This applies when Chaos.Mongo features depend on stable MongoDB index/query alig
 - Write an **integration/index-contract** test that runs configurators against Testcontainers MongoDB and inspects `Indexes.ListAsync()` for key order, uniqueness, TTL options, and partial filters.
 - Add one **behavior-critical integration** assertion when the real contract is observable behavior like processing order or uniqueness enforcement.
 - Prefer recursive BSON assertions that check required clauses instead of exact whole-document equality when safe refactors may change boolean composition shape.
+- When production uses fluent `Find(...).Sort(...).Limit(...)` extension chains, capture the final `FindOptions` via a proxy `IMongoCollection` so the real fluent path executes and tests can still assert rendered filter/sort BSON.
 
 ## Examples
 - Outbox polling query plus claim contract: `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
