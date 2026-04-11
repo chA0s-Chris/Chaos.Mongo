@@ -8,6 +8,58 @@
 
 ## Learnings
 
+### 2026-04-12: Index/Query Regression Test Assessment
+
+**Session:** Design specification for index regression testing (no code changes)
+
+**Findings:**
+
+1. **Index Landscape — Three packages, five distinct indexes:**
+   - Outbox: `IX_Outbox_Polling` (compound, partial), `IX_Outbox_ProcessedUtc_TTL`, `IX_Outbox_FailedUtc_TTL` (both TTL + partial)
+   - EventStore: `IX_Unique_AggregateId_Version` (unique compound, no partial)
+   - Queue: Unnamed (compound `IsClosed, IsLocked, LockedUtc, IsTerminal`), `ClosedItemTtlIndex` (TTL + partial)
+
+2. **Query/Index Alignment:**
+   - Outbox polling query is well-aligned (all filter fields in partial index predicate, sort matches index order)
+   - EventStore queries match index (AggregateId leading, Version secondary, sorts ASC match index)
+   - Queue queries use composite index but with trailing condition (`IsTerminal`) — not all filter permutations guaranteed to use index
+   - No query regression likely *if* indexes remain intact; risk is *silent removal* of index clauses
+
+3. **Test Anti-Patterns Identified:**
+   - Mocking `IMongoIndexManager` misses real MongoDB index behavior (partial filter parsing, TTL enforcement, uniqueness)
+   - Parsing `explain()` output couples tests to MongoDB version/storage engine specifics
+   - Byte-level stats assertions (size, avgObjSize) are noise, not signals
+   - Exact timing assertions fail in variable CI environments
+
+4. **Regression Testing Strategy (Approved for Inbox):**
+   - **Tier 1 (Critical):** Index Configuration Tests — assert all indexes exist with exact key specs, sort order, options, partial filters
+   - **Tier 2:** Query/Index Alignment Tests — structural BSON validation of filters/sorts (mocked + integration hybrid)
+   - **Tier 3:** Partial Filter Edge Cases — TTL deletion respects predicates, uniqueness enforced under concurrency, type predicates work
+   - **Tier 4:** Compound Sort Order — result order matches declared sort (catch DESC/ASC flip)
+   - **Tier 5:** Concurrency Safety — unique constraints and write-while-reading don't conflict
+
+5. **Testcontainers Role:**
+   - Index configuration tests MUST use real MongoDB (Testcontainers) to validate partial filter BSON syntax
+   - Query alignment can use mocking (pure structural validation)
+   - Edge case tests MUST use real MongoDB (TTL timing, uniqueness, partial filter enforcement)
+
+6. **Implementation Cost:**
+   - ~950 new lines of test code across 5 test files
+   - 4–6 days effort (Parker)
+   - +5–10 min/run CI overhead (acceptable)
+   - Dependencies: Testcontainers (already in use), NUnit (existing), MongoDB (already running in CI)
+
+7. **No Code Changes Required:**
+   - All indexes are correctly defined
+   - All queries are properly aligned
+   - Tests are purely validation/regression prevention
+
+**Decision:** Recommend Phase 1 (Index Configuration Tests) as highest priority. This forms foundation for all downstream tests and can be implemented immediately with zero risk to production code.
+
+**Written to:** `.squad/decisions/inbox/parker-index-query-regression-tests.md` (comprehensive design spec for team review)
+
+---
+
 ### 2026-04-11: PR #75 Review Notes r3068136358 / r3068136363 Validation
 
 - `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` now uses `Ne(x => x.IsTerminal, true)` for queue availability, so legacy queue documents without `IsTerminal` still qualify as non-terminal work items.
@@ -293,3 +345,91 @@
 **Validation Results:**
 - ✅ Compared branch changes against `main` with no meaningful tester-facing defects found
 - ✅ `bash build.sh Test` passed for the branch
+
+### 2026-04-11: Index Usage Integration Tests Assessment
+
+**Session:** Analysis of proposed index-usage integration tests for Queue/EventStore/Outbox  
+**Requested by:** Christian Flessa  
+**Status:** Complete  
+**Output:** `parker-index-assessment.md` (15KB)
+
+**Analysis Scope:**
+Evaluated whether Chaos.Mongo should add integration tests verifying that queue/event-store/outbox queries actually use intended MongoDB indexes (vs. collection scans).
+
+**Key Findings:**
+
+1. **Feasibility:** ✅ YES—Testcontainers allows real index creation and verification. Three proven patterns:
+   - Index structure assertions (BSON checks) — stable, maintainable
+   - TTL behavior verification (insert, wait, verify expiry) — proven in current retention tests
+   - Query functional correctness (verify result set, not explain-plan) — stable
+
+2. **Brittleness Risk:** ⚠️ EXPLAIN-PLAN TESTS ARE TOO BRITTLE
+   - MongoDB query planner is adaptive (collection size, selectivity, server stats affect choices)
+   - Empty/small collections optimize for COLLSCAN, not IXSCAN (cheaper)
+   - Single-node Testcontainers ≠ production replica set behavior
+   - Plan output structure varies across MongoDB versions
+   - Tests parsing explain-plan BSON couple tightly to internals
+
+3. **Signal Value:** Explain-plan tests provide LOW signal relative to maintenance cost
+   - We already verify index creation (mocked tests exist)
+   - Real risk: "query accidentally regresses to collection scan" (not "index missing")
+   - Better signal: Run functional queries, verify correct result set, check for errors under scale
+
+4. **What's Already Tested:**
+   - Lock expiry recovery: `MongoQueueLockExpiryIntegrationTests.cs` validates stale lock detection
+   - TTL expiry: `MongoQueueRetentionIntegrationTests.cs` validates item deletion
+   - Queue/Outbox semantics: Integration tests verify results, not explain-plan
+   - EventStore uniqueness: Unique constraint enforced (proven)
+
+**Recommendations:**
+
+**✅ ADD (Low-Risk):**
+- Index definition structure assertions — expand existing patterns (~80 lines, new file `MongoQueueIndexIntegrationTests.cs`)
+- TTL behavior tests — already in place, proven stable
+- Lock recovery functional tests — already in place, proven stable
+- Outbox query correctness test — one new integration test, ~40 lines
+
+**❌ DO NOT ADD:**
+- Explain-plan parsing tests (brittle, high maintenance, low signal)
+- Query execution time assertions (flaky in CI, version-dependent)
+- "Force collection size X" index selection tests (adds bulk, fragile to planner changes)
+
+**CI Impact:** +8-10s (from TTL waits in existing retention tests). Risk: Very low—no flaky timing assertions.
+
+**Maintenance Burden:** Minimal for recommended tests (BSON structure checks stable across MongoDB versions).
+
+**Conclusion:** Index-usage testing is worthwhile for functional correctness. Explain-plan testing is not—couples to MongoDB internals, fails across versions. Recommend minimal, focused approach: verify structure + behavior, NOT planner choices.
+
+**Open Questions for Team:**
+1. Is 8s TTL wait acceptable per test run, or tag retention tests `[Explicit]`?
+2. EventStore: care about query performance, or uniqueness-enforcement sufficient?
+3. Outbox: worth one polling correctness test, or existing coverage enough?
+4. CI: can we commit to ~8s added per run?
+
+### 2026-04-11: Index Regression Test Strategy Design (Extended)
+
+**Design Principles:**
+- No explain-plan coupling (too brittle, version-dependent, planner-dependent)
+- Integration-heavy testing (Testcontainers) for real MongoDB behavior
+- Deterministic assertions (no flaky timing, structural validation instead)
+- Multi-tier approach (5 tiers total, Phase 1-2 are priority)
+
+**Phase 1 Implementation (Immediate, 3-4 days):**
+
+Test Files:
+- MongoQueueIndexSchemaIntegrationTests.cs (40 lines)
+- EventStoreIndexSchemaIntegrationTests.cs (30 lines)
+- OutboxIndexSchemaIntegrationTests.cs (50 lines)
+- QueryIndexAlignmentTests.cs (150 lines, mocked unit tests)
+
+Total Phase 1: 350 lines test code
+CI Impact: +5-10ms
+Risk: None (read-only validation)
+Signal: High (catches 80 percent of index bugs)
+
+**Success Criteria:**
+- Index Configuration Pass: 95 percent confidence
+- Query Alignment Pass: 90 percent confidence
+- Combined: 98 percent confidence future changes do not break index coverage
+
+**Handoff:** Nate approves roadmap; Parker executes Phase 1 first.

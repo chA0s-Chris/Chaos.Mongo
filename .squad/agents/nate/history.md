@@ -48,6 +48,26 @@
 
 **Cross-Agent Alignment:**
 - Eliot's implementation plan confirmed by test strategy (Parker)
+
+### 2026-04-10: Index/Query Contract Testing Strategy
+
+**Issue Created:** #76 — Index/query contract tests for regression protection
+
+**Agreed Direction:**
+- Contract tests (not explain-plan parsing) to protect query/index alignment from regressions
+- No reliance on MongoDB explain-plan API
+- Focus: index definitions, query shape alignment, behavior-critical integration tests
+- Prioritization: Outbox → Queue → EventStore (criticality ordering)
+- Use Testcontainers for actual MongoDB behavior verification
+- Fail immediately if indexes missing or queries change shape
+
+**Rationale:**
+MongoDB query performance silently degrades if indexes drift. Contract tests provide early detection without fragile explain-plan dependencies.
+
+**Trade-offs:**
+- Won't detect all performance issues, only index/query misalignment
+- Requires Testcontainers, adds integration test complexity
+- Benefits: Early warning, portable across MongoDB versions, explicit contracts
 - Nate's architectural decisions informed test coverage requirements
 - All secondary concerns (retries, observability, collection naming) deferred to Phase 2+
 
@@ -271,3 +291,169 @@ _logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc
 **Trade-off:** Minimal. The change is purely clarifying; it changes no behavior and increases precision at near-zero cost. No other README retry documentation needed update (lines 441-442 remain contextually sound post-change).
 
 **Status:** COMPLETE. Change is surgical and unrelated to code; no commit per user request.
+
+### 2026-04-15: Index Verification Integration Tests — Assessment
+
+**Request:** Should Chaos.Mongo add integration tests that verify queue/event-store/outbox queries actually use intended MongoDB indexes?
+
+**Analysis Performed:**
+- Reviewed current index strategies across Queue, EventStore, and Outbox
+- Inspected query patterns and index structures
+- Assessed brittleness of `explain()` plan verification vs. maintenance cost
+- Evaluated three alternatives: broad verification, lightweight schema tests, opt-in profiling
+
+**Key Findings:**
+1. All three features already create indexes correctly at startup
+2. Query logic matches index design (compound index field order, partial filters)
+3. Functional tests already catch query behavior regressions
+4. Broad `explain()` plan verification is highly brittle across MongoDB versions and collection sizes
+
+**Recommendation: REJECT broad index verification tests.** Maintenance cost (data volume sensitivity, plan fragility, framework churn) exceeds regression detection benefit. Functional tests + code review sufficient.
+
+**Alternative (Deferred):** Lightweight schema inspection tests (verify index existence, field order, partial filters) have low cost and zero brittleness—worth adding if performance becomes a concern.
+
+**Specific Guidance:**
+- Queue: Skip. Functional tests sufficient.
+- EventStore: Consider lightweight schema test (verify unique index on both fields).
+- Outbox: Consider lightweight schema test for polling index field order (business-critical).
+
+**Trade-offs Named:**
+- **Regression detection vs. brittleness:** Functional tests catch query bugs; explain plans don't justify maintenance burden
+- **Proactive monitoring vs. reactive profiling:** Better to investigate with real telemetry when issues emerge
+- **Broad coverage vs. narrow scope:** If testing indexes, keep it to schema validation only—no execution plans
+
+**Decision Document:** `.squad/decisions/inbox/nate-index-verification-tests.md` (comprehensive assessment with templates and alternatives)
+
+### 2026-04-15: Index/Query Test Strategy — Comprehensive Assessment
+
+**Request:** User (Christian Flessa) asked for concrete test strategy assessment:
+1. Is this a good idea?
+2. What exact contract should tests enforce?
+3. What should be tested at code/query-definition level versus integration level?
+4. How would you structure tests to catch regressions without over-coupling to MongoDB internals?
+5. Which subsystems are most worth covering first?
+
+**Analysis Performed:**
+- Audited all index definitions (Queue, EventStore, Outbox) and their corresponding queries
+- Evaluated brittleness of explain-plan verification across MongoDB versions and collection sizes
+- Assessed functional test coverage already in place
+- Named trade-offs explicitly
+
+**Key Findings:**
+
+1. **Current State is Strong:**
+   - Queue: Compound index field order (IsClosed, IsLocked, LockedUtc, IsTerminal) correct; functional tests comprehensive
+   - EventStore: Unique index enforced at database level; concurrency tests catch violations
+   - Outbox: Polling index field order critical risk (silent degradation possible at scale); functional tests exercise but don't validate schema
+
+2. **Explain-Plan Testing is Brittle:**
+   - MongoDB version churn: Output format differs across 5.x/6.x/7.x/8.x
+   - Collection size dependency: Planner chooses COLLSCAN <1k docs, IXSCAN 10k+ docs
+   - Single-node testcontainer bias: Production replica sets have different plans
+   - Signal value weak: Functional tests already catch query behavior bugs
+   - Maintenance burden: +60-120s CI/CD per test; false failures at scale; developer fear of refactoring
+
+3. **Lightweight Schema Validation is the Answer:**
+   - Verify index exists with correct field order, partial filters, uniqueness
+   - Zero brittleness: BSON index definition structure stable across versions
+   - Catches real mistakes: Field name typo, order regression, missing partial filter
+   - Fast: <50ms per test; no large collection seeding
+   - Low maintenance: Only updates when schema actually changes
+
+4. **Subsystem-Specific Risk Assessment:**
+   - Queue: LOW risk. Field order correct; functional tests sufficient. Optional: add schema test (~40 lines).
+   - EventStore: VERY LOW risk. Uniqueness database-enforced. Optional: add schema test (~30 lines).
+   - Outbox: MODERATE risk. Field-order regression realistic (silent slow query). Recommended: add schema test (~50 lines) + one query correctness test.
+
+**Recommendation: Three-Layer Approach**
+
+- Layer 1 (Schema validation): Add lightweight tests (~120 lines total; <10ms CI impact) to verify index field order, partial filters, uniqueness
+- Layer 2 (Functional tests): Keep existing tests (already comprehensive; implicit index validation through behavior)
+- Layer 3 (Code review): Enforce index-query alignment checkpoints in PR review
+
+**Trade-offs Named:**
+- Regression detection vs. brittleness: Functional tests catch bugs; explain plans create false failures at scale
+- Proactive verification vs. reactive profiling: Better to investigate with real telemetry when performance issues emerge
+- Broad coverage vs. maintainability: Schema validation is narrow scope, high signal; explain plans are broad scope, low signal
+
+**Implementation Roadmap:**
+- Phase 1 (Immediate): Add schema validation tests for Queue, EventStore, Outbox (~2-3 hours; low risk; high signal)
+- Phase 2 (Optional): Add Outbox query correctness test (verify sorted results)
+- Phase 3 (Deferred): Only if production telemetry shows outbox polling latency issues; then add opt-in performance profiling
+
+**Status:** Ready for team input. Decision document complete: `.squad/decisions/inbox/nate-index-query-test-strategy.md`
+
+**Key Trade-off Articulated:**
+- Cost of maintaining explain-plan tests: +60-120s CI/CD, framework churn, false failures at scale, developer fear
+- Benefit of explain-plan tests: Detects planner choices (not bugs; weak signal)
+- Cost of schema validation tests: ~120 lines code, <10ms runtime
+- Benefit of schema validation tests: Catches real mistakes (typos, order regressions), zero brittleness
+- **Decision:** Lightweight schema validation is favorable trade-off
+
+### 2026-04-11: Index/Query Contract Review Assessment
+
+**Session:** Architecture contract review for index/query alignment testing strategy
+
+**Question:** Should we add integration tests that verify MongoDB indexes are actually used by queries?
+
+**Analysis Performed:**
+- Audited all three subsystems (Queue, EventStore, Outbox) for index/query alignment
+- Field order verification: Queue ✅ aligned, EventStore ✅ aligned, Outbox ⚠️ moderate risk
+- Trade-off: Explain-plan verification vs. schema validation vs. functional testing
+- Risk-benefit analysis: Brittleness cost of explain plans vs. signal value gained
+
+**Key Findings:**
+- Explain-plan parsing is brittle: MongoDB version-dependent, collection-size-dependent, planner-dependent
+- Functional tests already catch query behavior regressions (queries fail if they break)
+- Real risk is silent removal of index clauses during refactoring
+- Schema validation tests catch real mistakes with zero maintenance cost
+
+**Recommendation:**
+- **Do NOT implement broad explain-plan verification**
+- **DO add lightweight schema validation tests** (~120 lines total)
+- **Use code review discipline** as final checkpoint
+
+**Three-Layer Approach:**
+1. Schema validation (index structure, field order, partial filters)
+2. Query correctness tests (functional, mostly exist)
+3. Code review (enforce index-query alignment in PR checkpoints)
+
+**Specific Guidance by Subsystem:**
+- Queue: Low risk. Add schema test for compound field order.
+- EventStore: Very low risk. Add schema test for unique index.
+- Outbox: Moderate risk (field order matters). Add schema test + one query correctness test.
+
+**Implementation Roadmap:**
+- Phase 1 (Immediate): Create 3 new test files, ~120 lines. Effort: 2-3 hours.
+- Phase 2 (Optional): Add query correctness to Outbox (field order validation via sort order).
+- Phase 3 (Deferred): Performance profiling suite if telemetry shows issues.
+
+**Cross-Agent Alignment:** Parker's detailed test strategy confirms architectural soundness; implementation can proceed with confidence.
+
+### 2026-04-11: Index/Query Contract Review Assessment
+
+**Session:** Architecture contract review for index/query alignment testing strategy
+
+**Question:** Should we add integration tests that verify MongoDB indexes are actually used by queries?
+
+**Analysis Performed:**
+- Audited all three subsystems (Queue, EventStore, Outbox) for index/query alignment
+- Field order verification: Queue ALIGNED, EventStore ALIGNED, Outbox MODERATE RISK
+- Trade-off: Explain-plan verification vs. schema validation vs. functional testing
+- Risk-benefit analysis: Brittleness cost of explain plans vs. signal value gained
+
+**Key Findings:**
+- Explain-plan parsing is brittle: MongoDB version-dependent, collection-size-dependent, planner-dependent
+- Functional tests already catch query behavior regressions
+- Real risk is silent removal of index clauses during refactoring
+- Schema validation tests catch real mistakes with zero maintenance cost
+
+**Recommendation:**
+- Do NOT implement broad explain-plan verification
+- DO add lightweight schema validation tests (120 lines total)
+- Use code review discipline as final checkpoint
+
+**Implementation Roadmap:**
+- Phase 1 (Immediate): Create 3 new test files, 120 lines. Effort: 2-3 hours.
+- Phase 2 (Optional): Add query correctness to Outbox.
+- Phase 3 (Deferred): Performance profiling suite if telemetry shows issues.

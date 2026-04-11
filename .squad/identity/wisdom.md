@@ -9,3 +9,7 @@ Reusable patterns and heuristics learned through work. NOT transcripts — each 
 ## Patterns
 
 <!-- Append entries below. Format: **Pattern:** description. **Context:** when it applies. -->
+
+**Pattern:** MongoDB `explain()` plan tests are brittle and high-maintenance. Prefer lightweight schema inspection (index existence, field order, partial filters) if index verification is needed.
+
+**Context:** When tempted to add integration tests that verify query execution plans via explain(), consider: query plans vary by MongoDB version, collection size, and sharding strategy. Unless performance is already a proven problem (via production telemetry), the maintenance cost of explaining fragile plans exceeds the regression detection benefit. Functional tests catch query behavior bugs; code review catches most logic errors.

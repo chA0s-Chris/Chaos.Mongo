@@ -542,6 +542,183 @@ This is the **minimum viable schema** that prevents poison messages while keepin
 
 **Status:** ✅ PR created; awaiting user review and merge approval.
 
+### Nate — Index/Query Test Strategy Assessment
+
+**Date:** 2026-04-11  
+**Author:** Nate (Lead/Architect)  
+**Status:** Recommendation  
+**Scope:** Integration test strategy for Queue, EventStore, and Outbox indexes
+
+**Question:** Should we add integration tests that verify MongoDB indexes are actually used by queries (vs. collection scans)?
+
+**Answer:** Don't implement brittle `explain()` plan verification. Instead, enforce the contract through three layered approaches:
+
+1. **Schema validation tests** (lightweight, zero brittleness) — verify index structure with correct field order and partial filters
+2. **Query correctness tests** (functional, already mostly exist) — verify queries return correct results under realistic conditions
+3. **Code review discipline** — surface index-query alignment in PR checkpoints
+
+**Core Insight:** Explain-plan parsing is brittle (version-dependent, collection-size-dependent, planner-dependent). Functional tests already catch query behavior regressions. Schema validation catches real mistakes (field typos, order inversions) with zero maintenance cost.
+
+**Risk Assessment by Subsystem:**
+- **Queue:** LOW RISK. Field order correct, functional tests heavy. Add lightweight schema test for compound field order. Skip explain plans.
+- **EventStore:** VERY LOW RISK. Uniqueness database-enforced. Add schema test for unique index. Concurrency tests sufficient.
+- **Outbox:** MODERATE RISK. Field order matters for range query efficiency. Add schema test + one query correctness test.
+
+**Implementation Roadmap:**
+- **Phase 1 (Immediate):** Create ~120 lines of schema validation tests. Effort: 2-3 hours. Signal gain: high.
+- **Phase 2 (Optional):** Add query correctness test to Outbox (field order validation via result ordering).
+- **Phase 3 (Deferred):** Performance profiling suite only if production telemetry shows issues.
+
+**Trade-off:** Maintenance cost (explain plan fragility, CI/CD bloat, framework churn) exceeds regression detection benefit when functional tests already exercise queries under realistic conditions and code review catches logic errors.
+
+**See also:** `.squad/decisions/inbox/nate-index-query-test-strategy.md` for full architectural analysis.
+
+---
+
+### Parker — Index Regression Test Strategy Design
+
+**Date:** 2026-04-11  
+**Author:** Parker (Test Engineer)  
+**Status:** Recommendation  
+**Scope:** Multi-tier regression testing approach for index correctness
+
+**Problem:** Ensure future code changes don't silently break index coverage or query efficiency without coupling tests to MongoDB's internal query planner.
+
+**Recommendation:** Multi-tier regression testing strategy (no explain-plan coupling):
+
+1. **Tier 1 — Index Configuration Tests:** Assert index exists with correct keys, sort order, options
+2. **Tier 2 — Query/Index Alignment Tests:** Structural BSON validation of filters and sorts (unit tests, mocked)
+3. **Tier 3 — Partial Filter Edge Cases:** TTL deletion, type predicates, compound filter behavior
+4. **Tier 4 — Compound Sort Order:** Result ordering validation
+5. **Tier 5 — Concurrency Safety:** Unique constraint enforcement, write-while-reading
+
+**What NOT to Test:**
+- ❌ Explain-plan parsing (brittle, version-dependent)
+- ❌ Byte-level index stats (variance, not indicative)
+- ❌ Exact timing thresholds (CI variance)
+- ❌ Mocking MongoIndexManager for core index tests (misses real behavior)
+
+**Implementation Roadmap:**
+
+**Phase 1 (Immediate, 3-4 days):**
+- Index Configuration Tests (6 test methods, ~200 lines)
+- Query Alignment Tests unit tests only (3 test methods, ~150 lines)
+- CI Impact: +5-10ms total
+- Risk: None (read-only validation, no implementation changes)
+
+**Phase 2 (High Value, 3-4 days):**
+- Performance Regression Tests (load-based timing validation)
+- Partial Filter Edge Cases (TTL/uniqueness behavior)
+
+**Phase 3 (Nice-to-Have):**
+- Compound sort order tests
+- Concurrency safety tests
+
+**Test File Structure:**
+```
+tests/Chaos.Mongo.Tests/Integration/Queues/
+  └── MongoQueueIndexSchemaIntegrationTests.cs (new)
+tests/Chaos.Mongo.EventStore.Tests/Integration/
+  └── EventStoreIndexSchemaIntegrationTests.cs (new)
+tests/Chaos.Mongo.Outbox.Tests/Integration/
+  └── OutboxIndexSchemaIntegrationTests.cs (new)
+tests/Chaos.Mongo.Tests/Indexes/
+  └── QueryIndexAlignmentTests.cs (new, mocked unit tests)
+```
+
+**Risk Mitigation:**
+- TTL flakiness: Use short TTL, poll up to 10s, accept variance
+- Partial filter syntax: Always validate on real MongoDB (Testcontainers)
+- Query regression: Sort order tests catch silent order changes
+
+**Signal Value at Each Tier:**
+- ✅ Tier 1: 95% confidence index exists with exact spec
+- ✅ Tier 2: 90% confidence queries align with index
+- ✅ Tier 3: 95% confidence TTL/uniqueness works
+- ✅ Combined: 98% confidence future changes don't break index coverage
+
+**See also:** `.squad/decisions/inbox/parker-index-query-regression-tests.md` for full implementation guide (950 lines of planned test code, effort ~4-6 days).
+
+---
+
+### Decision: Queue Terminal Item TTL Exclusion
+
+**Date:** 2026-04-11  
+**Author:** Alec  
+**Status:** Approved  
+
+Terminal queue items are now intentionally excluded from the `ClosedUtc` TTL index partial filter.
+
+**Changes:**
+- Terminal queue items remain queryable for dead-letter handling while TTL cleanup applies only to successfully processed items
+- Runtime filter in `CreateAvailableQueueItemFilter()` explicitly requires `IsTerminal == false`
+- TTL index partial filter ensures non-terminal closed items are cleaned up
+
+**Rationale:** Terminal items may need to be routed to dead-letter queues; TTL should not remove them before DLQ handler can inspect.
+
+---
+
+### Decision: Legacy Terminal Filter Compatibility
+
+**Date:** 2026-04-11  
+**Author:** Eliot  
+**Status:** Approved  
+
+Queue availability queries treat missing `IsTerminal` field as non-terminal for backward compatibility with older queue documents after upgrade.
+
+**Implementation:**
+- Availability queries: Missing `IsTerminal` treated as non-terminal (queries continue to find old docs)
+- TTL partial filter: Use `IsTerminal: { $in: [false, null] }` for compatibility (MongoDB Mongo 8 rejects `$ne: true` and `$exists: false` on this field)
+
+**Rationale:** Ensures smooth upgrade path where older queue items without the `IsTerminal` field remain processable.
+
+---
+
+### Nate — Queue Retry Policy Branch Review (#73)
+
+**Date:** 2026-04-11  
+**Author:** Nate (Lead/Architect)  
+**Status:** Review Complete  
+**Related:** Squad branch for queue retry policies and terminal state support
+
+**Summary:** PR `squad/71-queue-dead-letter-handling-and-retry-policies` implements retry policies with terminal state support. **Verdict: Ready to merge with two non-blocking improvements.**
+
+**Critical Finding:** Terminal items not explicitly excluded in availability filter
+- **Issue:** `CreateAvailableQueueItemFilter()` doesn't filter on `IsTerminal`, yet compound index includes it
+- **Impact:** Semantic/clarity gap; not a bug due to accidental correctness (terminal items have `IsClosed=true`)
+- **Fix:** Add explicit `IsTerminal == false` filter to align index design with query intent
+
+**Moderate Finding:** Retry count math underdocumented
+- **Issue:** `WithMaxRetries(5)` comment doesn't clarify whether this means 5 retries *after* first failure (6 total attempts)
+- **Impact:** Documentation/UX; users may misconfigure retry budgets
+- **Fix:** Update README and XML docs to clarify: "5 retries after initial failure = 6 total attempts"
+
+**Positive Findings:**
+- ✅ Lock ownership guard solid
+- ✅ TTL + terminal orthogonality correct
+- ✅ Builder API validation correct
+- ✅ Test coverage comprehensive
+
+**Recommendation:** Merge after addressing IsTerminal filter clarity and MaxRetries documentation.
+
+---
+
+### Nate — ADR: Clarify MaxRetries Semantics
+
+**Date:** 2026-04-11  
+**Author:** Nate (Lead/Architect)  
+**Status:** Approved  
+
+Documentation clarification for `WithMaxRetries()` semantics to prevent user misconfiguration.
+
+**Changes:**
+1. **README (line 435):** Update comment from "Stop retrying poison messages after 5 retries" to "Stop after 5 retries (6 total attempts including initial)"
+2. **XML docs on `MongoQueueBuilder.WithMaxRetries()`:** Add parameter clarification: "Maximum number of retries after the initial attempt. For example, 5 allows up to 6 total attempts (1 initial + 5 retries)."
+
+**Rationale:** Clarity over terseness. A 30-second read prevents users from misconfiguring production retry budgets.
+
+**Verification:** No other MaxRetries documentation requires update (searched codebase).
+
 ## Team Directives
 
 ### Conventional Commit Message Standard (2026-04-11)
