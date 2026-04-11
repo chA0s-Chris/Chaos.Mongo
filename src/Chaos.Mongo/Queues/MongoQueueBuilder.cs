@@ -18,6 +18,7 @@ public sealed class MongoQueueBuilder<TPayload>
     private String? _collectionName;
     private Boolean _isRegistered;
     private TimeSpan? _lockLeaseTime;
+    private Int32? _maxRetries = MongoDefaults.QueueMaxRetries;
     private Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>>? _payloadHandlerFactory;
     private Type? _payloadHandlerType;
     private Int32? _queryLimit;
@@ -70,6 +71,7 @@ public sealed class MongoQueueBuilder<TPayload>
             CollectionName = _collectionName ?? String.Empty,
             ClosedItemRetention = _closedItemRetention,
             LockLeaseTime = _lockLeaseTime ?? MongoDefaults.QueueLockLeaseTime,
+            MaxRetries = _maxRetries,
             PayloadType = _payloadType,
             QueryLimit = _queryLimit ?? MongoDefaults.QueryLimit,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TPayload>),
@@ -111,7 +113,8 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
-    /// Configures how long processed queue items are retained before MongoDB TTL cleanup removes them.
+    /// Configures how long successfully processed queue items are retained before MongoDB TTL cleanup removes them.
+    /// Terminal failed items remain queryable for dead-letter handling.
     /// </summary>
     /// <param name="retention">The retention duration for closed items.</param>
     /// <returns>This builder instance for method chaining.</returns>
@@ -146,6 +149,7 @@ public sealed class MongoQueueBuilder<TPayload>
 
     /// <summary>
     /// Configures the queue to delete successfully processed items immediately.
+    /// Terminal failed items remain queryable for dead-letter handling.
     /// </summary>
     /// <returns>This builder instance for method chaining.</returns>
     public MongoQueueBuilder<TPayload> WithImmediateDelete()
@@ -172,6 +176,33 @@ public sealed class MongoQueueBuilder<TPayload>
         }
 
         _lockLeaseTime = leaseTime;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the maximum number of retries for failed queue items before they become terminal.
+    /// </summary>
+    /// <param name="maxRetries">The number of retries allowed after the initial failed attempt.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="maxRetries"/> is less than or equal to zero.</exception>
+    public MongoQueueBuilder<TPayload> WithMaxRetries(Int32 maxRetries)
+    {
+        if (maxRetries <= 0)
+        {
+            throw new ArgumentException("Max retries must be greater than 0. Use WithNoRetry() to disable retries.", nameof(maxRetries));
+        }
+
+        _maxRetries = maxRetries;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the queue to stop retrying failed items after the first failed attempt.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    public MongoQueueBuilder<TPayload> WithNoRetry()
+    {
+        _maxRetries = 0;
         return this;
     }
 

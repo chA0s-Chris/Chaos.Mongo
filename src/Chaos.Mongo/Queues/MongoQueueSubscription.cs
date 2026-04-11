@@ -69,12 +69,22 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     /// <inheritdoc/>
     public Boolean IsActive => _isActive && !_isDisposed;
 
+    private static FilterDefinition<MongoQueueItem<TPayload>> CreateLockOwnershipFilter(ObjectId queueItemId, DateTime acquiredLockUtc)
+    {
+        var filterBuilder = Builders<MongoQueueItem<TPayload>>.Filter;
+        return filterBuilder.Eq(x => x.Id, queueItemId) &
+               filterBuilder.Eq(x => x.IsClosed, false) &
+               filterBuilder.Eq(x => x.IsLocked, true) &
+               filterBuilder.Eq(x => x.LockedUtc, acquiredLockUtc);
+    }
+
     private FilterDefinition<MongoQueueItem<TPayload>> CreateAvailableQueueItemFilter()
     {
         var filterBuilder = Builders<MongoQueueItem<TPayload>>.Filter;
         var lockExpiryUtc = _timeProvider.GetUtcNow().UtcDateTime - _queueDefinition.LockLeaseTime;
 
         return filterBuilder.Eq(x => x.IsClosed, false) &
+               filterBuilder.Ne(x => x.IsTerminal, true) &
                (filterBuilder.Eq(x => x.IsLocked, false) |
                 (filterBuilder.Eq(x => x.IsLocked, true) &
                  (filterBuilder.Eq(x => x.LockedUtc, null) |
@@ -98,7 +108,8 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                             new(Builders<MongoQueueItem<TPayload>>.IndexKeys
                                                                   .Ascending(x => x.IsClosed)
                                                                   .Ascending(x => x.IsLocked)
-                                                                  .Ascending(x => x.LockedUtc)),
+                                                                  .Ascending(x => x.LockedUtc)
+                                                                  .Ascending(x => x.IsTerminal)),
                             cancellationToken: cancellationToken);
 
         if (_queueDefinition.ClosedItemRetention.HasValue)
@@ -109,9 +120,19 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 {
                     Name = ClosedItemTtlIndexName,
                     ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
-                    PartialFilterExpression = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, true) &
-                                              Builders<MongoQueueItem<TPayload>>.Filter.Exists(nameof(MongoQueueItem.ClosedUtc)) &
-                                              Builders<MongoQueueItem<TPayload>>.Filter.Type(nameof(MongoQueueItem.ClosedUtc), BsonType.DateTime)
+                    PartialFilterExpression = new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(
+                        new()
+                        {
+                            { nameof(MongoQueueItem.IsClosed), true },
+                            { nameof(MongoQueueItem.IsTerminal), new BsonDocument("$in", new BsonArray([false, BsonNull.Value])) },
+                            {
+                                nameof(MongoQueueItem.ClosedUtc), new BsonDocument
+                                {
+                                    { "$exists", true },
+                                    { "$type", (Int32)BsonType.DateTime }
+                                }
+                            }
+                        })
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(ttlIndex, cancellationToken: cancellationToken);
@@ -120,6 +141,66 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         {
             await collection.Indexes.DropOneIfExistsAsync(ClosedItemTtlIndexName, cancellationToken);
         }
+    }
+
+    private async Task HandleFailedQueueItemAsync(IMongoCollection<MongoQueueItem<TPayload>> collection,
+                                                  ObjectId queueItemId,
+                                                  DateTime acquiredLockUtc,
+                                                  Exception exception,
+                                                  CancellationToken cancellationToken)
+    {
+        var failedItem = await collection.FindOneAndUpdateAsync(
+            CreateLockOwnershipFilter(queueItemId, acquiredLockUtc),
+            Builders<MongoQueueItem<TPayload>>.Update.Inc(x => x.RetryCount, 1),
+            new FindOneAndUpdateOptions<MongoQueueItem<TPayload>>
+            {
+                ReturnDocument = ReturnDocument.After
+            },
+            cancellationToken);
+
+        if (failedItem is null)
+        {
+            _logger.LogWarning("Skipping failure handling for queue item {QueueItemId} with payload {PayloadType} because lock ownership changed",
+                               queueItemId,
+                               typeof(TPayload).FullName);
+            return;
+        }
+
+        _logger.LogError(exception,
+                         "Processing queue item {QueueItemId} with payload {PayloadType} failed on attempt {RetryCount}",
+                         queueItemId,
+                         typeof(TPayload).FullName,
+                         failedItem.RetryCount);
+
+        if (!_queueDefinition.MaxRetries.HasValue || failedItem.RetryCount <= _queueDefinition.MaxRetries.Value)
+        {
+            return;
+        }
+
+        var terminalUpdateSucceeded = (await collection.UpdateOneAsync(
+            CreateLockOwnershipFilter(queueItemId, acquiredLockUtc),
+            Builders<MongoQueueItem<TPayload>>.Update
+                                              .Set(x => x.IsClosed, true)
+                                              .Set(x => x.IsTerminal, true)
+                                              .Set(x => x.ClosedUtc, _timeProvider.GetUtcNow().UtcDateTime)
+                                              .Set(x => x.IsLocked, false)
+                                              .Unset(x => x.LockedUtc),
+            cancellationToken: cancellationToken)).ModifiedCount > 0;
+
+        if (!terminalUpdateSucceeded)
+        {
+            _logger.LogWarning("Skipping terminal transition for queue item {QueueItemId} with payload {PayloadType} because lock ownership changed",
+                               queueItemId,
+                               typeof(TPayload).FullName);
+            return;
+        }
+
+        _logger.LogWarning(exception,
+                           "Marking queue item {QueueItemId} with payload {PayloadType} as terminal after {RetryCount} failed attempts (max retries: {MaxRetries})",
+                           queueItemId,
+                           typeof(TPayload).FullName,
+                           failedItem.RetryCount,
+                           _queueDefinition.MaxRetries.Value);
     }
 
     /// <summary>
@@ -221,6 +302,11 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                                  payloadHandler.GetType().FullName);
                 await payloadHandler.HandlePayloadAsync(queueItem.Payload, cancellationToken);
             }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, e, cancellationToken);
+                return;
+            }
             finally
             {
                 // ReSharper disable SuspiciousTypeConversion.Global
@@ -235,10 +321,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 // ReSharper restore SuspiciousTypeConversion.Global
             }
 
-            var completionFilter = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.Id, queueItemId) &
-                                   Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, false) &
-                                   Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsLocked, true) &
-                                   Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.LockedUtc, acquiredLockUtc);
+            var completionFilter = CreateLockOwnershipFilter(queueItemId, acquiredLockUtc);
             var completionSucceeded = _queueDefinition.ClosedItemRetention.HasValue
                 ? (await collection.UpdateOneAsync(
                     completionFilter,

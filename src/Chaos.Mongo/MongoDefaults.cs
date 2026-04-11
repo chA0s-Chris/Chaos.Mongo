@@ -63,7 +63,7 @@ public static class MongoDefaults
     public static TimeSpan MigrationLockLeaseTime => TimeSpan.FromMinutes(10);
 
     /// <summary>
-    /// Gets the default retention time for closed queue items before TTL cleanup removes them.
+    /// Gets the default retention time for successfully processed queue items before TTL cleanup removes them.
     /// </summary>
     public static TimeSpan? QueueClosedItemRetention => TimeSpan.FromHours(1);
 
@@ -71,6 +71,11 @@ public static class MongoDefaults
     /// Gets the default lease time for queue item locks.
     /// </summary>
     public static TimeSpan QueueLockLeaseTime => TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Gets the default maximum number of retries for failed queue items before they become terminal.
+    /// </summary>
+    public static Int32? QueueMaxRetries => null;
 
     /// <summary>
     /// Gets the default delay between lock acquisition retry attempts.

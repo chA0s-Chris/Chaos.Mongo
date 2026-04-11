@@ -13,8 +13,9 @@ public record MongoQueueDefinition
     public required Boolean AutoStartSubscription { get; init; }
 
     /// <summary>
-    /// Duration that closed queue items are retained before TTL cleanup removes them.
-    /// <c>null</c> means items are deleted immediately after successful processing.
+    /// Duration that successfully processed queue items are retained before TTL cleanup removes them.
+    /// <c>null</c> means successful items are deleted immediately after processing.
+    /// Terminal failed items stay queryable for dead-letter handling.
     /// </summary>
     public TimeSpan? ClosedItemRetention { get; init; } = MongoDefaults.QueueClosedItemRetention;
 
@@ -27,6 +28,12 @@ public record MongoQueueDefinition
     /// Duration that a queue item lock remains valid before another consumer may recover it.
     /// </summary>
     public required TimeSpan LockLeaseTime { get; init; }
+
+    /// <summary>
+    /// Maximum number of retries for failed queue items before they become terminal.
+    /// <c>null</c> means failed items keep retrying after lease expiry.
+    /// </summary>
+    public Int32? MaxRetries { get; init; } = MongoDefaults.QueueMaxRetries;
 
     /// <summary>
     /// Type of the payload handler.

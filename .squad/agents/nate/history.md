@@ -98,6 +98,27 @@ The ADR assumed passive expiry would "just work" with the existing query filter.
 
 **Decision:** Findings #1 and #2 block merge. Remaining findings recommended but not blocking.
 
+### 2026-04-11: PR #71 Review — Queue Retry Policies with Terminal State Support
+
+**Branch:** `squad/71-queue-dead-letter-handling-and-retry-policies`
+
+**Critical Finding — Terminal Items Not Explicitly Excluded:**
+- `CreateAvailableQueueItemFilter()` does NOT filter on `IsTerminal`, but compound index includes it (line 111)
+- Index is created but never used in query — signals intent mismatch
+- **Impact:** Low operational (terminal items don't re-process because `IsClosed=true` blocks them), high clarity cost
+- **Recommendation:** Add `filterBuilder.Eq(x => x.IsTerminal, false)` to availability filter for defensive clarity and index alignment
+
+**Moderate Finding — Retry Count Math Underdocumented:**
+- `WithMaxRetries(5)` allows 5 retries **after** first failure (6 total attempts), but README comment doesn't clarify
+- **Recommendation:** Update README line 437 with "Allow 5 retries after initial failure (6 total attempts)"
+
+**Positive Findings:**
+- Lock ownership guard is solid (LockedUtc equality prevents theft)
+- TTL + terminal orthogonality correct (terminal items stay queryable for DLQ until TTL expires)
+- Builder API validation and tests comprehensive
+
+**Verdict:** Architecturally sound, tests pass. Filter clarity strongly recommended before merge; documentation improvement lower-priority.
+
 ### 2026-04-10: PR #73 Review Finding r3066971413 — Deep Dive
 
 **Finding:** Test container disposal in `[OneTimeTearDown]` breaks parallel test execution.
@@ -156,3 +177,97 @@ _logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc
 **Rationale:** Diagnostics accuracy on critical paths matters. Operators need precise logs to understand lock recovery failure modes. Cost is trivial (single log message). Not deferring to Phase 2 (#72 covers additional observability, but this base case should be accurate in current PR).
 
 **ADR:** Queue Lock Recovery Log Message Accuracy (merged to decisions.md 2026-04-11)
+
+### 2026-04-11: Issue #71 — Queue Dead-Letter Handling and Retry Policies (Phase 2 Shape)
+
+**Session:** Architecture scoping for Phase 2 issue #71  
+**Trigger:** User directed team to pick one of #71/#72 after Phase 1 PR merge; chose #71 for higher operational value
+
+**Decision Made:** Defined smallest implementation shape for #71 that avoids scope creep.
+
+**Key Architectural Decisions:**
+
+1. **Storage Model:** Retry state in same queue document, not separate DLQ collection
+   - Rationale: Atomic reprocessing, single schema, one source of truth
+   - DLQ is logical view (query filter), not physical collection
+
+2. **Retry Tracking:** Add `RetryCount` (int) and `IsTerminal` (bool) to `MongoQueueItem`
+   - RetryCount incremented on handler exception
+   - IsTerminal set when RetryCount >= MaxRetries (if configured)
+
+3. **Public API (Phase 2.1 only)**
+   - `MongoQueueDefinition.MaxRetries` (nullable int)
+   - `MongoQueueBuilder<T>.WithMaxRetries(int)` and `WithNoRetry()`
+   - `MongoDefaults.QueueMaxRetries = null` (unlimited by default)
+
+4. **Scope Discipline:** Phase 2.1 limited to max-count retry logic
+   - ❌ Deferred: Custom policies, exception discrimination, automated reprocessing, separate DLQ collection
+   - Rationale: Telemetry (#72) needed for good policy design; deferred items don't block Phase 2
+
+5. **Backward Compatibility:** Default `MaxRetries=null` preserves Phase 1 semantics (unlimited retries)
+
+**Implementation Shape (For Eliot):**
+- On handler exception: increment RetryCount, check if terminal, log, swallow exception
+- Index updated: compound on (IsClosed, IsLocked, LockedUtc, IsTerminal)
+- Pattern follows Phase 1 approach (TTL index, fluent builder, backward-compat defaults)
+
+**Acceptance Criteria (For Parker):**
+- Handler exception → RetryCount increments → logged
+- RetryCount >= MaxRetries → IsTerminal=true → logged warning
+- Default (null) preserves Phase 1 behavior (no change to existing queues)
+- Integration tests: retry exhaustion, terminal state, backward compat
+- Builder tests: WithMaxRetries, WithNoRetry validation
+
+**Artifact:** `.squad/decisions/inbox/nate-issue-71-shape.md` (comprehensive architecture decision document)
+
+**Rationale for Decisions:**
+- Same-document model avoids operational complexity of separate collection (atomic, simpler schema)
+- Max-count retries cover ~80% of use cases; custom policies wait for telemetry
+- Null default maintains backward compatibility while enabling opt-in retry limits
+- Phase 2.1 scope prevents scope creep; deferred items don't block implementation
+
+**Status:** Ready for implementation. No architectural blockers. Decision document ready for Eliot and Parker review.
+
+### 2026-04-15: PR Review Finding r3068240198 — MaxRetries Documentation Clarity
+
+**Finding:** README wording for `WithMaxRetries(5)` is ambiguous and may mislead users about total attempt count.
+
+**Current Wording (line 435):**
+```
+.WithMaxRetries(5) // Stop retrying poison messages after 5 retries
+```
+
+**Ambiguity Concern:**
+- Naive read: 5 total failures allowed
+- Actual behavior: 5 retries AFTER initial failure = 6 total attempts
+
+**Evidence (Implementation):**
+- Line 175 in `MongoQueueSubscription.cs`: condition is `failedItem.RetryCount <= MaxRetries`
+- Integration test `MongoQueueRetryIntegrationTests.cs` line 38: `WithMaxRetries(1)` expects 2 handler attempts (line 55) and `RetryCount == 2` (line 62)
+- Flow: attempt 1 fails → `RetryCount=1`, check `1 <= 1` → allow retry; attempt 2 fails → `RetryCount=2`, check `2 <= 1` → FALSE → terminal
+
+**Verdict: FIX IT — This is meaningful, not noise.**
+
+**Trade-off Analysis:**
+- Cost: 2-minute fix (one comment update)
+- Risk of leaving it: Users misconfigure queues (e.g., `WithMaxRetries(99)` expecting 99 retries, get 100), then report bugs or make wrong operational decisions
+- False positives (fixing non-bugs): Zero—behavior is clear in code and tests
+
+**Decision:** Update README to clarify terminology. Recommended wording: "Allow 5 retries after initial failure (6 total attempts)" or "Stop after 5 retry attempts, allowing up to 6 total attempts."
+
+**Follow-Up:** After fix, consider clarifying the same semantics in `MongoQueueBuilder.WithMaxRetries()` XML docs for consistency.
+
+### 2026-04-15: README MaxRetries Documentation Update
+
+**Task:** Implement ADR for PR review finding r3068240198 — clarify retry semantics in README.
+
+**Change Made:**
+- **File:** `README.md` line 435
+- **Old:** `.WithMaxRetries(5) // Stop retrying poison messages after 5 retries`
+- **New:** `.WithMaxRetries(5) // Stop after 5 retries (6 total attempts including initial)`
+
+**Rationale:** The phrase "5 retries" is ambiguous—unclear whether it means 5 total attempts or 5 retries after initial failure. Implementation clarifies this: `RetryCount > MaxRetries` only triggers terminal state, so `WithMaxRetries(5)` allows up to 6 total attempts. README now mirrors implementation semantics exactly.
+
+**Trade-off:** Minimal. The change is purely clarifying; it changes no behavior and increases precision at near-zero cost. No other README retry documentation needed update (lines 441-442 remain contextually sound post-change).
+
+**Status:** COMPLETE. Change is surgical and unrelated to code; no commit per user request.

@@ -141,4 +141,10 @@
 
 **Outcome:** PR #74 follow-up complete and ready for user review/merge. All changes committed to `squad/10-remove-old-queue-items` branch.
 
+## Learnings
+
+- Queue availability filtering in `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` should treat missing `IsTerminal` as non-terminal for backward compatibility with legacy queue documents, using `IsTerminal != true` semantics for active-work queries.
+- TTL retention on queue items must stay backward compatible too, but MongoDB partial index filters reject `$ne` and `$exists: false`; the working representation is `IsTerminal: { $in: [false, null] }`, which still includes legacy documents with no `IsTerminal` field.
+- Review coverage for these behaviors lives in `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` and `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueRetentionIntegrationTests.cs`, and the assertions should validate compatible behavior instead of one literal BSON shape.
+
 ## Recent Work (Historical Duplicates Below — See Above for Latest Work)

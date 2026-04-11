@@ -34,6 +34,42 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
+    public void MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention()
+    {
+        // Arrange
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
+            PayloadType = typeof(TestPayload),
+            QueryLimit = 1,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+            AutoStartSubscription = false
+        };
+
+        // Assert
+        queueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
+    }
+
+    [Test]
+    public void MongoQueueDefinition_WithoutExplicitMaxRetries_UsesUnlimitedRetries()
+    {
+        // Arrange
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
+            PayloadType = typeof(TestPayload),
+            QueryLimit = 1,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+            AutoStartSubscription = false
+        };
+
+        // Assert
+        queueDefinition.MaxRetries.Should().BeNull();
+    }
+
+    [Test]
     public void RegisterQueue_CalledTwice_OnlyRegistersOnce()
     {
         // Arrange
@@ -112,6 +148,44 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
+    public async Task RegisterQueue_WithMaxRetries_UsesConfiguredMaxRetries()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.WithMaxRetries(3);
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.MaxRetries.Should().Be(3);
+    }
+
+    [Test]
+    public async Task RegisterQueue_WithNoRetry_UsesZeroMaxRetries()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.WithNoRetry();
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.MaxRetries.Should().Be(0);
+    }
+
+    [Test]
     public async Task RegisterQueue_WithoutClosedItemRetention_UsesDefaultRetention()
     {
         // Arrange
@@ -127,24 +201,6 @@ public class MongoQueueBuilderTests
 
         // Assert
         queue.QueueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
-    }
-
-    [Test]
-    public void MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention()
-    {
-        // Arrange
-        var queueDefinition = new MongoQueueDefinition
-        {
-            CollectionName = "test-queue",
-            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
-            PayloadType = typeof(TestPayload),
-            QueryLimit = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
-            AutoStartSubscription = false
-        };
-
-        // Assert
-        queueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
     }
 
     [Test]
@@ -384,6 +440,64 @@ public class MongoQueueBuilderTests
         // Assert
         act.Should().Throw<ArgumentException>()
            .WithMessage("Lock lease time must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithMaxRetries_WithNegativeValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithMaxRetries(-1);
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Max retries must be greater than 0. Use WithNoRetry() to disable retries.*");
+    }
+
+    [Test]
+    public void WithMaxRetries_WithPositiveValue_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithMaxRetries(3);
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithMaxRetries_WithZeroValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithMaxRetries(0);
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Max retries must be greater than 0. Use WithNoRetry() to disable retries.*");
+    }
+
+    [Test]
+    public void WithNoRetry_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithNoRetry();
+
+        // Assert
+        result.Should().BeSameAs(builder);
     }
 
     [Test]

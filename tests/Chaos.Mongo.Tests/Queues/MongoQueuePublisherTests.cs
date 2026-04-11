@@ -8,7 +8,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using Moq;
 using NUnit.Framework;
-using MongoDefaults = Chaos.Mongo.MongoDefaults;
+using MongoDefaults = MongoDefaults;
 
 public class MongoQueuePublisherTests
 {
@@ -250,6 +250,8 @@ public class MongoQueuePublisherTests
         capturedItem!.Payload.Should().BeSameAs(payload);
         capturedItem.CreatedUtc.Should().Be(testTime);
         capturedItem.Id.Should().NotBe(ObjectId.Empty);
+        capturedItem.RetryCount.Should().Be(0);
+        capturedItem.IsTerminal.Should().BeFalse();
     }
 
     public class AnotherTestPayload;
