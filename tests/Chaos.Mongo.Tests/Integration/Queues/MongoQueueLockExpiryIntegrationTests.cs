@@ -71,6 +71,8 @@ public class MongoQueueLockExpiryIntegrationTests
         recoveredItem.IsLocked.Should().BeFalse();
         recoveredItem.ClosedUtc.Should().NotBeNull();
         recoveredItem.LockedUtc.Should().BeNull();
+        recoveredItem.RetryCount.Should().Be(1);
+        recoveredItem.IsTerminal.Should().BeFalse();
 
         // Cleanup
         await queue.StopSubscriptionAsync();
@@ -181,10 +183,11 @@ public class MongoQueueLockExpiryIntegrationTests
 
         // Assert
         indexDocuments.Should().Contain(x =>
-                                            x["key"].AsBsonDocument.ElementCount == 3 &&
+                                            x["key"].AsBsonDocument.ElementCount == 4 &&
                                             x["key"]["IsClosed"] == 1 &&
                                             x["key"]["IsLocked"] == 1 &&
                                             x["key"]["LockedUtc"] == 1 &&
+                                            x["key"]["IsTerminal"] == 1 &&
                                             !x.Contains("partialFilterExpression"));
 
         // Cleanup

@@ -29,6 +29,12 @@ public record MongoQueueDefinition
     public required TimeSpan LockLeaseTime { get; init; }
 
     /// <summary>
+    /// Maximum number of retries for failed queue items before they become terminal.
+    /// <c>null</c> means failed items keep retrying after lease expiry.
+    /// </summary>
+    public Int32? MaxRetries { get; init; } = MongoDefaults.QueueMaxRetries;
+
+    /// <summary>
     /// Type of the payload handler.
     /// </summary>
     public required Type PayloadHandlerType { get; init; }

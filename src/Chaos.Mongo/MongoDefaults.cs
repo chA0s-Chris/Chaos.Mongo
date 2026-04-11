@@ -73,6 +73,11 @@ public static class MongoDefaults
     public static TimeSpan QueueLockLeaseTime => TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Gets the default maximum number of retries for failed queue items before they become terminal.
+    /// </summary>
+    public static Int32? QueueMaxRetries => null;
+
+    /// <summary>
     /// Gets the default delay between lock acquisition retry attempts.
     /// </summary>
     public static TimeSpan RetryDelay => TimeSpan.FromMilliseconds(500);

@@ -41,10 +41,20 @@ public class MongoQueueItem
     public Boolean IsLocked { get; set; }
 
     /// <summary>
+    /// <c>true</c> if queue item exhausted its retry policy and is now terminal.
+    /// </summary>
+    public Boolean IsTerminal { get; set; }
+
+    /// <summary>
     /// Timestamp the queue item was locked.
     /// </summary>
     [BsonIgnoreIfNull]
     public DateTime? LockedUtc { get; set; }
+
+    /// <summary>
+    /// Number of failed processing attempts for this queue item.
+    /// </summary>
+    public Int32 RetryCount { get; set; }
 }
 
 /// <summary>
