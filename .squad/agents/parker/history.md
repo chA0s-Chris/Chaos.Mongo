@@ -131,3 +131,60 @@
 - `tests/Chaos.Mongo.Tests/Integration/MongoAssemblySetup.cs` owns starting and stopping the shared `MongoDbTestContainer` for the whole test assembly.
 - Individual integration fixtures in `tests/Chaos.Mongo.Tests` may call `MongoDbTestContainer.StartContainerAsync()` in `[OneTimeSetUp]` to get the running container reference, but they should not dispose it in fixture teardown.
 - `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs` was corrected to follow this pattern after PR #73 review feedback.
+
+### 2026-04-11: Issue #10 Queue Closed-Item Retention — Test Coverage
+
+**Session:** Issue #10 implementation validation  
+**Branch:** `squad/10-remove-old-queue-items`  
+**Status:** Completed (awaiting user review for merge)
+
+**Test Coverage Added:**
+
+**Builder Configuration Tests:**
+- `.WithClosedItemRetention(TimeSpan)` accepts valid durations and configures policy
+- `.WithImmediateDelete()` sets retention to null
+- Configuration validation rejects invalid values
+- Default retention (1 hour) applied when no explicit config
+
+**Integration Tests:**
+- TTL index creation with default (1 hour) and custom retention periods
+- Immediate delete behavior (null retention): items deleted within expected window
+- Same-collection policy reconciliation: multiple subscriptions with different policies
+- Index lifecycle: TTL index dropped when switching to immediate-delete mode
+- Query performance with large closed-item collections (1000+ items)
+
+**Validation Outcomes:**
+- ✅ All retention configuration paths exercise correctly
+- ✅ TTL index created with configured retention period
+- ✅ Immediate delete removes items within expected window
+- ✅ Multiple policies reconcile without conflicts
+- ✅ No regression in existing queue processing
+- ✅ All tests passing with Testcontainers MongoDB
+
+**Status:** Full coverage achieved, ready for production validation after merge.
+
+### 2026-04-11: PR #74 Follow-up — Direct-Construction Default & Cancellation Hardening Validation
+
+**Session:** PR #74 follow-up test validation  
+**Branch:** `squad/10-remove-old-queue-items`  
+**Status:** Complete (ready for user review and merge)
+
+**Work Completed:**
+
+1. **Reviewed Direct-Construction Default Fix**
+   - Analyzed `MongoQueueDefinition.ClosedItemRetention` default initialization
+   - Confirmed alignment with builder-supplied default from `MongoDefaults`
+   - Validated existing test `MongoQueueBuilderTests.MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention` covers contract
+
+2. **Reviewed Cancellation Token Hardening**
+   - Analyzed retention polling helper cancellation token threading
+   - Confirmed `ListAsync`, `ToListAsync`, `FirstOrDefaultAsync`, polling helpers all respect timeout
+   - Determined no additional test scenarios required—hardening is implementation-detail safety, not API behavior change
+
+**Validation Results:**
+- ✅ Focused queue tests passed
+- ✅ Full solution `dotnet test Chaos.Mongo.slnx --no-restore` passed
+- ✅ Existing test coverage sufficient for follow-up scope
+- ⚠️  Note: `bash build.sh Test` blocked by shared `.nuke/temp/build.log` lock; used direct `dotnet test` as reliable fallback
+
+**Outcome:** PR #74 follow-up is test-complete and ready for user review/merge. No additional test code needed.

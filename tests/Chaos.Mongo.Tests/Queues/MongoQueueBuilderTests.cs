@@ -53,6 +53,45 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
+    public async Task RegisterQueue_WithClosedItemRetention_UsesConfiguredRetention()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        var retention = TimeSpan.FromMinutes(15);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.WithClosedItemRetention(retention);
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.ClosedItemRetention.Should().Be(retention);
+    }
+
+    [Test]
+    public async Task RegisterQueue_WithImmediateDelete_UsesNullRetention()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.WithImmediateDelete();
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.ClosedItemRetention.Should().BeNull();
+    }
+
+    [Test]
     public async Task RegisterQueue_WithLockLeaseTime_UsesConfiguredLockLeaseTime()
     {
         // Arrange
@@ -70,6 +109,42 @@ public class MongoQueueBuilderTests
 
         // Assert
         queue.QueueDefinition.LockLeaseTime.Should().Be(lockLeaseTime);
+    }
+
+    [Test]
+    public async Task RegisterQueue_WithoutClosedItemRetention_UsesDefaultRetention()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
+    }
+
+    [Test]
+    public void MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention()
+    {
+        // Arrange
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
+            PayloadType = typeof(TestPayload),
+            QueryLimit = 1,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+            AutoStartSubscription = false
+        };
+
+        // Assert
+        queueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
     }
 
     [Test]
@@ -154,6 +229,50 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
+    public void WithClosedItemRetention_WithNegativeValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithClosedItemRetention(TimeSpan.FromSeconds(-1));
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Closed item retention must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithClosedItemRetention_WithPositiveValue_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithClosedItemRetention(TimeSpan.FromMinutes(5));
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithClosedItemRetention_WithZeroValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithClosedItemRetention(TimeSpan.Zero);
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Closed item retention must be greater than 0.*");
+    }
+
+    [Test]
     public void WithCollectionName_WhenCollectionNameIsEmpty_ThrowsArgumentException()
     {
         // Arrange
@@ -204,6 +323,20 @@ public class MongoQueueBuilderTests
 
         // Act
         var result = builder.WithCollectionName("test-queue");
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithImmediateDelete_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithImmediateDelete();
 
         // Assert
         result.Should().BeSameAs(builder);

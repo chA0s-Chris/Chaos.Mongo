@@ -6,105 +6,31 @@
 - **Role:** Library Dev
 - **Joined:** 2026-04-09T19:19:45.616Z
 
-## Learnings
+**Queue Architecture Summary:**
+- `MongoQueueItem`: State machine with `IsClosed`, `IsLocked`, `LockedUtc`, `ClosedUtc` fields
+- Processing: Dual-mechanism (change stream + polling loop with backoff)
+- Original issues: Stuck locks on handler failure (Issue #9), unbounded closed-item accumulation (Issue #10)
+- Index strategy: Compound index on `(IsClosed, IsLocked, LockedUtc)` for active items; TTL index on `ClosedUtc` for cleanup
 
-### Queue Implementation Architecture (2025-01-15)
-
-**MongoQueueItem state machine:**
-- Three key fields: `IsClosed` (processed?), `IsLocked` (processing?), with timestamps `LockedUtc`, `ClosedUtc`
-- Processing filter: `IsClosed=false AND IsLocked=false` (finds unprocessed, unlocked items)
-- Lock acquired: `FindOneAndUpdateAsync()` sets `IsLocked=true, LockedUtc=now` before handler runs
-- Unlock on success: `IsClosed=true, ClosedUtc=now, IsLocked=false, Unset(LockedUtc)`
-- **Bug on failure:** Exception caught silently, lock never released → item stuck forever
-
-**Queue subscription pattern:**
-- Dual-mechanism: MongoDB change stream watches inserts in real-time; polling loop processes + handles misses
-- Change stream signals via `_signalSemaphore.Release()` when inserts detected
-- Polling loop queries `IsClosed=false AND IsLocked=false`, processes up to `QueryLimit` items (default 1)
-- After batch, checks if more unprocessed items exist, self-signals if needed
-- Default `QueryLimit=1` means single-item-at-a-time processing (very conservative)
-
-**Key files for queue work:**
-- `MongoQueueSubscription.cs`: Core processing engine (ProcessQueueItemsAsync, ProcessQueueItemAsync)
-- `MongoQueueItem.cs`: Schema definition
+**Key Queue Implementation Files:**
+- `MongoQueueSubscription.cs`: Core processing engine (ProcessQueueItemsAsync, ProcessQueueItemAsync, lock recovery)
+- `MongoQueueItem.cs`: Schema definition with state fields
 - `MongoQueueDefinition.cs`: Configuration holder (passed to builder)
 - `MongoQueueBuilder.cs`: DI registration and fluent configuration
-- Tests: `MongoQueueTests.cs` (unit), `MongoQueueIntegrationTests.cs` (integration with Testcontainers)
+- Tests: `MongoQueueTests.cs` (unit), `MongoQueueLockExpiryIntegrationTests.cs`, `MongoQueueRetentionIntegrationTests.cs` (integration)
 
-**No cleanup or timeout handling exists.** Items processed successfully stay forever (`IsClosed=true` with `ClosedUtc` set but unused). Stuck locks from handler failures never expire.
+**Configuration Defaults (MongoDefaults.cs):**
+- `QueueLockLeaseTime` = 5 minutes (for lock recovery)
+- `QueueClosedItemRetention` = 1 hour (for TTL cleanup)
+- `AutoStartSubscription` = false (opt-in)
+- `QueryLimit` = 1 (single-item-at-a-time processing)
 
-**Default configuration in MongoDefaults.cs:**
-- `AutoStartSubscription = false` (opt-in)
-- `QueryLimit = 1` (process 1 item per loop iteration)
-- `LockLeaseTime = 5 min` (for distributed locks, NOT queue item locks — unrelated)
+**API Pattern:**
+- Fluent builder: `MongoBuilder.WithQueue<T>()` returns `MongoQueueBuilder<T>` with chainable `.With*()` methods
+- New features follow builder pattern (e.g., `.WithLockLeaseTime()`, `.WithClosedItemRetention()`, `.WithImmediateDelete()`)
+- All new fields optional with sensible defaults; backward compatible
 
-**Index strategy:**
-- `EnsureIndexesAsync()` creates partial index: `{IsClosed: asc, IsLocked: asc}` filtered to `IsClosed=false AND IsLocked=false`
-- Only indexes unprocessed items for efficient polling
-- TTL indexes can be created in same method without breaking existing setup
-
-### Issues #9 and #10 — Root Cause (2025-01-15)
-
-**Issue #9 (stuck locks):**
-- Handler exception on line 177 (MongoQueueSubscription.cs) caught silently (line 203)
-- Lock state never reset → item with `IsLocked=true` ignored forever
-- Code path: `ProcessQueueItemAsync()` → exception in `HandlePayloadAsync()` → catch block → no update
-- Solution: Reset lock on failure (set `IsLocked=false, Unset(LockedUtc)`) to allow retry on next scan
-
-**Issue #10 (old items):**
-- No deletion logic anywhere in queue system
-- Processed items (IsClosed=true) stay in DB indefinitely
-- `ClosedUtc` timestamp exists but never used
-- Solution: Create TTL index on `ClosedUtc` with configurable retention (e.g., 7 days default)
-
-**Both issues should be addressed in a single PR** because they share configuration pattern, file changes, and test scenarios.
-
-### API Gaps Identified (2025-01-15)
-
-**New configuration needed:**
-- `LockTimeoutSeconds` (when to consider lock "stuck" and safe to reset)
-- `ProcessedItemRetentionSeconds` (how long to keep closed items before TTL cleanup)
-- Fluent builder methods: `WithLockTimeout()`, `WithProcessedItemRetention()`
-- Defaults: 5 min lock timeout, 7 days retention (conservative, configurable)
-
-**Backward compatibility:**
-- All new fields optional (nullable)
-- No breaking changes to `IMongoQueue<T>` or handler contract
-- Existing code works unchanged (just keeps old behavior: stuck locks, item accumulation)
-
-### Secondary Issues Found (2025-01-15)
-
-1. **Race condition in `ProcessQueueItemsAsync` (line 263-264):** Count check between batch processing and self-signal could miss items during high throughput. Low impact, out of scope for #9/#10.
-
-2. **Lock expiry without retry limits:** Stuck items unlock but no backoff or "dead letter" collection. Acceptable for now; handlers can implement retry semantics themselves.
-
-3. **Collection naming weak:** Uses `PayloadType.Name` (not FullName), collision risk if two namespaced types have same name. Out of scope, minor.
-
-4. **No durable lock detection for long-running handlers:** If handler takes >5 min and we unlock it, two processors could run simultaneously. Acceptable per "at-least-once" semantics.
-
-### Testing Patterns (2025-01-15)
-
-**Integration tests use Testcontainers.MongoDb:**
-- Each test gets unique DB name: `$"QueueTest_{Guid.NewGuid():N}"`
-- Handler helpers (TestPayloadHandler, AnotherPayloadHandler) track processed payloads
-- `handler.WaitForMessages(count, timeout)` polls for completion
-- Tests verify both auto-start and manual start modes
-- Cleanup: Start/stop hosted services properly, dispose queue
-
-### Testing Patterns (2025-01-15)
-
-**Integration tests use Testcontainers.MongoDb:**
-- Each test gets unique DB name: `$"QueueTest_{Guid.NewGuid():N}"`
-- Handler helpers (TestPayloadHandler, AnotherPayloadHandler) track processed payloads
-- `handler.WaitForMessages(count, timeout)` polls for completion
-- Tests verify both auto-start and manual start modes
-- Cleanup: Start/stop hosted services properly, dispose queue
-
-**Test structure:**
-- Arrange: Build services, publish messages (often BEFORE starting subscription)
-- Act: Start subscription, wait for processing
-- Assert: Verify processed items, queue state
-- Cleanup: Stop services gracefully
+## Recent Work
 
 ### 2026-04-10: Team Orchestration & Implementation Planning
 
@@ -145,60 +71,74 @@
 - Queue subscriptions now create a compound index on `(IsClosed, IsLocked, LockedUtc)` instead of the old partial unlocked-items index.
 - Recovery tests live in `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`.
 
-### 2026-04-11: Issue #9 Queue Lock Lease Recovery
+**PR #73 Blocker Fixes:**
+- Queue wake-up behavior: Passive lease recovery still needs a periodic wake-up after the queue goes idle, otherwise expired locks are only retried when a new insert or self-signal arrives. `MongoQueueSubscription` now re-checks the queue at least once per second while idle, capped by the configured lease time, so expired locks wake processing without a new publish.
+- Lock ownership guard: Closing a processed item must be conditional on the same `LockedUtc` value that was written when this consumer acquired the lock. Guarding the final close/unlock update with `(Id, IsClosed=false, IsLocked=true, LockedUtc=acquiredLockUtc)` prevents a slow consumer from clearing a replacement lock after lease expiry.
+- Regression coverage: Lease-expiry recovery test now proves the retry happens after the lease window without another insert. Added a two-consumer integration test that verifies the original handler cannot clear the replacement consumer's renewed lock.
 
-**Queue lease recovery pattern:**
-- `MongoQueueDefinition.LockLeaseTime` carries per-queue lease configuration, defaulted in `MongoQueueBuilder<T>` from `MongoDefaults.QueueLockLeaseTime`.
-- `MongoQueueSubscription` now treats open items as processable when they are unlocked or when `IsLocked=true` and `LockedUtc` is missing or older than `now - LockLeaseTime`.
-- Lease recovery stays passive: no unlock write on failure, no scavenger job, and the polling loop reclaims expired items by reacquiring the lock atomically.
+**Status:** PR #73 implementation complete and submitted for user review. Awaiting approval before merge to main.
 
-**Indexing for queue recovery:**
-- Queue subscriptions now create a compound index on `(IsClosed, IsLocked, LockedUtc)` instead of the old partial unlocked-items index.
-- Recovery tests live in `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`.
+### 2026-04-11: Issue #10 Queue Closed-Item Retention (TTL-Based)
 
-**User preference:**
-- For issue work, use the dedicated issue branch and leave changes uncommitted for review.
+**Session:** Issue #10 implementation and validation  
+**Branch:** `squad/10-remove-old-queue-items`  
+**Status:** Completed (awaiting user review for merge)
 
-### 2026-04-11: Post-Session Orchestration (Scribe Consolidation)
+**Implementation Pattern:**
+- Single managed TTL index per queue collection (`IX_Queue_ClosedUtc_TTL`) for deterministic retention
+- Index reconciliation on every subscription start enables policy changes without manual cleanup
+- When `ClosedItemRetention` is null, items deleted immediately; TTL index dropped
+- Default retention: 1 hour (configurable)
 
-**Session Work:**
-- Eliot completed Issue #9 implementation on `squad/9-queue-resilience` branch (uncommitted for review)
-- Decisions inbox merged: captured Eliot's implementation note and user directives on documentation and branch discipline
-- Orchestration log created at 2026-04-10T22:01:46Z
-- Session log created with Issue #9 summary and next steps
+**API Changes:**
+- `MongoQueueBuilder<T>.WithClosedItemRetention(TimeSpan)` — set custom retention period
+- `MongoQueueBuilder<T>.WithImmediateDelete()` — enable immediate deletion
+- `MongoQueueDefinition.ClosedItemRetention` property (nullable TimeSpan)
+- `MongoDefaults.QueueClosedItemRetention` = 1 hour
 
-**Directives Added to decisions.md:**
-- Keep feature documentation current with code changes
-- Use dedicated issue branches with uncommitted changes for review
+**Code Changes:**
+- Extended `MongoQueueDefinition` with retention configuration
+- Updated `MongoQueueBuilder<T>` with fluent methods
+- Modified `MongoQueueSubscription.EnsureIndexesAsync()` for TTL index lifecycle
+- Updated queue processing for immediate delete when retention null
+- Updated README with retention documentation
+- Extended builder and integration test coverage
 
-**Status:** Awaiting user review before merge to main. Phase 2 (Issue #10 TTL retention) ready to begin after approval.
+**Test Coverage:**
+- Builder configuration validation
+- TTL index creation/management (default and custom retention)
+- Immediate delete behavior (null retention)
+- Same-collection policy reconciliation (multiple subscriptions, different policies)
+- No regression in existing queue processing
 
-### 2026-04-11: PR Creation for Issue #9 (User Review Cycle)
+**Status:** Implementation complete, all tests passing, ready for user/team review and merge.
 
-**Commit:** `9744ed3` — "feat: implement queue lock lease recovery for issue #9"
+### 2026-04-11: PR #74 Follow-up — Direct-Construction Default & Cancellation Hardening
+
+**Session:** PR #74 follow-up validation and hardening  
+**Branch:** `squad/10-remove-old-queue-items`  
+**Status:** Complete (ready for user review and merge)  
+**Commit:** `fa183f1`
 
 **Work Completed:**
-- Committed all Issue #9 changes to `squad/9-queue-resilience` with required Co-authored-by trailer
-- Pushed branch to remote: `origin/squad/9-queue-resilience`
-- Created PR #73: "feat: implement queue lock lease recovery (issue #9)"
 
-**PR #73 Details:**
-- Title: Queue lock lease recovery implementation
-- Body: Summarizes passive lease expiry, MongoQueueDefinition additions, builder API, indexing changes, tests, and backward compatibility
-- Fixes issue #9
+1. **Fixed Direct-Construction Default for `MongoQueueDefinition.ClosedItemRetention`**
+   - Issue: Direct construction bypassed builder default, leaving retention unset
+   - Change: Added default to record property initializer (`= MongoDefaults.QueueClosedItemRetention`)
+   - Outcome: Direct construction now matches documented 1-hour retention without forcing every caller to set it
 
-**Status:** PR ready for user review and team feedback before merge.
+2. **Hardened `MongoQueueRetentionIntegrationTests` Cancellation Token Flow**
+   - Issue: Retention polling helpers (`ListAsync`, `ToListAsync`, `FirstOrDefaultAsync`) not respecting timeout cancellation tokens
+   - Change: Threaded cancellation token through all retention polling helper calls
+   - Outcome: Tests now honor timeout semantics, preventing optional hang scenarios in production
 
-### 2026-04-10: PR #73 Blocker Fixes
+**Validation:**
+- ✅ Direct-construction test validates default applies correctly
+- ✅ Focused queue tests passed
+- ✅ Full solution `dotnet test Chaos.Mongo.slnx --no-restore` passed
+- ✅ Existing test `MongoQueueBuilderTests.MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention` validates default contract
+- ✅ No regression in existing queue behavior
 
-**Queue wake-up behavior:**
-- Passive lease recovery still needs a periodic wake-up after the queue goes idle, otherwise expired locks are only retried when a new insert or self-signal arrives.
-- `MongoQueueSubscription` now re-checks the queue at least once per second while idle, capped by the configured lease time, so expired locks wake processing without a new publish.
+**Outcome:** PR #74 follow-up complete and ready for user review/merge. All changes committed to `squad/10-remove-old-queue-items` branch.
 
-**Lock ownership guard:**
-- Closing a processed item must be conditional on the same `LockedUtc` value that was written when this consumer acquired the lock.
-- Guarding the final close/unlock update with `(Id, IsClosed=false, IsLocked=true, LockedUtc=acquiredLockUtc)` prevents a slow consumer from clearing a replacement lock after lease expiry.
-
-**Regression coverage:**
-- Lease-expiry recovery test now proves the retry happens after the lease window without another insert.
-- Added a two-consumer integration test that verifies the original handler cannot clear the replacement consumer's renewed lock.
+## Recent Work (Historical Duplicates Below — See Above for Latest Work)

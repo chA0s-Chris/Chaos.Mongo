@@ -158,6 +158,43 @@ This provides operators with:
 
 ## Completed Work
 
+### PR #74 Follow-up — Issue #10 Direct-Construction Default & Cancellation Hardening (2026-04-11)
+
+**Authors:** Eliot (implementation), Parker (validation)  
+**Status:** Complete (ready for user review and merge)  
+**Related:** PR #74, Issue #10, Branch `squad/10-remove-old-queue-items`
+
+#### Problem
+
+- Direct construction of `MongoQueueDefinition` with `ClosedItemRetention` unset left retention null, bypassing documented 1-hour default
+- `MongoQueueRetentionIntegrationTests` retention polling helpers did not thread cancellation tokens, creating optional hang scenarios
+
+#### Decision
+
+1. Add default initializer to `MongoQueueDefinition.ClosedItemRetention` property
+2. Thread timeout cancellation token through all retention polling helper calls
+
+#### Rationale
+
+- **Direct-construction default:** Builder always applies `MongoDefaults.QueueClosedItemRetention`, but direct construction bypassed this. Default initializer ensures both code paths behave identically without forcing every caller to set retention.
+- **Cancellation token hardening:** Timeout semantics must be respected throughout polling loops to prevent optional hangs in production. Minimal change, high safety impact.
+
+#### Implementation
+
+**Commit:** `fa183f1`
+
+- `MongoQueueDefinition.ClosedItemRetention` now defaults to `MongoDefaults.QueueClosedItemRetention`
+- `MongoQueueRetentionIntegrationTests` threads cancellation token through `ListAsync`, `ToListAsync`, `FirstOrDefaultAsync`, and polling helpers
+
+#### Validation
+
+- ✅ Focused queue tests passed
+- ✅ Full solution `dotnet test Chaos.Mongo.slnx --no-restore` passed
+- ✅ Existing test `MongoQueueBuilderTests.MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention` validates default contract
+- ✅ No regression in existing queue processing
+
+**Note:** `bash build.sh Test` blocked by shared `.nuke/temp/build.log` lock; direct `dotnet test` used as reliable fallback.
+
 ### Issue Triage & Phase 2 Planning (2026-04-10)
 
 **Author:** Nate (Lead/Architect)  
@@ -183,6 +220,45 @@ Updated GitHub issues #9 and #10 with implementation-ready specifications derive
 1. Phase 1 (Immediate): Eliot implements #9 (lock expiry), Parker designs tests
 2. Phase 1 (Follow-up): Second PR for #10 (TTL retention) after #9 merges
 3. Phase 2 (Design): Team aligns on #71 and #72 requirements before implementation
+
+### Issue #10 — Queue Closed-Item Retention (TTL-Based) (2026-04-11)
+
+**Authors:** Eliot (implementation), Parker (testing)  
+**Status:** Completed (awaiting user review for merge)  
+**Related Issue:** #10  
+**Branch:** `squad/10-remove-old-queue-items`
+
+Implemented TTL-based retention policy for closed queue items with configurable retention window (default 1 hour) or immediate delete mode.
+
+**Key Implementation Details:**
+- Single managed TTL index per queue collection (`IX_Queue_ClosedUtc_TTL`) for deterministic retention
+- Index reconciliation on every subscription start enables multiple subscriptions to safely change retention policies without manual cleanup
+- When `ClosedItemRetention` is null, successfully processed items are deleted immediately instead of using TTL
+- Backward compatible: retention optional with 1-hour default; existing code unaffected
+
+**New API:**
+- `MongoQueueBuilder<T>.WithClosedItemRetention(TimeSpan retention)` — set custom retention period
+- `MongoQueueBuilder<T>.WithImmediateDelete()` — enable immediate deletion (retention = null)
+- `MongoQueueDefinition.ClosedItemRetention` property (nullable TimeSpan)
+- `MongoDefaults.QueueClosedItemRetention` = 1 hour (default)
+
+**Changes:**
+- Extended `MongoQueueDefinition` with retention configuration
+- Updated `MongoQueueBuilder<T>` with fluent retention methods
+- Modified `MongoQueueSubscription.EnsureIndexesAsync()` to create/manage TTL index
+- Updated processing to immediately delete closed items when retention is null
+- Updated README with retention policy documentation
+
+**Test Coverage:**
+- Builder configuration tests for retention methods
+- Integration tests: TTL index creation (default and custom), immediate delete behavior, same-collection policy reconciliation
+- No regression in existing queue behavior
+- All tests passing with Testcontainers MongoDB
+
+**Status Notes:**
+- Implementation complete and uncommitted on branch per team directive
+- All integration tests passing
+- Ready for user/team review and merge approval
 
 ## Team Directives
 
