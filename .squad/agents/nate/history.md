@@ -98,6 +98,27 @@ The ADR assumed passive expiry would "just work" with the existing query filter.
 
 **Decision:** Findings #1 and #2 block merge. Remaining findings recommended but not blocking.
 
+### 2026-04-11: PR #71 Review — Queue Retry Policies with Terminal State Support
+
+**Branch:** `squad/71-queue-dead-letter-handling-and-retry-policies`
+
+**Critical Finding — Terminal Items Not Explicitly Excluded:**
+- `CreateAvailableQueueItemFilter()` does NOT filter on `IsTerminal`, but compound index includes it (line 111)
+- Index is created but never used in query — signals intent mismatch
+- **Impact:** Low operational (terminal items don't re-process because `IsClosed=true` blocks them), high clarity cost
+- **Recommendation:** Add `filterBuilder.Eq(x => x.IsTerminal, false)` to availability filter for defensive clarity and index alignment
+
+**Moderate Finding — Retry Count Math Underdocumented:**
+- `WithMaxRetries(5)` allows 5 retries **after** first failure (6 total attempts), but README comment doesn't clarify
+- **Recommendation:** Update README line 437 with "Allow 5 retries after initial failure (6 total attempts)"
+
+**Positive Findings:**
+- Lock ownership guard is solid (LockedUtc equality prevents theft)
+- TTL + terminal orthogonality correct (terminal items stay queryable for DLQ until TTL expires)
+- Builder API validation and tests comprehensive
+
+**Verdict:** Architecturally sound, tests pass. Filter clarity strongly recommended before merge; documentation improvement lower-priority.
+
 ### 2026-04-10: PR #73 Review Finding r3066971413 — Deep Dive
 
 **Finding:** Test container disposal in `[OneTimeTearDown]` breaks parallel test execution.

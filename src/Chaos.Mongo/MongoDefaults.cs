@@ -63,7 +63,7 @@ public static class MongoDefaults
     public static TimeSpan MigrationLockLeaseTime => TimeSpan.FromMinutes(10);
 
     /// <summary>
-    /// Gets the default retention time for closed queue items before TTL cleanup removes them.
+    /// Gets the default retention time for successfully processed queue items before TTL cleanup removes them.
     /// </summary>
     public static TimeSpan? QueueClosedItemRetention => TimeSpan.FromHours(1);
 

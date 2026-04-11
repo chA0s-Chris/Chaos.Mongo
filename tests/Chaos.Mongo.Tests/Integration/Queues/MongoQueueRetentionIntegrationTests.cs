@@ -11,7 +11,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using System.Linq.Expressions;
 using Testcontainers.MongoDb;
-using MongoDefaults = Chaos.Mongo.MongoDefaults;
+using MongoDefaults = MongoDefaults;
 
 public class MongoQueueRetentionIntegrationTests
 {
@@ -53,7 +53,7 @@ public class MongoQueueRetentionIntegrationTests
                 async cancellationToken => await collection.CountDocumentsAsync(
                     Builders<MongoQueueItem<RetentionPayload>>.Filter.Empty,
                     cancellationToken: cancellationToken) == 0,
-                                  TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(10));
             var ttlIndex = await FindIndexAsync(indexCollection, x => x["name"] == ClosedItemTtlIndexName);
 
             // Assert
@@ -104,6 +104,7 @@ public class MongoQueueRetentionIntegrationTests
             closedItem.ClosedUtc.Should().NotBeNull();
             ttlIndex["expireAfterSeconds"].ToDouble().Should().Be(MongoDefaults.QueueClosedItemRetention!.Value.TotalSeconds);
             ttlIndex["partialFilterExpression"]["IsClosed"].AsBoolean.Should().BeTrue();
+            ttlIndex["partialFilterExpression"]["IsTerminal"].AsBoolean.Should().BeFalse();
         }
         finally
         {

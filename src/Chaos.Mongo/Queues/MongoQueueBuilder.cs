@@ -113,7 +113,8 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
-    /// Configures how long processed queue items are retained before MongoDB TTL cleanup removes them.
+    /// Configures how long successfully processed queue items are retained before MongoDB TTL cleanup removes them.
+    /// Terminal failed items remain queryable for dead-letter handling.
     /// </summary>
     /// <param name="retention">The retention duration for closed items.</param>
     /// <returns>This builder instance for method chaining.</returns>
@@ -148,6 +149,7 @@ public sealed class MongoQueueBuilder<TPayload>
 
     /// <summary>
     /// Configures the queue to delete successfully processed items immediately.
+    /// Terminal failed items remain queryable for dead-letter handling.
     /// </summary>
     /// <returns>This builder instance for method chaining.</returns>
     public MongoQueueBuilder<TPayload> WithImmediateDelete()

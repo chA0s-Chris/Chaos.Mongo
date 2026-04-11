@@ -8,6 +8,12 @@
 
 ## Learnings
 
+### 2026-04-11: Queue Retry/Retention Review Follow-up Validation
+
+- `MongoQueueSubscription.CreateAvailableQueueItemFilter()` now explicitly excludes terminal items with `IsTerminal == false`, and `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` renders the private filter to lock that contract down.
+- Queue TTL cleanup for closed items now uses a partial filter on `IsClosed == true && IsTerminal == false`; `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueRetentionIntegrationTests.cs` asserts the index keeps terminal failures out of TTL cleanup.
+- Retry coverage now closes the prior assertion gap: `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueRetryIntegrationTests.cs` verifies terminal failures also clear `IsLocked`, `LockedUtc`, and set `ClosedUtc`, while `MongoQueueSubscriptionTests` covers the corrected failure log wording.
+
 ### Queue Implementation Architecture (2025-04-10)
 
 **Lock Pattern:** Optimistic concurrency using `FindOneAndUpdate` with conditions on `IsLocked` and `IsClosed`. No transactions needed—MongoDB atomic updates guarantee single-consumer semantics.
@@ -249,3 +255,34 @@
 - ✅ All retry integration tests passed (2 tests in `MongoQueueRetryIntegrationTests.cs`)
 - ✅ Placeholder file deleted with no references remaining
 - ✅ Existing coverage validates retry limit enforcement and terminal state transitions
+
+### 2026-04-11: Branch Review — Retry Policy Queue Changes
+
+**Session:** Comprehensive tester review against `main`  
+**Branch:** `squad/71-queue-dead-letter-handling-and-retry-policies`  
+**Status:** Complete
+
+**Files Reviewed:**
+- `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs`
+- `src/Chaos.Mongo/Queues/MongoQueueBuilder.cs`
+- `src/Chaos.Mongo/Queues/MongoQueueDefinition.cs`
+- `src/Chaos.Mongo/Queues/MongoQueueItem.cs`
+- `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueRetryIntegrationTests.cs`
+- `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueBuilderTests.cs`
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueuePublisherTests.cs`
+- `README.md`
+
+**Assessment:**
+- Retry behavior matches the documented contract: `WithMaxRetries(N)` allows N retries after the first failed attempt, and `WithNoRetry()` marks the item terminal after the first failure.
+- Terminal failures stay in the main queue as closed terminal items, while successful completions still respect retention/immediate-delete policy.
+- Lock-ownership guards on failure and completion paths prevent stale consumers from mutating queue items after a replacement consumer reacquires the lease.
+
+**Coverage Notes:**
+- Integration tests cover terminal transition for capped retries and no-retry mode.
+- Builder tests cover the new retry configuration surface and defaults.
+- Publisher tests now assert newly introduced queue item defaults (`RetryCount = 0`, `IsTerminal = false`).
+
+**Validation Results:**
+- ✅ Compared branch changes against `main` with no meaningful tester-facing defects found
+- ✅ `bash build.sh Test` passed for the branch

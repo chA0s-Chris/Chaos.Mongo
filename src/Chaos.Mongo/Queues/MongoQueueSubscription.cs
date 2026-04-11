@@ -84,6 +84,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         var lockExpiryUtc = _timeProvider.GetUtcNow().UtcDateTime - _queueDefinition.LockLeaseTime;
 
         return filterBuilder.Eq(x => x.IsClosed, false) &
+               filterBuilder.Eq(x => x.IsTerminal, false) &
                (filterBuilder.Eq(x => x.IsLocked, false) |
                 (filterBuilder.Eq(x => x.IsLocked, true) &
                  (filterBuilder.Eq(x => x.LockedUtc, null) |
@@ -120,6 +121,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                     Name = ClosedItemTtlIndexName,
                     ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
                     PartialFilterExpression = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, true) &
+                                              Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsTerminal, false) &
                                               Builders<MongoQueueItem<TPayload>>.Filter.Exists(nameof(MongoQueueItem.ClosedUtc)) &
                                               Builders<MongoQueueItem<TPayload>>.Filter.Type(nameof(MongoQueueItem.ClosedUtc), BsonType.DateTime)
                 });
@@ -156,7 +158,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         }
 
         _logger.LogError(exception,
-                         "Processing queue item {QueueItemId} with payload {PayloadType} failed on failed attempt {RetryCount}",
+                         "Processing queue item {QueueItemId} with payload {PayloadType} failed on attempt {RetryCount}",
                          queueItemId,
                          typeof(TPayload).FullName,
                          failedItem.RetryCount);
