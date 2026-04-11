@@ -10,6 +10,16 @@
 
 <!-- Append learnings below -->
 
+### 2026-04-11: Tara Hired as Expert Reviewer
+
+**Context:** Brought on Tara as dedicated Expert Reviewer for merge-gate and fresh-eyes review.
+
+**Why:** After PR #77 required multiple review/fix cycles, team identified need for fresh-eyes review role focused on cross-cutting correctness, contract credibility, public-surface drift detection, and package-boundary consistency before code reaches `main`.
+
+**Tara's Charter:** PR review, merge-gate, contract validation, serialization/bootstrap review, query/index alignment, DI wiring consistency, cross-package consistency across `Chaos.Mongo`, `Chaos.Mongo.EventStore`, and `Chaos.Mongo.Outbox`.
+
+**Handoff:** Merge-gate and fresh-eyes review work now routes to `squad:tara` label; Lead triages issues with `squad` label, routes code review work to Tara as appropriate.
+
 ### 2026-04-11: Issue #76 Test-Contract Review
 
 **Review Scope:** Parker's index/query contract tests for Outbox, Queue, and EventStore.

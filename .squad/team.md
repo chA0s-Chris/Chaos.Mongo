@@ -17,6 +17,7 @@
 | Alec | Feature Dev (EventStore & Outbox) | `.squad/agents/alec/charter.md` | ✅ Active |
 | Sophie | DevOps (CI/CD & Packaging) | `.squad/agents/sophie/charter.md` | ✅ Active |
 | Parker | Test Engineer | `.squad/agents/parker/charter.md` | ✅ Active |
+| Tara | Expert Reviewer | `.squad/agents/tara/charter.md` | ✅ Active |
 | Scribe | Session Logger | `.squad/agents/scribe/charter.md` | 📋 Silent |
 | Ralph | Work Monitor | `.squad/agents/ralph/charter.md` | 🔄 Monitor |
 

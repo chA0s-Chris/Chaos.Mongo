@@ -8,6 +8,16 @@
 
 ## Learnings
 
+### 2026-04-11: Tara Hired as Expert Reviewer
+
+**Context:** Tara now serves as dedicated fresh-eyes reviewer for merge-gate and cross-package consistency checks.
+
+**What This Means for Testing:** Tara will review test implementations for contract credibility, ensuring tests actually exercise intended behaviors rather than just passing silently. When routing test review work or seeking fresh-eyes feedback on test-design decisions, escalate to Tara.
+
+**Test Review Scope:** Contract validation (BSON assertions, index definitions, query shapes), serialization bootstrap, DI wiring, edge case coverage, and regression detection.
+
+**Collaboration:** Tara complements Parker's role — Parker writes tests for coverage and behavior; Tara reviews them for contract integrity and regression risk before merge.
+
 ### 2026-04-12: Index/Query Regression Test Assessment
 
 **Session:** Design specification for index regression testing (no code changes)

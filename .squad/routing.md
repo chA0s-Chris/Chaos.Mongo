@@ -12,7 +12,8 @@ How to decide who handles what.
 | Event store | Alec | Aggregate repository, event persistence, checkpointing, projections |
 | Outbox | Alec | Outbox processor, publisher interface, hosted service, message dispatch |
 | Architecture & API design | Nate | Package boundaries, public API review, ADRs, trade-off analysis |
-| Code review | Nate | Review PRs, check quality, surface architectural concerns |
+| Code review | Tara | Fresh-eyes review, merge-gate feedback, cross-cutting consistency checks |
+| Reviewer gate | Tara | PR review before merge, contract validation, public-surface drift checks |
 | CI/CD & build pipeline | Sophie | GitHub Actions, Nuke targets, NuGet packaging, release workflow |
 | Testing | Parker | Write tests, find edge cases, Testcontainers setup, coverage |
 | Scope & priorities | Nate | What to build next, trade-offs, decisions |
@@ -27,6 +28,7 @@ How to decide who handles what.
 | `squad:alec` | EventStore/Outbox work | Alec |
 | `squad:sophie` | CI/CD/build work | Sophie |
 | `squad:parker` | Test work | Parker |
+| `squad:tara` | Expert review work | Tara |
 | `squad:{name}` | Pick up issue and complete the work | Named member |
 
 ### How Issue Assignment Works
@@ -50,9 +52,9 @@ How to decide who handles what.
 
 | Work Type | Primary | Secondary |
 |-----------|---------|----------|
-| Architecture, code review, API design | Nate | — |
+| Architecture, API design | Nate | Tara (for fresh-eyes review) |
 | Core library, connections, DI, migrations, locking, queues | Eliot | — |
 | Event store, outbox, aggregate repository | Alec | Eliot (when touching core APIs) |
 | CI/CD, Nuke build, NuGet packaging, releases | Sophie | — |
 | Tests, Testcontainers, edge cases, coverage | Parker | — |
-
+| Fresh-eyes review, merge gate, cross-cutting consistency | Tara | Nate |

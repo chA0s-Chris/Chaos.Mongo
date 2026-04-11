@@ -859,6 +859,20 @@ All three review notes from Nate's 2026-04-11 assessment have been fixed. Test s
 
 ---
 
+## Team Directives
+
+### Convention: Conventional Commit Messages
+
+**Date:** 2026-04-11T20:03:57Z  
+**From:** Christian Flessa (via Copilot)  
+**Context:** Clarification on valid commit message format
+
+Always use valid conventional commit messages. Format: `{type}(scope): {subject}` where type is one of feat, fix, refactor, docs, test, chore, ci, perf, etc. Messages like `Scribe: ...` are not valid conventional commits and should not be used.
+
+**Why:** Ensures consistency in commit history, supports automated changelog generation, and maintains clarity in git blame and history traversal.
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus
