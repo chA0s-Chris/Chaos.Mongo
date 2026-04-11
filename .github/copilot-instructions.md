@@ -1,8 +1,20 @@
-# RTK — Token-Optimized CLI
+# Copilot Instructions
+
+## Code Reviews
+
+When performing a code review, always ignore files in these directories:
+
+- ./.claude
+- ./.idea
+- ./.nuke
+- ./.squad
+- ./.windsurf
+
+## RTK — Token-Optimized CLI
 
 **rtk** is a CLI proxy that filters and compresses command outputs, saving 60-90% tokens.
 
-## Rule
+### Rule
 
 Always prefix shell commands with `rtk`:
 
@@ -15,7 +27,7 @@ docker ps                  rtk docker ps
 kubectl get pods           rtk kubectl pods
 ```
 
-## Meta commands (use directly)
+### Meta commands (use directly)
 
 ```bash
 rtk gain              # Token savings dashboard
