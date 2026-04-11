@@ -103,7 +103,7 @@ public class MongoQueueRetentionIntegrationTests
             closedItem.IsLocked.Should().BeFalse();
             closedItem.ClosedUtc.Should().NotBeNull();
             ttlIndex["expireAfterSeconds"].ToDouble().Should().Be(MongoDefaults.QueueClosedItemRetention!.Value.TotalSeconds);
-            ttlIndex["partialFilterExpression"]["IsClosed"].Should().Be(true);
+            ttlIndex["partialFilterExpression"]["IsClosed"].AsBoolean.Should().BeTrue();
         }
         finally
         {
