@@ -5,6 +5,10 @@
 - **Project:** A .NET MongoDB library providing migrations, event store, transactional outbox, queues, and helpers published as multiple NuGet packages
 - **Role:** Tester
 - **Joined:** 2026-04-09T19:19:45.618Z
+- **Test Subsystems:** Index/query contract validation, integration test patterns, Testcontainers setup, coverage analysis
+- **Key Expertise:** MongoDB schema validation, query correctness, partial filter edge cases, TTL timing, uniqueness constraints, concurrent write safety
+- **Recent Focus:** Index/query regression test design, contract test implementation, test isolation patterns, Tara collaboration on test credibility
+
 
 ## Learnings
 

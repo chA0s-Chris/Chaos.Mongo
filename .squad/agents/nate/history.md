@@ -5,6 +5,10 @@
 - **Project:** A .NET MongoDB library providing migrations, event store, transactional outbox, queues, and helpers published as multiple NuGet packages
 - **Role:** Lead
 - **Joined:** 2026-04-09T19:19:45.616Z
+- **Key Subsystems:** Queue (lock recovery, retention), EventStore (aggregate repository, checkpoints), Outbox (transactional outbox processor), Migrations (versioning, DDL), Locking (distributed lock)
+- **Architecture Pattern:** MongoBuilder fluent API for DI registration; features extend via With*() methods
+- **Prior Work:** Queue resilience analysis (lock expiry, TTL retention), test strategy refinement, index/query contract validation, cross-package consistency review
+- **Current Focus:** PR review cycles, test quality, index/query regression prevention, fresh-eyes review delegation (Tara)
 
 ## Learnings
 
@@ -39,27 +43,9 @@
 
 ### 2025-01-14: Queue Resilience Analysis
 
-**Issues Reviewed:** #9 (locked items stay locked forever on handler failure), #10 (closed items accumulate indefinitely)
+**Summary (archived):** Early analysis of queue issues #9 (locked items never recover) and #10 (closed items accumulate). Identified need for passive lease expiry and TTL retention. Proposed API additions to MongoQueueDefinition and MongoQueueBuilder. This analysis was validated by subsequent team consensus and implementation cycles (see 2026-04-10+ entries for outcomes).
 
-**Key Files:**
-- `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` — processing loop and locking logic (lines 146-207)
-- `src/Chaos.Mongo/Queues/MongoQueueItem.cs` — document schema with `IsLocked`, `LockedUtc`, `IsClosed`, `ClosedUtc`
-- `src/Chaos.Mongo/Queues/MongoQueueDefinition.cs` — queue configuration record
-- `src/Chaos.Mongo/Queues/MongoQueueBuilder.cs` — fluent builder (extend with new config)
-- `src/Chaos.Mongo/MongoDefaults.cs` — central defaults location
-
-**Architecture Decisions:**
-- Passive lease expiry (query-time filter) preferred over active scavenging job for simplicity
-- TTL-based retention (MongoDB native) preferred over manual cleanup for closed items
-- Retry counting deferred to Phase 2 — basic lease expiry solves immediate issue
-- Existing partial index on `(IsClosed=false, IsLocked=false)` needs replacement with compound index including `LockedUtc`
-
-**Public API Additions Required:**
-- `MongoDefaults.QueueLockLeaseTime` (5 min default)
-- `MongoDefaults.QueueClosedItemRetention` (1 hour default, nullable)
-- `MongoQueueDefinition.LockLeaseTime` (required)
-- `MongoQueueDefinition.ClosedItemRetention` (nullable, null = immediate delete)
-- `MongoQueueBuilder.WithLockLeaseTime()`, `WithClosedItemRetention()`, `WithImmediateDelete()`
+---
 
 ### 2026-04-10: Team Consensus & Orchestration
 
