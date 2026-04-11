@@ -15,7 +15,7 @@ using System.Reflection;
 public class MongoQueueSubscriptionTests
 {
     [Test]
-    public void CreateAvailableQueueItemFilter_ExplicitlyExcludesTerminalItems()
+    public void CreateAvailableQueueItemFilter_TreatsMissingIsTerminalAsNonTerminal()
     {
         // Arrange
         var sut = CreateSubscription();
@@ -29,7 +29,9 @@ public class MongoQueueSubscriptionTests
         var rendered = filter.Render(renderContext);
 
         // Assert
-        ContainsFieldValue(rendered, nameof(MongoQueueItem.IsTerminal), BsonBoolean.False).Should().BeTrue();
+        UsesLegacyCompatibleTerminalFilter(rendered)
+            .Should()
+            .BeTrue("the availability filter must exclude terminal items while still matching legacy queue items without IsTerminal");
     }
 
     [Test]
@@ -70,16 +72,6 @@ public class MongoQueueSubscriptionTests
         VerifyLoggedError(loggerMock, "failed on failed attempt", Times.Never());
     }
 
-    private static Boolean ContainsFieldValue(BsonValue value, String fieldName, BsonValue expectedValue)
-        => value switch
-        {
-            BsonDocument document => document.Elements.Any(element =>
-                                                               (element.Name == fieldName && element.Value == expectedValue) ||
-                                                               ContainsFieldValue(element.Value, fieldName, expectedValue)),
-            BsonArray array => array.Any(item => ContainsFieldValue(item, fieldName, expectedValue)),
-            _ => false
-        };
-
     private static MongoQueueSubscription<TestPayload> CreateSubscription(
         MongoQueueDefinition? queueDefinition = null,
         ILogger<MongoQueueSubscription<TestPayload>>? logger = null)
@@ -105,6 +97,49 @@ public class MongoQueueSubscriptionTests
                                                                  parameterTypes,
                                                                  null)
            ?? throw new InvalidOperationException($"Could not find method {name}.");
+
+    private static Boolean IsTerminalFalseClause(BsonValue clause)
+        => clause is BsonDocument clauseDocument &&
+           clauseDocument.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter == BsonBoolean.False;
+
+    private static Boolean IsTerminalFalseOrMissingFilter(BsonDocument document)
+        => document.TryGetValue("$or", out var orFilter) &&
+           orFilter is BsonArray clauses &&
+           clauses.Any(IsTerminalFalseClause) &&
+           clauses.Any(IsTerminalMissingClause);
+
+    private static Boolean IsTerminalFalseOrNullInFilter(BsonDocument document)
+        => document.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter is BsonDocument filterDocument &&
+           filterDocument.TryGetValue("$in", out var inValues) &&
+           inValues is BsonArray values &&
+           values.Contains(BsonBoolean.False) &&
+           values.Contains(BsonNull.Value);
+
+    private static Boolean IsTerminalMissingClause(BsonValue clause)
+        => clause is BsonDocument clauseDocument &&
+           clauseDocument.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter is BsonDocument filterDocument &&
+           filterDocument.TryGetValue("$exists", out var existsValue) &&
+           existsValue == BsonBoolean.False;
+
+    private static Boolean IsTerminalNotTrueFilter(BsonDocument document)
+        => document.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter is BsonDocument filterDocument &&
+           filterDocument.TryGetValue("$ne", out var notEqualValue) &&
+           notEqualValue == BsonBoolean.True;
+
+    private static Boolean UsesLegacyCompatibleTerminalFilter(BsonValue value)
+        => value switch
+        {
+            BsonDocument document => IsTerminalNotTrueFilter(document) ||
+                                     IsTerminalFalseOrNullInFilter(document) ||
+                                     IsTerminalFalseOrMissingFilter(document) ||
+                                     document.Elements.Any(element => UsesLegacyCompatibleTerminalFilter(element.Value)),
+            BsonArray array => array.Any(UsesLegacyCompatibleTerminalFilter),
+            _ => false
+        };
 
     private static void VerifyLoggedError(Mock<ILogger<MongoQueueSubscription<TestPayload>>> loggerMock,
                                           String messageSubstring,

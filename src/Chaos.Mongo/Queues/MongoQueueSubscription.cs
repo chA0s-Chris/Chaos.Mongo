@@ -84,7 +84,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         var lockExpiryUtc = _timeProvider.GetUtcNow().UtcDateTime - _queueDefinition.LockLeaseTime;
 
         return filterBuilder.Eq(x => x.IsClosed, false) &
-               filterBuilder.Eq(x => x.IsTerminal, false) &
+               filterBuilder.Ne(x => x.IsTerminal, true) &
                (filterBuilder.Eq(x => x.IsLocked, false) |
                 (filterBuilder.Eq(x => x.IsLocked, true) &
                  (filterBuilder.Eq(x => x.LockedUtc, null) |
@@ -120,10 +120,19 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 {
                     Name = ClosedItemTtlIndexName,
                     ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
-                    PartialFilterExpression = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, true) &
-                                              Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsTerminal, false) &
-                                              Builders<MongoQueueItem<TPayload>>.Filter.Exists(nameof(MongoQueueItem.ClosedUtc)) &
-                                              Builders<MongoQueueItem<TPayload>>.Filter.Type(nameof(MongoQueueItem.ClosedUtc), BsonType.DateTime)
+                    PartialFilterExpression = new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(
+                        new()
+                        {
+                            { nameof(MongoQueueItem.IsClosed), true },
+                            { nameof(MongoQueueItem.IsTerminal), new BsonDocument("$in", new BsonArray([false, BsonNull.Value])) },
+                            {
+                                nameof(MongoQueueItem.ClosedUtc), new BsonDocument
+                                {
+                                    { "$exists", true },
+                                    { "$type", (Int32)BsonType.DateTime }
+                                }
+                            }
+                        })
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(ttlIndex, cancellationToken: cancellationToken);

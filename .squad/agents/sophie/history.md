@@ -58,3 +58,21 @@
 
 **Commit Message:** Focused on container lifecycle violation (the blocking issue) and skill documentation. Emphasized that this fix prevents nondeterministic CI failures if parallel test workers are added.
 
+### PR #75 Creation for Issue #71 (2026-04-11)
+
+**Task:** Create PR for `squad/71-queue-dead-letter-handling-and-retry-policies` branch.
+
+**Verification:**
+- ✅ Branch state: clean, latest commit `562327d` (enhance queue item retention and filtering)
+- ✅ No prior PR existed for this branch
+- ✅ Branch is tracking 3 commits above `main`
+
+**PR Created:**
+- **URL:** https://github.com/chA0s-Chris/Chaos.Mongo/pull/75
+- **Title:** Queue dead-letter handling and retry policies
+- **Body:** Linked to #71 (Phase 2 queue resilience), dependencies on #9 and #10
+- **Base:** main
+- **State:** OPEN
+
+**Key:** PR body references issue #71 and explains this as Phase 2 follow-up to completed Phase 1 work (lock expiry and cleanup).
+

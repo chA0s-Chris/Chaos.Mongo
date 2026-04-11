@@ -103,8 +103,11 @@ public class MongoQueueRetentionIntegrationTests
             closedItem.IsLocked.Should().BeFalse();
             closedItem.ClosedUtc.Should().NotBeNull();
             ttlIndex["expireAfterSeconds"].ToDouble().Should().Be(MongoDefaults.QueueClosedItemRetention!.Value.TotalSeconds);
-            ttlIndex["partialFilterExpression"]["IsClosed"].AsBoolean.Should().BeTrue();
-            ttlIndex["partialFilterExpression"]["IsTerminal"].AsBoolean.Should().BeFalse();
+            var partialFilter = ttlIndex["partialFilterExpression"].AsBsonDocument;
+            partialFilter["IsClosed"].AsBoolean.Should().BeTrue();
+            UsesLegacyCompatibleTerminalFilter(partialFilter)
+                .Should()
+                .BeTrue("the TTL filter must exclude terminal items while still matching legacy queue items without IsTerminal");
         }
         finally
         {
@@ -193,6 +196,49 @@ public class MongoQueueRetentionIntegrationTests
         var indexes = await collection.Indexes.ListAsync(cancellationToken);
         return (await indexes.ToListAsync(cancellationToken)).FirstOrDefault(predicate);
     }
+
+    private static Boolean IsTerminalFalseClause(BsonValue clause)
+        => clause is BsonDocument clauseDocument &&
+           clauseDocument.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter == BsonBoolean.False;
+
+    private static Boolean IsTerminalFalseOrMissingFilter(BsonDocument document)
+        => document.TryGetValue("$or", out var orFilter) &&
+           orFilter is BsonArray clauses &&
+           clauses.Any(IsTerminalFalseClause) &&
+           clauses.Any(IsTerminalMissingClause);
+
+    private static Boolean IsTerminalFalseOrNullInFilter(BsonDocument document)
+        => document.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter is BsonDocument filterDocument &&
+           filterDocument.TryGetValue("$in", out var inValues) &&
+           inValues is BsonArray values &&
+           values.Contains(BsonBoolean.False) &&
+           values.Contains(BsonNull.Value);
+
+    private static Boolean IsTerminalMissingClause(BsonValue clause)
+        => clause is BsonDocument clauseDocument &&
+           clauseDocument.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter is BsonDocument filterDocument &&
+           filterDocument.TryGetValue("$exists", out var existsValue) &&
+           existsValue == BsonBoolean.False;
+
+    private static Boolean IsTerminalNotTrueFilter(BsonDocument document)
+        => document.TryGetValue(nameof(MongoQueueItem.IsTerminal), out var filter) &&
+           filter is BsonDocument filterDocument &&
+           filterDocument.TryGetValue("$ne", out var notEqualValue) &&
+           notEqualValue == BsonBoolean.True;
+
+    private static Boolean UsesLegacyCompatibleTerminalFilter(BsonValue value)
+        => value switch
+        {
+            BsonDocument document => IsTerminalNotTrueFilter(document) ||
+                                     IsTerminalFalseOrNullInFilter(document) ||
+                                     IsTerminalFalseOrMissingFilter(document) ||
+                                     document.Elements.Any(element => UsesLegacyCompatibleTerminalFilter(element.Value)),
+            BsonArray array => array.Any(UsesLegacyCompatibleTerminalFilter),
+            _ => false
+        };
 
     private static async Task<BsonDocument> WaitForIndexAsync(
         IMongoCollection<BsonDocument> collection,

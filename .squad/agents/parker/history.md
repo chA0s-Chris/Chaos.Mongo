@@ -8,6 +8,13 @@
 
 ## Learnings
 
+### 2026-04-11: PR #75 Review Notes r3068136358 / r3068136363 Validation
+
+- `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` now uses `Ne(x => x.IsTerminal, true)` for queue availability, so legacy queue documents without `IsTerminal` still qualify as non-terminal work items.
+- The closed-item TTL index now renders a partial filter with `IsTerminal: { $in: [false, null] }`, which stays MongoDB-partial-index compatible, keeps legacy successful items expiring, and still excludes terminal items from retention cleanup.
+- Queue filter tests in `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` and `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueRetentionIntegrationTests.cs` now assert acceptable backward-compatible BSON behaviors instead of pinning one exact `IsTerminal` representation.
+- Focused validation passed with `dotnet test tests/Chaos.Mongo.Tests/Chaos.Mongo.Tests.csproj --filter "FullyQualifiedName~Chaos.Mongo.Tests.Queues.MongoQueueSubscriptionTests|FullyQualifiedName~Chaos.Mongo.Tests.Integration.Queues.MongoQueueRetentionIntegrationTests" --no-restore` (15 passing tests across target frameworks).
+
 ### 2026-04-11: Queue Retry/Retention Review Follow-up Validation
 
 - `MongoQueueSubscription.CreateAvailableQueueItemFilter()` now explicitly excludes terminal items with `IsTerminal == false`, and `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` renders the private filter to lock that contract down.
