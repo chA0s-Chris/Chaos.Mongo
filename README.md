@@ -432,10 +432,13 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithAutoStartSubscription() // Start processing on app startup
         .WithQueryLimit(10) // Process up to 10 messages at a time
         .WithLockLeaseTime(TimeSpan.FromMinutes(2)) // Retry stuck work after lease expiry
+        .WithClosedItemRetention(TimeSpan.FromHours(6)) // Keep completed items for TTL cleanup
     );
 ```
 
 If a handler crashes, the queue retries the locked item after the configured lock lease expires. This keeps queue recovery passive while preserving at-least-once delivery semantics.
+Closed items are retained for one hour by default and removed by a MongoDB TTL index on `ClosedUtc`. Use
+`WithImmediateDelete()` when you want successful items removed right away.
 
 #### Publishing Messages
 

@@ -14,6 +14,7 @@ public sealed class MongoQueueBuilder<TPayload>
     private readonly Type _payloadType = typeof(TPayload);
     private readonly IServiceCollection _services;
     private Boolean? _autoStartSubscription;
+    private TimeSpan? _closedItemRetention = MongoDefaults.QueueClosedItemRetention;
     private String? _collectionName;
     private Boolean _isRegistered;
     private TimeSpan? _lockLeaseTime;
@@ -67,6 +68,7 @@ public sealed class MongoQueueBuilder<TPayload>
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = _collectionName ?? String.Empty,
+            ClosedItemRetention = _closedItemRetention,
             LockLeaseTime = _lockLeaseTime ?? MongoDefaults.QueueLockLeaseTime,
             PayloadType = _payloadType,
             QueryLimit = _queryLimit ?? MongoDefaults.QueryLimit,
@@ -109,6 +111,23 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
+    /// Configures how long processed queue items are retained before MongoDB TTL cleanup removes them.
+    /// </summary>
+    /// <param name="retention">The retention duration for closed items.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="retention"/> is less than or equal to zero.</exception>
+    public MongoQueueBuilder<TPayload> WithClosedItemRetention(TimeSpan retention)
+    {
+        if (retention <= TimeSpan.Zero)
+        {
+            throw new ArgumentException("Closed item retention must be greater than 0.", nameof(retention));
+        }
+
+        _closedItemRetention = retention;
+        return this;
+    }
+
+    /// <summary>
     /// Configures the queue to use a specific collection name.
     /// </summary>
     /// <remarks>
@@ -122,6 +141,16 @@ public sealed class MongoQueueBuilder<TPayload>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collectionName);
         _collectionName = collectionName;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the queue to delete successfully processed items immediately.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    public MongoQueueBuilder<TPayload> WithImmediateDelete()
+    {
+        _closedItemRetention = null;
         return this;
     }
 

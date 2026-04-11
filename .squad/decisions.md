@@ -184,6 +184,45 @@ Updated GitHub issues #9 and #10 with implementation-ready specifications derive
 2. Phase 1 (Follow-up): Second PR for #10 (TTL retention) after #9 merges
 3. Phase 2 (Design): Team aligns on #71 and #72 requirements before implementation
 
+### Issue #10 — Queue Closed-Item Retention (TTL-Based) (2026-04-11)
+
+**Authors:** Eliot (implementation), Parker (testing)  
+**Status:** Completed (awaiting user review for merge)  
+**Related Issue:** #10  
+**Branch:** `squad/10-remove-old-queue-items`
+
+Implemented TTL-based retention policy for closed queue items with configurable retention window (default 1 hour) or immediate delete mode.
+
+**Key Implementation Details:**
+- Single managed TTL index per queue collection (`IX_Queue_ClosedUtc_TTL`) for deterministic retention
+- Index reconciliation on every subscription start enables multiple subscriptions to safely change retention policies without manual cleanup
+- When `ClosedItemRetention` is null, successfully processed items are deleted immediately instead of using TTL
+- Backward compatible: retention optional with 1-hour default; existing code unaffected
+
+**New API:**
+- `MongoQueueBuilder<T>.WithClosedItemRetention(TimeSpan retention)` — set custom retention period
+- `MongoQueueBuilder<T>.WithImmediateDelete()` — enable immediate deletion (retention = null)
+- `MongoQueueDefinition.ClosedItemRetention` property (nullable TimeSpan)
+- `MongoDefaults.QueueClosedItemRetention` = 1 hour (default)
+
+**Changes:**
+- Extended `MongoQueueDefinition` with retention configuration
+- Updated `MongoQueueBuilder<T>` with fluent retention methods
+- Modified `MongoQueueSubscription.EnsureIndexesAsync()` to create/manage TTL index
+- Updated processing to immediately delete closed items when retention is null
+- Updated README with retention policy documentation
+
+**Test Coverage:**
+- Builder configuration tests for retention methods
+- Integration tests: TTL index creation (default and custom), immediate delete behavior, same-collection policy reconciliation
+- No regression in existing queue behavior
+- All tests passing with Testcontainers MongoDB
+
+**Status Notes:**
+- Implementation complete and uncommitted on branch per team directive
+- All integration tests passing
+- Ready for user/team review and merge approval
+
 ## Team Directives
 
 ### Documentation and Branch Discipline (2026-04-10)

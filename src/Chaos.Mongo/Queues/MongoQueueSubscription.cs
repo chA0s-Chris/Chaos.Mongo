@@ -21,6 +21,7 @@ using MongoDB.Driver;
 public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload>
     where TPayload : class, new()
 {
+    private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
     private static readonly TimeSpan MaxLeaseRecoveryWakeInterval = TimeSpan.FromSeconds(1);
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ILogger _logger;
@@ -90,14 +91,36 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     /// <param name="collection">The MongoDB collection to create indexes on.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    private Task EnsureIndexesAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, CancellationToken cancellationToken)
-        => collection.Indexes
-                     .CreateOneOrUpdateAsync(
-                         new(Builders<MongoQueueItem<TPayload>>.IndexKeys
-                                                               .Ascending(x => x.IsClosed)
-                                                               .Ascending(x => x.IsLocked)
-                                                               .Ascending(x => x.LockedUtc)),
-                         cancellationToken: cancellationToken);
+    private async Task EnsureIndexesAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, CancellationToken cancellationToken)
+    {
+        await collection.Indexes
+                        .CreateOneOrUpdateAsync(
+                            new(Builders<MongoQueueItem<TPayload>>.IndexKeys
+                                                                  .Ascending(x => x.IsClosed)
+                                                                  .Ascending(x => x.IsLocked)
+                                                                  .Ascending(x => x.LockedUtc)),
+                            cancellationToken: cancellationToken);
+
+        if (_queueDefinition.ClosedItemRetention.HasValue)
+        {
+            var ttlIndex = new CreateIndexModel<MongoQueueItem<TPayload>>(
+                Builders<MongoQueueItem<TPayload>>.IndexKeys.Ascending(x => x.ClosedUtc),
+                new CreateIndexOptions<MongoQueueItem<TPayload>>
+                {
+                    Name = ClosedItemTtlIndexName,
+                    ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
+                    PartialFilterExpression = Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, true) &
+                                              Builders<MongoQueueItem<TPayload>>.Filter.Exists(nameof(MongoQueueItem.ClosedUtc)) &
+                                              Builders<MongoQueueItem<TPayload>>.Filter.Type(nameof(MongoQueueItem.ClosedUtc), BsonType.DateTime)
+                });
+
+            await collection.Indexes.CreateOneOrUpdateAsync(ttlIndex, cancellationToken: cancellationToken);
+        }
+        else
+        {
+            await collection.Indexes.DropOneIfExistsAsync(ClosedItemTtlIndexName, cancellationToken);
+        }
+    }
 
     /// <summary>
     /// Monitors a MongoDB change stream for insert operations and signals the processing task when new items arrive.
@@ -216,16 +239,18 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                                    Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsClosed, false) &
                                    Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.IsLocked, true) &
                                    Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.LockedUtc, acquiredLockUtc);
-            var completionResult = await collection.UpdateOneAsync(
-                completionFilter,
-                Builders<MongoQueueItem<TPayload>>.Update
-                                                  .Set(x => x.IsClosed, true)
-                                                  .Set(x => x.ClosedUtc, _timeProvider.GetUtcNow().UtcDateTime)
-                                                  .Set(x => x.IsLocked, false)
-                                                  .Unset(x => x.LockedUtc),
-                cancellationToken: cancellationToken);
+            var completionSucceeded = _queueDefinition.ClosedItemRetention.HasValue
+                ? (await collection.UpdateOneAsync(
+                    completionFilter,
+                    Builders<MongoQueueItem<TPayload>>.Update
+                                                      .Set(x => x.IsClosed, true)
+                                                      .Set(x => x.ClosedUtc, _timeProvider.GetUtcNow().UtcDateTime)
+                                                      .Set(x => x.IsLocked, false)
+                                                      .Unset(x => x.LockedUtc),
+                    cancellationToken: cancellationToken)).ModifiedCount > 0
+                : (await collection.DeleteOneAsync(completionFilter, cancellationToken)).DeletedCount > 0;
 
-            if (completionResult.ModifiedCount == 0)
+            if (!completionSucceeded)
             {
                 _logger.LogWarning("Skipping completion for queue item {QueueItemId} with payload {PayloadType} because lock ownership changed",
                                    queueItemId,

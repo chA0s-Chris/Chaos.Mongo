@@ -1,0 +1,266 @@
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// This file is licensed under the MIT license. See LICENSE in the project root for more information.
+namespace Chaos.Mongo.Tests.Integration.Queues;
+
+using Chaos.Mongo.Queues;
+using Chaos.Testing.Logging;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using NUnit.Framework;
+using System.Linq.Expressions;
+using Testcontainers.MongoDb;
+using MongoDefaults = Chaos.Mongo.MongoDefaults;
+
+public class MongoQueueRetentionIntegrationTests
+{
+    private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
+    private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer()
+        => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [Test]
+    public async Task Queue_WithImmediateDelete_RemovesProcessedItemAndDropsTtlIndex()
+    {
+        // Arrange
+        var handler = new PassivePayloadHandler();
+        var uniqueDbName = $"QueueImmediateDeleteTest_{Guid.NewGuid():N}";
+        const String collectionName = "retention-queue";
+
+        await using var serviceProvider = CreateServiceProvider(uniqueDbName,
+                                                                collectionName,
+                                                                queue => queue.WithPayloadHandler(_ => handler)
+                                                                              .WithImmediateDelete()
+                                                                              .WithoutAutoStartSubscription());
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var collection = helper.Database.GetCollection<MongoQueueItem<RetentionPayload>>(collectionName);
+        var indexCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+        await queue.StartSubscriptionAsync();
+
+        try
+        {
+            // Act
+            await queue.PublishAsync(new()
+            {
+                Value = "delete-me"
+            });
+
+            await WaitUntilAsync(async () => await collection.CountDocumentsAsync(Builders<MongoQueueItem<RetentionPayload>>.Filter.Empty) == 0,
+                                 TimeSpan.FromSeconds(10));
+            var ttlIndex = await FindIndexAsync(indexCollection, x => x["name"] == ClosedItemTtlIndexName);
+
+            // Assert
+            ttlIndex.Should().BeNull();
+        }
+        finally
+        {
+            await queue.StopSubscriptionAsync();
+        }
+    }
+
+    [Test]
+    public async Task Queue_WithoutExplicitRetention_CreatesDefaultTtlIndexAndKeepsClosedItem()
+    {
+        // Arrange
+        var handler = new PassivePayloadHandler();
+        var uniqueDbName = $"QueueDefaultRetentionTest_{Guid.NewGuid():N}";
+        const String collectionName = "retention-queue";
+
+        await using var serviceProvider = CreateServiceProvider(uniqueDbName,
+                                                                collectionName,
+                                                                queue => queue.WithPayloadHandler(_ => handler)
+                                                                              .WithoutAutoStartSubscription());
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var collection = helper.Database.GetCollection<MongoQueueItem<RetentionPayload>>(collectionName);
+        var indexCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+        await queue.StartSubscriptionAsync();
+
+        try
+        {
+            // Act
+            await queue.PublishAsync(new()
+            {
+                Value = "retain-me"
+            });
+
+            var closedItem = await WaitForQueueItemAsync(collection,
+                                                         x => x.Payload.Value == "retain-me" && x.IsClosed,
+                                                         TimeSpan.FromSeconds(10));
+            var ttlIndex = await WaitForIndexAsync(indexCollection,
+                                                   x => x["name"] == ClosedItemTtlIndexName,
+                                                   TimeSpan.FromSeconds(10));
+
+            // Assert
+            closedItem.IsClosed.Should().BeTrue();
+            closedItem.IsLocked.Should().BeFalse();
+            closedItem.ClosedUtc.Should().NotBeNull();
+            ttlIndex["expireAfterSeconds"].ToDouble().Should().Be(MongoDefaults.QueueClosedItemRetention!.Value.TotalSeconds);
+            ttlIndex["partialFilterExpression"]["IsClosed"].Should().Be(true);
+        }
+        finally
+        {
+            await queue.StopSubscriptionAsync();
+        }
+    }
+
+    [Test]
+    public async Task StartSubscription_SameCollectionWithDifferentRetentionPolicies_ReconcilesTtlIndex()
+    {
+        // Arrange
+        var uniqueDbName = $"QueueRetentionPolicySwitchTest_{Guid.NewGuid():N}";
+        const String collectionName = "retention-queue";
+
+        await using var firstServiceProvider = CreateServiceProvider(uniqueDbName,
+                                                                     collectionName,
+                                                                     queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
+                                                                                   .WithClosedItemRetention(TimeSpan.FromHours(2))
+                                                                                   .WithoutAutoStartSubscription());
+        var firstHelper = firstServiceProvider.GetRequiredService<IMongoHelper>();
+        var firstIndexCollection = firstHelper.Database.GetCollection<BsonDocument>(collectionName);
+        var firstQueue = firstServiceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+
+        await using var secondServiceProvider = CreateServiceProvider(uniqueDbName,
+                                                                      collectionName,
+                                                                      queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
+                                                                                    .WithClosedItemRetention(TimeSpan.FromMinutes(15))
+                                                                                    .WithoutAutoStartSubscription());
+        var secondHelper = secondServiceProvider.GetRequiredService<IMongoHelper>();
+        var secondIndexCollection = secondHelper.Database.GetCollection<BsonDocument>(collectionName);
+        var secondQueue = secondServiceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+
+        await using var thirdServiceProvider = CreateServiceProvider(uniqueDbName,
+                                                                     collectionName,
+                                                                     queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
+                                                                                   .WithImmediateDelete()
+                                                                                   .WithoutAutoStartSubscription());
+        var thirdHelper = thirdServiceProvider.GetRequiredService<IMongoHelper>();
+        var thirdIndexCollection = thirdHelper.Database.GetCollection<BsonDocument>(collectionName);
+        var thirdQueue = thirdServiceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+
+        // Act & Assert
+        await firstQueue.StartSubscriptionAsync();
+        try
+        {
+            var firstTtlIndex = await WaitForIndexAsync(firstIndexCollection,
+                                                        x => x["name"] == ClosedItemTtlIndexName,
+                                                        TimeSpan.FromSeconds(10));
+            firstTtlIndex["expireAfterSeconds"].ToDouble().Should().Be(TimeSpan.FromHours(2).TotalSeconds);
+        }
+        finally
+        {
+            await firstQueue.StopSubscriptionAsync();
+        }
+
+        await secondQueue.StartSubscriptionAsync();
+        try
+        {
+            var secondTtlIndex = await WaitForIndexAsync(secondIndexCollection,
+                                                         x => x["name"] == ClosedItemTtlIndexName,
+                                                         TimeSpan.FromSeconds(10));
+            secondTtlIndex["expireAfterSeconds"].ToDouble().Should().Be(TimeSpan.FromMinutes(15).TotalSeconds);
+        }
+        finally
+        {
+            await secondQueue.StopSubscriptionAsync();
+        }
+
+        await thirdQueue.StartSubscriptionAsync();
+        try
+        {
+            var thirdTtlIndex = await FindIndexAsync(thirdIndexCollection, x => x["name"] == ClosedItemTtlIndexName);
+            thirdTtlIndex.Should().BeNull();
+        }
+        finally
+        {
+            await thirdQueue.StopSubscriptionAsync();
+        }
+    }
+
+    private static async Task<BsonDocument?> FindIndexAsync(
+        IMongoCollection<BsonDocument> collection,
+        Func<BsonDocument, Boolean> predicate)
+    {
+        var indexes = await collection.Indexes.ListAsync();
+        return (await indexes.ToListAsync()).FirstOrDefault(predicate);
+    }
+
+    private static async Task<BsonDocument> WaitForIndexAsync(
+        IMongoCollection<BsonDocument> collection,
+        Func<BsonDocument, Boolean> predicate,
+        TimeSpan timeout)
+    {
+        return await WaitUntilAsync(async () => await FindIndexAsync(collection, predicate), timeout)
+               ?? throw new TimeoutException("Index did not reach the expected state.");
+    }
+
+    private static async Task<MongoQueueItem<RetentionPayload>> WaitForQueueItemAsync(
+        IMongoCollection<MongoQueueItem<RetentionPayload>> collection,
+        Expression<Func<MongoQueueItem<RetentionPayload>, Boolean>> filter,
+        TimeSpan timeout)
+    {
+        return await WaitUntilAsync(async () => await collection.Find(filter).FirstOrDefaultAsync(), timeout)
+               ?? throw new TimeoutException("Queue item did not reach the expected state.");
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<Boolean>> predicate, TimeSpan timeout)
+        => _ = await WaitUntilAsync(async () => await predicate() ? true : (Boolean?)null, timeout);
+
+    private static async Task<T?> WaitUntilAsync<T>(Func<Task<T?>> action, TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                var result = await action();
+                if (result is not null)
+                {
+                    return result;
+                }
+
+                await Task.Delay(100, cts.Token);
+            }
+        }
+        catch (OperationCanceledException e) when (cts.IsCancellationRequested)
+        {
+            throw new TimeoutException("The expected state was not reached.", e);
+        }
+
+        throw new TimeoutException("The expected state was not reached.");
+    }
+
+    private ServiceProvider CreateServiceProvider(
+        String databaseName,
+        String collectionName,
+        Action<MongoQueueBuilder<RetentionPayload>> configureQueue)
+    {
+        var services = new ServiceCollection();
+        services.AddNUnitTestLogging();
+
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        services.AddMongo(url, databaseName)
+                .WithQueue<RetentionPayload>(queue =>
+                {
+                    queue.WithCollectionName(collectionName);
+                    configureQueue(queue);
+                });
+
+        return services.BuildServiceProvider();
+    }
+
+    private sealed class PassivePayloadHandler : IMongoQueuePayloadHandler<RetentionPayload>
+    {
+        public Task HandlePayloadAsync(RetentionPayload payload, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class RetentionPayload
+    {
+        public String Value { get; init; } = String.Empty;
+    }
+}
