@@ -49,8 +49,11 @@ public class MongoQueueRetentionIntegrationTests
                 Value = "delete-me"
             });
 
-            await WaitUntilAsync(async () => await collection.CountDocumentsAsync(Builders<MongoQueueItem<RetentionPayload>>.Filter.Empty) == 0,
-                                 TimeSpan.FromSeconds(10));
+            await WaitUntilAsync(
+                async cancellationToken => await collection.CountDocumentsAsync(
+                    Builders<MongoQueueItem<RetentionPayload>>.Filter.Empty,
+                    cancellationToken: cancellationToken) == 0,
+                                  TimeSpan.FromSeconds(10));
             var ttlIndex = await FindIndexAsync(indexCollection, x => x["name"] == ClosedItemTtlIndexName);
 
             // Assert
@@ -183,10 +186,11 @@ public class MongoQueueRetentionIntegrationTests
 
     private static async Task<BsonDocument?> FindIndexAsync(
         IMongoCollection<BsonDocument> collection,
-        Func<BsonDocument, Boolean> predicate)
+        Func<BsonDocument, Boolean> predicate,
+        CancellationToken cancellationToken = default)
     {
-        var indexes = await collection.Indexes.ListAsync();
-        return (await indexes.ToListAsync()).FirstOrDefault(predicate);
+        var indexes = await collection.Indexes.ListAsync(cancellationToken);
+        return (await indexes.ToListAsync(cancellationToken)).FirstOrDefault(predicate);
     }
 
     private static async Task<BsonDocument> WaitForIndexAsync(
@@ -194,7 +198,7 @@ public class MongoQueueRetentionIntegrationTests
         Func<BsonDocument, Boolean> predicate,
         TimeSpan timeout)
     {
-        return await WaitUntilAsync(async () => await FindIndexAsync(collection, predicate), timeout)
+        return await WaitUntilAsync(async cancellationToken => await FindIndexAsync(collection, predicate, cancellationToken), timeout)
                ?? throw new TimeoutException("Index did not reach the expected state.");
     }
 
@@ -203,21 +207,21 @@ public class MongoQueueRetentionIntegrationTests
         Expression<Func<MongoQueueItem<RetentionPayload>, Boolean>> filter,
         TimeSpan timeout)
     {
-        return await WaitUntilAsync(async () => await collection.Find(filter).FirstOrDefaultAsync(), timeout)
+        return await WaitUntilAsync(async cancellationToken => await collection.Find(filter).FirstOrDefaultAsync(cancellationToken), timeout)
                ?? throw new TimeoutException("Queue item did not reach the expected state.");
     }
 
-    private static async Task WaitUntilAsync(Func<Task<Boolean>> predicate, TimeSpan timeout)
-        => _ = await WaitUntilAsync(async () => await predicate() ? true : (Boolean?)null, timeout);
+    private static async Task WaitUntilAsync(Func<CancellationToken, Task<Boolean>> predicate, TimeSpan timeout)
+        => _ = await WaitUntilAsync(async cancellationToken => await predicate(cancellationToken) ? true : (Boolean?)null, timeout);
 
-    private static async Task<T?> WaitUntilAsync<T>(Func<Task<T?>> action, TimeSpan timeout)
+    private static async Task<T?> WaitUntilAsync<T>(Func<CancellationToken, Task<T?>> action, TimeSpan timeout)
     {
         using var cts = new CancellationTokenSource(timeout);
         try
         {
             while (!cts.Token.IsCancellationRequested)
             {
-                var result = await action();
+                var result = await action(cts.Token);
                 if (result is not null)
                 {
                     return result;

@@ -113,37 +113,32 @@
 
 **Status:** Implementation complete, all tests passing, ready for user/team review and merge.
 
-### 2026-04-11: Issue #10 Queue Closed-Item Retention (TTL-Based)
+### 2026-04-11: PR #74 Follow-up — Direct-Construction Default & Cancellation Hardening
 
-**Session:** Issue #10 implementation and validation  
+**Session:** PR #74 follow-up validation and hardening  
 **Branch:** `squad/10-remove-old-queue-items`  
-**Status:** Completed (awaiting user review for merge)
+**Status:** Complete (ready for user review and merge)  
+**Commit:** `fa183f1`
 
-**Implementation Pattern:**
-- Single managed TTL index per queue collection (`IX_Queue_ClosedUtc_TTL`) for deterministic retention
-- Index reconciliation on every subscription start enables policy changes without manual cleanup
-- When `ClosedItemRetention` is null, items deleted immediately; TTL index dropped
-- Default retention: 1 hour (configurable)
+**Work Completed:**
 
-**API Changes:**
-- `MongoQueueBuilder<T>.WithClosedItemRetention(TimeSpan)` — set custom retention period
-- `MongoQueueBuilder<T>.WithImmediateDelete()` — enable immediate deletion
-- `MongoQueueDefinition.ClosedItemRetention` property (nullable TimeSpan)
-- `MongoDefaults.QueueClosedItemRetention` = 1 hour
+1. **Fixed Direct-Construction Default for `MongoQueueDefinition.ClosedItemRetention`**
+   - Issue: Direct construction bypassed builder default, leaving retention unset
+   - Change: Added default to record property initializer (`= MongoDefaults.QueueClosedItemRetention`)
+   - Outcome: Direct construction now matches documented 1-hour retention without forcing every caller to set it
 
-**Code Changes:**
-- Extended `MongoQueueDefinition` with retention configuration
-- Updated `MongoQueueBuilder<T>` with fluent methods
-- Modified `MongoQueueSubscription.EnsureIndexesAsync()` for TTL index lifecycle
-- Updated queue processing for immediate delete when retention null
-- Updated README with retention documentation
-- Extended builder and integration test coverage
+2. **Hardened `MongoQueueRetentionIntegrationTests` Cancellation Token Flow**
+   - Issue: Retention polling helpers (`ListAsync`, `ToListAsync`, `FirstOrDefaultAsync`) not respecting timeout cancellation tokens
+   - Change: Threaded cancellation token through all retention polling helper calls
+   - Outcome: Tests now honor timeout semantics, preventing optional hang scenarios in production
 
-**Test Coverage:**
-- Builder configuration validation
-- TTL index creation/management (default and custom retention)
-- Immediate delete behavior (null retention)
-- Same-collection policy reconciliation (multiple subscriptions, different policies)
-- No regression in existing queue processing
+**Validation:**
+- ✅ Direct-construction test validates default applies correctly
+- ✅ Focused queue tests passed
+- ✅ Full solution `dotnet test Chaos.Mongo.slnx --no-restore` passed
+- ✅ Existing test `MongoQueueBuilderTests.MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention` validates default contract
+- ✅ No regression in existing queue behavior
 
-**Status:** Implementation complete, all tests passing, ready for user/team review and merge.
+**Outcome:** PR #74 follow-up complete and ready for user review/merge. All changes committed to `squad/10-remove-old-queue-items` branch.
+
+## Recent Work (Historical Duplicates Below — See Above for Latest Work)

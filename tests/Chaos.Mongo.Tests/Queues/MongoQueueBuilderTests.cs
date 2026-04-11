@@ -130,6 +130,24 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
+    public void MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention()
+    {
+        // Arrange
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
+            PayloadType = typeof(TestPayload),
+            QueryLimit = 1,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+            AutoStartSubscription = false
+        };
+
+        // Assert
+        queueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
+    }
+
+    [Test]
     public async Task RegisterQueue_WithoutLockLeaseTime_UsesDefaultLockLeaseTime()
     {
         // Arrange

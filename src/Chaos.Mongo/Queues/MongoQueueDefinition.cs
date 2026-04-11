@@ -16,7 +16,7 @@ public record MongoQueueDefinition
     /// Duration that closed queue items are retained before TTL cleanup removes them.
     /// <c>null</c> means items are deleted immediately after successful processing.
     /// </summary>
-    public TimeSpan? ClosedItemRetention { get; init; }
+    public TimeSpan? ClosedItemRetention { get; init; } = MongoDefaults.QueueClosedItemRetention;
 
     /// <summary>
     /// Name of the collection.

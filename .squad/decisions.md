@@ -158,6 +158,43 @@ This provides operators with:
 
 ## Completed Work
 
+### PR #74 Follow-up — Issue #10 Direct-Construction Default & Cancellation Hardening (2026-04-11)
+
+**Authors:** Eliot (implementation), Parker (validation)  
+**Status:** Complete (ready for user review and merge)  
+**Related:** PR #74, Issue #10, Branch `squad/10-remove-old-queue-items`
+
+#### Problem
+
+- Direct construction of `MongoQueueDefinition` with `ClosedItemRetention` unset left retention null, bypassing documented 1-hour default
+- `MongoQueueRetentionIntegrationTests` retention polling helpers did not thread cancellation tokens, creating optional hang scenarios
+
+#### Decision
+
+1. Add default initializer to `MongoQueueDefinition.ClosedItemRetention` property
+2. Thread timeout cancellation token through all retention polling helper calls
+
+#### Rationale
+
+- **Direct-construction default:** Builder always applies `MongoDefaults.QueueClosedItemRetention`, but direct construction bypassed this. Default initializer ensures both code paths behave identically without forcing every caller to set retention.
+- **Cancellation token hardening:** Timeout semantics must be respected throughout polling loops to prevent optional hangs in production. Minimal change, high safety impact.
+
+#### Implementation
+
+**Commit:** `fa183f1`
+
+- `MongoQueueDefinition.ClosedItemRetention` now defaults to `MongoDefaults.QueueClosedItemRetention`
+- `MongoQueueRetentionIntegrationTests` threads cancellation token through `ListAsync`, `ToListAsync`, `FirstOrDefaultAsync`, and polling helpers
+
+#### Validation
+
+- ✅ Focused queue tests passed
+- ✅ Full solution `dotnet test Chaos.Mongo.slnx --no-restore` passed
+- ✅ Existing test `MongoQueueBuilderTests.MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention` validates default contract
+- ✅ No regression in existing queue processing
+
+**Note:** `bash build.sh Test` blocked by shared `.nuke/temp/build.log` lock; direct `dotnet test` used as reliable fallback.
+
 ### Issue Triage & Phase 2 Planning (2026-04-10)
 
 **Author:** Nate (Lead/Architect)  

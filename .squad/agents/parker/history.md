@@ -162,3 +162,29 @@
 - ✅ All tests passing with Testcontainers MongoDB
 
 **Status:** Full coverage achieved, ready for production validation after merge.
+
+### 2026-04-11: PR #74 Follow-up — Direct-Construction Default & Cancellation Hardening Validation
+
+**Session:** PR #74 follow-up test validation  
+**Branch:** `squad/10-remove-old-queue-items`  
+**Status:** Complete (ready for user review and merge)
+
+**Work Completed:**
+
+1. **Reviewed Direct-Construction Default Fix**
+   - Analyzed `MongoQueueDefinition.ClosedItemRetention` default initialization
+   - Confirmed alignment with builder-supplied default from `MongoDefaults`
+   - Validated existing test `MongoQueueBuilderTests.MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention` covers contract
+
+2. **Reviewed Cancellation Token Hardening**
+   - Analyzed retention polling helper cancellation token threading
+   - Confirmed `ListAsync`, `ToListAsync`, `FirstOrDefaultAsync`, polling helpers all respect timeout
+   - Determined no additional test scenarios required—hardening is implementation-detail safety, not API behavior change
+
+**Validation Results:**
+- ✅ Focused queue tests passed
+- ✅ Full solution `dotnet test Chaos.Mongo.slnx --no-restore` passed
+- ✅ Existing test coverage sufficient for follow-up scope
+- ⚠️  Note: `bash build.sh Test` blocked by shared `.nuke/temp/build.log` lock; used direct `dotnet test` as reliable fallback
+
+**Outcome:** PR #74 follow-up is test-complete and ready for user review/merge. No additional test code needed.
