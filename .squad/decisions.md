@@ -2,6 +2,127 @@
 
 ## Active Decisions
 
+### ADR: Queue Metrics API — Public Constants Surface
+
+**Status:** Recommendation (awaiting team/user review)  
+**Date:** 2026-04-11  
+**Author:** Eliot  
+**Affected Parties:** Library users consuming Chaos.Mongo queue metrics via OpenTelemetry
+
+#### Question
+
+Should instrument names in `src/Chaos.Mongo/Queues/MongoQueueDiagnostics.cs` be public constants so users can access the metrics reliably?
+
+#### Current State
+
+- Instrument names (e.g., `"chaos.mongo.queue.published"`) are private string literals embedded in `.CreateHistogram()` / `.CreateCounter()` calls
+- Meter name (`"Chaos.Mongo.Queues"`) is private const
+- Tag names (`queue.cleanup_mode`, etc.) are private
+- README documents these names as strings
+- Consumers copy names from docs into their OpenTelemetry config
+
+#### Recommendation: YES — Expose Public Metrics Contract
+
+##### Rationale
+
+1. **Standard Practice:** Framework diagnostics (runtime, ASP.NET Core) expose meter and instrument names as public constants. Consumers rely on these to wire filtering, sampling, export rules.
+
+2. **Current Fragility:** Private names + doc-only contract means refactoring could silently break consumer integrations. No compile-time enforcement.
+
+3. **Low API Cost:** ~15 lines of safe, stable surface (`public const string`). Semver-safe: strings never change semantically in normal evolution.
+
+4. **User Friction:** Asking users to extract and maintain these names manually is friction that should be eliminated.
+
+##### Proposed Solution
+
+Create a new public static class `MongoQueueMetrics` in `Chaos.Mongo.Queues` namespace:
+
+```csharp
+namespace Chaos.Mongo.Queues;
+
+/// <summary>
+/// Well-known constants for Chaos.Mongo queue metrics emitted via System.Diagnostics.Metrics.
+/// Use these to configure OpenTelemetry meters, samplers, and exporters.
+/// </summary>
+public static class MongoQueueMetrics
+{
+    /// <summary>Meter name for all queue diagnostics.</summary>
+    public const string MeterName = "Chaos.Mongo.Queues";
+
+    /// <summary>Instrument names.</summary>
+    public const string PublishedInstrumentName = "chaos.mongo.queue.published";
+    public const string ProcessingSucceededInstrumentName = "chaos.mongo.queue.processing.succeeded";
+    public const string ProcessingFailedInstrumentName = "chaos.mongo.queue.processing.failed";
+    public const string ProcessingDurationInstrumentName = "chaos.mongo.queue.processing.duration";
+    public const string QueueAgeInstrumentName = "chaos.mongo.queue.processing.queue_age";
+    public const string LockRecoveredInstrumentName = "chaos.mongo.queue.lock.recovered";
+    public const string LockRecoveryAgeInstrumentName = "chaos.mongo.queue.lock.recovery_age";
+
+    /// <summary>Standard tag names for metric filtering.</summary>
+    public const string CleanupModeTagName = "queue.cleanup_mode";
+    public const string PayloadTypeTagName = "queue.payload_type";
+    public const string QueueCollectionTagName = "queue.collection";
+    public const string ResultTagName = "queue.result";
+}
+```
+
+Then update `MongoQueueDiagnostics` to reference these constants instead of hardcoded strings.
+
+##### Impact
+
+- **Public API:** New class, no breaking changes
+- **Code Changes:** `MongoQueueDiagnostics.cs` (internal, string references only)
+- **Documentation:** README can link to `MongoQueueMetrics` constants
+- **Testing:** No test changes; existing metrics tests already validate behavior
+- **Versioning:** Stable surface (string values are contractual; semver governs content additions only)
+
+##### What This Enables
+
+```csharp
+// Before: Users copy from README
+var meterListener = new MeterListener();
+meterListener.AddMeter("Chaos.Mongo.Queues"); // Magic string from docs
+
+// After: API-driven, discoverable
+var meterListener = new MeterListener();
+meterListener.AddMeter(MongoQueueMetrics.MeterName); // Intellisense, refactoring-safe
+```
+
+#### Ownership
+
+- **Implementation:** Eliot (next iteration or follow-up PR)
+- **Review:** Nate (public API surface), users (ergonomics feedback)
+
+#### Status
+
+Staged for Tara's merge-gate review via orchestration logs.
+
+#### Review: Tara — Queue Metrics Public API Assessment (2026-04-11)
+
+**Reviewer:** Tara  
+**Status:** Assessment prepared
+
+**API Shape Assessment:**
+- Structure is appropriately minimal with nested static classes for organization
+- All members are `public const string` (immutable, ABI-safe, refactoring-safe)
+- Naming conventions follow .NET standards (meter: `Chaos.Mongo.Queues`, instruments: lowercase dot-separated, tags: scoped)
+
+**Compatibility:** No issues
+- Constants are compile-time values (no binary compatibility concerns)
+- Nested class structure enables future additions without breaking changes
+- Test suite demonstrates intended usage pattern
+
+**Documentation Readiness:**
+- XML docs required on each constant explaining purpose
+- README links to class and nested member names
+- Internal `MongoQueueDiagnostics` must use constants instead of hardcoded strings
+
+**Recommendation:** APPROVED for Phase 2 implementation pending confirmation of API shape preference (flat const vs. nested classes).
+
+---
+
+---
+
 ### ADR: Queue Resilience and Retention Improvements
 
 **Status:** Approved  
