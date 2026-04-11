@@ -35,6 +35,27 @@ public class MongoQueueSubscriptionTests
     }
 
     [Test]
+    public void CreateAvailableQueueItemFilter_UsesLeaseRecoveryClausesAlignedWithCompoundIndex()
+    {
+        // Arrange
+        var sut = CreateSubscription();
+        var method = GetPrivateMethod("CreateAvailableQueueItemFilter", Type.EmptyTypes);
+        var serializerRegistry = BsonSerializer.SerializerRegistry;
+        var documentSerializer = serializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>();
+        var renderContext = new RenderArgs<MongoQueueItem<TestPayload>>(documentSerializer, serializerRegistry);
+
+        // Act
+        var filter = (FilterDefinition<MongoQueueItem<TestPayload>>)method.Invoke(sut, [])!;
+        var rendered = filter.Render(renderContext);
+
+        // Assert
+        ContainsEquality(rendered, nameof(MongoQueueItem.IsClosed), BsonBoolean.False).Should().BeTrue();
+        ContainsEquality(rendered, nameof(MongoQueueItem.IsLocked), BsonBoolean.False).Should().BeTrue();
+        ContainsNullEquality(rendered, nameof(MongoQueueItem.LockedUtc)).Should().BeTrue();
+        ContainsComparisonOperator(rendered, nameof(MongoQueueItem.LockedUtc), "$lt").Should().BeTrue();
+    }
+
+    [Test]
     public async Task HandleFailedQueueItemAsync_LogsReadableAttemptMessage()
     {
         // Arrange
@@ -71,6 +92,30 @@ public class MongoQueueSubscriptionTests
         VerifyLoggedError(loggerMock, "failed on attempt 1", Times.Once());
         VerifyLoggedError(loggerMock, "failed on failed attempt", Times.Never());
     }
+
+    private static Boolean ContainsComparisonOperator(BsonValue value, String field, String comparisonOperator)
+        => value switch
+        {
+            BsonDocument document => (document.TryGetValue(field, out var filter) &&
+                                      filter is BsonDocument filterDocument &&
+                                      filterDocument.Contains(comparisonOperator)) ||
+                                     document.Elements.Any(element => ContainsComparisonOperator(element.Value, field, comparisonOperator)),
+            BsonArray array => array.Any(item => ContainsComparisonOperator(item, field, comparisonOperator)),
+            _ => false
+        };
+
+    private static Boolean ContainsEquality(BsonValue value, String field, BsonValue expected)
+        => value switch
+        {
+            BsonDocument document => (document.TryGetValue(field, out var directValue) &&
+                                      directValue == expected) ||
+                                     document.Elements.Any(element => ContainsEquality(element.Value, field, expected)),
+            BsonArray array => array.Any(item => ContainsEquality(item, field, expected)),
+            _ => false
+        };
+
+    private static Boolean ContainsNullEquality(BsonValue value, String field)
+        => ContainsEquality(value, field, BsonNull.Value);
 
     private static MongoQueueSubscription<TestPayload> CreateSubscription(
         MongoQueueDefinition? queueDefinition = null,

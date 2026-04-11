@@ -10,6 +10,23 @@
 
 <!-- Append learnings below -->
 
+### 2026-04-11: Issue #76 Test-Contract Review
+
+**Review Scope:** Parker's index/query contract tests for Outbox, Queue, and EventStore.
+
+**Assessment:**
+- The strongest pattern remains: rendered BSON assertions for query shape, live `Indexes.ListAsync()` inspection for durable index schema, and a small behavior-critical integration check where ordering/uniqueness is the real contract.
+- This implementation follows that pattern well and avoids the brittle `explain()` path we explicitly rejected.
+- Queue index coverage is intentionally split: existing integration tests already lock the compound index shape, while `MongoQueueSubscriptionTests.cs` now adds the missing dequeue-filter contract.
+
+**Key Files:**
+- `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
+- `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/Integration/EventStoreIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs`
+- `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`
+
 ### 2025-01-14: Queue Resilience Analysis
 
 **Issues Reviewed:** #9 (locked items stay locked forever on handler failure), #10 (closed items accumulate indefinitely)
