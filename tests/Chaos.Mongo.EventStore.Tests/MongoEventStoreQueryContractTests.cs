@@ -127,6 +127,12 @@ public class MongoEventStoreQueryContractTests
         Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), -1));
     }
 
+    private static void BootstrapSerialization(MongoEventStoreOptions<OrderAggregate> options)
+    {
+        MongoEventStoreSerializationSetup.EnsureGuidSerializer();
+        MongoEventStoreSerializationSetup.RegisterClassMaps(options);
+    }
+
     private static Boolean ContainsComparison(BsonValue value, String field, String comparisonOperator, BsonValue expected)
         => value switch
         {
@@ -154,6 +160,8 @@ public class MongoEventStoreQueryContractTests
         IMongoCollection<CheckpointDocument<OrderAggregate>> checkpointCollection,
         IMongoCollection<Event<OrderAggregate>> eventsCollection)
     {
+        BootstrapSerialization(options);
+
         var databaseMock = new Mock<IMongoDatabase>();
         databaseMock.Setup(d => d.GetCollection<CheckpointDocument<OrderAggregate>>(options.CheckpointCollectionName, null))
                     .Returns(checkpointCollection);
@@ -200,6 +208,8 @@ public class MongoEventStoreQueryContractTests
         MongoEventStoreOptions<OrderAggregate> options,
         IMongoCollection<Event<OrderAggregate>> eventsCollection)
     {
+        BootstrapSerialization(options);
+
         var databaseMock = new Mock<IMongoDatabase>();
         databaseMock.Setup(d => d.GetCollection<Event<OrderAggregate>>(options.EventsCollectionName, null))
                     .Returns(eventsCollection);

@@ -147,9 +147,20 @@ public class OutboxIndexContractIntegrationTests
         var processor = serviceProvider.GetRequiredService<IOutboxProcessor>();
 
         // Act
-        await processor.StartAsync();
-        await WaitUntilAsync(() => publisher.PublishedMessages.Count >= 3);
-        await processor.StopAsync();
+        var started = false;
+        try
+        {
+            await processor.StartAsync();
+            started = true;
+            await WaitUntilAsync(() => publisher.PublishedMessages.Count >= 3);
+        }
+        finally
+        {
+            if (started)
+            {
+                await processor.StopAsync();
+            }
+        }
 
         // Assert
         publisher.PublishedMessages.Select(x => x.Payload["Name"].AsString).Should().Equal(

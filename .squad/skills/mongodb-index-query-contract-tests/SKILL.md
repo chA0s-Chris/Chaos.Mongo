@@ -15,6 +15,7 @@ This applies when Chaos.Mongo features depend on stable MongoDB index/query alig
 
 ## Patterns
 - Write a **unit/query-contract** test that captures or reflects the actual `FilterDefinition` or `SortDefinition`, renders it to BSON, and asserts on the fields and operators that matter.
+- If rendered BSON depends on production serializer/bootstrap setup (for example Guid serializers or event-store class maps), invoke that setup explicitly inside the test so isolated execution stays deterministic.
 - Write an **integration/index-contract** test that runs configurators against Testcontainers MongoDB and inspects `Indexes.ListAsync()` for key order, uniqueness, TTL options, and partial filters.
 - Add one **behavior-critical integration** assertion when the real contract is observable behavior like processing order or uniqueness enforcement.
 - Prefer recursive BSON assertions that check required clauses instead of exact whole-document equality when safe refactors may change boolean composition shape.
