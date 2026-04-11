@@ -141,10 +141,33 @@
 
 **Outcome:** PR #74 follow-up complete and ready for user review/merge. All changes committed to `squad/10-remove-old-queue-items` branch.
 
+### 2026-04-11: PR #77 Final Fixes — EventStore, Outbox, Queue Tests
+
+**Session:** Address three valid review notes from 2026-04-11 Copilot review pass  
+**Status:** Complete (build passing: 427 tests, 0 failures)
+
+**Work Completed:**
+
+1. **EventStore query-contract serialization bootstrap** (`MongoEventStoreQueryContractTests.cs`)
+   - Added explicit call to `MongoEventStoreSerializationSetup.EnsureGuidSerializer()` and `RegisterClassMaps(options)` before BSON rendering
+   - Merge-blocking issue: isolated test runs now use production BSON configuration instead of failing on Guid serialization
+
+2. **Outbox processor integration test cleanup guarantee** (`OutboxIndexContractIntegrationTests.cs`)
+   - Wrapped processor `StopAsync()` in `finally` block to ensure cleanup even on wait timeout
+   - Prevents background polling loop from leaking into subsequent tests
+
+3. **Queue lease-recovery contract assertion coupling** (`MongoQueueSubscriptionTests.cs`)
+   - Tightened assertion to verify `LockedUtc < now - leaseTime` is coupled with `IsLocked == true` in the same filter branch
+   - Strengthens contract coverage to prevent false positives from loose tree-wide checks
+
+**Verification:** ✅ Build clean. All three review notes addressed. Test suite passing with no regressions.
+
 ## Learnings
 
 - Queue availability filtering in `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` should treat missing `IsTerminal` as non-terminal for backward compatibility with legacy queue documents, using `IsTerminal != true` semantics for active-work queries.
 - TTL retention on queue items must stay backward compatible too, but MongoDB partial index filters reject `$ne` and `$exists: false`; the working representation is `IsTerminal: { $in: [false, null] }`, which still includes legacy documents with no `IsTerminal` field.
 - Review coverage for these behaviors lives in `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` and `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueRetentionIntegrationTests.cs`, and the assertions should validate compatible behavior instead of one literal BSON shape.
+- EventStore query-contract tests that render BSON must explicitly run `MongoEventStoreSerializationSetup.EnsureGuidSerializer()` plus `RegisterClassMaps(options)` in the test path; otherwise isolated runs can fail on Guid serialization or depend on prior test order. The affected contract coverage lives in `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`.
+- Integration tests that start `OutboxProcessor` should always stop it from a `finally` block so timed-out waits do not leak the background polling loop into later tests. The current regression point is `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs`.
 
 ## Recent Work (Historical Duplicates Below — See Above for Latest Work)

@@ -741,6 +741,124 @@ Documentation clarification for `WithMaxRetries()` semantics to prevent user mis
 
 **Rationale:** Captures user preferences for development workflow and documentation practices.
 
+### Parker — Index Contract Test Strategy for Issue #76
+
+**Date:** 2026-04-11  
+**Author:** Parker  
+**Status:** Approved (Alec revision pass)  
+**Issue:** #76
+
+For MongoDB index/query regression protection, use three layers instead of explain-plan parsing:
+
+1. **Rendered query-shape tests** for filters and sorts (`Render(...)` on `FilterDefinition` and `SortDefinition`)
+2. **Real index-definition integration tests** using `Indexes.ListAsync()` against Testcontainers MongoDB
+3. **Behavior-critical integration checks** for cases where order or uniqueness is the real contract
+
+**Why:**
+- Query planners vary across MongoDB versions and data shapes, so explain-plan assertions are brittle noise
+- Rendered BSON catches silent query drift immediately
+- Listing indexes against real MongoDB validates actual key order, uniqueness, TTL options, and partial filters
+- A small behavior check covers the user-visible contract that index/query alignment is meant to protect
+
+**Applied in:**
+- `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
+- `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/Integration/EventStoreIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs`
+
+---
+
+### Alec — Fluent Query-Contract Capture
+
+**Date:** 2026-04-11  
+**Author:** Alec  
+**Status:** Approved (PR #77 revision pass)  
+**Related:** Parker's index contract test strategy
+
+When MongoDB production code composes queries through `collection.Find(...).Sort(...).Limit(...)`, contract tests should drive that real fluent path and capture the final `FindOptions` at collection execution time instead of trying to mock `Find()` directly.
+
+**Why:**
+- `Find()` is an extension method, so Moq setups against it are brittle or impossible
+- A capturing `IMongoCollection` proxy lets the real fluent pipeline build the filter, sort, and limit
+- Tests still assert the durable contract by rendering the resulting BSON
+
+**Pattern:**
+- Implement a spy/capturing `IMongoCollection<T>` decorator that intercepts `Find()` calls
+- Let the real fluent extension methods execute against the decorator
+- Capture the final `FindOptions` at execution time
+- Assert on rendered BSON filter, sort, and other options
+
+**Applied in:**
+- `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`
+
+---
+
+### Nate — PR #77 Latest Review Pass Assessment
+
+**Date:** 2026-04-11  
+**PR:** #77 — `squad/76-index-query-contract-tests`  
+**Status:** Assessment only
+
+#### Decision
+Treat all three newly posted review notes from the 2026-04-11 19:44Z Copilot review pass as valid. One is a merge blocker; two should still be fixed before merge because they weaken test isolation or the stated contract coverage.
+
+#### Findings
+
+1. **EventStore serialization bootstrap is valid and merge-blocking**
+   - `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs` renders filters/sorts against the global BSON serializer registry without explicitly calling `MongoEventStoreSerializationSetup.EnsureGuidSerializer()` and `RegisterClassMaps(...)`.
+   - Running `MongoEventStoreQueryContractTests` in isolation currently fails with `GuidSerializer cannot serialize a Guid when GuidRepresentation is Unspecified`.
+   - Team guidance: EventStore query-contract tests must explicitly bootstrap production serialization before rendering BSON.
+
+2. **Outbox processor cleanup note is valid**
+   - `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs` starts the background processor and only stops it on the happy path.
+   - If the wait times out or throws, the singleton processor can keep running because disposal alone does not guarantee `StopAsync()` is called.
+   - Team guidance: tests that start background processors must stop them in `finally`.
+
+3. **Queue lease-recovery assertion note is valid**
+   - `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` proves `IsLocked == false`, `LockedUtc == null`, and `LockedUtc < ...` exist somewhere, but does not prove the stale-lock recovery branch is guarded by `IsLocked == true`.
+   - Because this PR's purpose is contract protection, the assertion should verify those clauses stay coupled in the same logical branch.
+
+#### Merge Guidance
+- **Must fix before merge:** EventStore serialization bootstrap
+- **Should fix before merge:** Outbox cleanup `try/finally`, queue lease-recovery branch coupling assertion
+
+---
+
+### Eliot — PR #77 Final Fixes Implementation
+
+**Date:** 2026-04-11  
+**PR:** #77 — `squad/76-index-query-contract-tests`  
+**Status:** Complete (all review notes addressed)
+
+#### Decision
+All three review notes from Nate's 2026-04-11 assessment have been fixed. Test suite passing: 427 tests, 0 failures.
+
+#### Changes Made
+
+1. **EventStore query-contract tests** (`MongoEventStoreQueryContractTests.cs`)
+   - Added explicit bootstrap of `MongoEventStoreSerializationSetup.EnsureGuidSerializer()` and `RegisterClassMaps(options)` to rendering chain
+   - Ensures isolated test runs use production BSON configuration
+   - Merge blocker resolved
+
+2. **Outbox processor integration tests** (`OutboxIndexContractIntegrationTests.cs`)
+   - Wrapped processor stop in `finally` block to guarantee cleanup even on wait timeout
+   - Prevents background polling loop leak into subsequent tests
+   - Test isolation improved
+
+3. **Queue lease-recovery contract assertion** (`MongoQueueSubscriptionTests.cs`)
+   - Tightened assertion to verify `LockedUtc < now - leaseTime` is coupled with `IsLocked == true`
+   - Previously checked predicates existed anywhere; now validates they appear in same filter branch
+   - Contract coverage strengthened
+
+#### Verification
+- ✅ `bash build.sh Test` passing: 427 tests, 0 failures
+- ✅ All targeted files modified and tests passing
+- ✅ Merge-blocking issue resolved, remaining notes addressed
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

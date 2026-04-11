@@ -10,6 +10,23 @@
 
 <!-- Append learnings below -->
 
+### 2026-04-11: Issue #76 Test-Contract Review
+
+**Review Scope:** Parker's index/query contract tests for Outbox, Queue, and EventStore.
+
+**Assessment:**
+- The strongest pattern remains: rendered BSON assertions for query shape, live `Indexes.ListAsync()` inspection for durable index schema, and a small behavior-critical integration check where ordering/uniqueness is the real contract.
+- This implementation follows that pattern well and avoids the brittle `explain()` path we explicitly rejected.
+- Queue index coverage is intentionally split: existing integration tests already lock the compound index shape, while `MongoQueueSubscriptionTests.cs` now adds the missing dequeue-filter contract.
+
+**Key Files:**
+- `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
+- `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/Integration/EventStoreIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs`
+- `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`
+
 ### 2025-01-14: Queue Resilience Analysis
 
 **Issues Reviewed:** #9 (locked items stay locked forever on handler failure), #10 (closed items accumulate indefinitely)
@@ -457,3 +474,40 @@ _logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc
 - Phase 1 (Immediate): Create 3 new test files, 120 lines. Effort: 2-3 hours.
 - Phase 2 (Optional): Add query correctness to Outbox.
 - Phase 3 (Deferred): Performance profiling suite if telemetry shows issues.
+
+### 2026-04-11: PR #77 Final Review Assessment and Triage
+
+**Session:** Post-review quality assessment for index/query contract tests  
+**Date:** 2026-04-11  
+**PR:** #77 — `squad/76-index-query-contract-tests`
+
+**Review Scope:** Copilot review pass posted 2026-04-11 19:44Z (three new notes)
+
+**Assessment Decision:**
+Treat all three newly posted review notes as **valid**. One is merge-blocking; two should be fixed before merge because they weaken test isolation or stated contract coverage.
+
+**Findings & Triage:**
+
+1. **EventStore serialization bootstrap** — MERGE BLOCKER
+   - Issue: `MongoEventStoreQueryContractTests.cs` renders BSON against global registry without bootstrap
+   - Symptom: Isolated test run fails with `GuidSerializer cannot serialize a Guid when GuidRepresentation is Unspecified`
+   - Fix: Explicit call to `MongoEventStoreSerializationSetup.EnsureGuidSerializer()` + `RegisterClassMaps()`
+   - Owner: Eliot
+   - Status: ✅ FIXED
+
+2. **Outbox processor cleanup** — SHOULD FIX
+   - Issue: `OutboxIndexContractIntegrationTests.cs` only stops processor on happy path
+   - Symptom: Timeout or exception leaves polling loop running in next test
+   - Fix: Wrap stop in `finally` block
+   - Owner: Eliot
+   - Status: ✅ FIXED
+
+3. **Queue lease-recovery assertion coupling** — SHOULD FIX
+   - Issue: `MongoQueueSubscriptionTests.cs` proves predicates exist but not that they stay coupled in same branch
+   - Symptom: False positive possible if filter logic later decouples checks
+   - Fix: Tighten assertion to verify `LockedUtc < now - leaseTime` **and** `IsLocked == true` in same rendered branch
+   - Owner: Eliot
+   - Status: ✅ FIXED
+
+**Merge Recommendation:** All three notes now addressed. Test suite clean: 427 tests passing, 0 failures. Ready for merge.
+

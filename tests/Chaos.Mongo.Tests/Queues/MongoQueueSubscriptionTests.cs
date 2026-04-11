@@ -35,6 +35,27 @@ public class MongoQueueSubscriptionTests
     }
 
     [Test]
+    public void CreateAvailableQueueItemFilter_UsesLeaseRecoveryClausesAlignedWithCompoundIndex()
+    {
+        // Arrange
+        var sut = CreateSubscription();
+        var method = GetPrivateMethod("CreateAvailableQueueItemFilter", Type.EmptyTypes);
+        var serializerRegistry = BsonSerializer.SerializerRegistry;
+        var documentSerializer = serializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>();
+        var renderContext = new RenderArgs<MongoQueueItem<TestPayload>>(documentSerializer, serializerRegistry);
+
+        // Act
+        var filter = (FilterDefinition<MongoQueueItem<TestPayload>>)method.Invoke(sut, [])!;
+        var rendered = filter.Render(renderContext);
+
+        // Assert
+        ContainsEquality(rendered, nameof(MongoQueueItem.IsClosed), BsonBoolean.False).Should().BeTrue();
+        ContainsEquality(rendered, nameof(MongoQueueItem.IsLocked), BsonBoolean.False).Should().BeTrue();
+        ContainsLeaseRecoveryBranch(rendered).Should().BeTrue(
+            "the lease-recovery branch must require IsLocked == true in the same clause branch as the LockedUtc recovery predicate");
+    }
+
+    [Test]
     public async Task HandleFailedQueueItemAsync_LogsReadableAttemptMessage()
     {
         // Arrange
@@ -71,6 +92,30 @@ public class MongoQueueSubscriptionTests
         VerifyLoggedError(loggerMock, "failed on attempt 1", Times.Once());
         VerifyLoggedError(loggerMock, "failed on failed attempt", Times.Never());
     }
+
+    private static Boolean BranchHasLockedRecoveryClause(BsonDocument document)
+        => SubtreeContainsLockedState(document) &&
+           SubtreeContainsLeaseRecoveryLockedUtcClause(document);
+
+    private static Boolean ContainsEquality(BsonValue value, String field, BsonValue expected)
+        => value switch
+        {
+            BsonDocument document => (document.TryGetValue(field, out var directValue) &&
+                                      directValue == expected) ||
+                                     document.Elements.Any(element => ContainsEquality(element.Value, field, expected)),
+            BsonArray array => array.Any(item => ContainsEquality(item, field, expected)),
+            _ => false
+        };
+
+    private static Boolean ContainsLeaseRecoveryBranch(BsonValue value)
+        => value switch
+        {
+            BsonDocument document => document.Elements.Any(element => ContainsLeaseRecoveryBranch(element.Value)),
+            BsonArray array => array.Any(item => item is BsonDocument document &&
+                                                 (BranchHasLockedRecoveryClause(document) ||
+                                                  ContainsLeaseRecoveryBranch(document))),
+            _ => false
+        };
 
     private static MongoQueueSubscription<TestPayload> CreateSubscription(
         MongoQueueDefinition? queueDefinition = null,
@@ -129,6 +174,27 @@ public class MongoQueueSubscriptionTests
            filter is BsonDocument filterDocument &&
            filterDocument.TryGetValue("$ne", out var notEqualValue) &&
            notEqualValue == BsonBoolean.True;
+
+    private static Boolean SubtreeContainsLeaseRecoveryLockedUtcClause(BsonValue value)
+        => value switch
+        {
+            BsonDocument document => (document.TryGetValue(nameof(MongoQueueItem.LockedUtc), out var lockedUtcValue) &&
+                                      (lockedUtcValue == BsonNull.Value ||
+                                       (lockedUtcValue is BsonDocument lockedUtcDocument && lockedUtcDocument.Contains("$lt")))) ||
+                                     document.Elements.Any(element => SubtreeContainsLeaseRecoveryLockedUtcClause(element.Value)),
+            BsonArray array => array.Any(SubtreeContainsLeaseRecoveryLockedUtcClause),
+            _ => false
+        };
+
+    private static Boolean SubtreeContainsLockedState(BsonValue value)
+        => value switch
+        {
+            BsonDocument document => (document.TryGetValue(nameof(MongoQueueItem.IsLocked), out var isLockedValue) &&
+                                      isLockedValue == BsonBoolean.True) ||
+                                     document.Elements.Any(element => SubtreeContainsLockedState(element.Value)),
+            BsonArray array => array.Any(SubtreeContainsLockedState),
+            _ => false
+        };
 
     private static Boolean UsesLegacyCompatibleTerminalFilter(BsonValue value)
         => value switch

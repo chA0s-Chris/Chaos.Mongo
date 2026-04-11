@@ -60,6 +60,17 @@
 
 ---
 
+### 2026-04-11: Issue #76 Index/Query Contract Tests
+
+- Added outbox query-contract coverage in `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs` by rendering the polling and claim filters/sorts and asserting they stay aligned with `IX_Outbox_Polling`.
+- Added outbox integration coverage in `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs` for index definitions and processing order, so ordering regressions fail without brittle explain-plan parsing.
+- Added event store query-contract coverage in `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs` for stream reads, latest-version lookup, and checkpoint replay windows.
+- Added event store index coverage in `tests/Chaos.Mongo.EventStore.Tests/Integration/EventStoreIndexContractIntegrationTests.cs` for the unique aggregate/version contract.
+- Tightened queue dequeue coverage in `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs` to assert the lease-recovery filter keeps `IsClosed`, `IsLocked`, and `LockedUtc` clauses aligned with the compound recovery index.
+- Reusable test pattern: contract tests here are strongest when they combine BSON rendering for query shape, real index inspection via `Indexes.ListAsync()`, and a small behavior-critical integration check for ordering or uniqueness.
+
+---
+
 ### 2026-04-11: PR #75 Review Notes r3068136358 / r3068136363 Validation
 
 - `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs` now uses `Ne(x => x.IsTerminal, true)` for queue availability, so legacy queue documents without `IsTerminal` still qualify as non-terminal work items.
@@ -433,3 +444,7 @@ Signal: High (catches 80 percent of index bugs)
 - Combined: 98 percent confidence future changes do not break index coverage
 
 **Handoff:** Nate approves roadmap; Parker executes Phase 1 first.
+
+---
+
+**PR #77 Index Contract Strategy (2026-04-11):** Alec's revision pass on query-contract tests prompted decision formalization. Recorded three-layer index/query regression protection (rendered query shapes, real index validation via `Indexes.ListAsync()`, behavior-critical checks) as captured decision: `.squad/decisions.md` entry "Parker — Index Contract Test Strategy for Issue #76".
