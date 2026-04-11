@@ -741,6 +741,60 @@ Documentation clarification for `WithMaxRetries()` semantics to prevent user mis
 
 **Rationale:** Captures user preferences for development workflow and documentation practices.
 
+### Parker — Index Contract Test Strategy for Issue #76
+
+**Date:** 2026-04-11  
+**Author:** Parker  
+**Status:** Approved (Alec revision pass)  
+**Issue:** #76
+
+For MongoDB index/query regression protection, use three layers instead of explain-plan parsing:
+
+1. **Rendered query-shape tests** for filters and sorts (`Render(...)` on `FilterDefinition` and `SortDefinition`)
+2. **Real index-definition integration tests** using `Indexes.ListAsync()` against Testcontainers MongoDB
+3. **Behavior-critical integration checks** for cases where order or uniqueness is the real contract
+
+**Why:**
+- Query planners vary across MongoDB versions and data shapes, so explain-plan assertions are brittle noise
+- Rendered BSON catches silent query drift immediately
+- Listing indexes against real MongoDB validates actual key order, uniqueness, TTL options, and partial filters
+- A small behavior check covers the user-visible contract that index/query alignment is meant to protect
+
+**Applied in:**
+- `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
+- `tests/Chaos.Mongo.Outbox.Tests/Integration/OutboxIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/Integration/EventStoreIndexContractIntegrationTests.cs`
+- `tests/Chaos.Mongo.Tests/Queues/MongoQueueSubscriptionTests.cs`
+
+---
+
+### Alec — Fluent Query-Contract Capture
+
+**Date:** 2026-04-11  
+**Author:** Alec  
+**Status:** Approved (PR #77 revision pass)  
+**Related:** Parker's index contract test strategy
+
+When MongoDB production code composes queries through `collection.Find(...).Sort(...).Limit(...)`, contract tests should drive that real fluent path and capture the final `FindOptions` at collection execution time instead of trying to mock `Find()` directly.
+
+**Why:**
+- `Find()` is an extension method, so Moq setups against it are brittle or impossible
+- A capturing `IMongoCollection` proxy lets the real fluent pipeline build the filter, sort, and limit
+- Tests still assert the durable contract by rendering the resulting BSON
+
+**Pattern:**
+- Implement a spy/capturing `IMongoCollection<T>` decorator that intercepts `Find()` calls
+- Let the real fluent extension methods execute against the decorator
+- Capture the final `FindOptions` at execution time
+- Assert on rendered BSON filter, sort, and other options
+
+**Applied in:**
+- `tests/Chaos.Mongo.Outbox.Tests/OutboxProcessorQueryContractTests.cs`
+- `tests/Chaos.Mongo.EventStore.Tests/MongoEventStoreQueryContractTests.cs`
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

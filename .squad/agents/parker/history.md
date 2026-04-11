@@ -444,3 +444,7 @@ Signal: High (catches 80 percent of index bugs)
 - Combined: 98 percent confidence future changes do not break index coverage
 
 **Handoff:** Nate approves roadmap; Parker executes Phase 1 first.
+
+---
+
+**PR #77 Index Contract Strategy (2026-04-11):** Alec's revision pass on query-contract tests prompted decision formalization. Recorded three-layer index/query regression protection (rendered query shapes, real index validation via `Indexes.ListAsync()`, behavior-critical checks) as captured decision: `.squad/decisions.md` entry "Parker — Index Contract Test Strategy for Issue #76".
