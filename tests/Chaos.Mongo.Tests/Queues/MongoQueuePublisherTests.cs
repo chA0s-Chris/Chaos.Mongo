@@ -200,6 +200,47 @@ public class MongoQueuePublisherTests
     }
 
     [Test]
+    public async Task PublishAsync_WithValidParameters_EmitsPublishedMetric()
+    {
+        // Arrange
+        using var metricsCollector = new QueueMetricsCollector();
+        var mockCollection = new Mock<IMongoCollection<MongoQueueItem<TestPayload>>>();
+        var mockDatabase = new Mock<IMongoDatabase>();
+        var mockMongoHelper = new Mock<IMongoHelper>();
+
+        mockDatabase.Setup(x => x.GetCollection<MongoQueueItem<TestPayload>>("test-queue", null))
+                    .Returns(mockCollection.Object);
+        mockMongoHelper.Setup(x => x.Database).Returns(mockDatabase.Object);
+        mockCollection.Setup(x => x.InsertOneAsync(
+                                 It.IsAny<MongoQueueItem<TestPayload>>(),
+                                 null,
+                                 It.IsAny<CancellationToken>()))
+                      .Returns(Task.CompletedTask);
+
+        var publisher = new MongoQueuePublisher(mockMongoHelper.Object, TimeProvider.System);
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
+            PayloadType = typeof(TestPayload),
+            QueryLimit = 1,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+            AutoStartSubscription = false
+        };
+
+        // Act
+        await publisher.PublishAsync(queueDefinition, new TestPayload(), CancellationToken.None);
+
+        // Assert
+        var measurement = metricsCollector.Measurements.Should()
+                                          .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.Published)
+                                          .Subject;
+        measurement.Value.Should().Be(1);
+        measurement.Tags[MongoQueueMetrics.Tags.QueueCollection].Should().Be("test-queue");
+        measurement.Tags[MongoQueueMetrics.Tags.PayloadType].Should().Be(typeof(TestPayload).FullName);
+    }
+
+    [Test]
     public async Task PublishAsync_WithValidParameters_InsertsQueueItem()
     {
         // Arrange

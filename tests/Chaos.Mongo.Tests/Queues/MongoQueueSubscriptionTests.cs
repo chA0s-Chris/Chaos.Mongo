@@ -59,6 +59,7 @@ public class MongoQueueSubscriptionTests
     public async Task HandleFailedQueueItemAsync_LogsReadableAttemptMessage()
     {
         // Arrange
+        using var metricsCollector = new QueueMetricsCollector();
         var queueItemId = ObjectId.GenerateNewId();
         var acquiredLockUtc = DateTime.UtcNow;
         var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
@@ -91,6 +92,256 @@ public class MongoQueueSubscriptionTests
         // Assert
         VerifyLoggedError(loggerMock, "failed on attempt 1", Times.Once());
         VerifyLoggedError(loggerMock, "failed on failed attempt", Times.Never());
+        VerifyLoggedError(loggerMock, "will be retried after the lock lease expires", Times.Once());
+        var measurement = metricsCollector.Measurements.Should()
+                                          .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingFailed)
+                                          .Subject;
+        measurement.Tags[MongoQueueMetrics.Tags.Result].Should().Be("retry");
+        measurement.Tags[MongoQueueMetrics.Tags.QueueCollection].Should().Be("test-queue");
+    }
+
+    [Test]
+    public async Task HandleFailedQueueItemAsync_WhenRetryBudgetIsExhausted_EmitsTerminalFailureMetric()
+    {
+        // Arrange
+        using var metricsCollector = new QueueMetricsCollector();
+        var queueItemId = ObjectId.GenerateNewId();
+        var acquiredLockUtc = DateTime.UtcNow;
+        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var collectionMock = new Mock<IMongoCollection<MongoQueueItem<TestPayload>>>();
+        var updateResultMock = new Mock<UpdateResult>();
+        updateResultMock.SetupGet(x => x.ModifiedCount).Returns(1);
+        collectionMock
+            .Setup(c => c.FindOneAndUpdateAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MongoQueueItem<TestPayload>
+            {
+                Id = queueItemId,
+                CreatedUtc = acquiredLockUtc,
+                Payload = new(),
+                RetryCount = 2
+            });
+        collectionMock
+            .Setup(c => c.UpdateOneAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateOptions>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(updateResultMock.Object);
+
+        var sut = CreateSubscription(new()
+                                     {
+                                         AutoStartSubscription = false,
+                                         CollectionName = "test-queue",
+                                         LockLeaseTime = TimeSpan.FromMinutes(1),
+                                         MaxRetries = 1,
+                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+                                         PayloadType = typeof(TestPayload),
+                                         QueryLimit = 10
+                                     },
+                                     logger: loggerMock.Object);
+        var method = GetPrivateMethod("HandleFailedQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(DateTime), typeof(Exception), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [
+            collectionMock.Object, queueItemId, acquiredLockUtc, new InvalidOperationException("boom"), CancellationToken.None
+        ])!;
+
+        // Assert
+        VerifyLoggedError(loggerMock, "Marking queue item", Times.Once());
+        var measurement = metricsCollector.Measurements.Should()
+                                          .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingFailed)
+                                          .Subject;
+        measurement.Tags[MongoQueueMetrics.Tags.Result].Should().Be("terminal");
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_WhenCompletionOwnershipChanges_DoesNotEmitSuccessMetrics()
+    {
+        // Arrange
+        using var metricsCollector = new QueueMetricsCollector();
+        var queueItemId = ObjectId.GenerateNewId();
+        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var collectionMock = new Mock<IMongoCollection<MongoQueueItem<TestPayload>>>();
+        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
+        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
+        var updateResultMock = new Mock<UpdateResult>();
+        updateResultMock.SetupGet(x => x.ModifiedCount).Returns(0);
+        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
+                          .Returns(Task.CompletedTask);
+        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>()).Returns(payloadHandlerMock.Object);
+        collectionMock
+            .Setup(c => c.FindOneAndUpdateAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MongoQueueItem<TestPayload>
+            {
+                Id = queueItemId,
+                CreatedUtc = DateTime.UtcNow.AddMinutes(-1),
+                Payload = new(),
+                RetryCount = 1
+            });
+        collectionMock
+            .Setup(c => c.UpdateOneAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateOptions>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(updateResultMock.Object);
+
+        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactoryMock.Object, logger: loggerMock.Object);
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collectionMock.Object, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        VerifyLoggedWarning(loggerMock, "Skipping completion", Times.Once());
+        VerifyLoggedInformation(loggerMock, "Processed queue item", Times.Never());
+        metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingSucceeded);
+        metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingDuration);
+        metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingQueueAge);
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_WhenImmediateDeleteCompletionOwnershipChanges_DoesNotEmitSuccessMetrics()
+    {
+        // Arrange
+        using var metricsCollector = new QueueMetricsCollector();
+        var queueItemId = ObjectId.GenerateNewId();
+        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var collectionMock = new Mock<IMongoCollection<MongoQueueItem<TestPayload>>>();
+        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
+        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
+        var deleteResultMock = new Mock<DeleteResult>();
+        deleteResultMock.SetupGet(x => x.DeletedCount).Returns(0);
+        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
+                          .Returns(Task.CompletedTask);
+        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>()).Returns(payloadHandlerMock.Object);
+        collectionMock
+            .Setup(c => c.FindOneAndUpdateAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MongoQueueItem<TestPayload>
+            {
+                Id = queueItemId,
+                CreatedUtc = DateTime.UtcNow.AddMinutes(-1),
+                Payload = new(),
+                RetryCount = 1
+            });
+        collectionMock
+            .Setup(c => c.DeleteOneAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(deleteResultMock.Object);
+
+        var sut = CreateSubscription(new()
+                                     {
+                                         AutoStartSubscription = false,
+                                         ClosedItemRetention = null,
+                                         CollectionName = "test-queue",
+                                         LockLeaseTime = TimeSpan.FromMinutes(1),
+                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+                                         PayloadType = typeof(TestPayload),
+                                         QueryLimit = 10
+                                     },
+                                     payloadHandlerFactory: payloadHandlerFactoryMock.Object,
+                                     logger: loggerMock.Object);
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collectionMock.Object, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        VerifyLoggedWarning(loggerMock, "Skipping completion", Times.Once());
+        VerifyLoggedInformation(loggerMock, "Processed queue item", Times.Never());
+        metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingSucceeded);
+        metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingDuration);
+        metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingQueueAge);
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_WithRecoveredLock_EmitsRecoveryAndSuccessDiagnostics()
+    {
+        // Arrange
+        using var metricsCollector = new QueueMetricsCollector();
+        var queueItemId = ObjectId.GenerateNewId();
+        var now = new DateTimeOffset(2025, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var recoveredLockUtc = now.UtcDateTime.AddMinutes(-2);
+        var createdUtc = now.UtcDateTime.AddMinutes(-5);
+        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var collectionMock = new Mock<IMongoCollection<MongoQueueItem<TestPayload>>>();
+        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
+        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
+        var updateResultMock = new Mock<UpdateResult>();
+        var timeProviderMock = new Mock<TimeProvider>();
+        updateResultMock.SetupGet(x => x.ModifiedCount).Returns(1);
+        timeProviderMock.Setup(x => x.GetUtcNow()).Returns(now);
+        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
+                          .Returns(Task.CompletedTask);
+        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>()).Returns(payloadHandlerMock.Object);
+        collectionMock
+            .Setup(c => c.FindOneAndUpdateAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MongoQueueItem<TestPayload>
+            {
+                Id = queueItemId,
+                CreatedUtc = createdUtc,
+                IsLocked = true,
+                LockedUtc = recoveredLockUtc,
+                Payload = new(),
+                RetryCount = 1
+            });
+        collectionMock
+            .Setup(c => c.UpdateOneAsync(
+                       It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateDefinition<MongoQueueItem<TestPayload>>>(),
+                       It.IsAny<UpdateOptions>(),
+                       It.IsAny<CancellationToken>()))
+            .ReturnsAsync(updateResultMock.Object);
+
+        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactoryMock.Object,
+                                     timeProvider: timeProviderMock.Object,
+                                     logger: loggerMock.Object);
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collectionMock.Object, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        VerifyLoggedWarning(loggerMock, "Recovering queue item lock", Times.Once());
+        VerifyLoggedInformation(loggerMock, "Processed queue item", Times.Once());
+        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecovered);
+        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecoveryAge);
+        var successMeasurement = metricsCollector.Measurements.Should()
+                                                 .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingSucceeded)
+                                                 .Subject;
+        successMeasurement.Tags[MongoQueueMetrics.Tags.CleanupMode].Should().Be("ttl-retention");
+        successMeasurement.Tags[MongoQueueMetrics.Tags.QueueCollection].Should().Be("test-queue");
+        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingDuration);
+        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingQueueAge);
     }
 
     private static Boolean BranchHasLockedRecoveryClause(BsonDocument document)
@@ -119,6 +370,10 @@ public class MongoQueueSubscriptionTests
 
     private static MongoQueueSubscription<TestPayload> CreateSubscription(
         MongoQueueDefinition? queueDefinition = null,
+        IMongoHelper? mongoHelper = null,
+        IMongoQueuePayloadHandlerFactory? payloadHandlerFactory = null,
+        IMongoQueuePayloadPrioritizer? payloadPrioritizer = null,
+        TimeProvider? timeProvider = null,
         ILogger<MongoQueueSubscription<TestPayload>>? logger = null)
         => new(queueDefinition ?? new MongoQueueDefinition
                {
@@ -129,10 +384,10 @@ public class MongoQueueSubscriptionTests
                    PayloadType = typeof(TestPayload),
                    QueryLimit = 10
                },
-               Mock.Of<IMongoHelper>(),
-               Mock.Of<IMongoQueuePayloadHandlerFactory>(),
-               Mock.Of<IMongoQueuePayloadPrioritizer>(),
-               TimeProvider.System,
+               mongoHelper ?? Mock.Of<IMongoHelper>(),
+               payloadHandlerFactory ?? Mock.Of<IMongoQueuePayloadHandlerFactory>(),
+               payloadPrioritizer ?? Mock.Of<IMongoQueuePayloadPrioritizer>(),
+               timeProvider ?? TimeProvider.System,
                logger ?? Mock.Of<ILogger<MongoQueueSubscription<TestPayload>>>());
 
     private static MethodInfo GetPrivateMethod(String name, Type[] parameterTypes)
@@ -213,6 +468,30 @@ public class MongoQueueSubscriptionTests
         => loggerMock.Verify(
             l => l.Log(
                 LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(messageSubstring)),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
+            times);
+
+    private static void VerifyLoggedInformation(Mock<ILogger<MongoQueueSubscription<TestPayload>>> loggerMock,
+                                                String messageSubstring,
+                                                Times times)
+        => loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(messageSubstring)),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
+            times);
+
+    private static void VerifyLoggedWarning(Mock<ILogger<MongoQueueSubscription<TestPayload>>> loggerMock,
+                                            String messageSubstring,
+                                            Times times)
+        => loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Warning,
                 It.IsAny<EventId>(),
                 It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(messageSubstring)),
                 It.IsAny<Exception>(),

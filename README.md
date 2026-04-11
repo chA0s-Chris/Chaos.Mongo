@@ -443,6 +443,13 @@ the first failed attempt.
 Successfully processed items are retained for one hour by default and removed by a MongoDB TTL index on `ClosedUtc`.
 Use `WithImmediateDelete()` when you want successful items removed right away; terminal failed items are excluded from
 TTL cleanup so they stay queryable for dead-letter handling.
+Queues also emit structured logs for lock recovery, retry/terminal transitions, cleanup mode, and successful processing.
+Runtime metrics are published through the `MongoQueueMetrics.MeterName` meter. Consumers can reference
+`MongoQueueMetrics.Instruments.*` and `MongoQueueMetrics.Tags.*` instead of duplicating metric and tag strings such as
+`MongoQueueMetrics.Instruments.Published`, `MongoQueueMetrics.Instruments.LockRecovered`,
+`MongoQueueMetrics.Instruments.ProcessingSucceeded`, `MongoQueueMetrics.Instruments.ProcessingFailed`,
+`MongoQueueMetrics.Instruments.LockRecoveryAge`, `MongoQueueMetrics.Instruments.ProcessingDuration`, and
+`MongoQueueMetrics.Instruments.ProcessingQueueAge`.
 
 #### Publishing Messages
 

@@ -5,6 +5,7 @@ namespace Chaos.Mongo.Queues;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Diagnostics;
 
 /// <summary>
 /// Manages a MongoDB-based queue subscription that monitors and processes queue items.
@@ -112,6 +113,8 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                                                                   .Ascending(x => x.IsTerminal)),
                             cancellationToken: cancellationToken);
 
+        _logger.LogDebug("Ensured queue processing index for collection {CollectionName}", _queueDefinition.CollectionName);
+
         if (_queueDefinition.ClosedItemRetention.HasValue)
         {
             var ttlIndex = new CreateIndexModel<MongoQueueItem<TPayload>>(
@@ -136,10 +139,16 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(ttlIndex, cancellationToken: cancellationToken);
+            _logger.LogInformation("Ensured TTL cleanup index {IndexName} for collection {CollectionName} with retention {ClosedItemRetention}",
+                                   ClosedItemTtlIndexName,
+                                   _queueDefinition.CollectionName,
+                                   _queueDefinition.ClosedItemRetention.Value);
         }
         else
         {
             await collection.Indexes.DropOneIfExistsAsync(ClosedItemTtlIndexName, cancellationToken);
+            _logger.LogInformation("Successful queue items for collection {CollectionName} will be deleted immediately after processing",
+                                   _queueDefinition.CollectionName);
         }
     }
 
@@ -166,14 +175,14 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
             return;
         }
 
-        _logger.LogError(exception,
-                         "Processing queue item {QueueItemId} with payload {PayloadType} failed on attempt {RetryCount}",
-                         queueItemId,
-                         typeof(TPayload).FullName,
-                         failedItem.RetryCount);
-
         if (!_queueDefinition.MaxRetries.HasValue || failedItem.RetryCount <= _queueDefinition.MaxRetries.Value)
         {
+            MongoQueueDiagnostics.RecordProcessingFailed(_queueDefinition, "retry");
+            _logger.LogError(exception,
+                             "Processing queue item {QueueItemId} with payload {PayloadType} failed on attempt {RetryCount}. The item will be retried after the lock lease expires",
+                             queueItemId,
+                             typeof(TPayload).FullName,
+                             failedItem.RetryCount);
             return;
         }
 
@@ -195,12 +204,13 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
             return;
         }
 
-        _logger.LogWarning(exception,
-                           "Marking queue item {QueueItemId} with payload {PayloadType} as terminal after {RetryCount} failed attempts (max retries: {MaxRetries})",
-                           queueItemId,
-                           typeof(TPayload).FullName,
-                           failedItem.RetryCount,
-                           _queueDefinition.MaxRetries.Value);
+        MongoQueueDiagnostics.RecordProcessingFailed(_queueDefinition, "terminal");
+        _logger.LogError(exception,
+                         "Marking queue item {QueueItemId} with payload {PayloadType} as terminal after {RetryCount} failed attempts (max retries: {MaxRetries})",
+                         queueItemId,
+                         typeof(TPayload).FullName,
+                         failedItem.RetryCount,
+                         _queueDefinition.MaxRetries.Value);
     }
 
     /// <summary>
@@ -268,6 +278,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
         {
             var acquiredLockUtc = _timeProvider.GetUtcNow().UtcDateTime;
             var lockExpiryUtc = acquiredLockUtc - _queueDefinition.LockLeaseTime;
+            var processingStartedTimestamp = Stopwatch.GetTimestamp();
             var queueItem = await collection.FindOneAndUpdateAsync(
                 CreateAvailableQueueItemFilter(queueItemId),
                 Builders<MongoQueueItem<TPayload>>.Update
@@ -285,8 +296,19 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 return;
             }
 
+            var queueAge = acquiredLockUtc - queueItem.CreatedUtc;
+            _logger.LogDebug(
+                "Acquired queue item lock {QueueItemId} with payload {PayloadType} (recovered: {RecoveredLock}, retry count: {RetryCount}, queue age: {QueueAgeMs} ms)",
+                queueItemId,
+                typeof(TPayload).FullName,
+                queueItem.IsLocked,
+                queueItem.RetryCount,
+                queueAge.TotalMilliseconds);
+
             if (queueItem.IsLocked)
             {
+                var recoveredLockAge = acquiredLockUtc - (queueItem.LockedUtc ?? queueItem.CreatedUtc);
+                MongoQueueDiagnostics.RecordLockRecovered(_queueDefinition, recoveredLockAge);
                 _logger.LogWarning(
                     "Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, expiry threshold: {ExpiryThreshold}) with payload {PayloadType}",
                     queueItemId,
@@ -338,7 +360,20 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 _logger.LogWarning("Skipping completion for queue item {QueueItemId} with payload {PayloadType} because lock ownership changed",
                                    queueItemId,
                                    typeof(TPayload).FullName);
+                return;
             }
+
+            var cleanupMode = _queueDefinition.ClosedItemRetention.HasValue ? "ttl-retention" : "immediate-delete";
+            var processingDuration = Stopwatch.GetElapsedTime(processingStartedTimestamp);
+            MongoQueueDiagnostics.RecordProcessingSucceeded(_queueDefinition, processingDuration, queueAge, cleanupMode);
+            _logger.LogInformation(
+                "Processed queue item {QueueItemId} with payload {PayloadType} in {ProcessingDurationMs} ms (retry count: {RetryCount}, queue age: {QueueAgeMs} ms, cleanup mode: {CleanupMode})",
+                queueItemId,
+                typeof(TPayload).FullName,
+                processingDuration.TotalMilliseconds,
+                queueItem.RetryCount,
+                queueAge.TotalMilliseconds,
+                cleanupMode);
         }
         catch (OperationCanceledException) { }
         catch (Exception e)

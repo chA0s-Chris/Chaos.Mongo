@@ -28,9 +28,9 @@ public class MongoQueuePublisher : IMongoQueuePublisher
     }
 
     /// <inheritdoc/>
-    public Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition,
-                                       TPayload payload,
-                                       CancellationToken cancellationToken)
+    public async Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition,
+                                             TPayload payload,
+                                             CancellationToken cancellationToken)
         where TPayload : class, new()
     {
         ArgumentNullException.ThrowIfNull(queueDefinition);
@@ -55,6 +55,7 @@ public class MongoQueuePublisher : IMongoQueuePublisher
             Id = ObjectId.GenerateNewId()
         };
 
-        return collection.InsertOneAsync(queueItem, null, cancellationToken);
+        await collection.InsertOneAsync(queueItem, null, cancellationToken);
+        MongoQueueDiagnostics.RecordPublished(queueDefinition);
     }
 }
