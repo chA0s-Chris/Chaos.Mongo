@@ -18,9 +18,14 @@ public static class MongoQueueMetrics
     public static class Instruments
     {
         /// <summary>
-        /// The counter name for published queue items.
+        /// The counter name for recovered queue item locks.
         /// </summary>
-        public const String Published = "chaos.mongo.queue.published";
+        public const String LockRecovered = "chaos.mongo.queue.lock.recovered";
+
+        /// <summary>
+        /// The histogram name for recovered lock age.
+        /// </summary>
+        public const String LockRecoveryAge = "chaos.mongo.queue.lock.recovery_age";
 
         /// <summary>
         /// The histogram name for queue item processing duration.
@@ -41,16 +46,10 @@ public static class MongoQueueMetrics
         /// The counter name for successfully completed queue items.
         /// </summary>
         public const String ProcessingSucceeded = "chaos.mongo.queue.processing.succeeded";
-
         /// <summary>
-        /// The histogram name for recovered lock age.
+        /// The counter name for published queue items.
         /// </summary>
-        public const String LockRecoveryAge = "chaos.mongo.queue.lock.recovery_age";
-
-        /// <summary>
-        /// The counter name for recovered queue item locks.
-        /// </summary>
-        public const String LockRecovered = "chaos.mongo.queue.lock.recovered";
+        public const String Published = "chaos.mongo.queue.published";
     }
 
     /// <summary>

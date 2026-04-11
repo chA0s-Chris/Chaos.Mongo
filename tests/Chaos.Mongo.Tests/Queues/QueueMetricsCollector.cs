@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Queues;
 
+using Chaos.Mongo.Queues;
 using System.Diagnostics.Metrics;
 
 internal sealed class QueueMetricsCollector : IDisposable
@@ -13,7 +14,7 @@ internal sealed class QueueMetricsCollector : IDisposable
     {
         _listener.InstrumentPublished = (instrument, listener) =>
         {
-            if (instrument.Meter.Name == "Chaos.Mongo.Queues")
+            if (instrument.Meter.Name == MongoQueueMetrics.MeterName)
             {
                 listener.EnableMeasurementEvents(instrument);
             }
@@ -24,9 +25,6 @@ internal sealed class QueueMetricsCollector : IDisposable
     }
 
     public IReadOnlyList<QueueMetricMeasurement> Measurements => _measurements;
-
-    public void Dispose()
-        => _listener.Dispose();
 
     private void RecordMeasurement<T>(Instrument instrument,
                                       T measurement,
@@ -44,6 +42,9 @@ internal sealed class QueueMetricsCollector : IDisposable
                               Convert.ToDouble(measurement),
                               tagDictionary));
     }
+
+    public void Dispose()
+        => _listener.Dispose();
 }
 
 internal sealed record QueueMetricMeasurement(String InstrumentName, Double Value, Dictionary<String, String?> Tags);

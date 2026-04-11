@@ -7,50 +7,51 @@ using System.Diagnostics.Metrics;
 
 internal static class MongoQueueDiagnostics
 {
-    private const String CleanupModeTagName = "queue.cleanup_mode";
-    internal const String MeterName = "Chaos.Mongo.Queues";
-    private const String PayloadTypeTagName = "queue.payload_type";
-    private const String QueueCollectionTagName = "queue.collection";
-    private const String ResultTagName = "queue.result";
+    private static readonly Meter _meter = new(MongoQueueMetrics.MeterName);
 
-    private static readonly Meter Meter = new(MeterName);
-    private static readonly Counter<Int64> ProcessingFailedCounter = Meter.CreateCounter<Int64>(
-        "chaos.mongo.queue.processing.failed",
+    private static readonly Histogram<Double> _processingDurationHistogram = _meter.CreateHistogram<Double>(
+        MongoQueueMetrics.Instruments.ProcessingDuration,
+        "ms",
+        "Queue item processing duration in milliseconds.");
+
+    private static readonly Counter<Int64> _processingFailedCounter = _meter.CreateCounter<Int64>(
+        MongoQueueMetrics.Instruments.ProcessingFailed,
         description: "Number of failed queue item processing attempts.");
-    private static readonly Counter<Int64> ProcessingSucceededCounter = Meter.CreateCounter<Int64>(
-        "chaos.mongo.queue.processing.succeeded",
+
+    private static readonly Counter<Int64> _processingSucceededCounter = _meter.CreateCounter<Int64>(
+        MongoQueueMetrics.Instruments.ProcessingSucceeded,
         description: "Number of successfully completed queue items.");
-    private static readonly Histogram<Double> ProcessingDurationHistogram = Meter.CreateHistogram<Double>(
-        "chaos.mongo.queue.processing.duration",
-        unit: "ms",
-        description: "Queue item processing duration in milliseconds.");
-    private static readonly Counter<Int64> PublishedCounter = Meter.CreateCounter<Int64>(
-        "chaos.mongo.queue.published",
+
+    private static readonly Counter<Int64> _publishedCounter = _meter.CreateCounter<Int64>(
+        MongoQueueMetrics.Instruments.Published,
         description: "Number of queue items published.");
-    private static readonly Histogram<Double> QueueAgeHistogram = Meter.CreateHistogram<Double>(
-        "chaos.mongo.queue.processing.queue_age",
-        unit: "ms",
-        description: "Time from queue item creation to lock acquisition in milliseconds.");
-    private static readonly Counter<Int64> RecoveredLockCounter = Meter.CreateCounter<Int64>(
-        "chaos.mongo.queue.lock.recovered",
+
+    private static readonly Histogram<Double> _queueAgeHistogram = _meter.CreateHistogram<Double>(
+        MongoQueueMetrics.Instruments.ProcessingQueueAge,
+        "ms",
+        "Time from queue item creation to lock acquisition in milliseconds.");
+
+    private static readonly Histogram<Double> _recoveredLockAgeHistogram = _meter.CreateHistogram<Double>(
+        MongoQueueMetrics.Instruments.LockRecoveryAge,
+        "ms",
+        "Age of recovered queue item locks in milliseconds.");
+
+    private static readonly Counter<Int64> _recoveredLockCounter = _meter.CreateCounter<Int64>(
+        MongoQueueMetrics.Instruments.LockRecovered,
         description: "Number of expired or malformed queue item locks recovered.");
-    private static readonly Histogram<Double> RecoveredLockAgeHistogram = Meter.CreateHistogram<Double>(
-        "chaos.mongo.queue.lock.recovery_age",
-        unit: "ms",
-        description: "Age of recovered queue item locks in milliseconds.");
 
     internal static void RecordLockRecovered(MongoQueueDefinition queueDefinition, TimeSpan lockAge)
     {
         var tags = CreateCommonTags(queueDefinition);
-        RecoveredLockCounter.Add(1, tags);
-        RecoveredLockAgeHistogram.Record(lockAge.TotalMilliseconds, tags);
+        _recoveredLockCounter.Add(1, tags);
+        _recoveredLockAgeHistogram.Record(lockAge.TotalMilliseconds, tags);
     }
 
     internal static void RecordProcessingFailed(MongoQueueDefinition queueDefinition, String result)
     {
         var tags = CreateCommonTags(queueDefinition);
-        tags.Add(ResultTagName, result);
-        ProcessingFailedCounter.Add(1, tags);
+        tags.Add(MongoQueueMetrics.Tags.Result, result);
+        _processingFailedCounter.Add(1, tags);
     }
 
     internal static void RecordProcessingSucceeded(MongoQueueDefinition queueDefinition,
@@ -59,21 +60,21 @@ internal static class MongoQueueDiagnostics
                                                    String cleanupMode)
     {
         var tags = CreateCommonTags(queueDefinition);
-        tags.Add(CleanupModeTagName, cleanupMode);
+        tags.Add(MongoQueueMetrics.Tags.CleanupMode, cleanupMode);
 
-        ProcessingSucceededCounter.Add(1, tags);
-        ProcessingDurationHistogram.Record(processingDuration.TotalMilliseconds, tags);
-        QueueAgeHistogram.Record(queueAge.TotalMilliseconds, tags);
+        _processingSucceededCounter.Add(1, tags);
+        _processingDurationHistogram.Record(processingDuration.TotalMilliseconds, tags);
+        _queueAgeHistogram.Record(queueAge.TotalMilliseconds, tags);
     }
 
     internal static void RecordPublished(MongoQueueDefinition queueDefinition)
-        => PublishedCounter.Add(1, CreateCommonTags(queueDefinition));
+        => _publishedCounter.Add(1, CreateCommonTags(queueDefinition));
 
     private static TagList CreateCommonTags(MongoQueueDefinition queueDefinition)
     {
         TagList tags = [];
-        tags.Add(QueueCollectionTagName, queueDefinition.CollectionName);
-        tags.Add(PayloadTypeTagName, queueDefinition.PayloadType.FullName ?? queueDefinition.PayloadType.Name);
+        tags.Add(MongoQueueMetrics.Tags.QueueCollection, queueDefinition.CollectionName);
+        tags.Add(MongoQueueMetrics.Tags.PayloadType, queueDefinition.PayloadType.FullName ?? queueDefinition.PayloadType.Name);
         return tags;
     }
 }
