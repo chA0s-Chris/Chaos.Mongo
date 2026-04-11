@@ -432,7 +432,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithAutoStartSubscription() // Start processing on app startup
         .WithQueryLimit(10) // Process up to 10 messages at a time
         .WithLockLeaseTime(TimeSpan.FromMinutes(2)) // Retry stuck work after lease expiry
-        .WithMaxRetries(5) // Stop retrying poison messages after 5 retries
+        .WithMaxRetries(5) // Stop after 5 retries (6 total attempts including initial)
         .WithClosedItemRetention(TimeSpan.FromHours(6)) // Keep successful items for TTL cleanup
     );
 ```

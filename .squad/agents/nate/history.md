@@ -227,3 +227,47 @@ _logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc
 - Phase 2.1 scope prevents scope creep; deferred items don't block implementation
 
 **Status:** Ready for implementation. No architectural blockers. Decision document ready for Eliot and Parker review.
+
+### 2026-04-15: PR Review Finding r3068240198 — MaxRetries Documentation Clarity
+
+**Finding:** README wording for `WithMaxRetries(5)` is ambiguous and may mislead users about total attempt count.
+
+**Current Wording (line 435):**
+```
+.WithMaxRetries(5) // Stop retrying poison messages after 5 retries
+```
+
+**Ambiguity Concern:**
+- Naive read: 5 total failures allowed
+- Actual behavior: 5 retries AFTER initial failure = 6 total attempts
+
+**Evidence (Implementation):**
+- Line 175 in `MongoQueueSubscription.cs`: condition is `failedItem.RetryCount <= MaxRetries`
+- Integration test `MongoQueueRetryIntegrationTests.cs` line 38: `WithMaxRetries(1)` expects 2 handler attempts (line 55) and `RetryCount == 2` (line 62)
+- Flow: attempt 1 fails → `RetryCount=1`, check `1 <= 1` → allow retry; attempt 2 fails → `RetryCount=2`, check `2 <= 1` → FALSE → terminal
+
+**Verdict: FIX IT — This is meaningful, not noise.**
+
+**Trade-off Analysis:**
+- Cost: 2-minute fix (one comment update)
+- Risk of leaving it: Users misconfigure queues (e.g., `WithMaxRetries(99)` expecting 99 retries, get 100), then report bugs or make wrong operational decisions
+- False positives (fixing non-bugs): Zero—behavior is clear in code and tests
+
+**Decision:** Update README to clarify terminology. Recommended wording: "Allow 5 retries after initial failure (6 total attempts)" or "Stop after 5 retry attempts, allowing up to 6 total attempts."
+
+**Follow-Up:** After fix, consider clarifying the same semantics in `MongoQueueBuilder.WithMaxRetries()` XML docs for consistency.
+
+### 2026-04-15: README MaxRetries Documentation Update
+
+**Task:** Implement ADR for PR review finding r3068240198 — clarify retry semantics in README.
+
+**Change Made:**
+- **File:** `README.md` line 435
+- **Old:** `.WithMaxRetries(5) // Stop retrying poison messages after 5 retries`
+- **New:** `.WithMaxRetries(5) // Stop after 5 retries (6 total attempts including initial)`
+
+**Rationale:** The phrase "5 retries" is ambiguous—unclear whether it means 5 total attempts or 5 retries after initial failure. Implementation clarifies this: `RetryCount > MaxRetries` only triggers terminal state, so `WithMaxRetries(5)` allows up to 6 total attempts. README now mirrors implementation semantics exactly.
+
+**Trade-off:** Minimal. The change is purely clarifying; it changes no behavior and increases precision at near-zero cost. No other README retry documentation needed update (lines 441-442 remain contextually sound post-change).
+
+**Status:** COMPLETE. Change is surgical and unrelated to code; no commit per user request.
