@@ -13,9 +13,14 @@ public record MongoQueueDefinition
     public required Boolean AutoStartSubscription { get; init; }
 
     /// <summary>
-    /// Name of collection.
+    /// Name of the collection.
     /// </summary>
     public required String CollectionName { get; init; }
+
+    /// <summary>
+    /// Duration that a queue item lock remains valid before another consumer may recover it.
+    /// </summary>
+    public required TimeSpan LockLeaseTime { get; init; }
 
     /// <summary>
     /// Type of the payload handler.

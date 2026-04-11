@@ -77,3 +77,82 @@
 **Deferred Items Not Issued (Yet):**
 - Secondary issues (race in count check, long-running handler locking) — discoverable during #9/#10 PRs
 - Collection naming for DLQ and observability queries — design decision for Phase 2
+
+### 2026-04-10: PR #73 Review Findings Triage
+
+**PR:** #73 — Queue Lock Lease Recovery (Issue #9)  
+**Trigger:** Copilot code review surfaced 6 findings
+
+**Critical Issues Identified:**
+1. **No wake-up after expiry** — Semaphore waits indefinitely; expired locks never retried without new messages. This defeats passive lease recovery. Fix: Add timeout to `WaitAsync` matching lease interval.
+2. **Lock token race** — Long-running handlers can have locks stolen, then overwrite the new lock on completion. Fix: Guard close update with captured `LockedUtc`.
+
+**Test/Cosmetic Issues (valid, low-priority):**
+- ❌ **Test container disposal breaks parallel tests** — ELEVATED TO BLOCKING (see r3066971413 analysis below)
+- `WaitForQueueItemAsync` throws wrong exception type (wrap delay)
+- Duplicated history entry in Eliot's file (dedupe)
+- Short lease in test masks wake-up bug (optional increase)
+
+**Architectural Observation:**
+The ADR assumed passive expiry would "just work" with the existing query filter. What we missed: the processing loop's semaphore-based signaling creates a dependency on external events (inserts) that passive expiry alone can't satisfy. The fix is simple (timed wait), but this is a gap between design and implementation.
+
+**Decision:** Findings #1 and #2 block merge. Remaining findings recommended but not blocking.
+
+### 2026-04-10: PR #73 Review Finding r3066971413 — Deep Dive
+
+**Finding:** Test container disposal in `[OneTimeTearDown]` breaks parallel test execution.
+
+**Analysis:** The test class independently disposes a container managed as a shared singleton by `MongoAssemblySetup.cs` (SetUpFixture pattern). When parallel tests run and this teardown fires, it kills the shared resource while other tests still depend on it. This is a real CI/CD break risk, not a cosmetic issue.
+
+**Root Cause:** `MongoQueueLockExpiryIntegrationTests` has `[OneTimeTearDown] public Task DisposeMongoDbContainer() => _container.DisposeAsync()`. The container returned by `MongoDbTestContainer.StartContainerAsync()` is a singleton managed at assembly level, not per-test-class.
+
+**Precedent:** Other test classes (`MongoMigrationIntegrationTests`, `MongoConfiguratorIntegrationTests`, etc.) correctly call `StartContainerAsync()` WITHOUT a disposal teardown. They rely on `MongoAssemblySetup.StopContainer()` (which calls `MongoDbTestContainer.StopContainerAsync()`) for cleanup.
+
+**Impact:** 
+- Local serial tests: May pass (disposal races with other tests' setup)
+- CI parallel tests: Will fail with timeouts or connection errors
+- Non-deterministic failures in CI pipeline
+
+**Verdict:** VALID AND CRITICAL — blocks merge.
+
+**Recommendation:** Remove the `[OneTimeTearDown]` disposal. The container lifecycle is already managed by the assembly-level fixture. See `.squad/decisions/inbox/nate-pr73-review-thread-r3066971413.md` for full analysis and fix instructions.
+
+### 2026-04-11: PR #73 Review Finding r3066971461 — Lease Timing Verification
+
+**Finding:** Comment claimed test lease (250ms) was too short to verify independent lease recovery wake-up.
+
+**Status:** **STALE** — Finding already fixed by commit 529c6bc
+
+**What Was Fixed:**
+- Lease time increased: 250ms → 2 seconds
+- Processing loop now has timed wait: `_signalSemaphore.WaitAsync(leaseRecoveryWakeInterval, ...)` (line 268)
+- Test now asserts: `(handler.AttemptStartedAtUtc[1] - handler.AttemptStartedAtUtc[0]) >= (leaseTime - 500ms)`
+
+**Verdict:** Current test is sound. No action required. Test correctly verifies lease expiry recovery happens independently, without relying on new message inserts.
+
+**Documented in:** `.squad/decisions/inbox/nate-pr73-review-r3066971461.md`
+
+### 2026-04-11: PR #73 Diagnostics Quality Review — Log Message Accuracy
+
+**Finding:** Review thread r3067714453 identified log message accuracy issue in queue lock recovery path.
+
+**Issue:** The `MongoQueueSubscription` recovery path treats two distinct lock failure conditions as equivalent:
+- `IsLocked=true` AND `LockedUtc=null` (malformed/orphaned lock state)
+- `IsLocked=true` AND `LockedUtc < lockExpiryUtc` (expired lock state)
+
+Current message says "Recovering **expired** queue item lock" for both cases, misleading operators on actual failure mode.
+
+**Decision:** Update log message to distinguish between null (missing timestamp) and stale timestamp conditions. Include prior `LockedUtc` value and expiry threshold in log output.
+
+**Implementation:** Update line 185-187 in `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs`:
+```csharp
+_logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, threshold: {LockExpiryUtc}) with payload {PayloadType}",
+                   queueItemId,
+                   queueItem.LockedUtc?.ToString("O") ?? "null",
+                   lockExpiryUtc.ToString("O"),
+                   typeof(TPayload).FullName);
+```
+
+**Rationale:** Diagnostics accuracy on critical paths matters. Operators need precise logs to understand lock recovery failure modes. Cost is trivial (single log message). Not deferring to Phase 2 (#72 covers additional observability, but this base case should be accurate in current PR).
+
+**ADR:** Queue Lock Recovery Log Message Accuracy (merged to decisions.md 2026-04-11)

@@ -111,6 +111,51 @@ Both PRs are independent and can be developed in parallel.
 | Lock timeout race condition | Acceptable per "at-least-once" semantics. Document in code. |
 | Performance impact of new indexes | MongoDB TTL efficient. Compound index improves query. |
 
+### ADR: Queue Lock Recovery Log Message Accuracy
+
+**Status:** Approved  
+**Date:** 2026-04-11  
+**Issue:** PR #73 review thread r3067714453  
+**Author:** Nate (Lead/Architect)
+
+#### Problem
+
+The `MongoQueueSubscription` recovery path treats two distinct lock conditions as equivalent:
+- `IsLocked=true` AND `LockedUtc=null` (timestamp missing)
+- `IsLocked=true` AND `LockedUtc < lockExpiryUtc` (timestamp expired)
+
+The current log message says "Recovering **expired** queue item lock" for both cases. When `LockedUtc` is null, the lock isn't expired—it's malformed or orphaned. This misleads operators interpreting diagnostic logs.
+
+#### Decision
+
+Update the log message to distinguish between true expiry and missing/malformed timestamps.
+
+**Change:** Replace the single "Recovering expired queue item lock" message with more precise wording that includes the prior `LockedUtc` state.
+
+#### Rationale
+
+- **Diagnostics accuracy matters on critical paths.** Lock recovery happens when a handler crashes or times out. Operators need precise logs to understand failure modes.
+- **The cost is trivial.** A single log message update, scoped to this PR.
+- **Not deferring to Phase 2.** This is not a feature request—it's correctness for observability. Phase 2 (#72) covers additional observability, but this base case should be accurate now.
+
+#### Implementation
+
+Update line 185-187 in `src/Chaos.Mongo/Queues/MongoQueueSubscription.cs`:
+
+```csharp
+_logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, threshold: {LockExpiryUtc}) with payload {PayloadType}",
+                   queueItemId,
+                   queueItem.LockedUtc?.ToString("O") ?? "null",
+                   lockExpiryUtc.ToString("O"),
+                   typeof(TPayload).FullName);
+```
+
+This provides operators with:
+- The item ID (existing)
+- The payload type (existing)
+- The prior `LockedUtc` value (new—distinguishes null vs. stale timestamp)
+- The expiry threshold used (new—helps correlate with timing)
+
 ## Completed Work
 
 ### Issue Triage & Phase 2 Planning (2026-04-10)
@@ -139,8 +184,22 @@ Updated GitHub issues #9 and #10 with implementation-ready specifications derive
 2. Phase 1 (Follow-up): Second PR for #10 (TTL retention) after #9 merges
 3. Phase 2 (Design): Team aligns on #71 and #72 requirements before implementation
 
+## Team Directives
+
+### Documentation and Branch Discipline (2026-04-10)
+
+**Author:** Christian Flessa  
+**Status:** Directive (team memory)  
+
+1. **Feature Documentation:** Keep documentation up to date with code changes. When adding noteworthy new features, always consider updating the feature documentation (e.g., README).
+
+2. **Issue Branch Discipline:** Always use a corresponding branch for issue work, and do not commit those changes before user review (e.g., `squad/<issue-number>-<slug>` branch with uncommitted changes for PR review).
+
+**Rationale:** Captures user preferences for development workflow and documentation practices.
+
 ## Governance
 
 - All meaningful changes require team consensus
 - Document architectural decisions here
 - Keep history focused on work, decisions focused on direction
+- Team directives capture user preferences for inclusion in team memory

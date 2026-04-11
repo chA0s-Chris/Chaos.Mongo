@@ -63,6 +63,11 @@ public static class MongoDefaults
     public static TimeSpan MigrationLockLeaseTime => TimeSpan.FromMinutes(10);
 
     /// <summary>
+    /// Gets the default lease time for queue item locks.
+    /// </summary>
+    public static TimeSpan QueueLockLeaseTime => TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Gets the default delay between lock acquisition retry attempts.
     /// </summary>
     public static TimeSpan RetryDelay => TimeSpan.FromMilliseconds(500);

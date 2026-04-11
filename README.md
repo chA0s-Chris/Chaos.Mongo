@@ -431,8 +431,11 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithCollectionName("email_queue")
         .WithAutoStartSubscription() // Start processing on app startup
         .WithQueryLimit(10) // Process up to 10 messages at a time
+        .WithLockLeaseTime(TimeSpan.FromMinutes(2)) // Retry stuck work after lease expiry
     );
 ```
+
+If a handler crashes, the queue retries the locked item after the configured lock lease expires. This keeps queue recovery passive while preserving at-least-once delivery semantics.
 
 #### Publishing Messages
 

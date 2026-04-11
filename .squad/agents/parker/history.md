@@ -125,3 +125,9 @@
 - Ownership clear (Eliot lead, Parker test fixtures, Nate review)
 - Architecture locked, API contract finalized
 - Test strategy comprehensive, no blockers identified
+
+### Shared Integration Testcontainer Lifecycle (2026-04-11)
+
+- `tests/Chaos.Mongo.Tests/Integration/MongoAssemblySetup.cs` owns starting and stopping the shared `MongoDbTestContainer` for the whole test assembly.
+- Individual integration fixtures in `tests/Chaos.Mongo.Tests` may call `MongoDbTestContainer.StartContainerAsync()` in `[OneTimeSetUp]` to get the running container reference, but they should not dispose it in fixture teardown.
+- `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs` was corrected to follow this pattern after PR #73 review feedback.

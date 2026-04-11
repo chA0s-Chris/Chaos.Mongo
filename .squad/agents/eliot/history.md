@@ -133,3 +133,72 @@
 - Builder API extended with fluent methods (Eliot implements, Parker tests config flow)
 
 **Status:** Development ready. Clear ownership, locked API contract, test fixtures prepared.
+
+### 2026-04-11: Issue #9 Queue Lock Lease Recovery
+
+**Queue lease recovery pattern:**
+- `MongoQueueDefinition.LockLeaseTime` carries per-queue lease configuration, defaulted in `MongoQueueBuilder<T>` from `MongoDefaults.QueueLockLeaseTime`.
+- `MongoQueueSubscription` now treats open items as processable when they are unlocked or when `IsLocked=true` and `LockedUtc` is missing or older than `now - LockLeaseTime`.
+- Lease recovery stays passive: no unlock write on failure, no scavenger job, and the polling loop reclaims expired items by reacquiring the lock atomically.
+
+**Indexing for queue recovery:**
+- Queue subscriptions now create a compound index on `(IsClosed, IsLocked, LockedUtc)` instead of the old partial unlocked-items index.
+- Recovery tests live in `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`.
+
+### 2026-04-11: Issue #9 Queue Lock Lease Recovery
+
+**Queue lease recovery pattern:**
+- `MongoQueueDefinition.LockLeaseTime` carries per-queue lease configuration, defaulted in `MongoQueueBuilder<T>` from `MongoDefaults.QueueLockLeaseTime`.
+- `MongoQueueSubscription` now treats open items as processable when they are unlocked or when `IsLocked=true` and `LockedUtc` is missing or older than `now - LockLeaseTime`.
+- Lease recovery stays passive: no unlock write on failure, no scavenger job, and the polling loop reclaims expired items by reacquiring the lock atomically.
+
+**Indexing for queue recovery:**
+- Queue subscriptions now create a compound index on `(IsClosed, IsLocked, LockedUtc)` instead of the old partial unlocked-items index.
+- Recovery tests live in `tests/Chaos.Mongo.Tests/Integration/Queues/MongoQueueLockExpiryIntegrationTests.cs`.
+
+**User preference:**
+- For issue work, use the dedicated issue branch and leave changes uncommitted for review.
+
+### 2026-04-11: Post-Session Orchestration (Scribe Consolidation)
+
+**Session Work:**
+- Eliot completed Issue #9 implementation on `squad/9-queue-resilience` branch (uncommitted for review)
+- Decisions inbox merged: captured Eliot's implementation note and user directives on documentation and branch discipline
+- Orchestration log created at 2026-04-10T22:01:46Z
+- Session log created with Issue #9 summary and next steps
+
+**Directives Added to decisions.md:**
+- Keep feature documentation current with code changes
+- Use dedicated issue branches with uncommitted changes for review
+
+**Status:** Awaiting user review before merge to main. Phase 2 (Issue #10 TTL retention) ready to begin after approval.
+
+### 2026-04-11: PR Creation for Issue #9 (User Review Cycle)
+
+**Commit:** `9744ed3` — "feat: implement queue lock lease recovery for issue #9"
+
+**Work Completed:**
+- Committed all Issue #9 changes to `squad/9-queue-resilience` with required Co-authored-by trailer
+- Pushed branch to remote: `origin/squad/9-queue-resilience`
+- Created PR #73: "feat: implement queue lock lease recovery (issue #9)"
+
+**PR #73 Details:**
+- Title: Queue lock lease recovery implementation
+- Body: Summarizes passive lease expiry, MongoQueueDefinition additions, builder API, indexing changes, tests, and backward compatibility
+- Fixes issue #9
+
+**Status:** PR ready for user review and team feedback before merge.
+
+### 2026-04-10: PR #73 Blocker Fixes
+
+**Queue wake-up behavior:**
+- Passive lease recovery still needs a periodic wake-up after the queue goes idle, otherwise expired locks are only retried when a new insert or self-signal arrives.
+- `MongoQueueSubscription` now re-checks the queue at least once per second while idle, capped by the configured lease time, so expired locks wake processing without a new publish.
+
+**Lock ownership guard:**
+- Closing a processed item must be conditional on the same `LockedUtc` value that was written when this consumer acquired the lock.
+- Guarding the final close/unlock update with `(Id, IsClosed=false, IsLocked=true, LockedUtc=acquiredLockUtc)` prevents a slow consumer from clearing a replacement lock after lease expiry.
+
+**Regression coverage:**
+- Lease-expiry recovery test now proves the retry happens after the lease window without another insert.
+- Added a two-consumer integration test that verifies the original handler cannot clear the replacement consumer's renewed lock.
