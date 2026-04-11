@@ -260,7 +260,298 @@ Implemented TTL-based retention policy for closed queue items with configurable 
 - All integration tests passing
 - Ready for user/team review and merge approval
 
+### ADR: Issue #71 — Queue Dead-Letter Handling and Retry Policies (Phase 2 Shape)
+
+**Status:** Design Decision  
+**Date:** 2026-04-11  
+**Author:** Nate (Lead/Architect)  
+**Issue:** #71 — Queue dead-letter handling and retry policies  
+**Branch:** `squad/71-queue-dead-letter-handling-and-retry-policies`
+
+#### Problem
+
+Phase 1 (issues #9 and #10) solved **lock recovery** (prevent stuck locks) and **closed-item cleanup** (prevent unbounded growth). However, they did not solve the problem of **poison messages**:
+
+- A handler that crashes or throws on every attempt will cause that queue item to:
+  - Be recovered and reprocessed indefinitely (passive lease expiry keeps unlocking it)
+  - Spam logs and potentially block other items from processing
+  - Never reach a terminal state (no way for operators to discard it or route it elsewhere)
+
+Issue #71 must answer the question: **When does a queue item stop being retried?**
+
+#### Decision: Smallest Useful Phase 2 Shape
+
+**1. Scope: Retry Count Tracking (Core)**
+
+Add a **retry counter** to the queue item document:
+
+```csharp
+public class MongoQueueItem
+{
+    // existing fields...
+    
+    /// <summary>
+    /// Number of times this item has been processed (failed attempts).
+    /// </summary>
+    public Int32 RetryCount { get; set; }
+}
+```
+
+**Semantics:**
+- Incremented on every failed handler invocation (exception thrown, not caught)
+- Reset to 0 on successful handler completion
+- Used to enforce a max-retry policy (configurable per queue)
+- Accessible in logs and observability (#72) without requiring separate collection
+
+**Not included in Phase 2:**
+- Logic to distinguish handler-thrown exceptions from timeout/cancellation exceptions (defer to Phase 2.1)
+- Custom retry policies per payload type (defer to Phase 2.2)
+- Dead-letter collection for quarantined items (defer; see rationale below)
+
+**2. Storage Model: Same Queue Document**
+
+**Decision:** Retry state lives **in the main queue document**, not a separate dead-letter collection.
+
+**Rationale:**
+
+| Concern | Separate DLQ Collection | Same Document (Chosen) | Trade-off |
+|---------|------------------------|------------------------|-----------|
+| **Schema Simplicity** | Requires schema sync between queue and DLQ collections | Single schema, optional terminal-state fields | Simpler for Phase 2; avoid collection proliferation |
+| **Query Efficiency** | DLQ queries separate from active queue | Partial filter on `IsClosed + RetryCount` for status | One index covers both; DLQ is a logical view, not physical |
+| **Reprocessing** | Must copy item back to queue on DLQ→queue transition | Direct reprocess from queue (atomic) | Avoids cross-collection race conditions |
+| **Observability** | Telemetry bridges two collections | Single source of truth; easier for #72 | Simpler instrumentation |
+| **Operations Flexibility** | Move to DLQ without reprocess, then decide | Cannot delay decision; reprocess decision must happen now | Acceptable; operators decide upfront |
+
+**Consequence:** The DLQ is a **logical view** (items with `IsClosed=false` and `RetryCount >= maxRetries`), not a separate collection.
+
+**3. Max Retry Policy: Configuration Only**
+
+Add to `MongoQueueDefinition` and `MongoQueueBuilder`:
+
+```csharp
+public record MongoQueueDefinition
+{
+    /// <summary>
+    /// Maximum number of retry attempts before an item is marked terminal (not retried).
+    /// <c>null</c> means unlimited retries (at-least-once, no terminal state).
+    /// </summary>
+    public Int32? MaxRetries { get; init; }
+}
+
+public sealed class MongoQueueBuilder<TPayload>
+{
+    /// <summary>
+    /// Configures the maximum number of retry attempts for failed items.
+    /// Null = unlimited retries (default, preserves Phase 1 behavior).
+    /// </summary>
+    public MongoQueueBuilder<TPayload> WithMaxRetries(Int32 maxRetries) { ... }
+    
+    /// <summary>
+    /// Shorthand: set max retries to 0 (single attempt, no recovery).
+    /// </summary>
+    public MongoQueueBuilder<TPayload> WithNoRetry() => WithMaxRetries(0);
+}
+```
+
+**Defaults:**
+- `MongoDefaults.QueueMaxRetries = null` (unlimited, backward compatible)
+- Builders supply default via fluent API
+
+**4. Terminal State Handling: Minimal, Observable**
+
+Add one new field to track items that exhausted retries:
+
+```csharp
+public class MongoQueueItem
+{
+    /// <summary>
+    /// <c>true</c> if this item has exhausted its retry attempts and will not be retried.
+    /// Only meaningful when <c>IsClosed=true</c>.
+    /// </summary>
+    public Boolean IsTerminal { get; set; }
+}
+```
+
+**Semantics:**
+- Set to `true` only when `RetryCount >= MaxRetries` (if configured)
+- Queries for "dead-letter items" filter on `IsClosed=true && IsTerminal=true`
+- Operators can manually delete, reprocess, or archive
+- Logged as a warning when set
+
+**5. Index Updates**
+
+Update compound index to include `IsTerminal`:
+
+```csharp
+// New: (IsClosed, IsLocked, LockedUtc, IsTerminal)
+```
+
+#### Deferred to Phase 2.1+
+
+- Whether retry handler timeout counts as failure (separate from thrown exceptions)
+- Custom per-payload-type backoff strategies
+- Dead-letter collection for quarantined items (remains logical view only)
+
+#### Rationale
+
+This is the **minimum viable schema** that prevents poison messages while keeping schema changes minimal and maintaining backward compatibility. It gives Eliot and Nate a stable behavioral target without forcing architectural decisions too early.
+
+### Eliot — Issue #71 Implementation Note (Retry Count Semantics)
+
+**Date:** 2026-04-11  
+**Author:** Eliot  
+**Status:** Design Decision  
+
+**Decision:** For the Phase 2.1 retry slice, `RetryCount` records **failed processing attempts only** and is **not reset on later success**. `MaxRetries` is interpreted as the number of retries allowed **after** the initial failed attempt, so terminal transition happens when `RetryCount > MaxRetries`; `WithNoRetry()` remains the explicit single-attempt shorthand.
+
+**Why:** This keeps the new API name honest (`WithMaxRetries(1)` really allows one retry) while preserving useful post-recovery history on successfully processed items. It also avoids conflicting with the new dead-letter shape, where terminal items are the closed subset that exhausted retry budget and should remain queryable even when successful items use immediate delete.
+
+### Parker — Issue #71 Test Slice (Behavioral Contracts)
+
+**Date:** 2026-04-11  
+**Author:** Parker (Testing)  
+**Status:** Design Decision  
+
+**Decision:** Define the first test slice around **externally observable retry/DLQ behavior**, not document shape:
+
+1. A failed item below the retry limit is retried
+2. An item that reaches the retry limit stops active reprocessing
+3. Dead-lettered items preserve payload plus failure metadata
+4. A poison item does not block later healthy items
+
+**Deferred Until Architecture Settles:**
+- Whether DLQ state lives in the main collection or separate collection
+- Handler-signaled terminal failures
+- Custom backoff policy shape
+- Observability assertions belonging with #72
+
+**Why:** These scenarios give Eliot and Nate a stable behavioral target without forcing schema or API names too early. Smallest slice that reduces "poison message spins forever" risk.
+
+### Nate — Next Queue Issue Recommendation
+
+**Date:** 2026-04-10  
+**Author:** Nate (Lead/Architect)  
+**Status:** Accepted  
+
+**Context:** Phase 1 queue work (#9 lock lease recovery, #10 closed-item retention) now merged. Next backlog candidates are #71 and #72.
+
+**Decision:** Tackle **#71 next**.
+
+**Rationale:** If we do observability first (#72), we improve visibility into a queue that can still retry poison messages forever. That is useful, but it does not reduce underlying operational hazard. #71 removes the bigger behavior risk; #72 can then instrument the final retry/DLQ lifecycle.
+
+**Primary Implementation Owner:** **Eliot** leads implementation (core queue behavior in `Chaos.Mongo`, within Eliot's package boundary).
+
+**Dependency Warning:** Do not start coding #71 as "just add a retry counter." First decision is architectural: whether retry/DLQ state lives in main queue document or separate dead-letter collection.
+
+### Parker — Queue Testcontainer Lifecycle
+
+**Date:** 2026-04-11  
+**Author:** Parker (Testing)  
+**Status:** Approved  
+
+**Decision:** Queue integration tests in `tests/Chaos.Mongo.Tests` should use assembly-level `MongoAssemblySetup` / `MongoDbTestContainer` lifecycle and must not dispose shared MongoDB Testcontainer in per-class teardown.
+
+**Why:** `MongoDbTestContainer` is a shared singleton guarded by `MongoAssemblySetup` for entire test assembly. Disposing it inside individual fixture breaks unrelated integration tests, especially under parallel execution.
+
+**Applied:** Removed `[OneTimeTearDown]` container disposal from `MongoQueueLockExpiryIntegrationTests.cs`.
+
+### Sophie — CI/CD Risk Assessment: Test Container Lifecycle
+
+**Date:** 2026-04-11  
+**Author:** Sophie (DevOps)  
+**Status:** Verified—Risk Mitigated  
+
+**Finding:** Test container disposal in `MongoQueueLockExpiryIntegrationTests` violates assembly singleton pattern, will break CI under parallel test execution.
+
+**Risk Level:** HIGH — nondeterministic parallel test failures once parallelization enabled.
+
+**Verdict:** ✅ Valid and critical. Fix is surgical (remove 3 lines).
+
+**Fix:** Remove `[OneTimeTearDown]` disposal. Assembly-level fixture owns lifecycle.
+
+**Impact:** No product code risk. Pure test infrastructure fix. Enables future parallelization without rework.
+
+### Nate — PR #73 Review Findings Triage
+
+**Date:** 2026-04-11  
+**Author:** Nate (Lead/Architect)  
+**PR:** #73 (Queue Lock Lease Recovery)  
+**Status:** Analysis Complete  
+
+**Summary:** Copilot identified 6 findings in PR #73. After code review, 5 are valid; 1 is stale.
+
+**Priority Matrix:**
+
+| # | Finding | Severity | Status | Action |
+|---|---------|----------|--------|--------|
+| 1 | No wake-up after expiry | **Critical** | **FIXED** ✅ | Added timed wait on semaphore (commit 529c6bc) |
+| 2 | Lock token race (handler overwrites new lock) | **High** | **FIXED** ✅ | Added `LockedUtc` ownership check (commit 529c6bc) |
+| 3 | Container disposal breaks tests | **Medium** | **FIXED** ✅ | Removed `[OneTimeTearDown]` (commit 57718bc) |
+| 4 | Exception handling in test helper | **Low** | **FIXED** ✅ | Wrapped `Task.Delay` cancellation in try/catch |
+| 5 | Duplicated history entry | **Cosmetic** | **FIXED** ✅ | Deduplicated in history.md |
+| 6 | Short lease in test (optional concern) | **Low** | **OBSOLETE** ⊘ | Resolved by fix #1 (2-second lease now adequate) |
+
+**All findings resolved.** PR #73 ready for merge.
+
+### Eliot — PR #73 Queue Lock Lease Recovery Implementation
+
+**Date:** 2026-04-11  
+**Author:** Eliot  
+**Status:** Ready for Review  
+**Related:** Issue #9, PR #73
+
+**Summary:** Queue lock lease recovery implementation complete and committed to PR #73.
+
+**Key Implementation:**
+- Passive lease expiry using query-time filter (no background job)
+- `LockLeaseTime` property on `MongoQueueDefinition` (required, default 5 min)
+- `WithLockLeaseTime(TimeSpan)` fluent builder method
+- Compound index on `(IsClosed, IsLocked, LockedUtc)` with timed wake-up
+- Processing filter treats expired locks as available
+
+**Test Coverage:**
+- Integration tests in `MongoQueueLockExpiryIntegrationTests.cs`
+- Covers configuration, stale lock detection, handler failure recovery, concurrent failures
+- 2-second lease with timing assertions verifying retry delay matches lease interval
+
+**Documentation:** README updated with queue lock recovery details.
+
+**Status:** Ready for team review and merge.
+
+### Sophie — PR #74 Creation: Issue #10 Queue Retention
+
+**Date:** 2026-04-11  
+**Author:** Sophie (DevOps)  
+**Status:** Complete  
+
+**Context:** User confirmed changes committed and pushed on branch `squad/10-remove-old-queue-items`.
+
+**Decision:** Created PR #74 targeting `main` for issue #10.
+
+**PR Summary:** Queue Closed Items: TTL-Based Retention and Immediate Delete (#10)
+
+**Highlights:**
+- TTL-based retention (default 1 hour, configurable)
+- Immediate delete option via `.WithImmediateDelete()`
+- Automatic TTL index management with reconciliation on subscription start
+- Backward compatible with sensible defaults
+- Complete test coverage (builder + integration tests)
+- README documentation updated
+
+**Related:** PR #74 depends on PR #73 (issue #9) already merged.
+
+**Status:** ✅ PR created; awaiting user review and merge approval.
+
 ## Team Directives
+
+### Conventional Commit Message Standard (2026-04-11)
+
+**Author:** Christian Flessa  
+**Status:** Directive (team memory)  
+
+**What:** Always use conventional commit messages. The previous message "Fix queue retention defaults" was not acceptable.
+
+**Why:** User preference — captured for team memory. Conventional commits improve CI automation, changelog generation, and commit history clarity.
 
 ### Documentation and Branch Discipline (2026-04-10)
 

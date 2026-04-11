@@ -156,3 +156,53 @@ _logger.LogWarning("Recovering queue item lock {QueueItemId} (previous LockedUtc
 **Rationale:** Diagnostics accuracy on critical paths matters. Operators need precise logs to understand lock recovery failure modes. Cost is trivial (single log message). Not deferring to Phase 2 (#72 covers additional observability, but this base case should be accurate in current PR).
 
 **ADR:** Queue Lock Recovery Log Message Accuracy (merged to decisions.md 2026-04-11)
+
+### 2026-04-11: Issue #71 — Queue Dead-Letter Handling and Retry Policies (Phase 2 Shape)
+
+**Session:** Architecture scoping for Phase 2 issue #71  
+**Trigger:** User directed team to pick one of #71/#72 after Phase 1 PR merge; chose #71 for higher operational value
+
+**Decision Made:** Defined smallest implementation shape for #71 that avoids scope creep.
+
+**Key Architectural Decisions:**
+
+1. **Storage Model:** Retry state in same queue document, not separate DLQ collection
+   - Rationale: Atomic reprocessing, single schema, one source of truth
+   - DLQ is logical view (query filter), not physical collection
+
+2. **Retry Tracking:** Add `RetryCount` (int) and `IsTerminal` (bool) to `MongoQueueItem`
+   - RetryCount incremented on handler exception
+   - IsTerminal set when RetryCount >= MaxRetries (if configured)
+
+3. **Public API (Phase 2.1 only)**
+   - `MongoQueueDefinition.MaxRetries` (nullable int)
+   - `MongoQueueBuilder<T>.WithMaxRetries(int)` and `WithNoRetry()`
+   - `MongoDefaults.QueueMaxRetries = null` (unlimited by default)
+
+4. **Scope Discipline:** Phase 2.1 limited to max-count retry logic
+   - ❌ Deferred: Custom policies, exception discrimination, automated reprocessing, separate DLQ collection
+   - Rationale: Telemetry (#72) needed for good policy design; deferred items don't block Phase 2
+
+5. **Backward Compatibility:** Default `MaxRetries=null` preserves Phase 1 semantics (unlimited retries)
+
+**Implementation Shape (For Eliot):**
+- On handler exception: increment RetryCount, check if terminal, log, swallow exception
+- Index updated: compound on (IsClosed, IsLocked, LockedUtc, IsTerminal)
+- Pattern follows Phase 1 approach (TTL index, fluent builder, backward-compat defaults)
+
+**Acceptance Criteria (For Parker):**
+- Handler exception → RetryCount increments → logged
+- RetryCount >= MaxRetries → IsTerminal=true → logged warning
+- Default (null) preserves Phase 1 behavior (no change to existing queues)
+- Integration tests: retry exhaustion, terminal state, backward compat
+- Builder tests: WithMaxRetries, WithNoRetry validation
+
+**Artifact:** `.squad/decisions/inbox/nate-issue-71-shape.md` (comprehensive architecture decision document)
+
+**Rationale for Decisions:**
+- Same-document model avoids operational complexity of separate collection (atomic, simpler schema)
+- Max-count retries cover ~80% of use cases; custom policies wait for telemetry
+- Null default maintains backward compatibility while enabling opt-in retry limits
+- Phase 2.1 scope prevents scope creep; deferred items don't block implementation
+
+**Status:** Ready for implementation. No architectural blockers. Decision document ready for Eliot and Parker review.

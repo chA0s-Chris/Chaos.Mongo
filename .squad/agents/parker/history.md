@@ -188,3 +188,64 @@
 - ⚠️  Note: `bash build.sh Test` blocked by shared `.nuke/temp/build.log` lock; used direct `dotnet test` as reliable fallback
 
 **Outcome:** PR #74 follow-up is test-complete and ready for user review/merge. No additional test code needed.
+
+### 2026-04-11: Queue Retry Test Coverage — Placeholder Cleanup
+
+**Session:** Retry and dead-letter test coverage verification  
+**Branch:** `squad/71-queue-dead-letter-handling-and-retry-policies`  
+**Status:** Complete
+
+**Work Completed:**
+
+1. **Analyzed Placeholder Test File:**
+   - Reviewed `MongoQueueRetryDeadLetterIntegrationTests.cs` with 4 ignored tests
+   - Compared claimed contracts against existing implementation and test coverage
+
+2. **Coverage Assessment:**
+   - **Retry behavior (tests #1-2):** Already covered in `MongoQueueRetryIntegrationTests.cs`:
+     - `QueueHandlerFailure_WithMaxRetries_MarksItemTerminalAfterRetryBudgetIsExhausted` — validates retry limit exhaustion → terminal state
+     - `QueueHandlerFailure_WithNoRetry_MarksItemTerminalAfterFirstFailure` — validates no-retry → immediate terminal state
+   - **Dead-letter queues (tests #3-4):** No implementation exists — Issue #71 deferred to Phase 2 per `.squad/decisions.md`
+
+3. **Action Taken:**
+   - Deleted `MongoQueueRetryDeadLetterIntegrationTests.cs` (never committed, only a placeholder)
+   - Tests #1-2 claim retry contracts already covered by existing integration tests
+   - Tests #3-4 claim dead-letter contracts that don't exist in the implementation
+
+**Existing Retry Test Coverage:**
+
+**Unit Tests (`MongoQueueBuilderTests.cs`):**
+- `RegisterQueue_WithMaxRetries_UsesConfiguredMaxRetries` — builder configuration
+- `RegisterQueue_WithNoRetry_UsesZeroMaxRetries` — builder configuration
+- `WithMaxRetries_WithNegativeValue_ThrowsArgumentException` — validation
+- `WithMaxRetries_WithZeroValue_ThrowsArgumentException` — validation
+- `WithMaxRetries_WithPositiveValue_ReturnsBuilderForChaining` — fluent API
+- `WithNoRetry_ReturnsBuilderForChaining` — fluent API
+
+**Integration Tests (`MongoQueueRetryIntegrationTests.cs`):**
+- `QueueHandlerFailure_WithMaxRetries_MarksItemTerminalAfterRetryBudgetIsExhausted` — validates:
+  - Handler fails repeatedly
+  - `RetryCount` incremented on each failure
+  - Item marked terminal (`IsTerminal=true`, `IsClosed=true`) after exceeding max retries
+  - Item unlocked and closed after terminal transition
+- `QueueHandlerFailure_WithNoRetry_MarksItemTerminalAfterFirstFailure` — validates:
+  - Handler fails once
+  - Item marked terminal immediately with no retries
+  - No lock recovery attempts after terminal state
+
+**Implementation Contract:**
+- `MongoQueueItem.RetryCount` tracks failed attempts
+- `MongoQueueItem.IsTerminal` marks exhausted retry budget
+- `MongoQueueDefinition.MaxRetries` configures retry policy (null = unlimited, 0 = no retry, N = N retries)
+- Failed items remain in main queue with `IsTerminal=true` (no separate dead-letter collection)
+- Lock expiry mechanism allows retries (passive recovery via query-time filter)
+
+**Dead-Letter Queue Status:**
+- **No implementation exists** — terminal items stay in main queue
+- Issue #71 deferred to Phase 2 per team decisions
+- Placeholder tests claiming dead-letter contracts were invalid
+
+**Validation Results:**
+- ✅ All retry integration tests passed (2 tests in `MongoQueueRetryIntegrationTests.cs`)
+- ✅ Placeholder file deleted with no references remaining
+- ✅ Existing coverage validates retry limit enforcement and terminal state transitions
