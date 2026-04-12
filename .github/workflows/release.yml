@@ -112,7 +112,7 @@ jobs:
             gh pr create --title "$TITLE" --body "$BODY" --base main --head "$BRANCH"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.drafter.outputs.tag_name }}
           name: ${{ steps.drafter.outputs.name }}
