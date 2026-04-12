@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 
 
+
+## v0.4.0 (2026-04-11)
+
+### ✨ Features
+
+- Structured logging and diagnostics for queue metrics tracking (#78) by @chA0s-Chris
+- Queue dead-letter handling and retry policies (#75) by @chA0s-Chris
+- Queue Closed Items: TTL-Based Retention and Immediate Delete (#10) (#74) by @chA0s-Chris
+- Queue Lock Lease Recovery (#73) by @chA0s-Chris
+
+### 📚 Documentation
+
+- Use dedicated README per NuGet package (#69) by @chA0s-Chris
+
+
 ## v0.3.0 (2026-04-08)
 
 ### ✨ Features
