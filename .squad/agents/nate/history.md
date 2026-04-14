@@ -507,3 +507,31 @@ Treat all three newly posted review notes as **valid**. One is merge-blocking; t
 
 **Merge Recommendation:** All three notes now addressed. Test suite clean: 427 tests passing, 0 failures. Ready for merge.
 
+### 2026-04-16: ADR — Multi-Collection Bulk Write Default Behavior
+
+**Context:** MongoDB 8.0 introduced server-level `bulkWrite` command. C# Driver 3.1+ exposes `IMongoClient.BulkWriteAsync()` with session overloads. This could reduce `AppendEventsAsync` from 2-3 round trips to 1 within the existing transaction.
+
+**Question:** Should the optimization be auto-enabled or explicit opt-in?
+
+**Decision: Auto-enable with kill switch.**
+
+**Key Findings:**
+1. `IMongoClient.BulkWriteAsync(session, models)` supports session overloads — can participate in existing `WithTransactionAsync` wrapper
+2. Exception type divergence: client-level throws `ClientBulkWriteException` (not `MongoBulkWriteException`) — error normalization required
+3. `onBeforeCommit` callback cannot be coalesced — it remains a separate operation in the transaction
+4. Server version detection should happen at startup (configurator phase), not per-request
+
+**Rationale:**
+- Performance optimization with identical semantics should be automatic — users shouldn't discover builder options to get good performance
+- Kill switch (`WithoutBulkWriteOptimization()`) covers proxy/middleware edge cases and debugging triage
+- Consistent with library's existing auto-degradation pattern (`TryStartTransactionAsync`)
+- No `WithBulkWriteOptimization()` counterpart — minimize API surface; default is the recommended path
+
+**API Surface:**
+- `MongoEventStoreBuilder<T>.WithoutBulkWriteOptimization()` (opt-out only)
+- `MongoEventStoreOptions<T>.UseBulkWrite` (default: `true`)
+
+**Risk:** `ClientBulkWriteException` normalization gap is highest risk; requires comprehensive integration tests on ≥8.0.
+
+**Decision Document:** `.squad/decisions/inbox/nate-bulk-write-default.md`
+

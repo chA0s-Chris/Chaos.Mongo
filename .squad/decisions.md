@@ -277,6 +277,213 @@ This provides operators with:
 - The prior `LockedUtc` value (new—distinguishes null vs. stale timestamp)
 - The expiry threshold used (new—helps correlate with timing)
 
+
+### Decision: MongoDB 8 Bulk Writes — Queue is Not an Optimization Target
+
+**Status:** Decision
+**Date:** 2026-04-12
+**Author:** Eliot
+**Relates to:** Issue #81
+
+# Decision: MongoDB 8 Bulk Writes — Queue is Not an Optimization Target
+
+## Context
+
+User requested analysis: "Could MongoDB 8 multi-collection bulk writes optimize the Queue layer (like they do for EventStore)?"
+
+Alec is already implementing bulk-write optimization for EventStore (`AppendEventsAsync`), which writes to 3+ collections in one transaction.
+
+## Analysis Results
+
+### Queue Write Patterns (NOT multi-collection)
+
+1. **Publish**: `InsertOneAsync` to single queue collection
+2. **Lock Acquisition**: `FindOneAndUpdateAsync` to same collection
+3. **Failure Handling**: Sequential updates to same collection
+4. **Completion**: `UpdateOneAsync` or `DeleteOneAsync` to same collection
+
+**Key constraint**: Every operation targets ONE collection. Queue items never span multiple collections in a transaction.
+
+### EventStore Write Patterns (YES, multi-collection)
+
+Each `AppendEventsAsync` transaction writes to:
+1. Events collection: `InsertManyAsync`
+2. ReadModel collection: `ReplaceOneAsync`
+3. Checkpoint collection (optional): `InsertOneAsync`
+
+All three in one `ExecuteInTransaction` boundary.
+
+### Why Bulk Writes Don't Apply to Queues
+
+**Bulk writes** optimize batching multiple operations on **the same collection** into one command. They also enable multi-collection transactions in MongoDB 8+.
+
+**Queues have neither problem:**
+- Single-collection scope: No cross-collection write coordination needed
+- Optional transactions: Queue items don't use `ExecuteInTransaction` for publish/process
+- Single-item loop: `QueryLimit=1` means one item at a time; no batching pattern
+
+---
+
+## Decision
+
+✅ **EventStore bulk-write optimization**: Proceed (Alec's Phase 1/Phase 2 strategy in decisions.md)
+
+❌ **Queue bulk-write optimization**: Not applicable. Separate concerns:
+- Queue optimizations (if needed): batch processing, index tuning, change stream optimization
+- Bulk writes: EventStore-specific due to multi-collection transaction pattern
+
+---
+
+## Recommendation
+
+**Issue #81** documents this finding. Do NOT create a separate queue bulk-write follow-up.
+
+Future queue improvements should be explored independently, grounded in production telemetry (e.g., "high-throughput queues see contention on lock index" → tune index strategy).
+
+---
+
+## Architectural Insight
+
+This analysis crystallizes a pattern:
+- **Bulk writes benefit:** Multi-collection operations in a transaction (like EventStore)
+- **Queues benefit:** Single-collection optimizations (indexing, query strategy, processing loop)
+
+Document this in team wisdom for future optimization analysis.
+
+---
+
+### EventStore: Multi-Collection Bulk-Write Optimization — Phase 1 Work Items
+
+**Status:** Recommendation (Ready for GitHub issue creation)
+**Date:** 2026-04-14
+**Author:** Alec
+**Relates to:** Issue #81
+
+# Alec Inbox: Bulk-Write Follow-Up Issue Capture
+
+**Date:** 2026-04-14  
+**Subject:** EventStore Multi-Collection Bulk-Write Optimization — Phase 1 Work Items  
+**Status:** Ready for GitHub issue creation
+
+---
+
+## Finding Summary
+
+Multi-collection bulk-write optimization is **plausible and beneficial for EventStore only**. Outbox and Queue do not benefit due to single-collection write patterns.
+
+### EventStore Profile
+
+**Current write pattern (AppendEventsAsync):**
+- 4 sequential round-trips per transaction:
+  1. InsertMany (events collection)
+  2. ReplaceOne (read model upsert)
+  3. InsertOne (checkpoint collection, conditional)
+  4. User callback (optional transactional hook)
+
+**Bulk-write opportunity:** Consolidate 4 trips → 1 via MongoDB 8.0+ `BulkWriteAsync`
+- **Estimated latency gain:** 10–30ms per append (network round-trip elimination)
+- **Throughput impact:** 20–40% improvement on bulk append workloads (100+ events/sec)
+- **Topology:** Works on replica sets, sharded clusters; stricter constraints on single-node
+
+### Outbox Profile
+
+**No opportunity:** Single-collection pattern (outbox collection only)
+- AddMessageAsync: 1 InsertOne per message within caller's transaction
+- OutboxProcessor: per-message lock-and-process loop (serialized, single collection)
+- Optimization focus: already using batched polling
+
+### Queue Profile
+
+**No opportunity:** Independent per-queue collections
+- No cross-queue transactions
+- Fire-and-forget publish pattern
+- Optimization focus: index tuning
+
+---
+
+## Work Items for GitHub Issue
+
+### Issue Title
+
+**"EventStore: Multi-Collection Bulk-Write Optimization (MongoDB 8.0+)"**
+
+### Tasks (Phase 1 — v2.0 Target)
+
+#### Task 1: Configuration API
+- [ ] Add `UseBulkWriteOptimization: bool = false` to `MongoEventStoreOptions<TAggregate>`
+- [ ] Add `WithBulkWriteOptimization(bool enabled)` → `MongoEventStoreBuilder<TAggregate>`
+- [ ] Add `WithoutBulkWriteOptimization()` kill-switch method
+- [ ] Startup log (Debug): `"EventStore<TAggregate> bulk-write optimization [enabled|disabled]"`
+- **Files:** `src/Chaos.Mongo.EventStore/MongoEventStoreOptions.cs`, `MongoEventStoreBuilder.cs`
+
+#### Task 2: Implement BulkWriteAsync Path
+- [ ] Refactor `AppendEventsAsync` to detect `UseBulkWriteOptimization` flag
+- [ ] Build `List<WriteModel<BsonDocument>>` containing:
+  - events collection writes (InsertOne per event or consolidated)
+  - read model upsert (UpdateOne with IsUpsert: true)
+  - checkpoint insert (if interval check passes)
+- [ ] Call `_mongoHelper.Database.BulkWriteAsync()` within transaction with `IsOrdered: true`
+- [ ] Preserve fallback to serial writes when flag is false
+- **File:** `src/Chaos.Mongo.EventStore/MongoEventStore.cs`
+
+#### Task 3: Error Normalization
+- [ ] Map `ClientBulkWriteException` to existing exception types:
+  - Duplicate key on events/checkpoint → `MongoConcurrencyException`
+  - Duplicate key on idempotency → `MongoDuplicateEventException`
+- [ ] Preserve error message and stack trace
+- [ ] Handle partial-write scenarios (some writes succeed, some fail)
+- **File:** `src/Chaos.Mongo.EventStore/MongoEventStore.cs`
+
+#### Task 4: Capability Detection & Fail-Fast
+- [ ] At EventStore construction or first append, detect MongoDB version (from server hello)
+- [ ] If `UseBulkWriteOptimization == true` and server < 8.0, throw `InvalidOperationException`:
+  - Message: `"EventStore bulk-write optimization requires MongoDB 8.0+. Current server: {version}. Disable via WithoutBulkWriteOptimization()."`
+- [ ] No fallback; explicit error forces configuration decision
+- **File:** `src/Chaos.Mongo.EventStore/MongoEventStore.cs` or constructor
+
+#### Task 5: Testing
+- [ ] **Unit tests:**
+  - Flag toggle (enabled/disabled behavior)
+  - Bulk-write model construction (write order, field mapping)
+  - Error normalization (ClientBulkWriteException → custom exceptions)
+  - Server version < 8.0 check
+- [ ] **Integration tests (MongoDB 8.0+ only):**
+  - Multi-collection atomicity (all 3 collections updated or none)
+  - Duplicate key detection (version conflict, idempotency)
+  - Checkpoint correctness
+  - User callback integration within bulk transaction
+- [ ] **Integration tests (MongoDB 7.x):**
+  - Graceful skip of version check
+  - Fail-fast behavior on bulk-write request
+- **Files:** `tests/Chaos.Mongo.EventStore.Tests/` (unit), `tests/Chaos.Mongo.EventStore.Tests/Integration/` (integration)
+
+#### Task 6: Documentation & Observability
+- [ ] **README.md:** Add section on bulk-write opt-in:
+  - Requirements (MongoDB 8.0+)
+  - Builder usage: `.WithBulkWriteOptimization(enabled: true)`
+  - Performance characteristics (latency, throughput)
+  - Topology caveats (single-node strictness)
+- [ ] **Startup logging:** Every EventStore construction logs flag status (Debug level)
+- [ ] **Diagnostics:**
+  - Per-append log (Debug): `"AppendEventsAsync bulk-write: {writeCount} writes, {collectionCount} collections, {durationMs}ms"`
+  - Metrics hook (optional): record bulk vs. serial append latency
+
+---
+
+## Phase 2 Placeholder (v3.0+)
+
+- Reconsider auto-enable (Phase 2 decision per squad/decisions.md)
+- Pending: production telemetry, detection hardening, topology variance testing
+
+---
+
+## Recommendation
+
+**Create GitHub issue with above tasks; target v2.0 release.**
+
+Explicit opt-in mitigates deployment variance, provides environment-specific control, and aligns with Phase 1 decision from 2026-04-11. Performance gain (10–30ms/append, 20–40% throughput) justifies engineering investment.
+
+
 ## Completed Work
 
 ### PR #74 Follow-up — Issue #10 Direct-Construction Default & Cancellation Hardening (2026-04-11)
@@ -1065,6 +1272,239 @@ Re-review of branch `squad/72-queue-observability-diagnostics` found no remainin
 - `tests/Chaos.Mongo.Tests/Queues/QueueMetricsCollector.cs` (test helper)
 
 **Verdict:** ✅ Ready for merge
+
+---
+
+### MongoDB 8.0+ Bulk-Write Gating: Staged Recommendation (Nate + Alec)
+
+**Date:** 2026-04-16 (synthesis: 2026-04-14)  
+**Status:** Decision (staged approach)  
+**Participants:** Nate (Lead/Architect), Alec (Feature Dev), Coordinator  
+**Context:** EventStore `AppendEventsAsync` multi-collection bulk-write optimization
+
+#### Decision Summary
+
+**Staged Implementation:**
+
+1. **Phase 1 (v2.0+):** Explicit opt-in via `WithBulkWriteOptimization(enabled: true)`
+   - Low detection complexity, explicit configuration, fail-fast on capability mismatch
+   - Clear per-environment control, incremental rollout capability
+
+2. **Phase 2 (v3.0+):** Reconsider auto-enable with kill switch
+   - After maturation, detection hardening, production validation
+   - Aligns with Nate's recommendation once risks are mitigated
+
+#### Rationale
+
+**Nate's Recommendation (Auto-Enable with Kill Switch):**
+- Performance optimization should be default
+- Users shouldn't need to discover builder options
+- Precedes driver auto-detection patterns (connection pooling, compression)
+- Kill switch (`WithoutBulkWriteOptimization()`) provides safety valve
+
+**Alec's Recommendation (Explicit Opt-In with Fail-Fast):**
+- Topology variance (Standalone, Replica, Sharded) creates detection risk
+- Network transients, mixed clusters, feature flags add complexity
+- Explicit config simplifies debuggability and rollout control
+- Fail-fast (no fallback) prevents silent behavioral variance
+
+**Synthesis:** Both concerns are valid. Alec's deployment reality (heterogeneity, staged rollouts) outweighs Nate's performance-first principle *for v2.0*. Phase 2 auto-enable becomes feasible once bulk-write detection hardens and matures in production.
+
+#### API Contract (Phase 1)
+
+```csharp
+// On MongoEventStoreBuilder<TAggregate>
+public MongoEventStoreBuilder<TAggregate> WithBulkWriteOptimization(bool enabled = false)
+{
+    Options.UseBulkWriteOptimization = enabled;
+    return this;
+}
+
+// On MongoEventStoreOptions<TAggregate>
+public bool UseBulkWriteOptimization { get; set; } = false;  // default: disabled
+```
+
+#### Fallback Strategy (Phase 1)
+
+Fail-fast: If bulk-write requested but not supported, throw `InvalidOperationException` with actionable guidance. No automatic fallback to per-collection writes.
+
+#### Observability
+
+- Startup log (Debug level): `"EventStore<T> bulk-write optimization [enabled|disabled]"`
+- No new metrics (optimization is transparent)
+- Error messages guide user to prerequisites (MongoDB 8.0+, transactions enabled)
+
+#### Testing
+
+- Both paths covered by CI matrix (MongoDB 7.x tests skip bulk-write; 8.0+ tests cover both enabled/disabled)
+- Integration tests validate error handling when optimization misconfigured
+- Duplicate key error normalization (`ClientBulkWriteException` → `MongoConcurrencyException` / `MongoDuplicateEventException`)
+
+#### Migration Path
+
+Phase 2 (v3.0+) can auto-enable with kill switch:
+```csharp
+public MongoEventStoreBuilder<TAggregate> WithoutBulkWriteOptimization()
+{
+    Options.UseBulkWriteOptimization = false;
+    return this;
+}
+```
+Once detection hardens and fleet experiences bulk-write in production.
+
+#### References
+
+- **Nate's Full Recommendation:** `.squad/decisions/inbox/nate-bulk-write-default.md` (archived)
+- **Alec's Full Assessment:** `.squad/decisions/inbox/alec-bulk-write-gating.md` (archived)
+
+---
+
+### Sophie — PR #78 Created for Issue #72 (Queue Observability)
+
+**Date:** 2026-04-11  
+**Status:** Pull request created  
+**Related Issue:** #72  
+
+#### Decision
+
+Created pull request #78 for branch `squad/72-queue-observability-diagnostics`.
+
+#### Details
+
+- **PR Number:** 78
+- **Title:** feat: Add structured logging and diagnostics for queue metrics tracking
+- **Base:** main
+- **Head:** squad/72-queue-observability-diagnostics
+- **URL:** https://github.com/chA0s-Chris/Chaos.Mongo/pull/78
+
+#### Rationale
+
+- Branch contains 3 commits implementing queue observability (structured logging + metrics)
+- Builds on completed queue resilience work (PR #73)
+- Ready for review (latest commit: bae0fdb)
+- Implements production-grade metrics for queue processing (duration, queue age, lock recovery, state transitions)
+
+---
+
+### Alec — Single-Collection Bulk Writes — Outbox Remains Out of Scope
+
+**Status:** Decision  
+**Date:** 2026-04-14 (reassessment)  
+**Author:** Alec  
+**Relates to:** Issue #81  
+
+#### Context
+
+User clarified: "MongoDB 8 bulk writes work with single collections too. So if multiple operations on the same collection could be bundled, Outbox and Queue could benefit even without multi-collection transactions."
+
+**Question:** Does this change whether Outbox should use bulk writes?
+
+#### Current Write Patterns
+
+**Outbox: AddMessageAsync (Per-Message Publish)**
+- **Pattern:** Caller inserts ONE message per outbox call
+- **Batching:** No bundling. Each message is a separate transaction boundary from the caller's perspective
+- **Bulk write fit:** N/A — bulk writes group operations within a SINGLE database command; outbox operations are serialized across independent transactions
+
+**Outbox: ProcessBatchAsync/ProcessMessageAsync (Per-Message Processing)**
+- **Pattern:** Acquire lock, publish, update — SERIALIZED per message
+- **Opportunity for bulk:** Could theoretically batch lock acquisitions for all N messages, then process them, then batch finalize updates
+- **Reality:** Each message may fail independently; retry logic is per-message; lock recovery is per-message
+- **Bulk write fit:** **Limited.** Would break the fail-fast, per-message error isolation that Outbox currently has
+
+#### Assessment
+
+Single-collection bulk writes in MongoDB 8 do NOT change the Outbox verdict because:
+
+1. **Publish loop is per-message, not per-batch transactional** — Outbox processes one message at a time; even if lock acquisition and finalization were batched, the publisher is external and may fail
+2. **Outbox design prioritizes independent message processing** — Lock conflicts on one message don't block others; retry logic is per-message with independent backoff; bulk writes would make this coupling tighter and less resilient
+3. **Queue has the same issue** — independent per-queue operations, not batched
+4. **EventStore is still the only real win** — multi-collection per-transaction batching, where all operations must succeed together
+
+#### Decision
+
+✅ **Issue #81 stands as-is.** Outbox remains out of scope for bulk-write optimization.
+
+The clarification about single-collection bulk writes does not materially change the prior analysis. Outbox is fundamentally designed for per-message isolation, not per-batch transactional bundling.
+
+#### Recommendation for Issue #81 Update
+
+Update the issue to note: "Reassessment (2026-04-14): Single-collection bulk writes in MongoDB 8 do not change the verdict. Outbox processing is serialized per-message with independent failure handling; bulk-write optimization would require restructuring the processing loop and reduce failure isolation. No scope change."
+
+---
+
+### Eliot — MongoDB 8 Single-Collection Bulk Writes and Queue Candidacy
+
+**Status:** Analysis  
+**Date:** 2026-04-14  
+**Author:** Eliot  
+**Relates to:** Issue #81  
+**Scope:** Reassess Queue bulk-write optimization in light of MongoDB 8 single-collection bulk writes
+
+#### Executive Summary
+
+Even with MongoDB 8 supporting single-collection bulk writes, the Queue implementation remains a poor optimization candidate. The critical blocker is architecture, not technology: queues default to sequential single-item processing by design (`QueryLimit=1`), and there are no realistic hot paths where multi-operation batches occur within the same transaction scope.
+
+#### Question 1: Current Same-Collection Multi-Operation Hot Paths
+
+**Answer: No.**
+
+Queue operations are strictly single-item, single-operation:
+
+1. **Publish** → Single `InsertOneAsync` to queue collection
+2. **Lock Acquisition** → Single `FindOneAndUpdateAsync` (lock flag + timestamp)
+3. **Failure Handling** → Two separate operations in sequence (not transactional, not batched)
+4. **Completion** → Single `UpdateOneAsync` (mark closed) or `DeleteOneAsync` (immediate cleanup)
+
+The loop retrieves a batch (default size=1) and processes items sequentially, one at a time. No batching pattern exists. Even if `QueryLimit` were increased, the handler callback is user-provided and runs between database operations—cannot be batched.
+
+Queue operations do not use `ExecuteInTransaction`. The design is at-least-once delivery without ACID guarantees: lock acquisition and processing are separate database calls; failure recovery relies on passive lease expiry, not rollback.
+
+#### Question 2: Condition for Queue to Become a Candidate
+
+**Answer: Three conditions must all be true (all currently false, none on roadmap):**
+
+1. **Multi-operation same-collection bundling opportunity** — Queue default must change from `QueryLimit=1` to meaningful batch size; currently no realistic batching because items are processed sequentially with user callbacks in between
+2. **Transactional boundary established** — Queue operations must adopt `ExecuteInTransaction` scope; currently at-least-once design explicitly avoids transaction overhead
+3. **Proven performance bottleneck** — Production telemetry shows database round-trip overhead (not user callback time) is significant bottleneck; currently no evidence
+
+#### Question 3: Should Issue #81 Be Updated?
+
+**Answer: Yes—clarify and update the Queue finding.**
+
+Current Issue #81 statement: "Queue operations are single-collection writes. No meaningful multi-collection transactional write pattern to collapse."
+
+**Problem:** This reason is now incomplete (pre-dates MongoDB 8 single-collection bulk writes). It only justifies exclusion from *multi-collection* bulk writes. With MongoDB 8, we must explicitly explain why single-collection bulk writes are still not beneficial.
+
+**Proposed Update:**
+
+```
+❌ MongoQueue — not a candidate for bulk-write optimization
+
+Current architecture:
+• Single-item sequential processing (QueryLimit defaults to 1, no batching)
+• No transactional scope (design is at-least-once, not ACID)
+• Each operation (lock, process, complete) targets one item in isolation
+
+Why bulk writes don't help (even MongoDB 8 single-collection):
+• Bulk writes batch multiple operations on the same collection into one command
+• Queue's sequential one-item-at-a-time loop provides no multi-operation batches to collapse
+• User callback (HandlePayloadAsync) runs between database operations—cannot be batched
+• No transactional boundary exists to make bundling beneficial
+
+For bulk writes to help queues, all three must change:
+1. QueryLimit >> 1 (currently 1 for fairness)
+2. ExecuteInTransaction adoption (currently at-least-once design)
+3. Proven DB round-trip bottleneck (currently no evidence; callback time likely dominates)
+
+Recommendation: Queue optimizations (if needed) should focus on indexing, query strategy, and processing loop efficiency—not bulk writes.
+```
+
+#### Architectural Pattern (Team Wisdom)
+
+- **Bulk writes optimize:** Multi-collection operations bundled into one command (EventStore ✅)
+- **Queues optimize:** Single-collection single-item throughput via query strategy, indexing, lease recovery
+- **Technology isn't the limiter:** Even with MongoDB 8 single-collection bulk writes, queue architecture (sequential single-item, no transactions) makes them inapplicable
 
 ---
 

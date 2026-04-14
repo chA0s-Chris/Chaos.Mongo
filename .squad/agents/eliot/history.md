@@ -76,6 +76,75 @@
 
 ---
 
+### 2026-04-12: Queue Bulk-Write Analysis (Exploratory)
+
+**Date:** 2026-04-12T00:00:00Z  
+**Context:** User request to check if MongoDB 8 multi-collection bulk writes could optimize queue layer (following Alec's EventStore work)  
+**Status:** Completed; Issue #81 created with finding
+
+**Work:** Inspected queue write patterns across publish/process/complete flows to assess multi-collection bulk-write feasibility.
+
+**Finding:** Queues are NOT a bulk-write optimization target.
+- Single-collection-per-operation constraint: Each queue publishes to its own collection; all processing targets the same collection
+- No transactional cross-collection writes: Queue operations don't use `ExecuteInTransaction`; design is at-least-once, not ACID
+- Single-item processing: Default `QueryLimit=1` processes one item at a time; no batching pattern to optimize
+
+**Contrast with EventStore:** `AppendEventsAsync` writes to 3+ collections (events, readmodel, checkpoint) in a transaction—genuine bulk-write target. Queues operate within a single collection.
+
+**Architectural Insight:** Bulk writes optimize multi-collection operations in a transaction. Queues have neither: single collection, optional transactional scope. Future queue improvements (batch processing, index tuning) are separate concerns.
+
+**Decision:** Do NOT create a separate queue bulk-write issue. EventStore optimization and any future queue improvements are independent. Issue #81 documents the analysis and closes this exploratory thread.
+
+---
+
+### 2026-04-14: MongoDB 8 Bulk-Write Queue Analysis Follow-Up (Coordination Spawn)
+
+**Date:** 2026-04-14T19:06:03Z  
+**Context:** Christian Flessa spawned follow-up analysis to confirm Queue exclusion from bulk-write optimization scope (Issue #81 update)  
+**Status:** Analysis confirmed; decision merged into squad/decisions.md
+
+**Work:** Re-confirmed queue write patterns against bulk-write optimization criteria:
+- **All operations single-collection:** Publish, lock acquisition, failure handling, completion all target one collection
+- **No multi-collection transactions:** Queue items don't use `ExecuteInTransaction`; design is at-least-once
+- **Single-item processing loop:** `QueryLimit=1` means no batching pattern
+
+**Architectural Crystallization:** Bulk writes benefit multi-collection operations in a transaction (EventStore). Queues benefit from single-collection optimizations (indexing, query strategy, processing loop). Document this pattern in team wisdom for future optimization analysis.
+
+**Decision Documentation:** Merged into `.squad/decisions.md` as "Decision: MongoDB 8 Bulk Writes — Queue is Not an Optimization Target" (2026-04-12, Eliot). Orchestration log: `.squad/orchestration-log/2026-04-14T19:06:03Z-eliot.md`.
+
+---
+
+### 2026-04-14 (Second Pass): MongoDB 8 Single-Collection Bulk-Write Queue Reassessment (Coordination Spawn)
+
+**Date:** 2026-04-14T19:15:36Z  
+**Context:** Christian Flessa clarified that MongoDB 8 bulk writes can still benefit same-collection workloads if multi-operation batching is possible. Re-assessed Queue candidacy.  
+**Status:** Analysis complete; decision merged into squad/decisions.md
+
+**Work:** Analyzed whether MongoDB 8 single-collection bulk writes change Queue assessment:
+
+1. **Current Hot Paths:** All single-operation per query (QueryLimit=1 default)
+   - Publish: Single `InsertOneAsync`
+   - Lock Acquisition: Single `FindOneAndUpdateAsync`
+   - Failure Handling: Two sequential (not batched) operations
+   - Completion: Single `UpdateOneAsync` or `DeleteOneAsync`
+
+2. **No Batching Pattern:** Sequential single-item processing with user callbacks between ops; no multi-op bundling opportunity
+
+3. **No Transactional Boundary:** Queue uses at-least-once design, explicitly avoids `ExecuteInTransaction`
+
+4. **Conditions for Queue to Become Candidate (all false):**
+   - Multi-operation batching opportunity (currently none)
+   - Transactional scope established (currently none)
+   - Proven DB round-trip bottleneck (currently no evidence; callback time likely dominates)
+
+**Finding:** Queue architecture (sequential single-item, no transactional scope) precludes bulk-write benefit regardless of MongoDB capability.
+
+**Proposed Issue #81 Update:** Replace outdated rationale "single-collection writes" with architecture-focused explanation: bulk writes batch multiple operations; Queue's sequential one-item-at-a-time loop provides no multi-operation batches to collapse; user callback runs between operations and cannot be batched; no transactional boundary to make bundling beneficial. Queue optimizations should focus on indexing, query strategy, and processing efficiency—not bulk writes.
+
+**Decision Documentation:** Merged into `.squad/decisions.md` as "Analysis: MongoDB 8 Single-Collection Bulk Writes and Queue Candidacy" (Eliot, 2026-04-14). Orchestration log: `.squad/orchestration-log/2026-04-14T19:15:36Z-eliot.md`.
+
+---
+
 ## Historical Summary
 
 **2026-04-10 to 2026-04-11 (Early):** Completed Phase 1 queue implementation:
