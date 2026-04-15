@@ -9,6 +9,12 @@ namespace Chaos.Mongo.EventStore;
 public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class, IAggregate, new()
 {
     /// <summary>
+    /// Gets or sets a value indicating whether the MongoDB 8+ client bulk-write optimization is enabled.
+    /// Defaults to <c>false</c>.
+    /// </summary>
+    public Boolean BulkWriteOptimizationEnabled { get; set; }
+
+    /// <summary>
     /// Gets the name of the checkpoint collection.
     /// </summary>
     public String CheckpointCollectionName => $"{CollectionPrefix}{CheckpointCollectionSuffix}";

@@ -15,6 +15,7 @@ public class MongoEventStoreBuilderTests
         var result = builder
                      .WithCollectionPrefix("Test")
                      .WithCheckpoints(50)
+                     .WithBulkWriteOptimization()
                      .WithCheckpointCollectionSuffix("_Snap")
                      .WithEventsCollectionSuffix("_Evt")
                      .WithEvent<TestCreatedEvent>("Created");
@@ -31,8 +32,19 @@ public class MongoEventStoreBuilderTests
         builder.Options.EventsCollectionSuffix.Should().Be("_Events");
         builder.Options.CheckpointCollectionSuffix.Should().Be("_Checkpoints");
         builder.Options.CheckpointInterval.Should().Be(0);
+        builder.Options.BulkWriteOptimizationEnabled.Should().BeFalse();
         builder.Options.CheckpointsEnabled.Should().BeFalse();
         builder.Options.EventTypes.Should().BeEmpty();
+    }
+
+    [Test]
+    public void WithBulkWriteOptimization_EnablesOption()
+    {
+        var builder = new MongoEventStoreBuilder<TestAggregate>();
+
+        builder.WithBulkWriteOptimization();
+
+        builder.Options.BulkWriteOptimizationEnabled.Should().BeTrue();
     }
 
     [Test]

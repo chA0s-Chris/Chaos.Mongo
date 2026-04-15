@@ -12,6 +12,12 @@
 
 ## Learnings
 
+### 2026-04-15: Issue #81 Benchmark Revision Validation
+
+- Repaired the EventStore benchmark harness so it measures the approved three-scenario matrix explicitly: single-event append without checkpoints, medium batch without checkpoints, and checkpoint-forcing batch append, each baseline vs. `WithBulkWriteOptimization()`.
+- Replaced the EventStore bulk-write server-version cache with a `ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>>` so successful capability detection no longer pins per-iteration benchmark clients for process lifetime while still reusing the lookup for shared client instances.
+- Locked the cache behavior down with `MongoEventStoreBulkWriteTests.AppendEventsAsync_WhenStoresShareClient_CachesVersionLookupAcrossInstances()`, then validated with targeted EventStore tests, benchmark-project build/listing, and the full `bash build.sh Test` pipeline.
+
 ### 2026-04-11: Tara Hired as Expert Reviewer
 
 **Context:** Tara now serves as dedicated fresh-eyes reviewer for merge-gate and cross-package consistency checks.

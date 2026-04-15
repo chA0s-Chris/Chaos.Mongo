@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Chaos.Mongo.EventStore.Benchmarks/Chaos.Mongo.EventStore.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/build/">
     <Project Path="build/Nuke.csproj">
       <Configuration Solution="Debug|Any CPU" Project="Debug|Any CPU|NoBuild" />

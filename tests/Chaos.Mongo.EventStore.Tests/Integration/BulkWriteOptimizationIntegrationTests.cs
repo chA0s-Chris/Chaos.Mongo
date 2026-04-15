@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
+using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,37 @@ public class BulkWriteOptimizationIntegrationTests
     private MongoDbContainer _container = null!;
     private IEventStore<OrderAggregate> _eventStore = null!;
     private IMongoHelper _mongoHelper = null!;
+
+    [Test]
+    public async Task AppendEventsAsync_WithBulkWriteOptimization_DuplicateEventId_ThrowsMongoDuplicateEventException()
+    {
+        var aggregateId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = eventId,
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Grace",
+                TotalAmount = 40.00m
+            }
+        ]);
+
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = eventId,
+                AggregateId = aggregateId,
+                Version = 2
+            }
+        ]);
+
+        await act.Should().ThrowAsync<MongoDuplicateEventException>();
+    }
 
     [Test]
     public async Task AppendEventsAsync_WithBulkWriteOptimization_PersistsCheckpointAndCallbackWork()
@@ -63,51 +95,33 @@ public class BulkWriteOptimizationIntegrationTests
         aggregate.Version.Should().Be(3);
         aggregate.Status.Should().Be("Completed");
 
+        var persistedEvents = new List<Event<OrderAggregate>>();
+        await foreach (var persistedEvent in _eventStore.GetEventStream(aggregateId))
+        {
+            persistedEvents.Add(persistedEvent);
+        }
+
+        persistedEvents.Should().HaveCount(3);
+        var persistedCreatedEvent = persistedEvents[0].Should().BeOfType<OrderCreatedEvent>().Which;
+        persistedCreatedEvent.CustomerName.Should().Be("BulkWrite");
+        persistedCreatedEvent.TotalAmount.Should().Be(120.00m);
+        persistedEvents[1].Should().BeOfType<OrderShippedEvent>();
+        persistedEvents[2].Should().BeOfType<OrderCompletedEvent>();
+
         var readModel = await _aggregateRepository.GetAsync(aggregateId);
         readModel.Should().NotBeNull();
-        readModel!.Version.Should().Be(3);
+        readModel.Version.Should().Be(3);
         readModel.Status.Should().Be("Completed");
 
         var checkpointCollection = _mongoHelper.Database.GetCollection<CheckpointDocument<OrderAggregate>>("Orders_Checkpoints");
         var checkpoint = await checkpointCollection.Find(c => c.Id.AggregateId == aggregateId && c.Id.Version == 3)
-                                                  .FirstOrDefaultAsync();
+                                                   .FirstOrDefaultAsync();
         checkpoint.Should().NotBeNull();
-        checkpoint!.State.Version.Should().Be(3);
+        checkpoint.State.Version.Should().Be(3);
 
         var outboxMessage = await outboxCollection.Find(m => m.Id == outboxMessageId).FirstOrDefaultAsync();
         outboxMessage.Should().NotBeNull();
-        outboxMessage!.AggregateId.Should().Be(aggregateId);
-    }
-
-    [Test]
-    public async Task AppendEventsAsync_WithBulkWriteOptimization_DuplicateEventId_ThrowsMongoDuplicateEventException()
-    {
-        var aggregateId = Guid.NewGuid();
-        var eventId = Guid.NewGuid();
-
-        await _eventStore.AppendEventsAsync(
-        [
-            new OrderCreatedEvent
-            {
-                Id = eventId,
-                AggregateId = aggregateId,
-                Version = 1,
-                CustomerName = "Grace",
-                TotalAmount = 40.00m
-            }
-        ]);
-
-        var act = () => _eventStore.AppendEventsAsync(
-        [
-            new OrderShippedEvent
-            {
-                Id = eventId,
-                AggregateId = aggregateId,
-                Version = 2
-            }
-        ]);
-
-        await act.Should().ThrowAsync<MongoDuplicateEventException>();
+        outboxMessage.AggregateId.Should().Be(aggregateId);
     }
 
     [Test]
@@ -178,7 +192,7 @@ public class BulkWriteOptimizationIntegrationTests
         _aggregateRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
         _mongoHelper = sp.GetRequiredService<IMongoHelper>();
 
-        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
+        foreach (var configurator in sp.GetServices<IMongoConfigurator>())
             configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
     }
 }

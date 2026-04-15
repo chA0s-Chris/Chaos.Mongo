@@ -14,6 +14,16 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     public MongoEventStoreOptions<TAggregate> Options { get; } = new();
 
     /// <summary>
+    /// Enables the MongoDB 8+ client bulk-write optimization for append operations.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    public MongoEventStoreBuilder<TAggregate> WithBulkWriteOptimization()
+    {
+        Options.BulkWriteOptimizationEnabled = true;
+        return this;
+    }
+
+    /// <summary>
     /// Sets the suffix appended to the collection prefix for the checkpoint collection.
     /// Defaults to <c>"_Checkpoints"</c>.
     /// </summary>
