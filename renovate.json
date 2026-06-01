@@ -6,5 +6,28 @@
   "addLabels": [
     "renovate",
     "skip-changelog"
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": [
+        "FluentAssertions"
+      ],
+      "enabled": false
+    },
+    {
+      "groupName": "NUnit packages",
+      "matchPackageNames": [
+        "NUnit",
+        "NUnit.Analyzers",
+        "NUnit3TestAdapter"
+      ]
+    },
+    {
+      "groupName": "Test SDK",
+      "matchPackageNames": [
+        "Microsoft.NET.Test.Sdk",
+        "Microsoft.TestPlatform.TestHost"
+      ]
+    }
   ]
 }
