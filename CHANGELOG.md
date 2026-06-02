@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## v0.5.0 (2026-06-02)
 
-- No changes since last release
+- Update all dependencies to latest (#41, #42, #86, #82, #89, #87, #90) by @chA0s-Chris
 
 
 ## v0.4.0 (2026-04-11)
