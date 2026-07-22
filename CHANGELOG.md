@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 
 
+
+## v0.6.0 (2026-07-22)
+
+### ✨ Features
+
+- Add opt-in MongoDB 8 bulk-write optimization to EventStore appends (#103) by @chA0s-Chris
+
+### 📚 Documentation
+
+- Reorganize documentation and add package-specific READMEs (#108) by @chA0s-Chris
+
+
 ## v0.5.0 (2026-06-02)
 
 - Update all dependencies to latest (#41, #42, #86, #82, #89, #87, #90) by @chA0s-Chris
