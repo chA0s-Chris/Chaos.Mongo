@@ -8,14 +8,14 @@ The root README currently combines the repository overview with extensive featur
 
 ## Acceptance Criteria
 
-- [ ] The root `README.md` is a concise repository overview with a package comparison, installation guidance, a minimal quick start, a linked feature summary, and relevant project links.
-- [ ] The root README clearly communicates that Event Store and Transactional Outbox functionality is provided by separate NuGet packages.
-- [ ] Detailed guidance removed from the root README is preserved in focused, canonical Markdown pages under `docs/` without duplicate long-form copies.
-- [ ] `Chaos.Mongo`, `Chaos.Mongo.EventStore`, and `Chaos.Mongo.Outbox` each have a concise `README.md` beside their project file that describes package scope, installation, a minimal example, package relationships, and links to detailed documentation.
-- [ ] Each package README uses the repository's badge presentation, with its NuGet version and download badges linking to and reporting on that README's actual package; the root README continues to use `Chaos.Mongo` for its NuGet badges.
-- [ ] Repository navigation and cross-document links are valid on GitHub, while links in package READMEs also resolve correctly when rendered on NuGet.org.
-- [ ] Each project packages its local `README.md` as the NuGet package README.
-- [ ] All three projects pack without warnings, and every generated package contains the correct package-specific `README.md` at the package root.
+- [x] The root `README.md` is a concise repository overview with a package comparison, installation guidance, a minimal quick start, a linked feature summary, and relevant project links.
+- [x] The root README clearly communicates that Event Store and Transactional Outbox functionality is provided by separate NuGet packages.
+- [x] Detailed guidance removed from the root README is preserved in focused, canonical Markdown pages under `docs/` without duplicate long-form copies.
+- [x] `Chaos.Mongo`, `Chaos.Mongo.EventStore`, and `Chaos.Mongo.Outbox` each have a concise `README.md` beside their project file that describes package scope, installation, a minimal example, package relationships, and links to detailed documentation.
+- [x] Each package README uses the repository's badge presentation, with its NuGet version and download badges linking to and reporting on that README's actual package; the root README continues to use `Chaos.Mongo` for its NuGet badges.
+- [x] Repository navigation and cross-document links are valid on GitHub, while links in package READMEs also resolve correctly when rendered on NuGet.org.
+- [x] Each project packages its local `README.md` as the NuGet package README.
+- [x] All three projects pack without warnings, and every generated package contains the correct package-specific `README.md` at the package root.
 
 ## Technical Details
 
@@ -25,11 +25,11 @@ Place package landing pages at `src/Chaos.Mongo/README.md`, `src/Chaos.Mongo.Eve
 
 Reuse the root README's badge style in the package READMEs, but parameterize both the shields.io NuGet endpoints and their destination links with the owning project package ID: `Chaos.Mongo`, `Chaos.Mongo.EventStore`, or `Chaos.Mongo.Outbox`. Project-wide badges such as license, repository activity, and CI may continue to target the shared repository.
 
-Keep `PackageReadmeFile` set to `README.md` in each package project and replace the existing external README package items with the local SDK item configuration:
+Keep `PackageReadmeFile` set to `README.md` in each package project and replace the existing external README package items with an explicit local item:
 
 ```xml
 
-<None Update="README.md" Pack="true" PackagePath="" />
+<None Include="README.md" Pack="true" PackagePath="" />
 ```
 
-Use `Update` rather than `Include` to avoid duplicating an item already discovered by the SDK. Verify the package contract by packing all three projects with Release warning behavior and inspecting each `.nupkg`, not solely by reviewing the project files.
+The local Markdown files are not included in the evaluated default `None` items for these projects, so an explicit `Include` is required for packing. Verify the package contract by packing all three projects with Release warning behavior and inspecting each `.nupkg`, not solely by reviewing the project files.
