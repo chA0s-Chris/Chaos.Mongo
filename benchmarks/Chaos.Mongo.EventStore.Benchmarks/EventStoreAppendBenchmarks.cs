@@ -65,6 +65,22 @@ public class EventStoreAppendBenchmarks
     {
         _container = new MongoDbBuilder("mongo:8")
                      .WithReplicaSet()
+                     // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
+                     // pinned. See https://jira.mongodb.org/browse/SERVER-121912
+                     .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
+                     .WithCreateParameterModifier(parameters =>
+                     {
+                         parameters.HostConfig ??= new();
+                         parameters.HostConfig.Ulimits =
+                         [
+                             new()
+                             {
+                                 Name = "nofile",
+                                 Soft = 65536,
+                                 Hard = 65536
+                             }
+                         ];
+                     })
                      .Build();
 
         _container.StartAsync().GetAwaiter().GetResult();
