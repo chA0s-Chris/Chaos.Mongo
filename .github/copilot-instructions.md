@@ -7,7 +7,6 @@ When performing a code review, always ignore files in these directories:
 - ./.claude
 - ./.idea
 - ./.nuke
-- ./.squad
 - ./.windsurf
 
 ## RTK — Token-Optimized CLI
