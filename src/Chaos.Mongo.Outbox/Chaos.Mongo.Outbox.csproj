@@ -5,7 +5,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="../../docs/transactional-outbox.md" Pack="true" Visible="false" PackagePath="README.md" />
+    <None Include="README.md" Pack="true" Visible="false" PackagePath="" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Chaos.Mongo\Chaos.Mongo.csproj" />
