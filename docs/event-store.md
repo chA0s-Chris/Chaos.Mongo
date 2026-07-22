@@ -322,6 +322,17 @@ What it measures:
 - `AppendWithBulkWrite` — the opt-in MongoDB 8+ client bulk-write append path
 - Multiple event batch sizes via BenchmarkDotNet parameters
 
+What to expect:
+
+Bulk writes reduce the number of round trips per append, not the work each one does. The latency gain therefore scales
+with how many operations get collapsed — smallest for a single event without a checkpoint, largest when a checkpoint
+insert makes it three collections. Allocation moves the other way: the saving is per append rather than per event, and
+is therefore proportionally largest on small batches.
+
+The benchmarks run against a local container, where a round trip costs microseconds against a per-append cost dominated
+by transaction coordination and replica-set commit. This understates the optimization — treat local results as a
+floor, and expect a larger gain against a remote replica set with real network latency.
+
 Notes:
 
 - The benchmark uses the real `MongoEventStore<TAggregate>` implementation from this repository.
