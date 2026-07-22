@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore;
 
 using Chaos.Mongo.EventStore.Errors;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using System.Runtime.CompilerServices;
 
@@ -24,6 +25,60 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         _mongoHelper = mongoHelper;
         _options = options;
         _aggregateTypeName = typeof(TAggregate).Name;
+    }
+
+    /// <summary>
+    /// Creates an identifier for an event that was appended without one. Version 7 GUIDs are
+    /// time-ordered and reduce fragmentation of the unique <c>_id</c> index on the events
+    /// collection, so they are preferred wherever the target framework provides them.
+    /// </summary>
+    private static Guid CreateEventId()
+#if NET9_0_OR_GREATER
+        => Guid.CreateVersion7();
+#else
+        => Guid.NewGuid();
+#endif
+
+    private static String GetDuplicateKeyMessage(MongoException ex)
+        => ex switch
+        {
+            MongoWriteException writeException => writeException.WriteError?.Message ?? ex.Message,
+            MongoBulkWriteException bulkWriteException => String.Join(" | ", bulkWriteException.WriteErrors.Select(error => error.Message)),
+            ClientBulkWriteException clientBulkWriteException => String.Join(" | ", clientBulkWriteException.WriteErrors.Values.Select(error => error.Message)),
+            _ => ex.Message
+        };
+
+    private static Boolean IsDuplicateKeyException(MongoException ex)
+        => ex switch
+        {
+            MongoCommandException { Code: 11000 } => true,
+            MongoWriteException { WriteError.Category: ServerErrorCategory.DuplicateKey } => true,
+            MongoBulkWriteException bulkWriteException => bulkWriteException.WriteErrors.Any(error => error.Category == ServerErrorCategory.DuplicateKey),
+            ClientBulkWriteException clientBulkWriteException => clientBulkWriteException.WriteErrors.Values.Any(error => error.Category ==
+                    ServerErrorCategory.DuplicateKey),
+            _ => false
+        };
+
+    private static FilterDefinition<BsonDocument> RenderFilter<TDocument>(
+        IMongoCollection<TDocument> collection,
+        FilterDefinition<TDocument> filter)
+    {
+        var renderedFilter = filter.Render(
+            new(collection.DocumentSerializer, collection.Settings.SerializerRegistry));
+        return new BsonDocumentFilterDefinition<BsonDocument>(renderedFilter);
+    }
+
+    private async Task EnsureBulkWriteOptimizationSupportedAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.BulkWriteOptimizationEnabled)
+        {
+            return;
+        }
+
+        await MongoEventStoreBulkWriteSupport.EnsureSupportedAsync(
+            _mongoHelper.Client,
+            _mongoHelper.Database,
+            cancellationToken);
     }
 
     private IMongoCollection<CheckpointDocument<TAggregate>> GetCheckpointCollection()
@@ -54,6 +109,13 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             if (@event.CreatedUtc == default)
             {
                 @event.CreatedUtc = now;
+            }
+
+            // The bulk-write path serializes events directly and bypasses the driver's
+            // id generation, so assign the id here to keep both append paths identical.
+            if (@event.Id == Guid.Empty)
+            {
+                @event.Id = CreateEventId();
             }
         }
 
@@ -103,6 +165,17 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         var lastVersion = eventList[^1].Version;
         aggregate.Version = lastVersion;
 
+        var shouldCreateCheckpoint = _options.CheckpointsEnabled && lastVersion % _options.CheckpointInterval == 0;
+        var checkpoint = shouldCreateCheckpoint
+            ? new CheckpointDocument<TAggregate>
+            {
+                Id = new(aggregateId, lastVersion),
+                State = aggregate
+            }
+            : null;
+
+        await EnsureBulkWriteOptimizationSupportedAsync(cancellationToken);
+
         // 5. Persist changes inside transaction
         try
         {
@@ -111,30 +184,63 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 {
                     var eventsCollection = GetEventsCollection();
 
-                    // 5a. Insert events
-                    await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
-
-                    // 5b. Upsert read model
-                    await readModelCollection.ReplaceOneAsync(
-                        session,
-                        Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
-                        aggregate,
-                        new ReplaceOptions
-                        {
-                            IsUpsert = true
-                        },
-                        ct);
-
-                    // 5c. Create checkpoint if needed
-                    if (_options.CheckpointsEnabled && lastVersion % _options.CheckpointInterval == 0)
+                    if (_options.BulkWriteOptimizationEnabled)
                     {
-                        var checkpointCollection = GetCheckpointCollection();
-                        var checkpoint = new CheckpointDocument<TAggregate>
+                        var models = new List<BulkWriteModel>(eventList.Count + (checkpoint is null ? 1 : 2));
+
+                        foreach (var @event in eventList)
                         {
-                            Id = new(aggregateId, lastVersion),
-                            State = aggregate
-                        };
-                        await checkpointCollection.InsertOneAsync(session, checkpoint, cancellationToken: ct);
+                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
+                                           eventsCollection.CollectionNamespace,
+                                           @event.ToBsonDocument()));
+                        }
+
+                        models.Add(new BulkWriteReplaceOneModel<BsonDocument>(
+                                       readModelCollection.CollectionNamespace,
+                                       RenderFilter(readModelCollection, Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId)),
+                                       aggregate.ToBsonDocument(),
+                                       null,
+                                       null,
+                                       true));
+
+                        if (checkpoint is not null)
+                        {
+                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
+                                           GetCheckpointCollection().CollectionNamespace,
+                                           checkpoint.ToBsonDocument()));
+                        }
+
+                        await helper.Client.BulkWriteAsync(
+                            session,
+                            models,
+                            new()
+                            {
+                                IsOrdered = true
+                            },
+                            ct);
+                    }
+                    else
+                    {
+                        // 5a. Insert events
+                        await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
+
+                        // 5b. Upsert read model
+                        await readModelCollection.ReplaceOneAsync(
+                            session,
+                            Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
+                            aggregate,
+                            new ReplaceOptions
+                            {
+                                IsUpsert = true
+                            },
+                            ct);
+
+                        // 5c. Create checkpoint if needed
+                        if (checkpoint is not null)
+                        {
+                            var checkpointCollection = GetCheckpointCollection();
+                            await checkpointCollection.InsertOneAsync(session, checkpoint, cancellationToken: ct);
+                        }
                     }
 
                     // 5d. Invoke user callback for additional transactional operations
@@ -145,12 +251,9 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
             return aggregate;
         }
-        catch (MongoException ex)
-            when (ex is MongoCommandException { Code: 11000 } or
-                        MongoWriteException { WriteError.Category: ServerErrorCategory.DuplicateKey } or
-                        MongoBulkWriteException { WriteErrors: [{ Category: ServerErrorCategory.DuplicateKey }] })
+        catch (MongoException ex) when (IsDuplicateKeyException(ex))
         {
-            var message = ex.Message;
+            var message = GetDuplicateKeyMessage(ex);
 
             if (message.Contains("index: _id_", StringComparison.Ordinal))
             {

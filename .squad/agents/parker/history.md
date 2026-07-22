@@ -12,6 +12,12 @@
 
 ## Learnings
 
+### 2026-04-15: Issue #81 Benchmark Revision Validation
+
+- Repaired the EventStore benchmark harness so it measures the approved three-scenario matrix explicitly: single-event append without checkpoints, medium batch without checkpoints, and checkpoint-forcing batch append, each baseline vs. `WithBulkWriteOptimization()`.
+- Replaced the EventStore bulk-write server-version cache with a `ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>>` so successful capability detection no longer pins per-iteration benchmark clients for process lifetime while still reusing the lookup for shared client instances.
+- Locked the cache behavior down with `MongoEventStoreBulkWriteTests.AppendEventsAsync_WhenStoresShareClient_CachesVersionLookupAcrossInstances()`, then validated with targeted EventStore tests, benchmark-project build/listing, and the full `bash build.sh Test` pipeline.
+
 ### 2026-04-11: Tara Hired as Expert Reviewer
 
 **Context:** Tara now serves as dedicated fresh-eyes reviewer for merge-gate and cross-package consistency checks.
@@ -338,6 +344,14 @@
 **Validation Results:**
 - ✅ All retry integration tests passed (2 tests in `MongoQueueRetryIntegrationTests.cs`)
 - ✅ Placeholder file deleted with no references remaining
+
+### 2026-04-15: EventStore Bulk-Write Benchmark Scope
+
+- Issue #81's smallest useful BenchmarkDotNet matrix is baseline vs opt-in bulk-write across three append shapes: single event without checkpoints, multi-event batch without checkpoints, and checkpoint-forcing append (`CheckpointInterval = 1`) to exercise the 3-collection path.
+- The implementation branch already exposes both paths cleanly for benchmarking: baseline is the default configuration, optimized path is enabled with `WithBulkWriteOptimization()`, and MongoDB 8 support is fail-fast.
+- Benchmark setup must warm the optimized store once before measurement; otherwise the one-time `buildInfo` server-version lookup cached per `IMongoClient` will pollute the "bulk write" numbers.
+- Do not include DI startup, index creation, or per-iteration Testcontainer startup in the measurement. Share one MongoDB 8 container/client per benchmark job and use unique aggregate IDs per invocation so duplicates and aggregate growth do not skew results.
+- Avoid mixing in `onBeforeCommit` callback work for the main comparison: the current optimization does not batch callback writes, so callback I/O would dilute the before/after signal instead of measuring the changed EventStore path.
 - ✅ Existing coverage validates retry limit enforcement and terminal state transitions
 
 ### 2026-04-11: Branch Review — Retry Policy Queue Changes
@@ -462,3 +476,7 @@ Signal: High (catches 80 percent of index bugs)
 ---
 
 **PR #77 Index Contract Strategy (2026-04-11):** Alec's revision pass on query-contract tests prompted decision formalization. Recorded three-layer index/query regression protection (rendered query shapes, real index validation via `Indexes.ListAsync()`, behavior-critical checks) as captured decision: `.squad/decisions.md` entry "Parker — Index Contract Test Strategy for Issue #76".
+
+---
+
+**Issue #81 Benchmark Matrix Analysis (2026-04-15):** Completed benchmark-matrix analysis for EventStore bulk-write optimization performance validation. Recommended three scenarios: 1-event append (baseline latency), medium batch append (typical bulk workload), checkpoint-forcing append (multi-collection path activation). Each scenario compares baseline vs opt-in bulk-write on MongoDB 8, excluding startup/setup noise. Scenarios approved for BenchmarkDotNet harness implementation. Orchestration log: `.squad/orchestration-log/20260415-133231-parker.md`.

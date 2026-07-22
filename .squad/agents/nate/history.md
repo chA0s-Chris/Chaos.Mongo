@@ -14,6 +14,14 @@
 
 <!-- Append learnings below -->
 
+### 2026-04-16: Issue #81 Fallback Benchmark Review
+
+**Review Scope:** EventStore bulk-write implementation plus `benchmarks/Chaos.Mongo.EventStore.Benchmarks`.
+
+**Outcome:** Approved current revision. The earlier benchmark blockers are resolved: the harness now models the three requested append cases explicitly, the server-version cache uses `ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>>`, and the benchmark warms both variants so setup/capability-detection noise stays out of the measured path.
+
+**Validation:** `dotnet test tests/Chaos.Mongo.EventStore.Tests/Chaos.Mongo.EventStore.Tests.csproj --no-restore`, `dotnet build benchmarks/Chaos.Mongo.EventStore.Benchmarks/Chaos.Mongo.EventStore.Benchmarks.csproj -c Release --no-restore`, and a BenchmarkDotNet run of `EventStoreAppendBenchmarks` completed successfully. `bash build.sh Test` was attempted but blocked by a shared `.nuke/temp/build.log` file lock in the workspace rather than a code failure.
+
 ### 2026-04-11: Tara Hired as Expert Reviewer
 
 **Context:** Brought on Tara as dedicated Expert Reviewer for merge-gate and fresh-eyes review.
@@ -534,4 +542,3 @@ Treat all three newly posted review notes as **valid**. One is merge-blocking; t
 **Risk:** `ClientBulkWriteException` normalization gap is highest risk; requires comprehensive integration tests on ≥8.0.
 
 **Decision Document:** `.squad/decisions/inbox/nate-bulk-write-default.md`
-

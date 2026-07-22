@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Tests;
 using Chaos.Mongo.Configuration;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 using NUnit.Framework;
 
 public class MongoBuilderExtensionsTests
@@ -111,6 +112,7 @@ public class MongoBuilderExtensionsTests
         var builder = new MongoBuilder(services);
 
         builder.WithEventStore<TestAggregate>(es => es
+                                                    .WithBulkWriteOptimization()
                                                     .WithCollectionPrefix("MyPrefix")
                                                     .WithEvent<TestCreatedEvent>("Created"));
 
@@ -118,6 +120,7 @@ public class MongoBuilderExtensionsTests
         var options = sp.GetService<MongoEventStoreOptions<TestAggregate>>();
 
         options.Should().NotBeNull();
+        options.BulkWriteOptimizationEnabled.Should().BeTrue();
         options.CollectionPrefix.Should().Be("MyPrefix");
         options.EventTypes.Should().ContainKey(typeof(TestCreatedEvent));
     }
@@ -135,10 +138,10 @@ public class MongoBuilderExtensionsTests
 
     private sealed class FakeMongoHelper : IMongoHelper
     {
-        public MongoDB.Driver.IMongoClient Client => throw new NotImplementedException();
-        public MongoDB.Driver.IMongoDatabase Database => throw new NotImplementedException();
+        public IMongoClient Client => throw new NotImplementedException();
+        public IMongoDatabase Database => throw new NotImplementedException();
 
-        public MongoDB.Driver.IMongoCollection<TDocument> GetCollection<TDocument>(MongoDB.Driver.MongoCollectionSettings? settings = null)
+        public IMongoCollection<TDocument> GetCollection<TDocument>(MongoCollectionSettings? settings = null)
             => throw new NotImplementedException();
 
         public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default)
