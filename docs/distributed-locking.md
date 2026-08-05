@@ -52,13 +52,43 @@ public async Task TryProcessJobAsync(CancellationToken cancellationToken = defau
 - A lease allows another instance to recover work if the current holder stops responding.
 - `IMongoLock.IsValid` indicates whether the lock is still within its lease.
 - Lock documents are stored in the collection configured by `MongoOptions.LockCollectionName`.
+- Lease durations shorter than one millisecond are rejected with `ArgumentOutOfRangeException`, because MongoDB stores `DateTime` at millisecond precision. This applies to acquisition, extension, and `MongoOptions.MigrationLockLeaseTime`.
 
-The lease is not an automatic renewal mechanism. Choose a duration that covers the protected work, and do not continue making exclusivity-sensitive changes after the lock is no longer valid.
+## Extend a held lock
+
+Use `TryExtendAsync` to renew a lock before its lease expires. Omitting the duration reuses the duration supplied during acquisition:
+
+```csharp
+if (!await mongoLock.TryExtendAsync(cancellationToken: cancellationToken))
+{
+    logger.LogWarning("The distributed lock was lost");
+    return;
+}
+```
+
+`ExtendAsync` is the throwing companion and returns the same lock after a successful renewal:
+
+```csharp
+await mongoLock.ExtendAsync(
+    leaseTime: TimeSpan.FromMinutes(10),
+    cancellationToken: cancellationToken);
+```
+
+An expired, disposed, or stolen lock cannot be renewed. A refused extension makes that lock instance permanently invalid. MongoDB and cancellation failures propagate without marking the lock as lost, allowing the caller to distinguish an inconclusive operation from a definitive refusal.
+
+Retrying after such a failure is worthwhile but not guaranteed to succeed: a renewal that reached the server before the response was lost leaves the lock instance tracking a stale expiry, and the retry is then refused even though no other holder took over. Treat a refusal following a failed renewal as a signal to stop the protected work and acquire the lock again, not as proof that another instance owns it.
+
+Extension reduces the chance that long-running work outlives its lease, but it cannot eliminate the overlap window entirely. A holder can stall after its last renewal while another instance acquires the expired lock, then resume. Expiry is evaluated using each instance's client clock, so clock skew can widen this window. Check `IsValid` before exclusivity-sensitive changes and stop the protected work after a refused extension.
+
+Disposing a lock waits for a renewal that is already in flight, so the release uses the expiry that renewal stored instead of a stale one. A slow renewal therefore delays disposal. Cancel the token passed to the renewal when shutdown must not wait for it.
+
+The library does not renew locks automatically. Callers remain responsible for choosing renewal intervals, handling failures, and abandoning work after losing the lock.
 
 ## Recommendations
 
 - Use descriptive names that identify the protected operation or resource.
 - Set leases long enough for expected work but short enough for useful recovery.
+- Extend long-running leases before they expire, using an application-specific renewal policy.
 - Always use `await using` so normal and exceptional exits release the lock.
 - Pass cancellation tokens to retrying acquisition calls.
 - Decide explicitly how callers should behave when immediate acquisition fails.

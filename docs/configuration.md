@@ -16,7 +16,7 @@
 | `LockCollectionName`                      | `string`                       | `"_locks"`               | Collection used for distributed locks                          |
 | `MigrationHistoryCollectionName`          | `string`                       | `"_migrations"`          | Collection used for migration history                          |
 | `MigrationsLockName`                      | `string`                       | `"ChaosMongoMigrations"` | Distributed lock used to coordinate migrations                 |
-| `MigrationLockLeaseTime`                  | `TimeSpan`                     | 10 minutes               | Lease duration for the migration lock                          |
+| `MigrationLockLeaseTime`                  | `TimeSpan`                     | 10 minutes               | Lease duration for the migration lock; minimum one millisecond |
 | `HolderId`                                | `string?`                      | Generated identifier     | Identifier for this application instance                       |
 | `ConfigureClientSettings`                 | `Action<MongoClientSettings>?` | `null`                   | Customizes the MongoDB driver client settings                  |
 
