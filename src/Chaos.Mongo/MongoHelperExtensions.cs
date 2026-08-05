@@ -24,6 +24,7 @@ public static class MongoHelperExtensions
     /// <param name="cancellationToken">Optional cancellation token to stop lock acquisition attempts.</param>
     /// <returns>A lock instance that must be disposed to release the lock.</returns>
     /// <exception cref="ArgumentException">Thrown when <paramref name="lockName"/> is null or whitespace.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="leaseTime"/> is shorter than one millisecond.</exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is cancelled.</exception>
     public static async Task<IMongoLock> AcquireLockAsync(this IMongoHelper helper,
                                                           String lockName,

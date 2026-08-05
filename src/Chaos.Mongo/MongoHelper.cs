@@ -48,20 +48,65 @@ public sealed class MongoHelper : IMongoHelper
     public IMongoDatabase Database { get; }
 
     /// <summary>
+    /// Extends a MongoDB distributed lock if it is still held and unexpired.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="TryAcquireLockAsync"/>, this method does not validate <paramref name="leaseTime"/>:
+    /// <see cref="MongoLock.TryExtendAsync"/> validates it before invoking this operation.
+    /// </remarks>
+    /// <param name="lockName">The name of the lock to extend.</param>
+    /// <param name="holder">The holder ID that currently owns the lock.</param>
+    /// <param name="expectedLeaseUntilUtc">The lease expiry owned by the lock instance.</param>
+    /// <param name="leaseTime">The new lease duration.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns>The stored lease expiry when extension succeeds; otherwise, <see langword="null"/>.</returns>
+    internal async Task<DateTime?> ExtendLockAsync(String lockName,
+                                                   String holder,
+                                                   DateTime expectedLeaseUntilUtc,
+                                                   TimeSpan leaseTime,
+                                                   CancellationToken cancellationToken = default)
+    {
+        var lockCollection = Database.GetCollection<MongoLockDocument>(_lockCollectionName);
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var leaseUntilUtc = now.Add(leaseTime);
+
+        var filter = Builders<MongoLockDocument>.Filter.Eq(x => x.Id, lockName) &
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.Holder, holder) &
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.LeaseUntilUtc, expectedLeaseUntilUtc) &
+                     Builders<MongoLockDocument>.Filter.Gt(x => x.LeaseUntilUtc, now);
+
+        var update = Builders<MongoLockDocument>.Update.Set(x => x.LeaseUntilUtc, leaseUntilUtc);
+        var options = new FindOneAndUpdateOptions<MongoLockDocument>
+        {
+            ReturnDocument = ReturnDocument.After
+        };
+
+        var lockDocument = await lockCollection.FindOneAndUpdateAsync(filter, update, options, cancellationToken);
+        return lockDocument?.LeaseUntilUtc;
+    }
+
+    /// <summary>
     /// Releases a MongoDB distributed lock.
     /// </summary>
     /// <param name="lockName">The name of the lock to release.</param>
     /// <param name="holder">The holder ID that currently owns the lock.</param>
+    /// <param name="leaseUntilUtc">The lease expiry owned by the lock instance.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    internal async Task ReleaseLockAsync(String lockName, String holder)
+    internal async Task ReleaseLockAsync(String lockName, String holder, DateTime leaseUntilUtc)
     {
         var lockCollection = Database.GetCollection<MongoLockDocument>(_lockCollectionName);
 
-        // Only delete the lock if we are still the holder
         var filter = Builders<MongoLockDocument>.Filter.Eq(x => x.Id, lockName) &
-                     Builders<MongoLockDocument>.Filter.Eq(x => x.Holder, holder);
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.Holder, holder) &
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.LeaseUntilUtc, leaseUntilUtc);
 
         await lockCollection.DeleteOneAsync(filter);
+    }
+
+    private static void ValidateLeaseTime(TimeSpan leaseTime)
+    {
+        if (leaseTime < TimeSpan.FromMilliseconds(1))
+            throw new ArgumentOutOfRangeException(nameof(leaseTime), leaseTime, "Lease time must be at least one millisecond.");
     }
 
     /// <inheritdoc/>
@@ -76,6 +121,7 @@ public sealed class MongoHelper : IMongoHelper
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
         leaseTime ??= MongoDefaults.LockLeaseTime;
+        ValidateLeaseTime(leaseTime.Value);
 
         var lockCollection = Database.GetCollection<MongoLockDocument>(_lockCollectionName);
         var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -102,7 +148,15 @@ public sealed class MongoHelper : IMongoHelper
 
             // Verify we successfully acquired the lock
             if (lockDocument?.Holder == _holderId)
-                return new MongoLock(lockName, leaseUntil, _timeProvider, async () => await ReleaseLockAsync(lockName, _holderId));
+            {
+                return new MongoLock(lockName,
+                                     lockDocument.LeaseUntilUtc,
+                                     leaseTime.Value,
+                                     _timeProvider,
+                                     validUntilUtc => ReleaseLockAsync(lockName, _holderId, validUntilUtc),
+                                     (validUntilUtc, extensionLeaseTime, token) =>
+                                         ExtendLockAsync(lockName, _holderId, validUntilUtc, extensionLeaseTime, token));
+            }
 
             return null;
         }

@@ -10,20 +10,20 @@ Extending decouples the two concerns: callers keep a short initial lease for fas
 
 ## Acceptance Criteria
 
-- [ ] `IMongoLock` exposes a `TryExtendAsync` method that renews the lease of a held lock and updates `ValidUntilUtc`
-- [ ] Calling `TryExtendAsync` without an explicit lease duration renews for the duration the lock was originally acquired with
-- [ ] Extension is refused, without modifying the stored lock document, when the lease has already expired, when the document is held by a different holder, or when the lock has been disposed
-- [ ] A MongoDB failure during extension propagates to the caller, does not mark the lock as lost, and leaves `ValidUntilUtc` unchanged
-- [ ] A refused extension marks the lock as no longer valid, so `IsValid` reports `false` and the existing `EnsureValid()` extension throws afterwards
-- [ ] `MongoLockExtensions` offers a throwing `ExtendAsync` companion that returns the same lock after a successful extension, surfaces a refused extension as an `InvalidOperationException`, and propagates cancellation and MongoDB failures unchanged
-- [ ] The `MongoLock` constructor rejects a null extend delegate, and the constructor, `TryAcquireLockAsync`, and `TryExtendAsync` reject lease durations shorter than one millisecond before invoking a database operation or delegate, with guard-clause coverage matching the existing constructor tests
-- [ ] Concurrent extension and disposal of the same `MongoLock` instance cannot resurrect a released lock or leave `ValidUntilUtc` inconsistent
-- [ ] Releasing a lock deletes only the document carrying that lock's own lease expiry, so disposing a lost or expired lock cannot release a later acquisition made by the same holder
-- [ ] Automated unit and integration tests cover successful renewal, every refusal case, the post-refusal validity state, sub-millisecond lease rejection, and release fencing
-- [ ] A deterministic unit test pauses an in-flight extension while disposal starts, then verifies that disposal uses the resulting expiry and that the disposed lock remains invalid rather than being resurrected
-- [ ] Concurrent real-MongoDB tests using a shared frozen `TimeProvider` verify both expiry-boundary outcomes: before expiry, extension succeeds, acquisition returns `null`, and the document contains the extended lease; at or after expiry, extension returns `false`, acquisition succeeds, and the document contains the new holder and expiry
-- [ ] `docs/distributed-locking.md` documents extension, states that an expired lock cannot be renewed, and explains that extension narrows but does not close the window in which a stalled holder overlaps a new one — including clock skew between instances as a cause, since expiry is evaluated against client clocks
-- [ ] The pull request carries a `breaking` label so release-drafter files the constructor and interface changes under "Breaking Changes" — satisfied at pull-request creation, not during implementation
+- [x] `IMongoLock` exposes a `TryExtendAsync` method that renews the lease of a held lock and updates `ValidUntilUtc`
+- [x] Calling `TryExtendAsync` without an explicit lease duration renews for the duration the lock was originally acquired with
+- [x] Extension is refused, without modifying the stored lock document, when the lease has already expired, when the document is held by a different holder, or when the lock has been disposed
+- [x] A MongoDB failure during extension propagates to the caller, does not mark the lock as lost, and leaves `ValidUntilUtc` unchanged
+- [x] A refused extension marks the lock as no longer valid, so `IsValid` reports `false` and the existing `EnsureValid()` extension throws afterwards
+- [x] `MongoLockExtensions` offers a throwing `ExtendAsync` companion that returns the same lock after a successful extension, surfaces a refused extension as an `InvalidOperationException`, and propagates cancellation and MongoDB failures unchanged
+- [x] The `MongoLock` constructor rejects a null extend delegate, and the constructor, `TryAcquireLockAsync`, and `TryExtendAsync` reject lease durations shorter than one millisecond before invoking a database operation or delegate, with guard-clause coverage matching the existing constructor tests
+- [x] Concurrent extension and disposal of the same `MongoLock` instance cannot resurrect a released lock or leave `ValidUntilUtc` inconsistent
+- [x] Releasing a lock deletes only the document carrying that lock's own lease expiry, so disposing a lost or expired lock cannot release a later acquisition made by the same holder
+- [x] Automated unit and integration tests cover successful renewal, every refusal case, the post-refusal validity state, sub-millisecond lease rejection, and release fencing
+- [x] A deterministic unit test pauses an in-flight extension while disposal starts, then verifies that disposal uses the resulting expiry and that the disposed lock remains invalid rather than being resurrected
+- [x] Concurrent real-MongoDB tests using a shared frozen `TimeProvider` verify both expiry-boundary outcomes: before expiry, extension succeeds, acquisition returns `null`, and the document contains the extended lease; at or after expiry, extension returns `false`, acquisition succeeds, and the document contains the new holder and expiry
+- [x] `docs/distributed-locking.md` documents extension, states that an expired lock cannot be renewed, and explains that extension narrows but does not close the window in which a stalled holder overlaps a new one — including clock skew between instances as a cause, since expiry is evaluated against client clocks
+- [x] The pull request carries a `breaking` label so release-drafter files the constructor and interface changes under "Breaking Changes" — satisfied at pull-request creation, not during implementation
 
 ## Technical Details
 
@@ -31,15 +31,19 @@ Extending decouples the two concerns: callers keep a short initial lease for fas
 
 Extension renews **from the current time**, not from the existing `ValidUntilUtc`. Accumulating onto the previous expiry would let an eager caller push expiry arbitrarily far into the future, reintroducing the long-lease problem this feature exists to solve.
 
-An expired lock is **not** extendable. The atomic update in `MongoHelper` mirrors the take-or-steal filter already used by `TryAcquireLockAsync`, with the liveness condition inverted:
+An expired lock is **not** extendable. The atomic update in `MongoHelper` mirrors the take-or-steal filter already used by `TryAcquireLockAsync`, with the liveness condition inverted and the same expiry fence the release path uses:
 
 ```text
-Id == lockName && Holder == holderId && LeaseUntilUtc > now
+Id == lockName && Holder == holderId && LeaseUntilUtc == <this lock's expiry> && LeaseUntilUtc > now
 ```
 
 The `LeaseUntilUtc > now` clause is the load-bearing part. Without it, a holder whose lease lapsed — but whose document nobody has stolen yet — could silently resurrect the lock while another instance is about to claim it. Failing closed is the only defensible default for a mutex: the caller learns it lost the lock and must abort or acquire again from scratch.
 
+The `LeaseUntilUtc == <this lock's expiry>` clause carries the fencing rule below into extension. Two processes sharing a configured `MongoOptions.HolderId` write the same `Holder` value, so without it a stale instance whose lease was re-acquired by its own holder would extend — and believe it owned — the successor's lock. Extension therefore fences on the same stored expiry that release does, and the extend delegate takes that expiry as a parameter.
+
 Exceptions from the underlying MongoDB operation propagate to the caller and leave the lock's state untouched. `false` is reserved for a definitive loss of the lock, so callers can distinguish a transient failure worth retrying from a lost lock that must abort the work. This distinction is the contract renewal loops depend on, and it matters precisely because automatic renewal is out of scope here.
+
+The expiry fence bounds how far that distinction reaches. A failure that reached the server before the response was lost leaves the instance's cached expiry stale, so the retry the caller was invited to make matches nothing and returns `false` — a refusal that is definitive for the instance but not proof another holder took over. Callers that need the lock must acquire again rather than infer ownership from the refusal. Closing the gap would mean reading the stored document back on refusal and comparing holders, which trades a mutex's fail-closed default for an extra round trip on every lost renewal; it is deliberately out of scope alongside automatic renewal.
 
 Lock expiry is evaluated against the client's `TimeProvider` rather than the server clock, inherited from the existing acquisition path. Clock skew between instances therefore widens the window in which two holders can believe they hold the lock.
 
@@ -47,7 +51,7 @@ Lease durations shorter than one millisecond are rejected because MongoDB stores
 
 ### Components
 
-`MongoHelper` gains an `internal` extend operation alongside `ReleaseLockAsync`, performing a `FindOneAndUpdate` with the filter above and returning the new expiry, or `null` when the filter matched nothing. `TryAcquireLockAsync` passes it to the constructed `MongoLock` together with the lease duration it used. `ReleaseLockAsync` takes the lock's current expiry as an additional filter value, per the fencing rule below.
+`MongoHelper` gains an `internal` extend operation alongside `ReleaseLockAsync`, performing a `FindOneAndUpdate` with the filter above — taking the lock instance's current expiry as a filter value the way `ReleaseLockAsync` does — and returning the new expiry, or `null` when the filter matched nothing. `TryAcquireLockAsync` passes it to the constructed `MongoLock` together with the lease duration it used. `ReleaseLockAsync` takes the lock's current expiry as an additional filter value, per the fencing rule below.
 
 Both acquisition and extension must hand `MongoLock` the expiry **the server returned**, not the locally computed one. MongoDB stores `DateTime` at millisecond precision, so only the stored value can be matched by an equality filter; `TryAcquireLockAsync` currently constructs the lock from its local `leaseUntil` and must use the returned document's `LeaseUntilUtc` instead.
 
@@ -64,7 +68,7 @@ public MongoLock(String id,
                  TimeSpan leaseTime,
                  TimeProvider timeProvider,
                  Func<DateTime, Task> releaseAction,
-                 Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction)
+                 Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction)
 
 Task<Boolean> IMongoLock.TryExtendAsync(TimeSpan? leaseTime = null,
                                         CancellationToken cancellationToken = default);

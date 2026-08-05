@@ -4,16 +4,19 @@ namespace Chaos.Mongo.Tests;
 
 using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Driver;
 using NUnit.Framework;
 
 public class MongoLockExtensionsTests
 {
+    private static readonly TimeSpan _defaultLeaseTime = TimeSpan.FromMinutes(5);
+
     [Test]
     public async Task EnsureValid_AfterDisposal_ShouldThrowInvalidOperationException()
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        var mongoLock = new MongoLock("disposed-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider, () => Task.CompletedTask);
+        var mongoLock = CreateMongoLock("disposed-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider);
         await mongoLock.DisposeAsync();
 
         // Act
@@ -29,7 +32,7 @@ public class MongoLockExtensionsTests
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        var mongoLock = new MongoLock("transition-lock", timeProvider.GetUtcNow().AddMilliseconds(100).UtcDateTime, timeProvider, () => Task.CompletedTask);
+        var mongoLock = CreateMongoLock("transition-lock", timeProvider.GetUtcNow().AddMilliseconds(100).UtcDateTime, timeProvider);
 
         // Act & Assert - Valid before expiration
         mongoLock.EnsureValid().Should().BeSameAs(mongoLock);
@@ -47,8 +50,8 @@ public class MongoLockExtensionsTests
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        var validLock = new MongoLock("valid-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider, () => Task.CompletedTask);
-        var expiredLock = new MongoLock("expired-lock", timeProvider.GetUtcNow().AddMilliseconds(-100).UtcDateTime, timeProvider, () => Task.CompletedTask);
+        var validLock = CreateMongoLock("valid-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider);
+        var expiredLock = CreateMongoLock("expired-lock", timeProvider.GetUtcNow().AddMilliseconds(-100).UtcDateTime, timeProvider);
 
         // Act & Assert
         validLock.EnsureValid().Should().BeSameAs(validLock);
@@ -61,7 +64,7 @@ public class MongoLockExtensionsTests
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        var mongoLock = new MongoLock("expired-lock", timeProvider.GetUtcNow().AddMilliseconds(-100).UtcDateTime, timeProvider, () => Task.CompletedTask);
+        var mongoLock = CreateMongoLock("expired-lock", timeProvider.GetUtcNow().AddMilliseconds(-100).UtcDateTime, timeProvider);
 
         // Act
         var act = () => mongoLock.EnsureValid();
@@ -76,7 +79,7 @@ public class MongoLockExtensionsTests
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        var mongoLock = new MongoLock("fluent-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider, () => Task.CompletedTask);
+        var mongoLock = CreateMongoLock("fluent-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider);
 
         // Act
         var result = mongoLock.EnsureValid().EnsureValid().EnsureValid();
@@ -104,12 +107,115 @@ public class MongoLockExtensionsTests
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        var mongoLock = new MongoLock("test-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider, () => Task.CompletedTask);
+        var mongoLock = CreateMongoLock("test-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider);
 
         // Act
         var result = mongoLock.EnsureValid();
 
         // Assert
         result.Should().BeSameAs(mongoLock);
+    }
+
+    [Test]
+    public async Task ExtendAsync_WhenCancelled_ShouldPropagateCancellation()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var mongoLock = CreateMongoLock("test-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider);
+        using var cancellationTokenSource = new CancellationTokenSource();
+        await cancellationTokenSource.CancelAsync();
+
+        // Act
+        var act = async () => await mongoLock.ExtendAsync(cancellationToken: cancellationTokenSource.Token);
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        mongoLock.IsValid.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task ExtendAsync_WhenExtensionIsRefused_ShouldThrowInvalidOperationException()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var mongoLock = CreateMongoLock(
+            "refused-lock",
+            timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
+            timeProvider,
+            (_, _, _) => Task.FromResult<DateTime?>(null));
+
+        // Act
+        var act = async () => await mongoLock.ExtendAsync();
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage("*refused-lock*");
+    }
+
+    [Test]
+    public async Task ExtendAsync_WhenExtensionSucceeds_ShouldReturnSameLock()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var extendedExpiry = timeProvider.GetUtcNow().AddMinutes(10).UtcDateTime;
+        var mongoLock = CreateMongoLock(
+            "test-lock",
+            timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
+            timeProvider,
+            (_, _, _) => Task.FromResult<DateTime?>(extendedExpiry));
+
+        // Act
+        var result = await mongoLock.ExtendAsync();
+
+        // Assert
+        result.Should().BeSameAs(mongoLock);
+        result.ValidUntilUtc.Should().Be(extendedExpiry);
+    }
+
+    [Test]
+    public async Task ExtendAsync_WhenMongoDbOperationThrows_ShouldPropagateException()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var expectedException = new MongoException("Extension failed");
+        var mongoLock = CreateMongoLock(
+            "test-lock",
+            timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
+            timeProvider,
+            (_, _, _) => Task.FromException<DateTime?>(expectedException));
+
+        // Act
+        var act = async () => await mongoLock.ExtendAsync();
+
+        // Assert
+        var exception = await act.Should().ThrowAsync<MongoException>();
+        exception.Which.Should().BeSameAs(expectedException);
+    }
+
+    [Test]
+    public async Task ExtendAsync_WithNullLock_ShouldThrowArgumentNullException()
+    {
+        // Arrange
+        IMongoLock? mongoLock = null;
+
+        // Act
+        var act = async () => await mongoLock!.ExtendAsync();
+
+        // Assert
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    private static MongoLock CreateMongoLock(
+        String id,
+        DateTime validUntilUtc,
+        TimeProvider timeProvider,
+        Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null)
+    {
+        return new(id,
+                   validUntilUtc,
+                   _defaultLeaseTime,
+                   timeProvider,
+                   _ => Task.CompletedTask,
+                   extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
     }
 }

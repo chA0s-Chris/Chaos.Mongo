@@ -28,5 +28,6 @@ public interface IMongoHelper : IMongoConnection
     /// <param name="cancellationToken">Optional cancellation token.</param>
     /// <returns>A lock instance if successful, or <c>null</c> if the lock could not be acquired.</returns>
     /// <exception cref="ArgumentException">Thrown when <paramref name="lockName"/> is null or whitespace.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="leaseTime"/> is shorter than one millisecond.</exception>
     Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default);
 }
