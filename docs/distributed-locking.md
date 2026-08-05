@@ -80,6 +80,8 @@ Retrying after such a failure is worthwhile but not guaranteed to succeed: a ren
 
 Extension reduces the chance that long-running work outlives its lease, but it cannot eliminate the overlap window entirely. A holder can stall after its last renewal while another instance acquires the expired lock, then resume. Expiry is evaluated using each instance's client clock, so clock skew can widen this window. Check `IsValid` before exclusivity-sensitive changes and stop the protected work after a refused extension.
 
+Disposing a lock waits for a renewal that is already in flight, so the release uses the expiry that renewal stored instead of a stale one. A slow renewal therefore delays disposal. Cancel the token passed to the renewal when shutdown must not wait for it.
+
 The library does not renew locks automatically. Callers remain responsible for choosing renewal intervals, handling failures, and abandoning work after losing the lock.
 
 ## Recommendations
