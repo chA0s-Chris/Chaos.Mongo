@@ -473,12 +473,19 @@ await foreach (var evt in _eventStore.GetEventStream(aggregateId, fromVersion: 5
 
 ### Optimistic Concurrency
 
-The event store uses a unique compound index on `(AggregateId, Version)` to prevent concurrent writes:
+The event store detects concurrent writes in two places, and both report `MongoConcurrencyException`:
 
 1. Process A reads aggregate at version 5, prepares event with version 6
 2. Process B reads aggregate at version 5, prepares event with version 6
 3. Process A commits successfully
 4. Process B fails with `MongoConcurrencyException`
+
+Whether Process B fails before or inside its transaction depends on timing, not on the kind of conflict:
+
+- **Before the transaction** — Process B's append sees the aggregate already at version 6 and rejects version 6 as already committed.
+- **Inside the transaction** — Process B passed that check before Process A committed, and the unique compound index on `(AggregateId, Version)` rejects the insert.
+
+A version *above* the aggregate's current version + 1 is a gap in the caller's own numbering rather than a conflict, so it throws `ArgumentException` and must not be retried. Resubmitting an event that is already stored throws `MongoDuplicateEventException`, whichever path detects it.
 
 **Handling Concurrency Conflicts:**
 
@@ -553,12 +560,12 @@ Register the outbox separately via `WithOutbox(...)` and inject `IOutbox` into t
 
 ## Exception Handling
 
-| Exception | Cause | Recommended Action |
-|-----------|-------|-------------------|
-| `MongoConcurrencyException` | Another process inserted an event with the same version | Reload aggregate and retry |
-| `MongoDuplicateEventException` | Event with same ID already exists | Safe to ignore (idempotent) |
-| `MongoEventValidationException` | Event preconditions not met | Fix the event data or aggregate state |
-| `ArgumentException` | Invalid input (empty events, mixed aggregates, non-sequential versions) | Fix caller code |
+| Exception                       | Cause                                                                                                  | Recommended Action                    |
+|---------------------------------|--------------------------------------------------------------------------------------------------------|---------------------------------------|
+| `MongoConcurrencyException`     | The event's version was already committed for this aggregate                                           | Reload aggregate and retry            |
+| `MongoDuplicateEventException`  | Event with same ID already exists                                                                      | Safe to ignore (idempotent)           |
+| `MongoEventValidationException` | Event preconditions not met                                                                            | Fix the event data or aggregate state |
+| `ArgumentException`             | Invalid input (empty events, mixed aggregates, versions below 1, version gaps, non-sequential batches) | Fix caller code                       |
 
 ```csharp
 try

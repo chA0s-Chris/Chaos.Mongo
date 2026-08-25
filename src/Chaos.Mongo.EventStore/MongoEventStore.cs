@@ -68,6 +68,33 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         return new BsonDocumentFilterDefinition<BsonDocument>(renderedFilter);
     }
 
+    /// <summary>
+    /// Creates the exception describing an append whose first event version was already committed.
+    /// Resubmitting an event that is already stored is an idempotent retry rather than a conflict,
+    /// so the stored event IDs decide which exception the caller sees.
+    /// </summary>
+    private async Task<MongoEventStoreException> CreateStaleVersionExceptionAsync(
+        List<Event<TAggregate>> eventList,
+        Int64 currentVersion,
+        CancellationToken cancellationToken)
+    {
+        var eventIds = eventList.Select(e => e.Id).ToList();
+
+        var alreadyStored = await GetEventsCollection()
+                                  .Find(Builders<Event<TAggregate>>.Filter.In(e => e.Id, eventIds))
+                                  .AnyAsync(cancellationToken);
+
+        if (alreadyStored)
+        {
+            return new MongoDuplicateEventException(
+                "An event with the same ID already exists (idempotency conflict).");
+        }
+
+        return new MongoConcurrencyException(
+            $"A concurrency conflict occurred — version {eventList[0].Version} of this aggregate was already committed. " +
+            $"The aggregate is at version {currentVersion}.");
+    }
+
     private async Task EnsureBulkWriteOptimizationSupportedAsync(CancellationToken cancellationToken)
     {
         if (!_options.BulkWriteOptimizationEnabled)
@@ -134,7 +161,6 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         };
 
         // 2. Validate events: same aggregate, sequential versions
-        var expectedVersion = aggregate.Version + 1;
         foreach (var @event in eventList)
         {
             if (@event.AggregateId != aggregateId)
@@ -143,16 +169,45 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                     $"All events must target the same aggregate. Expected '{aggregateId}', but found '{@event.AggregateId}'.",
                     nameof(events));
             }
+        }
 
-            if (@event.Version != expectedVersion)
+        var firstVersion = eventList[0].Version;
+
+        // Check the batch against itself before comparing it to the aggregate: a malformed batch is
+        // a caller error no reload can fix, so it must never surface as a retryable conflict.
+        for (var index = 1; index < eventList.Count; index++)
+        {
+            var expectedBatchVersion = firstVersion + index;
+            if (eventList[index].Version != expectedBatchVersion)
             {
                 throw new ArgumentException(
-                    $"Events must have sequential versions starting from {aggregate.Version + 1}. " +
-                    $"Expected version {expectedVersion}, but found {@event.Version}.",
+                    "Events must have sequential versions. " +
+                    $"Expected version {expectedBatchVersion}, but found {eventList[index].Version}.",
                     nameof(events));
             }
+        }
 
-            expectedVersion++;
+        if (firstVersion < 1)
+        {
+            throw new ArgumentException(
+                $"Event versions must start at 1, but found {firstVersion}.",
+                nameof(events));
+        }
+
+        // A version that is already committed is an optimistic-concurrency conflict, not invalid
+        // input: the caller prepared the event against state another writer has since superseded.
+        if (firstVersion <= aggregate.Version)
+        {
+            throw await CreateStaleVersionExceptionAsync(eventList, aggregate.Version, cancellationToken);
+        }
+
+        var expectedVersion = aggregate.Version + 1;
+        if (firstVersion != expectedVersion)
+        {
+            throw new ArgumentException(
+                $"Events must have sequential versions starting from {expectedVersion}. " +
+                $"Expected version {expectedVersion}, but found {firstVersion}.",
+                nameof(events));
         }
 
         // 3. Apply events in memory (may throw MongoEventValidationException)
