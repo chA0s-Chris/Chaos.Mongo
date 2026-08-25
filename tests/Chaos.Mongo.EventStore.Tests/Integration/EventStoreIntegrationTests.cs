@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
+using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,38 +50,6 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
-    public async Task AppendEventsAsync_DuplicateVersion_ThrowsArgumentException()
-    {
-        var aggregateId = Guid.NewGuid();
-
-        await _eventStore.AppendEventsAsync(
-        [
-            new OrderCreatedEvent
-            {
-                Id = Guid.NewGuid(),
-                AggregateId = aggregateId,
-                Version = 1,
-                CustomerName = "Frank",
-                TotalAmount = 30.00m
-            }
-        ]);
-
-        // Try to insert another event with the same version - now caught by validation
-        var act = () => _eventStore.AppendEventsAsync(
-        [
-            new OrderShippedEvent
-            {
-                Id = Guid.NewGuid(),
-                AggregateId = aggregateId,
-                Version = 1
-            }
-        ]);
-
-        await act.Should().ThrowAsync<ArgumentException>()
-                 .WithMessage("*sequential*Expected version 2*");
-    }
-
-    [Test]
     public async Task AppendEventsAsync_EmptyEvents_ThrowsArgumentException()
     {
         var act = () => _eventStore.AppendEventsAsync(Array.Empty<Event<OrderAggregate>>());
@@ -114,42 +83,6 @@ public class EventStoreIntegrationTests
 
         await act.Should().ThrowAsync<ArgumentException>()
                  .WithMessage("*same aggregate*");
-    }
-
-    [Test]
-    public async Task AppendEventsAsync_MultipleEvents_AppliesAllEventsToReadModel()
-    {
-        var aggregateId = Guid.NewGuid();
-
-        // First batch: create order
-        await _eventStore.AppendEventsAsync(
-        [
-            new OrderCreatedEvent
-            {
-                Id = Guid.NewGuid(),
-                AggregateId = aggregateId,
-                Version = 1,
-                CustomerName = "Bob",
-                TotalAmount = 50.00m
-            }
-        ]);
-
-        // Second batch: ship order
-        await _eventStore.AppendEventsAsync(
-        [
-            new OrderShippedEvent
-            {
-                Id = Guid.NewGuid(),
-                AggregateId = aggregateId,
-                Version = 2
-            }
-        ]);
-
-        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
-        aggregate.Should().NotBeNull();
-        aggregate.Version.Should().Be(2);
-        aggregate.Status.Should().Be("Shipped");
-        aggregate.CustomerName.Should().Be("Bob");
     }
 
     [Test]
@@ -201,6 +134,42 @@ public class EventStoreIntegrationTests
         var readModel = await _aggregateRepository.GetAsync(aggregateId);
         readModel!.Version.Should().Be(3);
         readModel.Status.Should().Be("Completed");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_MultipleEvents_AppliesAllEventsToReadModel()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        // First batch: create order
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Bob",
+                TotalAmount = 50.00m
+            }
+        ]);
+
+        // Second batch: ship order
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 2
+            }
+        ]);
+
+        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
+        aggregate.Should().NotBeNull();
+        aggregate.Version.Should().Be(2);
+        aggregate.Status.Should().Be("Shipped");
+        aggregate.CustomerName.Should().Be("Bob");
     }
 
     [Test]
@@ -354,6 +323,137 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_StaleVersionWithMixedAggregates_ThrowsArgumentException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Kim",
+                TotalAmount = 20.00m
+            }
+        ]);
+
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1
+            },
+            new OrderCompletedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = Guid.NewGuid(),
+                Version = 2
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*same aggregate*");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_StaleVersionWithNonSequentialBatch_ThrowsArgumentException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Jerome",
+                TotalAmount = 15.00m
+            }
+        ]);
+
+        // A malformed batch stays a caller error even when its first version is stale
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1
+            },
+            new OrderCompletedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 5
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*sequential*Expected version 2*");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_StaleVersionWithStoredEventId_ThrowsMongoDuplicateEventException()
+    {
+        var aggregateId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+
+        Func<Task> append = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = eventId,
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Ingrid",
+                TotalAmount = 55.00m
+            }
+        ]);
+
+        await append();
+
+        // Resubmitting an already stored event is an idempotent retry, not a conflict
+        await append.Should().ThrowAsync<MongoDuplicateEventException>();
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_StaleVersion_ThrowsMongoConcurrencyException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Frank",
+                TotalAmount = 30.00m
+            }
+        ]);
+
+        // A version another writer already committed is a conflict, not invalid input
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderShippedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1
+            }
+        ]);
+
+        await act.Should().ThrowAsync<MongoConcurrencyException>()
+                 .WithMessage("*version 1 of this aggregate was already committed*");
+    }
+
+    [Test]
     public async Task AppendEventsAsync_ValidationFailure_ThrowsAndDoesNotPersist()
     {
         var aggregateId = Guid.NewGuid();
@@ -408,6 +508,27 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_VersionBelowOne_ThrowsArgumentException()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 0,
+                CustomerName = "Lena",
+                TotalAmount = 10.00m
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*must start at 1*");
+    }
+
+    [Test]
     public async Task AppendEventsAsync_VersionNotContinuingFromAggregate_ThrowsArgumentException()
     {
         var aggregateId = Guid.NewGuid();
@@ -438,6 +559,39 @@ public class EventStoreIntegrationTests
 
         await act.Should().ThrowAsync<ArgumentException>()
                  .WithMessage("*sequential*Expected version 2*");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_WithOnBeforeCommitFailure_RollsBackEntireTransaction()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        var act = () => _eventStore.AppendEventsAsync(
+            [
+                new OrderCreatedEvent
+                {
+                    Id = Guid.NewGuid(),
+                    AggregateId = aggregateId,
+                    Version = 1,
+                    CustomerName = "RollbackTest",
+                    TotalAmount = 50.00m
+                }
+            ],
+            (_, _, _, _) => throw new InvalidOperationException("Callback failure"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage("Callback failure");
+
+        // Verify no events were persisted
+        var events = new List<Event<OrderAggregate>>();
+        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+            events.Add(evt);
+
+        events.Should().BeEmpty();
+
+        // Verify no read model was persisted
+        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
+        aggregate.Should().BeNull();
     }
 
     [Test]
@@ -485,39 +639,6 @@ public class EventStoreIntegrationTests
             events.Add(evt);
 
         events.Should().HaveCount(1);
-    }
-
-    [Test]
-    public async Task AppendEventsAsync_WithOnBeforeCommitFailure_RollsBackEntireTransaction()
-    {
-        var aggregateId = Guid.NewGuid();
-
-        var act = () => _eventStore.AppendEventsAsync(
-            [
-                new OrderCreatedEvent
-                {
-                    Id = Guid.NewGuid(),
-                    AggregateId = aggregateId,
-                    Version = 1,
-                    CustomerName = "RollbackTest",
-                    TotalAmount = 50.00m
-                }
-            ],
-            (_, _, _, _) => throw new InvalidOperationException("Callback failure"));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-                 .WithMessage("Callback failure");
-
-        // Verify no events were persisted
-        var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
-            events.Add(evt);
-
-        events.Should().BeEmpty();
-
-        // Verify no read model was persisted
-        var aggregate = await _aggregateRepository.GetAsync(aggregateId);
-        aggregate.Should().BeNull();
     }
 
     [Test]
@@ -791,7 +912,7 @@ public class EventStoreIntegrationTests
         _mongoHelper = sp.GetRequiredService<IMongoHelper>();
 
         // Manually run configurators to create indexes
-        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
+        foreach (var configurator in sp.GetServices<IMongoConfigurator>())
             configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
     }
 }

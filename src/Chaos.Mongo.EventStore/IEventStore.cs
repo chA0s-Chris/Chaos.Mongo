@@ -20,6 +20,13 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     ///     and must have sequential versions starting from the aggregate's current version + 1.
     ///     </para>
     ///     <para>
+    ///     A first event whose version was already committed is treated as an optimistic-concurrency
+    ///     conflict rather than invalid input, because another writer may have committed that version
+    ///     after the caller read the aggregate. Resubmitting an event that is already stored is an
+    ///     idempotent retry and reports <see cref="MongoDuplicateEventException"/> instead. A version
+    ///     above the aggregate's current version + 1 remains invalid caller input.
+    ///     </para>
+    ///     <para>
     ///     Events are first applied to the aggregate in memory to validate that the aggregate's
     ///     current state permits the operations. If validation succeeds, the events are persisted
     ///     within a transaction along with the updated read model and optional checkpoint.
@@ -50,13 +57,15 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <returns>The aggregate with all events applied, as it was at commit time.</returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="events"/> is empty, contains events for different aggregates,
-    /// or has non-sequential versions.
+    /// starts at a version below one, leaves a gap above the aggregate's current version, or
+    /// continues with non-sequential versions.
     /// </exception>
     /// <exception cref="MongoEventValidationException">
     /// Thrown when an event cannot be applied because the aggregate's state does not permit it.
     /// </exception>
     /// <exception cref="MongoConcurrencyException">
-    /// Thrown when another process inserted an event for the same aggregate version.
+    /// Thrown when the first event's version was already committed for this aggregate, and when
+    /// another process inserts an event for the same aggregate version before this append commits.
     /// </exception>
     /// <exception cref="MongoDuplicateEventException">
     /// Thrown when an event with the same ID already exists.

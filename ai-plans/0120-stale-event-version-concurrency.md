@@ -10,26 +10,25 @@ Pre-validation must distinguish an already-consumed version from a genuine calle
 
 ## Acceptance Criteria
 
-- [ ] Appending events whose first version is greater than zero and not greater than the aggregate's current persisted version throws `MongoConcurrencyException`.
-- [ ] Such a stale append throws `MongoDuplicateEventException` instead when at least one submitted event ID already exists in the events collection, so idempotent retries stay distinguishable from concurrency conflicts.
-- [ ] Appending events whose first version exceeds the aggregate's current version by more than one still throws `ArgumentException`.
-- [ ] Appending events whose first version is less than one throws `ArgumentException` regardless of aggregate state.
-- [ ] Events after the first must be sequential relative to the preceding submitted event and otherwise throw `ArgumentException`, independent of whether the first version was stale.
-- [ ] A batch targeting more than one aggregate throws `ArgumentException` even when its first version is stale.
-- [ ] Writers that pass pre-validation and collide inside the transaction continue to receive `MongoConcurrencyException` or `MongoDuplicateEventException` from the existing duplicate-key translation.
-- [ ] Integration tests cover stale-version conflict, stale idempotent retry, version gap, non-positive version, malformed batch after a stale first version, and mixed aggregates, and existing tests asserting the previous mapping are updated.
-- [ ] `IEventStore.AppendEventsAsync` XML documentation and `docs/event-store.md` describe when each exception is thrown, including the two conflict-detection paths.
+- [x] Appending events whose first version is greater than zero and not greater than the aggregate's current persisted version throws `MongoConcurrencyException`.
+- [x] Such a stale append throws `MongoDuplicateEventException` instead when at least one submitted event ID already exists in the events collection, so idempotent retries stay distinguishable from concurrency conflicts.
+- [x] Appending events whose first version exceeds the aggregate's current version by more than one still throws `ArgumentException`.
+- [x] Appending events whose first version is less than one throws `ArgumentException` regardless of aggregate state.
+- [x] Events after the first must be sequential relative to the preceding submitted event and otherwise throw `ArgumentException`, independent of whether the first version was stale.
+- [x] A batch targeting more than one aggregate throws `ArgumentException` even when its first version is stale.
+- [x] Writers that pass pre-validation and collide inside the transaction continue to receive `MongoConcurrencyException` or `MongoDuplicateEventException` from the existing duplicate-key translation.
+- [x] Integration tests cover stale-version conflict, stale idempotent retry, version gap, non-positive version, malformed batch after a stale first version, and mixed aggregates, and existing tests asserting the previous mapping are updated.
+- [x] `IEventStore.AppendEventsAsync` XML documentation and `docs/event-store.md` describe when each exception is thrown, including the two conflict-detection paths.
 
 ## Technical Details
 
 Version pre-validation lives in `MongoEventStore.AppendEventsAsync` (`src/Chaos.Mongo.EventStore/MongoEventStore.cs`, step 2) and currently interleaves the aggregate-ID check with the sequential-version check in one loop. Validate all aggregate IDs before reaching any version verdict so a mixed-aggregate batch stays an `ArgumentException`.
 
-The verdict for the batch's first version `v`, against `aggregate.Version` from the read-model load:
+Check events 2..n against the preceding submitted event first: a malformed batch is a caller error that no reload can fix, so it must never surface as a retryable conflict. Only then judge the batch's first version `v` against `aggregate.Version` from the read-model load:
 
 - `v < 1` → `ArgumentException` (invalid input; guards the fresh-aggregate case where `aggregate.Version` is `0`).
 - `v <= aggregate.Version` → the version is already committed: probe, then `MongoConcurrencyException`.
 - `v > aggregate.Version + 1` → `ArgumentException` (caller-side version gap).
-- Otherwise the batch continues with the existing sequential check for events 2..n.
 
 The pre-validation `MongoConcurrencyException` message states the submitted version and the aggregate's current version, and stays distinguishable from the duplicate-key message so tests can target each detection path.
 
