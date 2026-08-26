@@ -20,4 +20,13 @@
     <PackageReference Include="SemanticVersioning" />
   </ItemGroup>
 
+  <!-- Transitive pins, not used from build sources. Nuke 10.1.0 is unmaintained and resolves
+       vulnerable versions of both packages: NuGet.Packaging via Nuke.Tooling, and
+       System.Security.Cryptography.Xml via Nuke.ProjectModel -> Microsoft.Build.Tasks.Core.
+       A direct reference outranks a transitive one, which is the only lever left. See #126. -->
+  <ItemGroup>
+    <PackageReference Include="NuGet.Packaging" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+  </ItemGroup>
+
 </Project>

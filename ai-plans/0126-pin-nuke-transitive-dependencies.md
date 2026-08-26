@@ -10,13 +10,13 @@ Persistent warnings are corrosive: they train everyone reading CI output to skim
 
 ## Acceptance Criteria
 
-- [ ] `dotnet list build/Nuke.csproj package --vulnerable --include-transitive` reports no vulnerable packages
-- [ ] Restoring `Chaos.Mongo.slnx` emits no NU1901 or NU1903 warning
-- [ ] Both pinned packages carry their versions in `Directory.Packages.props` and are referenced without a version from `build/Nuke.csproj`, per the repository's central package management rule
-- [ ] `build/Nuke.csproj` records in place why two packages it never references in source are declared there, so they are not later removed as dead configuration
+- [x] `dotnet list build/Nuke.csproj package --vulnerable --include-transitive` reports no vulnerable packages
+- [x] Restoring `Chaos.Mongo.slnx` emits no NU1901 or NU1903 warning
+- [x] Both pinned packages carry their versions in `Directory.Packages.props` and are referenced without a version from `build/Nuke.csproj`, per the repository's central package management rule
+- [x] `build/Nuke.csproj` records in place why two packages it never references in source are declared there, so they are not later removed as dead configuration
 - [ ] `bash build.sh Test` passes with an empty warnings block
-- [ ] `bash build.sh Pack` produces all three packages, demonstrating that the `NuGet.Packaging` bump does not break Nuke's tooling assembly at pack time
-- [ ] No project other than `build/Nuke.csproj` gains a reference to either pinned package, leaving the shipped libraries' dependency sets unchanged
+- [x] `bash build.sh Pack` produces all three packages, demonstrating that the `NuGet.Packaging` bump does not break Nuke's tooling assembly at pack time
+- [x] No project other than `build/Nuke.csproj` gains a reference to either pinned package, leaving the shipped libraries' dependency sets unchanged
 - [ ] The pull request carries `skip-changelog` — satisfied at pull-request creation, not during implementation
 
 ## Technical Details
