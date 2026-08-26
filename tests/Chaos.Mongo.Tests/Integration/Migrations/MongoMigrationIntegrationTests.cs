@@ -25,17 +25,22 @@ public class MongoMigrationIntegrationTests
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
+        // Cancellation is triggered by the second migration rather than by a wall-clock deadline,
+        // so the run reaches a known point before it is cancelled no matter how slow the
+        // connection, lock acquisition and transaction start are.
+        using var cts = new CancellationTokenSource();
+
         var serviceProvider = new ServiceCollection()
                               .AddNUnitTestLogging()
+                              .AddSingleton(cts)
                               .AddMongo(connectionString, databaseName)
                               .WithMigration<FastTestMigration>()
-                              .WithMigration<SlowTestMigration>()
+                              .WithMigration<CancellingTestMigration>()
                               .WithMigration<ThirdTestMigration>()
                               .Services
                               .BuildServiceProvider();
 
         var runner = serviceProvider.GetRequiredService<IMongoMigrationRunner>();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
         // Act
         var act = async () => await runner.RunMigrationsAsync(cts.Token);
@@ -43,6 +48,7 @@ public class MongoMigrationIntegrationTests
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
         MigrationTestTracker.ExecutedMigrations.Should().Contain(nameof(FastTestMigration));
+        MigrationTestTracker.ExecutedMigrations.Should().Contain(nameof(CancellingTestMigration));
         MigrationTestTracker.ExecutedMigrations.Should().NotContain(nameof(ThirdTestMigration));
     }
 
