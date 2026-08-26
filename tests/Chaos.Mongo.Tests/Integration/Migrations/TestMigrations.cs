@@ -147,14 +147,25 @@ internal class FastTestMigration : IMongoMigration
     }
 }
 
-internal class SlowTestMigration : IMongoMigration
+internal class CancellingTestMigration : IMongoMigration
 {
-    public String Id => "002_SlowTest";
+    private readonly CancellationTokenSource _cancellationTokenSource;
+
+    public CancellingTestMigration(CancellationTokenSource cancellationTokenSource)
+    {
+        ArgumentNullException.ThrowIfNull(cancellationTokenSource);
+        _cancellationTokenSource = cancellationTokenSource;
+    }
+
+    public String Description => "Cancels the run from inside a migration";
+
+    public String Id => "002_CancellingTest";
 
     public async Task ApplyAsync(IMongoHelper mongoHelper, IClientSessionHandle? session = null, CancellationToken cancellationToken = default)
     {
-        MigrationTestTracker.Track(nameof(SlowTestMigration));
-        await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+        MigrationTestTracker.Track(nameof(CancellingTestMigration));
+        await _cancellationTokenSource.CancelAsync();
+        cancellationToken.ThrowIfCancellationRequested();
     }
 }
 
