@@ -6,18 +6,21 @@
 
 Every restore of the build project emits nine NuGet audit warnings — one low-severity advisory against `NuGet.Packaging` 6.12.1 and eight high-severity advisories against `System.Security.Cryptography.Xml` 9.0.0. Both packages arrive transitively through `Nuke.Common` 10.1.0, and Nuke is no longer maintained, so the usual remedy of upgrading the direct dependency is unavailable.
 
-Persistent warnings are corrosive: they train everyone reading CI output to skim past the audit block, which is exactly where a genuine advisory against a shipped package would appear. Pinning the two packages to patched versions restores a clean audit so that a future warning means something again.
+Persistent warnings are corrosive: they train everyone reading CI output to skim past the audit block, which is exactly where a genuine advisory against a shipped package would appear. Pinning the packages to patched versions restores a clean audit so that a future warning means something again.
+
+The same mechanism turned out to cure a second, unrelated-looking warning that the build had been carrying: a bare `Exception was suppressed` hiding an MSBuild assembly-binding failure. It shares the root cause — an unmaintained Nuke resolving stale NuGet packages into a .NET 10 SDK build — and is fixed with a third pin.
 
 ## Acceptance Criteria
 
 - [x] `dotnet list build/Nuke.csproj package --vulnerable --include-transitive` reports no vulnerable packages
 - [x] Restoring `Chaos.Mongo.slnx` emits no NU1901 or NU1903 warning
-- [x] Both pinned packages carry their versions in `Directory.Packages.props` and are referenced without a version from `build/Nuke.csproj`, per the repository's central package management rule
-- [x] `build/Nuke.csproj` records in place why two packages it never references in source are declared there, so they are not later removed as dead configuration
-- [ ] `bash build.sh Test` passes with an empty warnings block
+- [x] Each pinned package carries its version in `Directory.Packages.props` and is referenced without a version from `build/Nuke.csproj`, per the repository's central package management rule
+- [x] `build/Nuke.csproj` records in place why packages it never references in source are declared there, so they are not later removed as dead configuration
+- [x] `bash build.sh Test` passes with an empty warnings block
+- [x] Nuke's in-process MSBuild evaluation binds `NuGet.Frameworks` successfully, so the build suppresses no exception
 - [x] `bash build.sh Pack` produces all three packages, demonstrating that the `NuGet.Packaging` bump does not break Nuke's tooling assembly at pack time
-- [x] No project other than `build/Nuke.csproj` gains a reference to either pinned package, leaving the shipped libraries' dependency sets unchanged
-- [ ] The pull request carries `skip-changelog` — satisfied at pull-request creation, not during implementation
+- [x] No project other than `build/Nuke.csproj` gains a reference to any pinned package, leaving the shipped libraries' dependency sets unchanged
+- [x] The pull request carries `skip-changelog` — satisfied at pull-request creation, not during implementation
 
 ## Technical Details
 
@@ -33,23 +36,28 @@ Nuke.Common 10.1.0 -> Nuke.ProjectModel -> Microsoft.Build.Tasks.Core 18.0.2
 
 `System.Security.Cryptography.Xml` is not a dependency of `NuGet.Packaging`; it comes from MSBuild by way of `Nuke.ProjectModel`.
 
+A third package is implicated for a different reason. Nuke loads MSBuild 18.0.2 in-process to evaluate the projects, and MSBuild binds to `NuGet.Frameworks` 7.9.0.0 — but `NuGet.Packaging` holds the graph to the 6.12 line. A lower assembly version cannot satisfy a higher reference, so `[MSBuild]::GetTargetFrameworkIdentifier(net10.0)` throws and Nuke suppresses it into a bare warning. Pinning `NuGet.Frameworks` to 7.9.0 satisfies MSBuild while rolling `NuGet.Packaging`'s own 6.12 reference forward.
+
 ### Pinning mechanism
 
 A direct `PackageReference` outranks a transitive one, so declaring both packages in the build project fixes their resolved versions. `build/Directory.Build.props` deliberately blocks the root `Directory.Build.props` import, but that does not affect `Directory.Packages.props` discovery — `Nuke.Common` and `SemanticVersioning` are already referenced version-less from `build/Nuke.csproj`, so central package management is in force and the versions belong there.
 
 ```xml
 <!-- Directory.Packages.props -->
+<PackageVersion Include="NuGet.Frameworks" Version="7.9.0" />
 <PackageVersion Include="NuGet.Packaging" Version="6.12.5" />
 <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.11" />
 ```
 
-The two references in `build/Nuke.csproj` look like dead configuration to anyone who greps the build sources for them, so the reason they exist has to travel with them.
+The references in `build/Nuke.csproj` look like dead configuration to anyone who greps the build sources for them, so the reason they exist has to travel with them.
 
 ### Version selection
 
 `NuGet.Packaging` is patched at 6.12.5 — a patch bump inside the same 6.12 line Nuke already resolves, and therefore the lowest-risk option available.
 
 `System.Security.Cryptography.Xml` is patched at 9.0.15 and at 10.0.6. The pin is **10.0.11**: it matches the build project's `net10.0` target and the eleven other 10.0.11 pins in `Directory.Packages.props`. Staying on the 9.x line with 9.0.19 would be equally correct and a smaller delta, but consistency with the rest of the file wins here because nothing in the build project constrains the major version.
+
+`NuGet.Frameworks` is pinned to 7.9.0 because that is the exact assembly version MSBuild 18.0.2 binds to; it is not a security bump. This pin was not in the original plan — the binding conflict was diagnosed during implementation, after clearing the audit warnings left it as the only one still standing.
 
 Renovate needs no special handling. `config:recommended` with the repository's `rangeStrategy: bump` will track both packages like any other dependency, which is the point of declaring them — they stop being invisible transitives. A future `NuGet.Packaging` major could in principle break Nuke's tooling assembly, but `Pack` runs in CI on every pull request and would catch it.
 
