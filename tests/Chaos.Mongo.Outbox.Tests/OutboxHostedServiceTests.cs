@@ -167,8 +167,8 @@ public class OutboxHostedServiceTests
         out Mock<IServiceScopeFactory> scopeFactory,
         IOutboxConfiguratorRunner? configuratorRunner = null)
     {
-        processor = new();
-        scopeFactory = new();
+        processor = new Mock<IOutboxProcessor>();
+        scopeFactory = new Mock<IServiceScopeFactory>();
 
         var mockScope = new Mock<IServiceScope>();
         var scopeServices = new ServiceCollection();
@@ -179,6 +179,6 @@ public class OutboxHostedServiceTests
         scopeFactory.Setup(f => f.CreateScope()).Returns(mockScope.Object);
 
         var logger = Mock.Of<ILogger<OutboxHostedService>>();
-        return new(processor.Object, scopeFactory.Object, logger);
+        return new OutboxHostedService(processor.Object, scopeFactory.Object, logger);
     }
 }

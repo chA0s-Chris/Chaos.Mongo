@@ -47,7 +47,7 @@ public class MongoQueueRetryIntegrationTests
         try
         {
             // Act
-            await queue.PublishAsync(new()
+            await queue.PublishAsync(new RetryPayload
             {
                 Value = "poison-message"
             });
@@ -100,7 +100,7 @@ public class MongoQueueRetryIntegrationTests
         try
         {
             // Act
-            await queue.PublishAsync(new()
+            await queue.PublishAsync(new RetryPayload
             {
                 Value = "single-attempt"
             });

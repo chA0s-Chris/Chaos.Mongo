@@ -25,7 +25,7 @@ public class OutboxConfiguratorRunnerTests
     public void Constructor_NullLogger_ThrowsArgumentNullException()
     {
         var mongoHelper = Mock.Of<IMongoHelper>();
-        var configurator = new OutboxConfigurator(new());
+        var configurator = new OutboxConfigurator(new OutboxOptions());
 
         var act = () => new OutboxConfiguratorRunner(mongoHelper, configurator, null!);
 
@@ -35,7 +35,7 @@ public class OutboxConfiguratorRunnerTests
     [Test]
     public void Constructor_NullMongoHelper_ThrowsArgumentNullException()
     {
-        var configurator = new OutboxConfigurator(new());
+        var configurator = new OutboxConfigurator(new OutboxOptions());
         var logger = Mock.Of<ILogger<OutboxConfiguratorRunner>>();
 
         var act = () => new OutboxConfiguratorRunner(null!, configurator, logger);

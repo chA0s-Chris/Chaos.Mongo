@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
+using Docker.DotNet.Models;
 using DotNet.Testcontainers.Containers;
 using Testcontainers.MongoDb;
 
@@ -29,10 +30,10 @@ public static class MongoDbTestContainer
                          .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
                          .WithCreateParameterModifier(parameters =>
                          {
-                             parameters.HostConfig ??= new();
+                             parameters.HostConfig ??= new HostConfig();
                              parameters.HostConfig.Ulimits =
                              [
-                                 new()
+                                 new Ulimit
                                  {
                                      Name = "nofile",
                                      Soft = 65536,

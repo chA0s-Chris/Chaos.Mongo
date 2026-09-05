@@ -211,11 +211,11 @@ public class MongoLockExtensionsTests
         TimeProvider timeProvider,
         Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null)
     {
-        return new(id,
-                   validUntilUtc,
-                   _defaultLeaseTime,
-                   timeProvider,
-                   _ => Task.CompletedTask,
-                   extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
+        return new MongoLock(id,
+                             validUntilUtc,
+                             _defaultLeaseTime,
+                             timeProvider,
+                             _ => Task.CompletedTask,
+                             extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
     }
 }

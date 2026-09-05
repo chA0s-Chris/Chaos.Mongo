@@ -106,7 +106,8 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     {
         await collection.Indexes
                         .CreateOneOrUpdateAsync(
-                            new(Builders<MongoQueueItem<TPayload>>.IndexKeys
+                            new CreateIndexModel<MongoQueueItem<TPayload>>(
+                                Builders<MongoQueueItem<TPayload>>.IndexKeys
                                                                   .Ascending(x => x.IsClosed)
                                                                   .Ascending(x => x.IsLocked)
                                                                   .Ascending(x => x.LockedUtc)
@@ -124,7 +125,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                     Name = ClosedItemTtlIndexName,
                     ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
                     PartialFilterExpression = new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(
-                        new()
+                        new BsonDocument
                         {
                             { nameof(MongoQueueItem.IsClosed), true },
                             { nameof(MongoQueueItem.IsTerminal), new BsonDocument("$in", new BsonArray([false, BsonNull.Value])) },
@@ -284,7 +285,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 Builders<MongoQueueItem<TPayload>>.Update
                                                   .Set(x => x.IsLocked, true)
                                                   .Set(x => x.LockedUtc, acquiredLockUtc),
-                new()
+                new FindOneAndUpdateOptions<MongoQueueItem<TPayload>, MongoQueueItem<TPayload>>
                 {
                     ReturnDocument = ReturnDocument.Before
                 },

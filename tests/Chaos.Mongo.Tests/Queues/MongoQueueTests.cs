@@ -154,26 +154,6 @@ public class MongoQueueTests
     }
 
     [Test]
-    public async Task PublishAsync_WithObjectPayload_DelegatesToTypedPublish()
-    {
-        // Arrange
-        var queueDefinition = CreateQueueDefinition();
-        var mockSubscriptionFactory = new Mock<IMongoQueueSubscriptionFactory>();
-        var mockPublisher = new Mock<IMongoQueuePublisher>();
-        var queue = new MongoQueue<TestPayload>(queueDefinition, mockSubscriptionFactory.Object, mockPublisher.Object);
-        var payload = new TestPayload();
-
-        mockPublisher.Setup(x => x.PublishAsync(queueDefinition, payload, It.IsAny<CancellationToken>()))
-                     .Returns(Task.CompletedTask);
-
-        // Act
-        await queue.PublishAsync((Object)payload, CancellationToken.None);
-
-        // Assert
-        mockPublisher.Verify(x => x.PublishAsync(queueDefinition, payload, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Test]
     public async Task PublishAsync_WithObjectPayloadNull_ThrowsArgumentNullException()
     {
         // Arrange
@@ -205,6 +185,26 @@ public class MongoQueueTests
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
                  .WithMessage("Payload type * is not assignable to *");
+    }
+
+    [Test]
+    public async Task PublishAsync_WithObjectPayload_DelegatesToTypedPublish()
+    {
+        // Arrange
+        var queueDefinition = CreateQueueDefinition();
+        var mockSubscriptionFactory = new Mock<IMongoQueueSubscriptionFactory>();
+        var mockPublisher = new Mock<IMongoQueuePublisher>();
+        var queue = new MongoQueue<TestPayload>(queueDefinition, mockSubscriptionFactory.Object, mockPublisher.Object);
+        var payload = new TestPayload();
+
+        mockPublisher.Setup(x => x.PublishAsync(queueDefinition, payload, It.IsAny<CancellationToken>()))
+                     .Returns(Task.CompletedTask);
+
+        // Act
+        await queue.PublishAsync((Object)payload, CancellationToken.None);
+
+        // Assert
+        mockPublisher.Verify(x => x.PublishAsync(queueDefinition, payload, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

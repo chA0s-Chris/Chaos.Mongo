@@ -74,7 +74,7 @@ public class MongoQueueSubscriptionTests
             {
                 Id = queueItemId,
                 CreatedUtc = acquiredLockUtc,
-                Payload = new(),
+                Payload = new TestPayload(),
                 RetryCount = 1
             });
 
@@ -121,7 +121,7 @@ public class MongoQueueSubscriptionTests
             {
                 Id = queueItemId,
                 CreatedUtc = acquiredLockUtc,
-                Payload = new(),
+                Payload = new TestPayload(),
                 RetryCount = 2
             });
         collectionMock
@@ -132,7 +132,7 @@ public class MongoQueueSubscriptionTests
                        It.IsAny<CancellationToken>()))
             .ReturnsAsync(updateResultMock.Object);
 
-        var sut = CreateSubscription(new()
+        var sut = CreateSubscription(new MongoQueueDefinition
                                      {
                                          AutoStartSubscription = false,
                                          CollectionName = "test-queue",
@@ -186,7 +186,7 @@ public class MongoQueueSubscriptionTests
             {
                 Id = queueItemId,
                 CreatedUtc = DateTime.UtcNow.AddMinutes(-1),
-                Payload = new(),
+                Payload = new TestPayload(),
                 RetryCount = 1
             });
         collectionMock
@@ -239,7 +239,7 @@ public class MongoQueueSubscriptionTests
             {
                 Id = queueItemId,
                 CreatedUtc = DateTime.UtcNow.AddMinutes(-1),
-                Payload = new(),
+                Payload = new TestPayload(),
                 RetryCount = 1
             });
         collectionMock
@@ -248,7 +248,7 @@ public class MongoQueueSubscriptionTests
                        It.IsAny<CancellationToken>()))
             .ReturnsAsync(deleteResultMock.Object);
 
-        var sut = CreateSubscription(new()
+        var sut = CreateSubscription(new MongoQueueDefinition
                                      {
                                          AutoStartSubscription = false,
                                          ClosedItemRetention = null,
@@ -308,7 +308,7 @@ public class MongoQueueSubscriptionTests
                 CreatedUtc = createdUtc,
                 IsLocked = true,
                 LockedUtc = recoveredLockUtc,
-                Payload = new(),
+                Payload = new TestPayload(),
                 RetryCount = 1
             });
         collectionMock

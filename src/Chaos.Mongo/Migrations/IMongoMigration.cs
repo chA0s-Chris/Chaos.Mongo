@@ -13,11 +13,13 @@ using MongoDB.Driver;
 ///     It is recommended to use timestamp-based prefixes for IDs (e.g., "20250110_InitialSchema").
 ///     </para>
 ///     <para>
-///     Migrations must be idempotent - they should be safe to run multiple times without causing errors or data corruption.
+///     Migrations must be idempotent - they should be safe to run multiple times without causing errors or data
+///     corruption.
 ///     This is critical because migrations may be partially applied before a failure occurs.
 ///     </para>
 ///     <para>
-///     Register migrations using <see cref="MongoBuilder.WithMigration{T}"/> or <see cref="MongoBuilder.WithMigrationAutoDiscovery"/>.
+///     Register migrations using <see cref="MongoBuilder.WithMigration{T}"/> or
+///     <see cref="MongoBuilder.WithMigrationAutoDiscovery"/>.
 ///     </para>
 /// </remarks>
 public interface IMongoMigration
@@ -58,7 +60,10 @@ public interface IMongoMigration
     /// Applies the migration to the database.
     /// </summary>
     /// <param name="mongoHelper">Helper for accessing MongoDB collections and operations.</param>
-    /// <param name="session">Optional transaction session. If provided, all operations should use this session for transactional consistency.</param>
+    /// <param name="session">
+    /// Optional transaction session. If provided, all operations should use this session for
+    /// transactional consistency.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token to abort the migration.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <remarks>
@@ -71,6 +76,9 @@ public interface IMongoMigration
     ///     will not be recorded in the history collection.
     ///     </para>
     /// </remarks>
-    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled via <paramref name="cancellationToken"/>.</exception>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown when the operation is cancelled via
+    /// <paramref name="cancellationToken"/>.
+    /// </exception>
     Task ApplyAsync(IMongoHelper mongoHelper, IClientSessionHandle? session = null, CancellationToken cancellationToken = default);
 }

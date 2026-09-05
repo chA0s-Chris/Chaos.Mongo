@@ -193,12 +193,12 @@ public class MongoLockTests
             "test-lock",
             originalExpiry,
             timeProvider,
-            releaseAction: validUntilUtc =>
+            validUntilUtc =>
             {
                 releasedExpiry = validUntilUtc;
                 return Task.CompletedTask;
             },
-            extendAction: async (_, _, _) =>
+            async (_, _, _) =>
             {
                 extensionStarted.SetResult(true);
                 return await completeExtension.Task;
@@ -537,11 +537,11 @@ public class MongoLockTests
                                              Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null,
                                              TimeSpan? leaseTime = null)
     {
-        return new(id,
-                   validUntilUtc,
-                   leaseTime ?? _defaultLeaseTime,
-                   timeProvider,
-                   releaseAction ?? (_ => Task.CompletedTask),
-                   extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
+        return new MongoLock(id,
+                             validUntilUtc,
+                             leaseTime ?? _defaultLeaseTime,
+                             timeProvider,
+                             releaseAction ?? (_ => Task.CompletedTask),
+                             extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
     }
 }

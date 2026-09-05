@@ -289,7 +289,7 @@ public class MongoQueueIntegrationTests
         var messageCount = 50;
         for (var i = 0; i < messageCount; i++)
         {
-            await queue.PublishAsync(new()
+            await queue.PublishAsync(new TestPayload
             {
                 Value = $"Message {i}"
             });
@@ -332,7 +332,7 @@ public class MongoQueueIntegrationTests
         queue.IsRunning.Should().BeFalse();
 
         // Publish first message before starting
-        await queue.PublishAsync(new()
+        await queue.PublishAsync(new TestPayload
         {
             Value = "Before Stop"
         });
@@ -350,7 +350,7 @@ public class MongoQueueIntegrationTests
         queue.IsRunning.Should().BeFalse();
 
         // Publish while stopped (message should queue up)
-        await queue.PublishAsync(new()
+        await queue.PublishAsync(new TestPayload
         {
             Value = "While Stopped"
         });

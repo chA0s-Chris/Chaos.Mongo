@@ -9,7 +9,8 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 
 /// <summary>
-/// Default implementation of <see cref="IMongoMigrationRunner"/> that executes pending migrations with distributed locking.
+/// Default implementation of <see cref="IMongoMigrationRunner"/> that executes pending migrations with distributed
+/// locking.
 /// </summary>
 /// <remarks>
 /// This runner ensures safe migration execution in distributed systems by:
@@ -62,7 +63,7 @@ public class MongoMigrationRunner : IMongoMigrationRunner
         _logger = logger;
         _options = options.Value;
         _timeProvider = timeProvider;
-        Migrations = [..migrations.OrderBy(x => x.Id, StringComparer.Ordinal)];
+        Migrations = [.. migrations.OrderBy(x => x.Id, StringComparer.Ordinal)];
     }
 
     internal ImmutableArray<IMongoMigration> Migrations { get; }

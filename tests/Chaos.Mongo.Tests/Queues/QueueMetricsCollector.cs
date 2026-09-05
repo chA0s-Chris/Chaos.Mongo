@@ -38,9 +38,9 @@ internal sealed class QueueMetricsCollector : IDisposable
             tagDictionary[tag.Key] = tag.Value?.ToString();
         }
 
-        _measurements.Add(new(instrument.Name,
-                              Convert.ToDouble(measurement),
-                              tagDictionary));
+        _measurements.Add(new QueueMetricMeasurement(instrument.Name,
+                                                     Convert.ToDouble(measurement),
+                                                     tagDictionary));
     }
 
     public void Dispose()

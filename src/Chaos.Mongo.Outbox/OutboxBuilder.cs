@@ -41,7 +41,7 @@ public sealed class OutboxBuilder
     /// <returns>A frozen <see cref="OutboxOptions"/> instance.</returns>
     public OutboxOptions Build()
     {
-        return new()
+        return new OutboxOptions
         {
             AutoStartProcessor = _autoStartProcessor,
             BatchSize = _batchSize,

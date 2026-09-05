@@ -99,76 +99,6 @@ public class MongoBuilderTests
     }
 
     [Test]
-    public void WithConfigurator_AfterAutoDiscovery_DoesNotRegisterDuplicates()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoBuilder(services);
-        var testAssembly = typeof(MongoBuilderTests).Assembly;
-
-        // Act
-        builder.WithConfiguratorAutoDiscovery([testAssembly]);
-        builder.WithConfigurator<TestConfigurator>(); // Already discovered
-
-        // Assert
-        var provider = services.BuildServiceProvider();
-        var configurators = provider.GetServices<IMongoConfigurator>().ToList();
-        var testConfiguratorCount = configurators.Count(c => c is TestConfigurator);
-
-        // Should still only be registered once
-        testConfiguratorCount.Should().Be(1);
-    }
-
-    [Test]
-    public void WithConfigurator_RegistersConfiguratorAsTransient()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoBuilder(services);
-
-        // Act
-        builder.WithConfigurator<TestConfigurator>();
-
-        // Assert
-        var provider = services.BuildServiceProvider();
-        var configurators = provider.GetServices<IMongoConfigurator>().ToList();
-        configurators.Should().HaveCount(1);
-        configurators.Should().AllBeOfType<TestConfigurator>();
-    }
-
-    [Test]
-    public void WithConfigurator_ReturnsBuilderForChaining()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoBuilder(services);
-
-        // Act
-        var result = builder.WithConfigurator<TestConfigurator>();
-
-        // Assert
-        result.Should().BeSameAs(builder);
-    }
-
-    [Test]
-    public void WithConfigurator_WithMultipleConfigurators_RegistersAll()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoBuilder(services);
-
-        // Act
-        builder.WithConfigurator<TestConfigurator>()
-               .WithConfigurator<AnotherTestConfigurator>();
-
-        // Assert
-        var provider = services.BuildServiceProvider();
-        var configurators = provider.GetServices<IMongoConfigurator>().ToList();
-        configurators.Should().HaveCount(2);
-        configurators.Should().ContainItemsAssignableTo<IMongoConfigurator>();
-    }
-
-    [Test]
     public void WithConfiguratorAutoDiscovery_PreventsDuplicateRegistrations()
     {
         // Arrange
@@ -283,6 +213,76 @@ public class MongoBuilderTests
         // Assert
         builder.DiscoveredConfigurators.Should().Contain(typeof(TestConfigurator));
         builder.DiscoveredConfigurators.Should().Contain(typeof(AnotherTestConfigurator));
+    }
+
+    [Test]
+    public void WithConfigurator_AfterAutoDiscovery_DoesNotRegisterDuplicates()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+        var testAssembly = typeof(MongoBuilderTests).Assembly;
+
+        // Act
+        builder.WithConfiguratorAutoDiscovery([testAssembly]);
+        builder.WithConfigurator<TestConfigurator>(); // Already discovered
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var configurators = provider.GetServices<IMongoConfigurator>().ToList();
+        var testConfiguratorCount = configurators.Count(c => c is TestConfigurator);
+
+        // Should still only be registered once
+        testConfiguratorCount.Should().Be(1);
+    }
+
+    [Test]
+    public void WithConfigurator_RegistersConfiguratorAsTransient()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        // Act
+        builder.WithConfigurator<TestConfigurator>();
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var configurators = provider.GetServices<IMongoConfigurator>().ToList();
+        configurators.Should().HaveCount(1);
+        configurators.Should().AllBeOfType<TestConfigurator>();
+    }
+
+    [Test]
+    public void WithConfigurator_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        // Act
+        var result = builder.WithConfigurator<TestConfigurator>();
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithConfigurator_WithMultipleConfigurators_RegistersAll()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        // Act
+        builder.WithConfigurator<TestConfigurator>()
+               .WithConfigurator<AnotherTestConfigurator>();
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var configurators = provider.GetServices<IMongoConfigurator>().ToList();
+        configurators.Should().HaveCount(2);
+        configurators.Should().ContainItemsAssignableTo<IMongoConfigurator>();
     }
 }
 

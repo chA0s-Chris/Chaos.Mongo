@@ -71,7 +71,7 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
         if (aggregate is null && events.Count == 0)
             return null;
 
-        aggregate ??= new()
+        aggregate ??= new TAggregate
         {
             Id = aggregateId,
             CreatedUtc = events[0].CreatedUtc

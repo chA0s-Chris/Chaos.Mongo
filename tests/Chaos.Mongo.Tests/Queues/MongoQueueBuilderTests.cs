@@ -501,20 +501,6 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithoutAutoStartSubscription_ReturnsBuilderForChaining()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var result = builder.WithoutAutoStartSubscription();
-
-        // Assert
-        result.Should().BeSameAs(builder);
-    }
-
-    [Test]
     public void WithPayloadHandler_GenericVersion_ReturnsBuilderForChaining()
     {
         // Arrange
@@ -544,20 +530,6 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithPayloadHandler_WithFactory_ReturnsBuilderForChaining()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var result = builder.WithPayloadHandler(_ => new TestPayloadHandler());
-
-        // Assert
-        result.Should().BeSameAs(builder);
-    }
-
-    [Test]
     public void WithPayloadHandler_WithFactoryNull_ThrowsArgumentNullException()
     {
         // Arrange
@@ -569,6 +541,20 @@ public class MongoQueueBuilderTests
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Test]
+    public void WithPayloadHandler_WithFactory_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithPayloadHandler(_ => new TestPayloadHandler());
+
+        // Assert
+        result.Should().BeSameAs(builder);
     }
 
     [Test]
@@ -671,6 +657,20 @@ public class MongoQueueBuilderTests
         // Assert
         act.Should().Throw<ArgumentException>()
            .WithMessage("Query limit must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithoutAutoStartSubscription_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithoutAutoStartSubscription();
+
+        // Assert
+        result.Should().BeSameAs(builder);
     }
 
     private static ServiceCollection CreateServices()

@@ -72,7 +72,7 @@ public class OutboxProcessorQueryContractTests
         {
             Id = ObjectId.GenerateNewId(),
             Type = "TestPayload",
-            Payload = new("Name", "Claim me"),
+            Payload = new BsonDocument("Name", "Claim me"),
             State = OutboxMessageState.Pending
         };
         FilterDefinition<OutboxMessage>? capturedClaimFilter = null;
@@ -128,7 +128,7 @@ public class OutboxProcessorQueryContractTests
     [SetUp]
     public void SetUp()
     {
-        _options = new()
+        _options = new OutboxOptions
         {
             CollectionName = "TestOutbox",
             BatchSize = 10,
@@ -139,24 +139,24 @@ public class OutboxProcessorQueryContractTests
             RetryBackoffMaxDelay = TimeSpan.FromSeconds(30)
         };
 
-        _timeProvider = new(new(2026, 04, 11, 12, 0, 0, TimeSpan.Zero));
-        _loggerMock = new();
-        _collectionMock = new();
-        _databaseMock = new();
+        _timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 04, 11, 12, 0, 0, TimeSpan.Zero));
+        _loggerMock = new Mock<ILogger<OutboxProcessor>>();
+        _collectionMock = new Mock<IMongoCollection<OutboxMessage>>();
+        _databaseMock = new Mock<IMongoDatabase>();
         _databaseMock
             .Setup(d => d.GetCollection<OutboxMessage>(_options.CollectionName, null))
             .Returns(_collectionMock.Object);
 
-        _mongoHelperMock = new();
+        _mongoHelperMock = new Mock<IMongoHelper>();
         _mongoHelperMock.Setup(h => h.Database).Returns(_databaseMock.Object);
 
-        _publisherMock = new();
+        _publisherMock = new Mock<IOutboxPublisher>();
         var serviceScopeMock = new Mock<IServiceScope>();
         var services = new ServiceCollection();
         services.AddSingleton(_publisherMock.Object);
         serviceScopeMock.Setup(s => s.ServiceProvider).Returns(services.BuildServiceProvider());
 
-        _scopeFactoryMock = new();
+        _scopeFactoryMock = new Mock<IServiceScopeFactory>();
         _scopeFactoryMock.Setup(f => f.CreateScope()).Returns(serviceScopeMock.Object);
     }
 
@@ -227,14 +227,14 @@ public class OutboxProcessorQueryContractTests
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var documentSerializer = serializerRegistry.GetSerializer<OutboxMessage>();
-        return filter.Render(new(documentSerializer, serializerRegistry));
+        return filter.Render(new RenderArgs<OutboxMessage>(documentSerializer, serializerRegistry));
     }
 
     private static BsonDocument Render(SortDefinition<OutboxMessage> sort)
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var documentSerializer = serializerRegistry.GetSerializer<OutboxMessage>();
-        return sort.Render(new(documentSerializer, serializerRegistry));
+        return sort.Render(new RenderArgs<OutboxMessage>(documentSerializer, serializerRegistry));
     }
 
     private OutboxProcessor CreateSut()
@@ -255,7 +255,7 @@ public class OutboxProcessorQueryContractTests
         var mongoHelperMock = new Mock<IMongoHelper>();
         mongoHelperMock.Setup(h => h.Database).Returns(databaseMock.Object);
 
-        return new(
+        return new OutboxProcessor(
             mongoHelperMock.Object,
             _options,
             _scopeFactoryMock.Object,

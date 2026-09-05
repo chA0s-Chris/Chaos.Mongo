@@ -114,6 +114,57 @@ public class MongoEventStoreBulkWriteTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_WhenBulkWriteOptimizationEnabledOnUnsupportedServer_ThrowsNotSupportedException()
+    {
+        var options = new MongoEventStoreOptions<TestAggregate>
+        {
+            CollectionPrefix = "Orders",
+            BulkWriteOptimizationEnabled = true
+        };
+        BootstrapSerialization(options);
+        var readModelCollection = MongoCollectionProxy<TestAggregate>.Create(
+            options.ReadModelCollectionName,
+            CreateCursor<TestAggregate>());
+
+        var databaseMock = new Mock<IMongoDatabase>(MockBehavior.Strict);
+        databaseMock.Setup(d => d.GetCollection<TestAggregate>(options.ReadModelCollectionName, null))
+                    .Returns(readModelCollection);
+        databaseMock.Setup(d => d.RunCommandAsync(
+                               It.IsAny<Command<BsonDocument>>(),
+                               It.IsAny<ReadPreference>(),
+                               It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(new BsonDocument("versionArray", new BsonArray
+                    {
+                        7,
+                        0,
+                        0,
+                        0
+                    }));
+
+        var clientMock = new Mock<IMongoClient>(MockBehavior.Strict);
+        var mongoHelperMock = new Mock<IMongoHelper>(MockBehavior.Strict);
+        mongoHelperMock.Setup(h => h.Client).Returns(clientMock.Object);
+        mongoHelperMock.Setup(h => h.Database).Returns(databaseMock.Object);
+
+        var sut = new MongoEventStore<TestAggregate>(mongoHelperMock.Object, options);
+
+        var act = () => sut.AppendEventsAsync(
+        [
+            new TestCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = Guid.NewGuid(),
+                Version = 1
+            }
+        ]);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+                 .WithMessage("*MongoDB 8.0 or later*7.0*");
+
+        clientMock.Verify(c => c.StartSessionAsync(It.IsAny<ClientSessionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
     public async Task AppendEventsAsync_WhenBulkWriteOptimizationEnabled_UsesOrderedClientBulkWrite()
     {
         var options = new MongoEventStoreOptions<TestAggregate>
@@ -230,57 +281,6 @@ public class MongoEventStoreBulkWriteTests
     }
 
     [Test]
-    public async Task AppendEventsAsync_WhenBulkWriteOptimizationEnabledOnUnsupportedServer_ThrowsNotSupportedException()
-    {
-        var options = new MongoEventStoreOptions<TestAggregate>
-        {
-            CollectionPrefix = "Orders",
-            BulkWriteOptimizationEnabled = true
-        };
-        BootstrapSerialization(options);
-        var readModelCollection = MongoCollectionProxy<TestAggregate>.Create(
-            options.ReadModelCollectionName,
-            CreateCursor<TestAggregate>());
-
-        var databaseMock = new Mock<IMongoDatabase>(MockBehavior.Strict);
-        databaseMock.Setup(d => d.GetCollection<TestAggregate>(options.ReadModelCollectionName, null))
-                    .Returns(readModelCollection);
-        databaseMock.Setup(d => d.RunCommandAsync(
-                               It.IsAny<Command<BsonDocument>>(),
-                               It.IsAny<ReadPreference>(),
-                               It.IsAny<CancellationToken>()))
-                    .ReturnsAsync(new BsonDocument("versionArray", new BsonArray
-                    {
-                        7,
-                        0,
-                        0,
-                        0
-                    }));
-
-        var clientMock = new Mock<IMongoClient>(MockBehavior.Strict);
-        var mongoHelperMock = new Mock<IMongoHelper>(MockBehavior.Strict);
-        mongoHelperMock.Setup(h => h.Client).Returns(clientMock.Object);
-        mongoHelperMock.Setup(h => h.Database).Returns(databaseMock.Object);
-
-        var sut = new MongoEventStore<TestAggregate>(mongoHelperMock.Object, options);
-
-        var act = () => sut.AppendEventsAsync(
-        [
-            new TestCreatedEvent
-            {
-                Id = Guid.NewGuid(),
-                AggregateId = Guid.NewGuid(),
-                Version = 1
-            }
-        ]);
-
-        await act.Should().ThrowAsync<NotSupportedException>()
-                 .WithMessage("*MongoDB 8.0 or later*7.0*");
-
-        clientMock.Verify(c => c.StartSessionAsync(It.IsAny<ClientSessionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Test]
     public async Task AppendEventsAsync_WhenCapabilityWaitIsCanceled_DoesNotPoisonSharedLookup()
     {
         var options = new MongoEventStoreOptions<TestAggregate>
@@ -350,7 +350,7 @@ public class MongoEventStoreBulkWriteTests
         var act = async () => await canceledAppend.WaitAsync(TimeSpan.FromSeconds(1));
         await act.Should().ThrowAsync<OperationCanceledException>();
 
-        versionLookup.SetResult(new("versionArray", new BsonArray
+        versionLookup.SetResult(new BsonDocument("versionArray", new BsonArray
         {
             8,
             0,
@@ -651,7 +651,7 @@ public class MongoEventStoreBulkWriteTests
             var proxy = (MongoCollectionProxy<TDocument>)collection;
             proxy._collection = collection;
             proxy._cursor = cursor ?? CreateCursor<TDocument>();
-            proxy._namespace = new(new DatabaseNamespace("Tests"), collectionName);
+            proxy._namespace = new CollectionNamespace(new DatabaseNamespace("Tests"), collectionName);
             return collection;
         }
 

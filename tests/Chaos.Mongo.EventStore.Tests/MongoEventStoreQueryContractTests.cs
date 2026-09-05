@@ -26,8 +26,8 @@ public class MongoEventStoreQueryContractTests
         };
         var checkpoint = new CheckpointDocument<OrderAggregate>
         {
-            Id = new(aggregateId, 3),
-            State = new()
+            Id = new CheckpointId(aggregateId, 3),
+            State = new OrderAggregate
             {
                 Id = aggregateId,
                 CreatedUtc = DateTime.UtcNow,
@@ -171,7 +171,7 @@ public class MongoEventStoreQueryContractTests
         var mongoHelperMock = new Mock<IMongoHelper>();
         mongoHelperMock.Setup(h => h.Database).Returns(databaseMock.Object);
 
-        return new(mongoHelperMock.Object, options);
+        return new MongoAggregateRepository<OrderAggregate>(mongoHelperMock.Object, options);
     }
 
     private static IAsyncCursor<TDocument> CreateCursor<TDocument>(params TDocument[] documents)
@@ -217,7 +217,7 @@ public class MongoEventStoreQueryContractTests
         var mongoHelperMock = new Mock<IMongoHelper>();
         mongoHelperMock.Setup(h => h.Database).Returns(databaseMock.Object);
 
-        return new(mongoHelperMock.Object, options);
+        return new MongoEventStore<OrderAggregate>(mongoHelperMock.Object, options);
     }
 
     private static BsonBinaryData CreateGuidValue(Guid value)
@@ -227,28 +227,28 @@ public class MongoEventStoreQueryContractTests
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var serializer = serializerRegistry.GetSerializer<Event<OrderAggregate>>();
-        return filter.Render(new(serializer, serializerRegistry));
+        return filter.Render(new RenderArgs<Event<OrderAggregate>>(serializer, serializerRegistry));
     }
 
     private static BsonDocument Render(FilterDefinition<CheckpointDocument<OrderAggregate>> filter)
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var serializer = serializerRegistry.GetSerializer<CheckpointDocument<OrderAggregate>>();
-        return filter.Render(new(serializer, serializerRegistry));
+        return filter.Render(new RenderArgs<CheckpointDocument<OrderAggregate>>(serializer, serializerRegistry));
     }
 
     private static BsonDocument Render(SortDefinition<Event<OrderAggregate>> sort)
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var serializer = serializerRegistry.GetSerializer<Event<OrderAggregate>>();
-        return sort.Render(new(serializer, serializerRegistry));
+        return sort.Render(new RenderArgs<Event<OrderAggregate>>(serializer, serializerRegistry));
     }
 
     private static BsonDocument Render(SortDefinition<CheckpointDocument<OrderAggregate>> sort)
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
         var serializer = serializerRegistry.GetSerializer<CheckpointDocument<OrderAggregate>>();
-        return sort.Render(new(serializer, serializerRegistry));
+        return sort.Render(new RenderArgs<CheckpointDocument<OrderAggregate>>(serializer, serializerRegistry));
     }
 
     private class CapturingMongoCollectionProxy<TDocument> : DispatchProxy

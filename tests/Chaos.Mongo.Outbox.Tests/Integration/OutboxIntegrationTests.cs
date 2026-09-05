@@ -86,21 +86,6 @@ public class OutboxIntegrationTests
     }
 
     [Test]
-    public async Task AddMessageAsync_WithoutTransaction_ThrowsInvalidOperationException()
-    {
-        using var session = await _mongoHelper.Client.StartSessionAsync();
-        // Not starting a transaction
-
-        var act = () => _outbox.AddMessageAsync(session, new TestPayload
-        {
-            Name = "Test"
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-                 .WithMessage("*active MongoDB transaction*");
-    }
-
-    [Test]
     public async Task AddMessageAsync_WithTransaction_InsertsMessage()
     {
         using var session = await _mongoHelper.Client.StartSessionAsync();
@@ -126,6 +111,21 @@ public class OutboxIntegrationTests
         var payload = messages[0].DeserializePayload<TestPayload>();
         payload.Name.Should().Be("Test");
         payload.Value.Should().Be(42);
+    }
+
+    [Test]
+    public async Task AddMessageAsync_WithoutTransaction_ThrowsInvalidOperationException()
+    {
+        using var session = await _mongoHelper.Client.StartSessionAsync();
+        // Not starting a transaction
+
+        var act = () => _outbox.AddMessageAsync(session, new TestPayload
+        {
+            Name = "Test"
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage("*active MongoDB transaction*");
     }
 
     [Test]

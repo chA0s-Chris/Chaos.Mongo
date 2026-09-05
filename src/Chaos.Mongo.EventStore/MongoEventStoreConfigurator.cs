@@ -28,7 +28,7 @@ public sealed class MongoEventStoreConfigurator<TAggregate> : IMongoConfigurator
             Builders<Event<TAggregate>>.IndexKeys
                                        .Ascending(e => e.AggregateId)
                                        .Ascending(e => e.Version),
-            new()
+            new CreateIndexOptions
             {
                 Unique = true,
                 Name = IndexNames.AggregateIdWithVersionUnique

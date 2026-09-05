@@ -22,7 +22,10 @@ public sealed class MongoHelper : IMongoHelper
     /// <param name="collectionTypeMap">The collection type map for resolving collection names.</param>
     /// <param name="timeProvider">The time provider for getting current time.</param>
     /// <param name="options">Optional MongoDB configuration options.</param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="connection"/> or <paramref name="collectionTypeMap"/> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="connection"/> or
+    /// <paramref name="collectionTypeMap"/> is null.
+    /// </exception>
     public MongoHelper(IMongoConnection connection,
                        ICollectionTypeMap collectionTypeMap,
                        TimeProvider timeProvider,

@@ -254,13 +254,13 @@ public class MongoHelperExtensionsIntegrationTests
         var counters = mongoHelper.GetCollection<Counter>();
         var testDocuments = mongoHelper.GetCollection<TestDocument>();
 
-        await counters.InsertOneAsync(new()
+        await counters.InsertOneAsync(new Counter
         {
             Id = "Test",
             Value = 42
         });
 
-        await testDocuments.InsertOneAsync(new()
+        await testDocuments.InsertOneAsync(new TestDocument
         {
             Id = ObjectId.GenerateNewId(),
             Value = 0
@@ -327,7 +327,7 @@ public class MongoHelperExtensionsIntegrationTests
                           .GetRequiredService<IMongoHelper>();
 
         var counters = mongoHelper.GetCollection<Counter>();
-        await counters.InsertOneAsync(new()
+        await counters.InsertOneAsync(new Counter
         {
             Id = "Test",
             Value = 42
