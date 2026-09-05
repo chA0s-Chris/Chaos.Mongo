@@ -149,6 +149,11 @@ public sealed class OutboxProcessor : IOutboxProcessor
                      (Builders<OutboxMessage>.Filter.Eq(m => m.IsLocked, false) |
                       Builders<OutboxMessage>.Filter.Lte(m => m.LockedUtc, staleLockThreshold));
 
+        if (_options.ProcessingFilter is { } processingFilter)
+        {
+            filter &= processingFilter;
+        }
+
         var sort = Builders<OutboxMessage>.Sort
                                           .Ascending(m => m.NextAttemptUtc)
                                           .Ascending(m => m.LockedUtc)
@@ -254,6 +259,11 @@ public sealed class OutboxProcessor : IOutboxProcessor
                           (Builders<OutboxMessage>.Filter.Eq(m => m.IsLocked, false) |
                            Builders<OutboxMessage>.Filter.Lte(m => m.LockedUtc, staleLockThreshold));
 
+        if (_options.ProcessingFilter is { } processingFilter)
+        {
+            claimFilter &= processingFilter;
+        }
+
         var claimUpdate = Builders<OutboxMessage>.Update
                                                  .Set(m => m.IsLocked, true)
                                                  .Set(m => m.LockedUtc, now)
@@ -270,7 +280,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
 
         if (claimed is null)
         {
-            _logger.LogDebug("Outbox message {MessageId} could not be claimed (already processed or locked by another processor)", message.Id);
+            _logger.LogDebug("Outbox message {MessageId} could not be claimed (no longer eligible or locked by another processor)", message.Id);
             return;
         }
 

@@ -4,6 +4,7 @@ namespace Chaos.Mongo.Outbox.Tests;
 
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 using NUnit.Framework;
 
 public class OutboxBuilderTests
@@ -19,6 +20,7 @@ public class OutboxBuilderTests
         options.RetryBackoffInitialDelay.Should().Be(OutboxOptions.DefaultRetryBackoffInitialDelay);
         options.RetryBackoffMaxDelay.Should().Be(OutboxOptions.DefaultRetryBackoffMaxDelay);
         options.RetentionPeriod.Should().BeNull();
+        options.ProcessingFilter.Should().BeNull();
         options.BatchSize.Should().Be(OutboxOptions.DefaultBatchSize);
         options.PollingInterval.Should().Be(OutboxOptions.DefaultPollingInterval);
         options.LockTimeout.Should().Be(OutboxOptions.DefaultLockTimeout);
@@ -230,6 +232,40 @@ public class OutboxBuilderTests
 
         actZero.Should().Throw<ArgumentOutOfRangeException>();
         actNeg.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public void WithProcessingFilter_NullFilter_ThrowsArgumentNullException()
+    {
+        var builder = new OutboxBuilder();
+
+        var act = () => builder.WithProcessingFilter(null!);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("filter");
+    }
+
+    [Test]
+    public void WithProcessingFilter_RepeatedCall_ReplacesFilterWithoutChangingBuiltOptions()
+    {
+        var first = Builders<OutboxMessage>.Filter.Eq(message => message.Type, "First");
+        var second = Builders<OutboxMessage>.Filter.Eq(message => message.Type, "Second");
+        var builder = new OutboxBuilder().WithProcessingFilter(first);
+        var options = builder.Build();
+
+        builder.WithProcessingFilter(second);
+
+        options.ProcessingFilter.Should().BeSameAs(first);
+        builder.Build().ProcessingFilter.Should().BeSameAs(second);
+    }
+
+    [Test]
+    public void WithProcessingFilter_ValidFilter_ReturnsBuilderAndSetsOption()
+    {
+        var builder = new OutboxBuilder();
+        var filter = Builders<OutboxMessage>.Filter.Eq(message => message.Type, "Allowed");
+
+        builder.WithProcessingFilter(filter).Should().BeSameAs(builder);
+        builder.Build().ProcessingFilter.Should().BeSameAs(filter);
     }
 
     [Test]

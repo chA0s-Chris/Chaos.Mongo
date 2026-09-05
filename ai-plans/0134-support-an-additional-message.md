@@ -13,25 +13,25 @@ selection and atomic claiming, preserving existing processing guarantees.
 
 ## Acceptance Criteria
 
-- [ ] An optional ProcessingFilter is available through OutboxOptions and the
+- [x] An optional ProcessingFilter is available through OutboxOptions and the
       existing WithOutbox builder configuration. Omitting it preserves existing
       behavior.
-- [ ] Selection applies the filter before sorting and limiting; atomic claiming
+- [x] Selection applies the filter before sorting and limiting; atomic claiming
       rechecks it alongside message identity and all existing eligibility
       predicates. The filter cannot bypass pending-state, retry-schedule, or
       lock rules.
-- [ ] Excluded messages are not published or modified by that processor,
+- [x] Excluded messages are not published or modified by that processor,
       including their state, retry count, retry schedule, and lock fields.
-- [ ] An excluded backlog larger than BatchSize does not prevent matching
+- [x] An excluded backlog larger than BatchSize does not prevent matching
       messages from being processed.
-- [ ] A selected message changed to no longer match before its claim is neither
+- [x] A selected message changed to no longer match before its claim is neither
       claimed nor published. Previously excluded messages are delivered when
       an appropriately configured processor runs.
-- [ ] Automated tests cover configuration propagation, filter composition,
+- [x] Automated tests cover configuration propagation, filter composition,
       exclusion, backlog starvation, and the selection-to-claim race. Existing
       retry, failure, cancellation, failed-claim, and ownership tests pass.
       Release builds pass and merged line coverage remains at least 95%.
-- [ ] Public API documentation and the transactional outbox guide explain
+- [x] Public API documentation and the transactional outbox guide explain
       configuration, startup lifetime, and the distinction from message-type
       registration and publisher routing.
 
