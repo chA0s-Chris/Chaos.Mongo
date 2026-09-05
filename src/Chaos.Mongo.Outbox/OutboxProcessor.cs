@@ -16,6 +16,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
     private readonly ILogger<OutboxProcessor> _logger;
     private readonly IMongoHelper _mongoHelper;
     private readonly OutboxOptions _options;
+    private readonly Object? _publisherKey;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly TimeProvider _timeProvider;
     private CancellationTokenSource? _cancellationTokenSource;
@@ -46,6 +47,19 @@ public sealed class OutboxProcessor : IOutboxProcessor
         _timeProvider = timeProvider;
         _logger = logger;
     }
+
+    internal OutboxProcessor(IMongoHelper mongoHelper, OutboxOptions options, IServiceScopeFactory serviceScopeFactory,
+                             TimeProvider timeProvider, ILogger<OutboxProcessor> logger, Object publisherKey)
+        : this(mongoHelper, options, serviceScopeFactory, timeProvider, logger)
+    {
+        _publisherKey = publisherKey;
+    }
+
+    private IDisposable? BeginScope() => _logger.BeginScope(new Dictionary<String, Object>
+    {
+        ["OutboxIdentity"] = _options.Identity,
+        ["CollectionName"] = _options.CollectionName
+    });
 
     private DateTime ComputeNextAttemptUtc(Int32 retryCount)
     {
@@ -173,7 +187,9 @@ public sealed class OutboxProcessor : IOutboxProcessor
         _logger.LogDebug("Found {MessageCount} eligible outbox messages", messages.Count);
 
         using var scope = _serviceScopeFactory.CreateScope();
-        var publisher = scope.ServiceProvider.GetRequiredService<IOutboxPublisher>();
+        var publisher = _publisherKey is null
+            ? scope.ServiceProvider.GetRequiredService<IOutboxPublisher>()
+            : scope.ServiceProvider.GetRequiredKeyedService<IOutboxPublisher>(_publisherKey);
 
         var processedMessageCount = 0;
 
@@ -195,6 +211,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
 
     private async Task ProcessLoopAsync(CancellationToken cancellationToken)
     {
+        using var logScope = BeginScope();
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -353,13 +370,17 @@ public sealed class OutboxProcessor : IOutboxProcessor
     /// <inheritdoc/>
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (_cancellationTokenSource is not null)
+        using (BeginScope())
         {
-            _logger.LogWarning("Outbox processor is already running");
-            return Task.CompletedTask;
+            if (_cancellationTokenSource is not null)
+            {
+                _logger.LogWarning("Outbox processor is already running");
+                return Task.CompletedTask;
+            }
+
+            _logger.LogInformation("Starting outbox processor for collection '{CollectionName}'", _options.CollectionName);
         }
 
-        _logger.LogInformation("Starting outbox processor for collection '{CollectionName}'", _options.CollectionName);
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _processingTask = ProcessLoopAsync(_cancellationTokenSource.Token);
         return Task.CompletedTask;
@@ -368,6 +389,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
     /// <inheritdoc/>
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        using var logScope = BeginScope();
         if (_cancellationTokenSource is null)
         {
             return;

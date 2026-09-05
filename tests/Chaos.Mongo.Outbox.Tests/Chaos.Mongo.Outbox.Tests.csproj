@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Chaos.Testing" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Testcontainers.MongoDb" />
   </ItemGroup>

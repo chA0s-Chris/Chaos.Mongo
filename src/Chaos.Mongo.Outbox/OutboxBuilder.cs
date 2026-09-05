@@ -41,23 +41,7 @@ public sealed class OutboxBuilder
     /// Builds the immutable <see cref="OutboxOptions"/> from the current builder state.
     /// </summary>
     /// <returns>A frozen <see cref="OutboxOptions"/> instance.</returns>
-    public OutboxOptions Build()
-    {
-        return new OutboxOptions
-        {
-            AutoStartProcessor = _autoStartProcessor,
-            BatchSize = _batchSize,
-            CollectionName = _collectionName,
-            LockTimeout = _lockTimeout,
-            MaxRetries = _maxRetries,
-            MessageTypeLookup = MessageTypes.ToImmutableDictionary(),
-            PollingInterval = _pollingInterval,
-            ProcessingFilter = _processingFilter,
-            RetentionPeriod = _retentionPeriod,
-            RetryBackoffInitialDelay = _retryBackoffInitialDelay,
-            RetryBackoffMaxDelay = _retryBackoffMaxDelay
-        };
-    }
+    public OutboxOptions Build() => Build("Default");
 
     /// <summary>
     /// Validates the builder configuration.
@@ -257,5 +241,24 @@ public sealed class OutboxBuilder
         _retryBackoffInitialDelay = initialDelay;
         _retryBackoffMaxDelay = maxDelay;
         return this;
+    }
+
+    internal OutboxOptions Build(String identity)
+    {
+        return new OutboxOptions
+        {
+            Identity = identity,
+            AutoStartProcessor = _autoStartProcessor,
+            BatchSize = _batchSize,
+            CollectionName = _collectionName,
+            LockTimeout = _lockTimeout,
+            MaxRetries = _maxRetries,
+            MessageTypeLookup = MessageTypes.ToImmutableDictionary(),
+            PollingInterval = _pollingInterval,
+            ProcessingFilter = _processingFilter,
+            RetentionPeriod = _retentionPeriod,
+            RetryBackoffInitialDelay = _retryBackoffInitialDelay,
+            RetryBackoffMaxDelay = _retryBackoffMaxDelay
+        };
     }
 }

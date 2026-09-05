@@ -9,11 +9,17 @@ using MongoDB.Driver;
 /// <summary>
 /// Creates required indexes on the outbox collection at startup.
 /// </summary>
+/// <remarks>
+/// A successful run is remembered for the lifetime of this instance, so later calls return without repeating index work.
+/// Failed or canceled runs are not remembered and may be retried. Concurrent callers wait for the run in progress.
+/// </remarks>
 public sealed class OutboxConfigurator : IMongoConfigurator
 {
     private const String FailedTtlIndexName = "IX_Outbox_FailedUtc_TTL";
     private const String ProcessedTtlIndexName = "IX_Outbox_ProcessedUtc_TTL";
+    private readonly SemaphoreSlim _initializationGate = new(1, 1);
     private readonly OutboxOptions _options;
+    private Boolean _initialized;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OutboxConfigurator"/> class.
@@ -25,8 +31,9 @@ public sealed class OutboxConfigurator : IMongoConfigurator
         _options = options;
     }
 
-    /// <inheritdoc/>
-    public async Task ConfigureAsync(IMongoHelper helper, CancellationToken cancellationToken = default)
+    internal OutboxOptions Options => _options;
+
+    private async Task CreateIndexesAsync(IMongoHelper helper, CancellationToken cancellationToken)
     {
         var collection = helper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
 
@@ -77,6 +84,26 @@ public sealed class OutboxConfigurator : IMongoConfigurator
         {
             await collection.Indexes.DropOneIfExistsAsync(ProcessedTtlIndexName, cancellationToken);
             await collection.Indexes.DropOneIfExistsAsync(FailedTtlIndexName, cancellationToken);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task ConfigureAsync(IMongoHelper helper, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(helper);
+        await _initializationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_initialized)
+                return;
+
+            await CreateIndexesAsync(helper, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _initialized = true;
+        }
+        finally
+        {
+            _initializationGate.Release();
         }
     }
 }

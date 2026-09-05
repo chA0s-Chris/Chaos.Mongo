@@ -15,39 +15,39 @@ in one ordinary PR.
 
 ## Acceptance Criteria
 
-- [ ] Two typed outboxes and a default outbox can coexist and resolve
+- [x] Two typed outboxes and a default outbox can coexist and resolve
       independently through dependency injection. Existing single-outbox
       APIs and tests remain compatible.
-- [ ] Each outbox writes only to its configured collection, validates payloads
+- [x] Each outbox writes only to its configured collection, validates payloads
       against its own registry, and resolves its configured publisher with
       the selected transient, scoped, or singleton lifetime.
-- [ ] Collection indexes, batch size, polling interval, lock timeout,
+- [x] Collection indexes, batch size, polling interval, lock timeout,
       processing filter, retry settings, and retention policy remain
       isolated per outbox.
-- [ ] Starting or stopping one processor does not affect another.
+- [x] Starting or stopping one processor does not affect another.
       A slow or failing publisher does not prevent another outbox from
       processing messages.
-- [ ] Automatic startup initializes each enabled outbox before starting its
+- [x] Automatic startup initializes each enabled outbox before starting its
       processor, exactly once per host startup, including when general
       MongoDB configurator startup is also enabled. Outboxes without
       automatic startup remain available for manual lifecycle control.
-- [ ] Host shutdown signals every auto-started processor to stop without
+- [x] Host shutdown signals every auto-started processor to stop without
       waiting for another processor to finish. A delayed publisher does not
       delay cancellation of another outbox.
-- [ ] Writes to multiple outboxes using the same compatible MongoDB session
+- [x] Writes to multiple outboxes using the same compatible MongoDB session
       commit or roll back atomically in the caller's transaction.
-- [ ] Duplicate marker identities and collection conflicts, including
+- [x] Duplicate marker identities and collection conflicts, including
       conflicts with the default outbox, produce clear configuration errors.
-- [ ] Payload types can be reused across outboxes without BSON class-map
+- [x] Payload types can be reused across outboxes without BSON class-map
       conflicts; each destination retains its own message discriminators.
-- [ ] Processing and lifecycle logs identify the associated outbox.
-- [ ] Automated tests cover registration, publisher lifetimes, configuration
+- [x] Processing and lifecycle logs identify the associated outbox.
+- [x] Automated tests cover registration, publisher lifetimes, configuration
       and lifecycle isolation, shared payloads, and compatibility.
       MongoDB integration tests verify collection and index isolation,
       independent publication, and transactional commit and rollback.
       The complete test suite and Release build pass, and merged line
       coverage remains at least 95%.
-- [ ] Public API documentation and the transactional outbox documentation
+- [x] Public API documentation and the transactional outbox documentation
       explain registration, injection, lifecycle control, manual
       initialization, publisher lifetimes, collection conflicts, and
       transactional usage.
