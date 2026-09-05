@@ -42,8 +42,10 @@ git config diff.renames true
 git add Original.cs
 git commit --quiet -m "Create rename fixture"
 
-git mv Original.cs Renamed.cs
-sed -i 's/Value1 => 1/value1 => 99/' Renamed.cs
+# A redirect instead of `sed -i` keeps the fixture portable: GNU and BSD sed disagree on the
+# in-place syntax, and a staged rename with edits does not need one.
+sed 's/Value1 => 1/value1 => 99/' Original.cs > Renamed.cs
+git rm --quiet Original.cs
 git add Renamed.cs
 
 # Ensure the fixture exercises a rename with edits, rather than an add/delete pair.
