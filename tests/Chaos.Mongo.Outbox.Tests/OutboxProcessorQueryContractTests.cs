@@ -319,7 +319,7 @@ public class OutboxProcessorQueryContractTests
                 _ => throw new NotSupportedException("Unexpected Find invocation shape.")
             };
 
-            CapturedFilter = (FilterDefinition<TDocument>)args![filterIndex]!;
+            CapturedFilter = (FilterDefinition<TDocument>)args[filterIndex]!;
             CapturedOptions = (FindOptions<TDocument, TDocument>?)args[optionsIndex];
         }
 
