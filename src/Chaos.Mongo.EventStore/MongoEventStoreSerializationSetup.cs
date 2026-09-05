@@ -12,7 +12,7 @@ using MongoDB.Bson.Serialization.Serializers;
 /// </summary>
 public static class MongoEventStoreSerializationSetup
 {
-    private static readonly GuidSerializer _guidStandardSerializer = new(GuidRepresentation.Standard);
+    private static readonly GuidSerializer GuidStandardSerializer = new(GuidRepresentation.Standard);
 
     /// <summary>
     /// Ensures a <see cref="GuidSerializer"/> with <see cref="GuidRepresentation.Standard"/> is registered globally.
@@ -22,7 +22,7 @@ public static class MongoEventStoreSerializationSetup
     {
         try
         {
-            BsonSerializer.RegisterSerializer(_guidStandardSerializer);
+            BsonSerializer.RegisterSerializer(GuidStandardSerializer);
         }
         catch (BsonSerializationException)
         {
@@ -51,7 +51,7 @@ public static class MongoEventStoreSerializationSetup
                     BsonClassMap.RegisterClassMap<Aggregate>(cm =>
                     {
                         cm.AutoMap();
-                        cm.MapIdMember(a => a.Id).SetSerializer(_guidStandardSerializer);
+                        cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
                     });
                 }
 
@@ -65,7 +65,7 @@ public static class MongoEventStoreSerializationSetup
                 BsonClassMap.RegisterClassMap<TAggregate>(cm =>
                 {
                     cm.AutoMap();
-                    cm.MapIdMember(a => a.Id).SetSerializer(_guidStandardSerializer);
+                    cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
                 });
             }
         }
@@ -77,8 +77,8 @@ public static class MongoEventStoreSerializationSetup
             BsonClassMap.RegisterClassMap<Event<TAggregate>>(cm =>
             {
                 cm.AutoMap();
-                cm.MapIdMember(e => e.Id).SetSerializer(_guidStandardSerializer);
-                cm.MapMember(e => e.AggregateId).SetSerializer(_guidStandardSerializer);
+                cm.MapIdMember(e => e.Id).SetSerializer(GuidStandardSerializer);
+                cm.MapMember(e => e.AggregateId).SetSerializer(GuidStandardSerializer);
                 cm.SetIsRootClass(true);
             });
         }
@@ -101,7 +101,7 @@ public static class MongoEventStoreSerializationSetup
             BsonClassMap.RegisterClassMap<CheckpointId>(cm =>
             {
                 cm.AutoMap();
-                cm.MapMember(c => c.AggregateId).SetSerializer(_guidStandardSerializer);
+                cm.MapMember(c => c.AggregateId).SetSerializer(GuidStandardSerializer);
             });
         }
 

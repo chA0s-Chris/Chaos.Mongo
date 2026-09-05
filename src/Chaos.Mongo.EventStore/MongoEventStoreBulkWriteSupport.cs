@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 
 internal static class MongoEventStoreBulkWriteSupport
 {
-    private static readonly ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>> _serverVersions = new();
+    private static readonly ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>> ServerVersions = new();
 
     public static async Task EnsureSupportedAsync(
         IMongoClient client,
@@ -17,7 +17,7 @@ internal static class MongoEventStoreBulkWriteSupport
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var cachedVersion = _serverVersions.GetValue(
+        var cachedVersion = ServerVersions.GetValue(
             client,
             _ => new Lazy<Task<Version>>(() => GetServerVersionAsync(database)));
 
@@ -37,10 +37,10 @@ internal static class MongoEventStoreBulkWriteSupport
         {
             // The shared lookup itself failed: evict it so the next caller retries. Only remove
             // the entry we awaited, in case a concurrent caller already installed a fresh one.
-            if (_serverVersions.TryGetValue(client, out var currentVersion) &&
+            if (ServerVersions.TryGetValue(client, out var currentVersion) &&
                 ReferenceEquals(currentVersion, cachedVersion))
             {
-                _serverVersions.Remove(client);
+                ServerVersions.Remove(client);
             }
 
             throw;

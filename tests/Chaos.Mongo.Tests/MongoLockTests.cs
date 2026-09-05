@@ -9,7 +9,7 @@ using NUnit.Framework;
 
 public class MongoLockTests
 {
-    private static readonly TimeSpan _defaultLeaseTime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultLeaseTime = TimeSpan.FromMinutes(5);
 
     [Test]
     public void Constructor_WithEmptyId_ShouldThrowArgumentException()
@@ -21,7 +21,7 @@ public class MongoLockTests
         Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _, _) => Task.FromResult<DateTime?>(validUntil);
 
         // Act
-        var act = () => new MongoLock(String.Empty, validUntil, _defaultLeaseTime, timeProvider, releaseAction, extendAction);
+        var act = () => new MongoLock(String.Empty, validUntil, DefaultLeaseTime, timeProvider, releaseAction, extendAction);
 
         // Assert
         act.Should().Throw<ArgumentException>();
@@ -59,7 +59,7 @@ public class MongoLockTests
         // Act
         var act = () => new MongoLock("test-lock",
                                       validUntil,
-                                      _defaultLeaseTime,
+                                      DefaultLeaseTime,
                                       timeProvider,
                                       _ => Task.CompletedTask,
                                       null!);
@@ -78,7 +78,7 @@ public class MongoLockTests
         Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _, _) => Task.FromResult<DateTime?>(validUntil);
 
         // Act
-        var act = () => new MongoLock(null!, validUntil, _defaultLeaseTime, timeProvider, releaseAction, extendAction);
+        var act = () => new MongoLock(null!, validUntil, DefaultLeaseTime, timeProvider, releaseAction, extendAction);
 
         // Assert
         act.Should().Throw<ArgumentException>();
@@ -95,7 +95,7 @@ public class MongoLockTests
         // Act
         var act = () => new MongoLock(lockId,
                                       validUntil,
-                                      _defaultLeaseTime,
+                                      DefaultLeaseTime,
                                       timeProvider,
                                       null!,
                                       (_, _, _) => Task.FromResult<DateTime?>(validUntil));
@@ -131,7 +131,7 @@ public class MongoLockTests
         Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _, _) => Task.FromResult<DateTime?>(validUntil);
 
         // Act
-        var act = () => new MongoLock("   ", validUntil, _defaultLeaseTime, timeProvider, releaseAction, extendAction);
+        var act = () => new MongoLock("   ", validUntil, DefaultLeaseTime, timeProvider, releaseAction, extendAction);
 
         // Assert
         act.Should().Throw<ArgumentException>();
@@ -505,7 +505,7 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var originalExpiry = timeProvider.GetUtcNow().AddMinutes(1).UtcDateTime;
-        var extendedExpiry = timeProvider.GetUtcNow().Add(_defaultLeaseTime).UtcDateTime;
+        var extendedExpiry = timeProvider.GetUtcNow().Add(DefaultLeaseTime).UtcDateTime;
         DateTime? expectedExpiry = null;
         TimeSpan? requestedLeaseTime = null;
         var mongoLock = CreateMongoLock(
@@ -525,7 +525,7 @@ public class MongoLockTests
         // Assert
         result.Should().BeTrue();
         expectedExpiry.Should().Be(originalExpiry);
-        requestedLeaseTime.Should().Be(_defaultLeaseTime);
+        requestedLeaseTime.Should().Be(DefaultLeaseTime);
         mongoLock.ValidUntilUtc.Should().Be(extendedExpiry);
         mongoLock.IsValid.Should().BeTrue();
     }
@@ -539,7 +539,7 @@ public class MongoLockTests
     {
         return new MongoLock(id,
                              validUntilUtc,
-                             leaseTime ?? _defaultLeaseTime,
+                             leaseTime ?? DefaultLeaseTime,
                              timeProvider,
                              releaseAction ?? (_ => Task.CompletedTask),
                              extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));

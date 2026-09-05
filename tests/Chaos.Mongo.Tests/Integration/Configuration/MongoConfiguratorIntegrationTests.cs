@@ -311,13 +311,13 @@ public class MongoConfiguratorIntegrationTests
     // Execution Tracker for verifying configurator execution order
     public static class ExecutionTracker
     {
-        private static readonly ConcurrentBag<String> _executed = [];
+        private static readonly ConcurrentBag<String> Executed = [];
 
-        public static IReadOnlyCollection<String> ExecutedConfigurators => _executed.ToList();
+        public static IReadOnlyCollection<String> ExecutedConfigurators => Executed.ToList();
 
-        public static void Reset() => _executed.Clear();
+        public static void Reset() => Executed.Clear();
 
-        public static void Track(String configuratorName) => _executed.Add(configuratorName);
+        public static void Track(String configuratorName) => Executed.Add(configuratorName);
     }
 
     internal class ConfiguratorWithScopedDependency : IMongoConfigurator

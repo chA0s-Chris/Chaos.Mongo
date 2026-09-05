@@ -9,7 +9,7 @@ using NUnit.Framework;
 
 public class MongoLockExtensionsTests
 {
-    private static readonly TimeSpan _defaultLeaseTime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultLeaseTime = TimeSpan.FromMinutes(5);
 
     [Test]
     public async Task EnsureValid_AfterDisposal_ShouldThrowInvalidOperationException()
@@ -213,7 +213,7 @@ public class MongoLockExtensionsTests
     {
         return new MongoLock(id,
                              validUntilUtc,
-                             _defaultLeaseTime,
+                             DefaultLeaseTime,
                              timeProvider,
                              _ => Task.CompletedTask,
                              extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
