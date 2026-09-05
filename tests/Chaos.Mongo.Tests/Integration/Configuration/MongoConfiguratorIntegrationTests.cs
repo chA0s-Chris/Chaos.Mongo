@@ -398,8 +398,8 @@ public class MongoConfiguratorIntegrationTests
 
     private class AuditLog
     {
-        public String Action { get; init; } = String.Empty;
-
+        // MongoDB accesses this identifier through BSON serialization.
+        // ReSharper disable once UnusedMember.Local
         [BsonId]
         public ObjectId Id { get; init; }
 
@@ -409,6 +409,8 @@ public class MongoConfiguratorIntegrationTests
     // Test Documents
     private class TestDocument
     {
+        // MongoDB accesses this identifier through BSON serialization.
+        // ReSharper disable once UnusedMember.Local
         [BsonId]
         public ObjectId Id { get; init; }
 

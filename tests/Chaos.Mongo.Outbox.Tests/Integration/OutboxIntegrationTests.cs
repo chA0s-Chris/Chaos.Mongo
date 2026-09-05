@@ -375,8 +375,5 @@ public class OutboxIntegrationTests
         throw new TimeoutException($"Condition was not met within {timeout}.");
     }
 
-    private class UnregisteredPayload
-    {
-        public String Data { get; set; } = String.Empty;
-    }
+    private class UnregisteredPayload { }
 }

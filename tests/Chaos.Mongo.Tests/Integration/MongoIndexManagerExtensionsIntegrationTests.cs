@@ -410,6 +410,8 @@ public class MongoIndexManagerExtensionsIntegrationTests
 
     private class TestDocument
     {
+        // MongoDB accesses this identifier through BSON serialization.
+        // ReSharper disable once UnusedMember.Local
         [BsonId]
         public ObjectId Id { get; init; }
 
