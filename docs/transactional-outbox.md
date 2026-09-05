@@ -15,6 +15,7 @@ Transactional outbox support for MongoDB, built on top of `Chaos.Mongo`.
 - [Configuration](#configuration)
   - [Registering the Outbox](#registering-the-outbox)
   - [Builder Options](#builder-options)
+  - [Processing Filter](#processing-filter)
   - [Processor Startup](#processor-startup)
 - [Writing Messages](#writing-messages)
   - [Transaction Requirement](#transaction-requirement)
@@ -265,9 +266,52 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 | `WithRetryBackoff(TimeSpan initialDelay, TimeSpan maxDelay)` | `5s`, `5m` | Configures exponential retry backoff |
 | `WithBatchSize(int)` | `100` | Maximum eligible messages fetched per polling batch |
 | `WithPollingInterval(TimeSpan)` | `5s` | Delay between polls when the batch is not full |
+| `WithProcessingFilter(FilterDefinition<OutboxMessage>)` | None | Adds a MongoDB constraint to message selection and atomic claiming |
 | `WithLockTimeout(TimeSpan)` | `5m` | When a locked message becomes reclaimable |
 | `WithRetentionPeriod(TimeSpan)` | Disabled | Creates TTL indexes for processed and failed messages |
 | `WithAutoStartProcessor()` | Disabled | Starts the processor automatically via hosted service |
+
+### Processing Filter
+
+Workers sharing an outbox can restrict which messages they process:
+
+```csharp
+using MongoDB.Driver;
+
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox(o => o
+        .WithPublisher<NotificationsPublisher>()
+        .WithMessage<OrderPlacedMessage>("OrderPlaced")
+        .WithMessage<OrderCancelledMessage>("OrderCancelled")
+        .WithProcessingFilter(Builders<OutboxMessage>.Filter.In(
+            message => message.Type, new[] { "OrderPlaced" }))
+        .WithAutoStartProcessor());
+```
+
+The optional `OutboxOptions.ProcessingFilter` is ANDed with the existing pending-state,
+retry-schedule, and lock predicates. MongoDB applies it before the batch is sorted and
+limited, then rechecks it when atomically claiming each selected message. Excluded
+messages consume no batch slots or retries and retain their state, retry schedule,
+and lock fields. They can be delivered later by a processor whose filter includes them.
+
+Configure the filter at startup through `WithProcessingFilter` or an `OutboxOptions`
+initializer. Options are registered as a singleton; runtime policy refresh is not
+supported, and the filter and its captured values must not be mutated after configuration.
+Repeated builder calls replace the previous filter; passing null to the builder throws.
+Omitting the setting (or leaving the options property null) preserves normal eligibility.
+
+`WithMessage<TPayload>()` registers write-side discriminators and BSON serialization;
+it does not restrict processor selection. `IOutboxPublisher` still handles delivery and
+routing for claimed messages. Returning successfully from a publisher marks a message
+processed, while throwing consumes a retry, so neither is a way to defer excluded messages.
+The processing filter is not reapplied to completion, failure, or cancellation cleanup:
+an owned claim can be finalized even if claiming changes a field used by the filter.
+
+Built-in indexes stay unchanged. The discriminator filter above is not covered by the
+polling index (`NextAttemptUtc`, `LockedUtc`, `_id`, with a pending-state partial filter).
+Applications with a large excluded pending backlog may add their own index for their
+filter and query workload. Server-side exclusion prevents batch starvation but does not
+guarantee an inexpensive scan.
 
 ### Processor Startup
 
@@ -363,7 +407,7 @@ The outbox provides **at-least-once delivery**.
 
 That means:
 
-- a committed outbox message will eventually be retried until it is processed or permanently failed
+- a committed outbox message eligible for a running processor will eventually be retried until it is processed or permanently failed
 - a message may be published more than once
 - downstream consumers should be idempotent
 

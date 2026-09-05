@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox;
 
+using MongoDB.Driver;
 using System.Collections.Immutable;
 
 /// <summary>
@@ -57,6 +58,16 @@ public sealed class OutboxOptions
     /// Defaults to <c>5 seconds</c>.
     /// </summary>
     public TimeSpan PollingInterval { get; init; } = DefaultPollingInterval;
+
+    /// <summary>
+    /// Gets the optional additional filter applied to message selection and atomic claiming.
+    /// Defaults to <c>null</c>, which preserves the normal processing eligibility rules.
+    /// </summary>
+    /// <remarks>
+    /// The filter only narrows eligibility and is configured at startup. Do not mutate it after configuration.
+    /// It does not register message types or route published messages, and is not applied to finalizing an owned claim.
+    /// </remarks>
+    public FilterDefinition<OutboxMessage>? ProcessingFilter { get; init; }
 
     /// <summary>
     /// Gets or sets the optional retention period for processed and failed messages.

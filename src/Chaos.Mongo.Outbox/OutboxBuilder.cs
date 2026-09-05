@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Outbox;
 
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 using System.Collections.Immutable;
 
 /// <summary>
@@ -16,6 +17,7 @@ public sealed class OutboxBuilder
     private TimeSpan _lockTimeout = OutboxOptions.DefaultLockTimeout;
     private Int32 _maxRetries = OutboxOptions.DefaultMaxRetries;
     private TimeSpan _pollingInterval = OutboxOptions.DefaultPollingInterval;
+    private FilterDefinition<OutboxMessage>? _processingFilter;
     private TimeSpan? _retentionPeriod;
     private TimeSpan _retryBackoffInitialDelay = OutboxOptions.DefaultRetryBackoffInitialDelay;
     private TimeSpan _retryBackoffMaxDelay = OutboxOptions.DefaultRetryBackoffMaxDelay;
@@ -50,6 +52,7 @@ public sealed class OutboxBuilder
             MaxRetries = _maxRetries,
             MessageTypeLookup = MessageTypes.ToImmutableDictionary(),
             PollingInterval = _pollingInterval,
+            ProcessingFilter = _processingFilter,
             RetentionPeriod = _retentionPeriod,
             RetryBackoffInitialDelay = _retryBackoffInitialDelay,
             RetryBackoffMaxDelay = _retryBackoffMaxDelay
@@ -176,6 +179,23 @@ public sealed class OutboxBuilder
             throw new ArgumentOutOfRangeException(nameof(pollingInterval), "Polling interval must be positive.");
 
         _pollingInterval = pollingInterval;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets an additional startup-configured filter that narrows message selection and atomic claiming.
+    /// </summary>
+    /// <param name="filter">The filter, which must not be mutated after configuration.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException">The filter is <c>null</c>.</exception>
+    /// <remarks>
+    /// Replaces any previously configured processing filter. Omit this call to use normal eligibility rules.
+    /// Message-type registration and publisher routing are configured separately.
+    /// </remarks>
+    public OutboxBuilder WithProcessingFilter(FilterDefinition<OutboxMessage> filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        _processingFilter = filter;
         return this;
     }
 
