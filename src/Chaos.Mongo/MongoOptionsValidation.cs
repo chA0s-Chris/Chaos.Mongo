@@ -9,25 +9,14 @@ using Microsoft.Extensions.Options;
 /// </summary>
 public sealed class MongoOptionsValidation : IValidateOptions<MongoOptions>
 {
-    /// <inheritdoc/>
-    public ValidateOptionsResult Validate(String? name, MongoOptions options)
+    private static ValidateOptionsResult ValidateCollectionTypeMap(IReadOnlyDictionary<Type, String>? collectionTypeMap)
     {
-        if (options is null)
-        {
-            return ValidateOptionsResult.Fail("Options instance is null");
-        }
-
-        if (options.Url is null)
-        {
-            return ValidateOptionsResult.Fail("MongoOptions.Url must be configured");
-        }
-
-        if (options.CollectionTypeMap is null)
+        if (collectionTypeMap is null)
         {
             return ValidateOptionsResult.Fail("MongoOptions.CollectionTypeMap must not be null");
         }
 
-        foreach (var kvp in options.CollectionTypeMap)
+        foreach (var kvp in collectionTypeMap)
         {
             if (kvp.Key is null)
             {
@@ -41,5 +30,21 @@ public sealed class MongoOptionsValidation : IValidateOptions<MongoOptions>
         }
 
         return ValidateOptionsResult.Success;
+    }
+
+    /// <inheritdoc/>
+    public ValidateOptionsResult Validate(String? name, MongoOptions? options)
+    {
+        if (options is null)
+        {
+            return ValidateOptionsResult.Fail("Options instance is null");
+        }
+
+        if (options.Url is null)
+        {
+            return ValidateOptionsResult.Fail("MongoOptions.Url must be configured");
+        }
+
+        return ValidateCollectionTypeMap(options.CollectionTypeMap);
     }
 }

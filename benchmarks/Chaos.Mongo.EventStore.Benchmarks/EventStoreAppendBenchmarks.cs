@@ -13,15 +13,17 @@ using Testcontainers.MongoDb;
 public class EventStoreAppendBenchmarks
 {
     private const Int32 OperationsPerBenchmarkInvocation = 32;
+
     private static readonly BenchmarkScenario[] ScenarioMatrix =
     [
         new("SingleEventNoCheckpoint", 1),
         new("MediumBatchNoCheckpoint", 10),
         new("CheckpointForcingBatch", 50, 1)
     ];
+
     private BenchmarkContext _baseline = null!;
     private Int32 _baselineInvocation;
-    private MongoDbContainer _container = null!;
+    private MongoDbContainer? _container;
     private BenchmarkContext _optimized = null!;
     private Int32 _optimizedInvocation;
 
@@ -95,7 +97,7 @@ public class EventStoreAppendBenchmarks
         WarmupAsync(_optimized.Store).GetAwaiter().GetResult();
     }
 
-    private static async Task DisposeContextAsync(BenchmarkContext context)
+    private static async Task DisposeContextAsync(BenchmarkContext? context)
     {
         if (context is null)
         {
@@ -129,10 +131,11 @@ public class EventStoreAppendBenchmarks
 
     private async Task<BenchmarkContext> CreateContextAsync(String scenario, Boolean bulkWriteOptimizationEnabled)
     {
+        var container = _container ?? throw new InvalidOperationException("The MongoDB container has not been initialized.");
         var databaseName = $"EventStoreBenchmark_{scenario}_{Guid.NewGuid():N}";
         var services = new ServiceCollection()
                        .AddMongo(
-                           MongoUrl.Create(_container.GetConnectionString()),
+                           MongoUrl.Create(container.GetConnectionString()),
                            configure: options =>
                            {
                                options.DefaultDatabase = databaseName;

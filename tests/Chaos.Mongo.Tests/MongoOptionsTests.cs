@@ -179,4 +179,31 @@ public class MongoOptionsTests
         value.Url!.Server.Host.Should().Be("localhost");
         value.Url.DatabaseName.Should().Be("test");
     }
+
+    [Test]
+    public void Validate_NullCollectionTypeMap_ReturnsValidationFailure()
+    {
+        var validator = new MongoOptionsValidation();
+        var options = new MongoOptions
+        {
+            Url = new MongoUrl("mongodb://localhost:27017/test"),
+            CollectionTypeMap = null!
+        };
+
+        var result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain("MongoOptions.CollectionTypeMap must not be null");
+    }
+
+    [Test]
+    public void Validate_NullOptions_ReturnsValidationFailure()
+    {
+        var validator = new MongoOptionsValidation();
+
+        var result = validator.Validate(null, null);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain("Options instance is null");
+    }
 }
