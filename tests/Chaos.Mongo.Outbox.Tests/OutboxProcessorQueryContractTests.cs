@@ -280,7 +280,7 @@ public class OutboxProcessorQueryContractTests
             IAsyncCursor<TDocument> cursor)
         {
             var collection = Create<IMongoCollection<TDocument>, CapturingMongoCollectionProxy<TDocument>>();
-            var proxy = (CapturingMongoCollectionProxy<TDocument>)(Object)collection;
+            var proxy = (CapturingMongoCollectionProxy<TDocument>)collection;
             proxy._collection = collection;
             proxy._cursor = cursor;
             return (collection, proxy);
