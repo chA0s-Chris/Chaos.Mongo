@@ -23,7 +23,6 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     where TPayload : class, new()
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
-    private static readonly TimeSpan MaxLeaseRecoveryWakeInterval = TimeSpan.FromSeconds(1);
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
@@ -401,9 +400,9 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                                _queueDefinition.CollectionName);
 
         var sortDefinition = _payloadPrioritizer.CreateSortDefinition<TPayload>();
-        var leaseRecoveryWakeInterval = _queueDefinition.LockLeaseTime < MaxLeaseRecoveryWakeInterval
+        var leaseRecoveryWakeInterval = _queueDefinition.LockLeaseTime < MongoQueueSubscriptionDefaults.MaxLeaseRecoveryWakeInterval
             ? _queueDefinition.LockLeaseTime
-            : MaxLeaseRecoveryWakeInterval;
+            : MongoQueueSubscriptionDefaults.MaxLeaseRecoveryWakeInterval;
         var countOptions = new CountOptions
         {
             Limit = 1

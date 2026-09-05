@@ -253,9 +253,9 @@ public class MongoEventStoreQueryContractTests
 
     private class CapturingMongoCollectionProxy<TDocument> : DispatchProxy
     {
-        private static readonly IMongoDatabase Database = Mock.Of<IMongoDatabase>();
         private static readonly IMongoIndexManager<TDocument> IndexManager = Mock.Of<IMongoIndexManager<TDocument>>();
-        private static readonly MongoCollectionSettings Settings = new();
+        private readonly IMongoDatabase _database = Mock.Of<IMongoDatabase>();
+        private readonly MongoCollectionSettings _settings = new();
 
         private IMongoCollection<TDocument> _collection = null!;
         private IAsyncCursor<TDocument> _cursor = null!;
@@ -283,11 +283,11 @@ public class MongoEventStoreQueryContractTests
                 "FindAsync" when targetMethod.IsGenericMethod => HandleFindAsync(targetMethod.GetGenericArguments()[0], args),
                 "FindSync" when targetMethod.IsGenericMethod => HandleFindSync(targetMethod.GetGenericArguments()[0], args),
                 "get_CollectionNamespace" => new CollectionNamespace(new DatabaseNamespace("Tests"), typeof(TDocument).Name),
-                "get_Database" => Database,
+                "get_Database" => _database,
                 "get_DocumentSerializer" => BsonSerializer.SerializerRegistry.GetSerializer<TDocument>(),
                 "get_Indexes" => IndexManager,
                 "get_SearchIndexes" => Mock.Of<IMongoSearchIndexManager>(),
-                "get_Settings" => Settings,
+                "get_Settings" => _settings,
                 "WithReadConcern" or "WithReadPreference" or "WithWriteConcern" => _collection,
                 _ => throw new NotSupportedException($"Method '{targetMethod.Name}' is not supported by the capturing test collection.")
             };
