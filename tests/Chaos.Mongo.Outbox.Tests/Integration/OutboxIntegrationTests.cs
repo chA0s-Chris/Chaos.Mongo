@@ -79,6 +79,8 @@ public class OutboxIntegrationTests
         using var session = await _mongoHelper.Client.StartSessionAsync();
         session.StartTransaction();
 
+        // The assertion is awaited before session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var act = () => _outbox.AddMessageAsync(session, new UnregisteredPayload());
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -119,6 +121,8 @@ public class OutboxIntegrationTests
         using var session = await _mongoHelper.Client.StartSessionAsync();
         // Not starting a transaction
 
+        // The assertion is awaited before session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var act = () => _outbox.AddMessageAsync(session, new TestPayload
         {
             Name = "Test"

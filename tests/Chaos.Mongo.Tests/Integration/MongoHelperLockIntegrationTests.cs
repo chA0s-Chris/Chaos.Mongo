@@ -362,7 +362,8 @@ public class MongoHelperLockIntegrationTests
         await cts.CancelAsync();
 
         // Act
-        var act = async () => await mongoHelper.TryAcquireLockAsync("cancel-lock", cancellationToken: cts.Token);
+        var cancellationToken = cts.Token;
+        var act = async () => await mongoHelper.TryAcquireLockAsync("cancel-lock", cancellationToken: cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();

@@ -44,7 +44,8 @@ public class MongoConfiguratorIntegrationTests
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
         // Act & Assert
-        var act = async () => await runner.RunConfiguratorsAsync(cts.Token);
+        var cancellationToken = cts.Token;
+        var act = async () => await runner.RunConfiguratorsAsync(cancellationToken);
         await act.Should().ThrowAsync<OperationCanceledException>();
 
         // Assert - Only first configurator should have executed before cancellation

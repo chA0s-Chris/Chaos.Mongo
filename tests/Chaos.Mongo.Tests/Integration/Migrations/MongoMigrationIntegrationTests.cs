@@ -43,7 +43,8 @@ public class MongoMigrationIntegrationTests
         var runner = serviceProvider.GetRequiredService<IMongoMigrationRunner>();
 
         // Act
-        var act = async () => await runner.RunMigrationsAsync(cts.Token);
+        var cancellationToken = cts.Token;
+        var act = async () => await runner.RunMigrationsAsync(cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();

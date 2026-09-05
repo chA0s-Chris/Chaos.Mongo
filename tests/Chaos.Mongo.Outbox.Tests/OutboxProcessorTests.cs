@@ -508,7 +508,8 @@ public class OutboxProcessorTests
         await WaitForSignalAsync(lockReleaseAttempted);
 
         // The processor should not throw despite the lock release failure
-        var act = () => sut.StopAsync(cts.Token);
+        var cancellationToken = cts.Token;
+        var act = () => sut.StopAsync(cancellationToken);
         await act.Should().NotThrowAsync();
 
         VerifyLoggedWarning("Failed to release lock");

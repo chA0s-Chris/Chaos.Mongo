@@ -126,7 +126,8 @@ public class MongoLockExtensionsTests
         await cancellationTokenSource.CancelAsync();
 
         // Act
-        var act = async () => await mongoLock.ExtendAsync(cancellationToken: cancellationTokenSource.Token);
+        var cancellationToken = cancellationTokenSource.Token;
+        var act = async () => await mongoLock.ExtendAsync(cancellationToken: cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();

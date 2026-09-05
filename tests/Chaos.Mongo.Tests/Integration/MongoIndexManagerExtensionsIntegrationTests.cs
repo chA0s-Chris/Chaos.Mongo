@@ -258,6 +258,8 @@ public class MongoIndexManagerExtensionsIntegrationTests
         await cts.CancelAsync();
 
         // Act & Assert
+        // The assertion is awaited before session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var act = async () => await indexManager.CreateOneOrUpdateAsync(session, indexModel, cancellationToken: cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }

@@ -89,7 +89,8 @@ public class OutboxHostedServiceTests
 
         await sut.StartedAsync(cts.Token);
 
-        processor.Verify(p => p.StartAsync(cts.Token), Times.Once);
+        var cancellationToken = cts.Token;
+        processor.Verify(p => p.StartAsync(cancellationToken), Times.Once);
     }
 
     [Test]
@@ -111,7 +112,8 @@ public class OutboxHostedServiceTests
 
         await sut.StartingAsync(cts.Token);
 
-        mockRunner.Verify(r => r.RunAsync(cts.Token), Times.Once);
+        var cancellationToken = cts.Token;
+        mockRunner.Verify(r => r.RunAsync(cancellationToken), Times.Once);
     }
 
     [Test]
@@ -149,7 +151,8 @@ public class OutboxHostedServiceTests
 
         await sut.StoppingAsync(cts.Token);
 
-        processor.Verify(p => p.StopAsync(cts.Token), Times.Once);
+        var cancellationToken = cts.Token;
+        processor.Verify(p => p.StopAsync(cancellationToken), Times.Once);
     }
 
     [Test]

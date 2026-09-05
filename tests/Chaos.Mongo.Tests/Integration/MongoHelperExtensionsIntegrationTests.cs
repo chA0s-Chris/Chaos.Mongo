@@ -120,10 +120,11 @@ public class MongoHelperExtensionsIntegrationTests
         cts.CancelAfter(TimeSpan.FromMilliseconds(200));
 
         // Act - helper2 tries to acquire but should be cancelled during retry
+        var cancellationToken = cts.Token;
         var act = async () => await helper2.AcquireLockAsync(
             uniqueLockName,
             retryDelay: TimeSpan.FromMilliseconds(50),
-            cancellationToken: cts.Token);
+            cancellationToken: cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
