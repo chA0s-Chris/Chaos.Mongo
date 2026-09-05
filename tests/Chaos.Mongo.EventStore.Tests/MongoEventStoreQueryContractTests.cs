@@ -267,8 +267,9 @@ public class MongoEventStoreQueryContractTests
         public static (IMongoCollection<TDocument> Collection, CapturingMongoCollectionProxy<TDocument> Proxy) Create(
             IAsyncCursor<TDocument> cursor)
         {
-            var collection = Create<IMongoCollection<TDocument>, CapturingMongoCollectionProxy<TDocument>>();
-            var proxy = (CapturingMongoCollectionProxy<TDocument>)collection;
+            var instance = Create(typeof(IMongoCollection<TDocument>), typeof(CapturingMongoCollectionProxy<TDocument>));
+            var collection = (IMongoCollection<TDocument>)instance;
+            var proxy = (CapturingMongoCollectionProxy<TDocument>)instance;
             proxy._collection = collection;
             proxy._cursor = cursor;
             return (collection, proxy);
