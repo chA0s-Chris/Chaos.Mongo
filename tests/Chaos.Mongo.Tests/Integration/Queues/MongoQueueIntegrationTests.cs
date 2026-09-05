@@ -302,7 +302,8 @@ public class MongoQueueIntegrationTests
         handler.ProcessedPayloads.Should().HaveCount(messageCount);
         for (var i = 0; i < messageCount; i++)
         {
-            handler.ProcessedPayloads.Should().Contain(p => p.Value == $"Message {i}");
+            var expectedValue = $"Message {i}";
+            handler.ProcessedPayloads.Should().Contain(p => p.Value == expectedValue);
         }
 
         // Cleanup
