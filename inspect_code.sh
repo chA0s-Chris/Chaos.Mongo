@@ -102,8 +102,7 @@ if [ "${INSPECT_ALL}" -eq 0 ]; then
     # not staged yet when this script is normally run, and it is the most likely to have findings.
     # With --base, the committed changes of a branch or stack layer join that selection. A deletion
     # leaves nothing to inspect, and a copy arrives as an addition because Git does not detect copies
-    # unless it is asked to. A committed rename is inspected under its new path; a merely staged one
-    # is not, because the working-tree selection keeps the narrower filter it has always used.
+    # unless it is asked to. Both committed and staged renames are inspected under their new paths.
     COMMITTED_PATHS=""
 
     if [ -n "${BASE_COMMIT}" ]; then
@@ -117,8 +116,8 @@ if [ "${INSPECT_ALL}" -eq 0 ]; then
     fi
 
     PATTERNS=$({ if [ -n "${COMMITTED_PATHS}" ]; then printf '%s\n' "${COMMITTED_PATHS}"; fi
-                 git diff --name-only --diff-filter=ACM
-                 git diff --name-only --cached --diff-filter=ACM
+                 git diff --name-only --diff-filter=ACMR
+                 git diff --name-only --cached --diff-filter=ACMR
                  git ls-files --others --exclude-standard; } | { grep '\.cs$' | sort -u | sed 's|^|**/|' | paste -sd ';' || true; })
 
     # Without --include, inspectcode analyzes the whole solution, so an empty file set must not
