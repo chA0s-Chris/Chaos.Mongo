@@ -305,14 +305,14 @@ public class OutboxProcessorQueryContractTests
             };
         }
 
-        private void CaptureFind(Type projectionType, Object?[]? args, out Int32 filterIndex, out Int32 optionsIndex)
+        private void CaptureFind(Type projectionType, Object?[]? args)
         {
             if (projectionType != typeof(TDocument))
             {
                 throw new NotSupportedException($"Projection '{projectionType}' is not supported by the capturing test collection.");
             }
 
-            (filterIndex, optionsIndex) = args?.Length switch
+            var (filterIndex, optionsIndex) = args?.Length switch
             {
                 3 => (0, 1),
                 4 => (1, 2),
@@ -325,13 +325,13 @@ public class OutboxProcessorQueryContractTests
 
         private Object HandleFindAsync(Type projectionType, Object?[]? args)
         {
-            CaptureFind(projectionType, args, out _, out _);
+            CaptureFind(projectionType, args);
             return Task.FromResult(_cursor);
         }
 
         private Object HandleFindSync(Type projectionType, Object?[]? args)
         {
-            CaptureFind(projectionType, args, out _, out _);
+            CaptureFind(projectionType, args);
             return _cursor;
         }
     }

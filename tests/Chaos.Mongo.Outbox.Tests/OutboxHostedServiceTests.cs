@@ -53,7 +53,7 @@ public class OutboxHostedServiceTests
             .Callback(() => callOrder.Add("configurator"))
             .Returns(Task.CompletedTask);
 
-        var sut = CreateService(out var processor, out _, mockRunner.Object);
+        var sut = CreateService(out var processor, mockRunner.Object);
         processor
             .Setup(p => p.StartAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("start"))
@@ -76,7 +76,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StartAsync_IsNoOp()
     {
-        var sut = CreateService(out _, out _);
+        var sut = CreateService(out _);
 
         await sut.StartAsync(CancellationToken.None);
     }
@@ -84,7 +84,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StartedAsync_PropagatesCancellationToken()
     {
-        var sut = CreateService(out var processor, out _);
+        var sut = CreateService(out var processor);
         using var cts = new CancellationTokenSource();
 
         await sut.StartedAsync(cts.Token);
@@ -95,7 +95,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StartedAsync_StartsProcessor()
     {
-        var sut = CreateService(out var processor, out _);
+        var sut = CreateService(out var processor);
 
         await sut.StartedAsync(CancellationToken.None);
 
@@ -106,7 +106,7 @@ public class OutboxHostedServiceTests
     public async Task StartingAsync_PropagatesCancellationToken()
     {
         var mockRunner = new Mock<IOutboxConfiguratorRunner>();
-        var sut = CreateService(out _, out _, mockRunner.Object);
+        var sut = CreateService(out _, mockRunner.Object);
         using var cts = new CancellationTokenSource();
 
         await sut.StartingAsync(cts.Token);
@@ -118,7 +118,7 @@ public class OutboxHostedServiceTests
     public async Task StartingAsync_RunsConfigurators()
     {
         var mockRunner = new Mock<IOutboxConfiguratorRunner>();
-        var sut = CreateService(out _, out _, mockRunner.Object);
+        var sut = CreateService(out _, mockRunner.Object);
 
         await sut.StartingAsync(CancellationToken.None);
 
@@ -128,7 +128,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StopAsync_IsNoOp()
     {
-        var sut = CreateService(out _, out _);
+        var sut = CreateService(out _);
 
         await sut.StopAsync(CancellationToken.None);
     }
@@ -136,7 +136,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StoppedAsync_IsNoOp()
     {
-        var sut = CreateService(out _, out _);
+        var sut = CreateService(out _);
 
         await sut.StoppedAsync(CancellationToken.None);
     }
@@ -144,7 +144,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StoppingAsync_PropagatesCancellationToken()
     {
-        var sut = CreateService(out var processor, out _);
+        var sut = CreateService(out var processor);
         using var cts = new CancellationTokenSource();
 
         await sut.StoppingAsync(cts.Token);
@@ -155,7 +155,7 @@ public class OutboxHostedServiceTests
     [Test]
     public async Task StoppingAsync_StopsProcessor()
     {
-        var sut = CreateService(out var processor, out _);
+        var sut = CreateService(out var processor);
 
         await sut.StoppingAsync(CancellationToken.None);
 
@@ -164,11 +164,10 @@ public class OutboxHostedServiceTests
 
     private static OutboxHostedService CreateService(
         out Mock<IOutboxProcessor> processor,
-        out Mock<IServiceScopeFactory> scopeFactory,
         IOutboxConfiguratorRunner? configuratorRunner = null)
     {
         processor = new Mock<IOutboxProcessor>();
-        scopeFactory = new Mock<IServiceScopeFactory>();
+        var scopeFactory = new Mock<IServiceScopeFactory>();
 
         var mockScope = new Mock<IServiceScope>();
         var scopeServices = new ServiceCollection();
