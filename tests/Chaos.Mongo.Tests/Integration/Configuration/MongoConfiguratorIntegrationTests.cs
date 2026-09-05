@@ -44,7 +44,8 @@ public class MongoConfiguratorIntegrationTests
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
         // Act & Assert
-        var act = async () => await runner.RunConfiguratorsAsync(cts.Token);
+        var cancellationToken = cts.Token;
+        var act = async () => await runner.RunConfiguratorsAsync(cancellationToken);
         await act.Should().ThrowAsync<OperationCanceledException>();
 
         // Assert - Only first configurator should have executed before cancellation
@@ -311,13 +312,13 @@ public class MongoConfiguratorIntegrationTests
     // Execution Tracker for verifying configurator execution order
     public static class ExecutionTracker
     {
-        private static readonly ConcurrentBag<String> _executed = [];
+        private static readonly ConcurrentBag<String> Executed = [];
 
-        public static IReadOnlyCollection<String> ExecutedConfigurators => _executed.ToList();
+        public static IReadOnlyCollection<String> ExecutedConfigurators => Executed.ToList();
 
-        public static void Reset() => _executed.Clear();
+        public static void Reset() => Executed.Clear();
 
-        public static void Track(String configuratorName) => _executed.Add(configuratorName);
+        public static void Track(String configuratorName) => Executed.Add(configuratorName);
     }
 
     internal class ConfiguratorWithScopedDependency : IMongoConfigurator
@@ -398,8 +399,8 @@ public class MongoConfiguratorIntegrationTests
 
     private class AuditLog
     {
-        public String Action { get; init; } = String.Empty;
-
+        // MongoDB accesses this identifier through BSON serialization.
+        // ReSharper disable once UnusedMember.Local
         [BsonId]
         public ObjectId Id { get; init; }
 
@@ -409,6 +410,8 @@ public class MongoConfiguratorIntegrationTests
     // Test Documents
     private class TestDocument
     {
+        // MongoDB accesses this identifier through BSON serialization.
+        // ReSharper disable once UnusedMember.Local
         [BsonId]
         public ObjectId Id { get; init; }
 

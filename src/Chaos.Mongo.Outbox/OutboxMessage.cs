@@ -47,15 +47,15 @@ public class OutboxMessage
     public Boolean IsLocked { get; set; }
 
     /// <summary>
-    /// Gets or sets the timestamp when the lock was acquired. Used for stale lock detection.
-    /// </summary>
-    public DateTime? LockedUtc { get; set; }
-
-    /// <summary>
     /// Gets or sets the opaque claim token identifying the processor's current lock ownership.
     /// A new value is generated every time a message is claimed or reclaimed.
     /// </summary>
     public String? LockId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the timestamp when the lock was acquired. Used for stale lock detection.
+    /// </summary>
+    public DateTime? LockedUtc { get; set; }
 
     /// <summary>
     /// Gets or sets when the message becomes eligible for another processing attempt after a failure.

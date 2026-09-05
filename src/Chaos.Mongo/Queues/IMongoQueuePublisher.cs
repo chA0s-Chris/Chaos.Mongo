@@ -15,8 +15,14 @@ public interface IMongoQueuePublisher
     /// <param name="payload">The payload to publish.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task that completes when the payload has been published.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="queueDefinition"/> or <paramref name="payload"/> is null.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when the payload type does not match the queue payload type or collection name is empty.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="queueDefinition"/> or <paramref name="payload"/> is
+    /// null.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the payload type does not match the queue payload type or
+    /// collection name is empty.
+    /// </exception>
     Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition, TPayload payload, CancellationToken cancellationToken)
         where TPayload : class, new();
 }

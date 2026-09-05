@@ -2,62 +2,63 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Integration;
 
+using Docker.DotNet.Models;
 using DotNet.Testcontainers.Containers;
 using Testcontainers.MongoDb;
 
 public static class MongoDbTestContainer
 {
-    private static readonly SemaphoreSlim _gate = new(1, 1);
-    private static MongoDbContainer? _container;
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static MongoDbContainer? Container;
 
     public static async Task<MongoDbContainer> StartContainerAsync()
     {
-        if (_container is { State: TestcontainersStates.Running })
-            return _container;
+        if (Container is { State: TestcontainersStates.Running })
+            return Container;
 
-        await _gate.WaitAsync();
+        await Gate.WaitAsync();
         try
         {
-            if (_container is { State: TestcontainersStates.Running })
-                return _container;
+            if (Container is { State: TestcontainersStates.Running })
+                return Container;
 
-            _container = new MongoDbBuilder()
-                         .WithImage("mongo:8")
-                         .WithReplicaSet()
-                         // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
-                         // pinned. See https://jira.mongodb.org/browse/SERVER-121912
-                         .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
-                         .WithCreateParameterModifier(parameters =>
-                         {
-                             parameters.HostConfig ??= new();
-                             parameters.HostConfig.Ulimits =
-                             [
-                                 new()
-                                 {
-                                     Name = "nofile",
-                                     Soft = 65536,
-                                     Hard = 65536
-                                 }
-                             ];
-                         })
-                         .Build();
+            Container = new MongoDbBuilder()
+                        .WithImage("mongo:8")
+                        .WithReplicaSet()
+                        // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
+                        // pinned. See https://jira.mongodb.org/browse/SERVER-121912
+                        .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
+                        .WithCreateParameterModifier(parameters =>
+                        {
+                            parameters.HostConfig ??= new HostConfig();
+                            parameters.HostConfig.Ulimits =
+                            [
+                                new Ulimit
+                                {
+                                    Name = "nofile",
+                                    Soft = 65536,
+                                    Hard = 65536
+                                }
+                            ];
+                        })
+                        .Build();
 
-            await _container.StartAsync();
-            return _container;
+            await Container.StartAsync();
+            return Container;
         }
         finally
         {
-            _gate.Release();
+            Gate.Release();
         }
     }
 
     public static async Task StopContainerAsync()
     {
-        if (_container is null)
+        if (Container is null)
             return;
 
-        var container = _container;
-        _container = null;
+        var container = Container;
+        Container = null;
         await container.DisposeAsync();
     }
 }

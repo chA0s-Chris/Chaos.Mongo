@@ -27,10 +27,10 @@ public class MongoHelperLockIntegrationTests
         timeProvider.Advance(TimeSpan.FromMinutes(1));
         var laterLock = await mongoHelper.TryAcquireLockAsync("reacquired-lock", TimeSpan.FromMinutes(5));
         laterLock.Should().NotBeNull();
-        await using var successorLock = laterLock!;
+        await using var successorLock = laterLock;
 
         // Act
-        await staleLock!.DisposeAsync();
+        await staleLock.DisposeAsync();
 
         // Assert
         var lockDocument = await lockCollection.Find(x => x.Id == "reacquired-lock").SingleAsync();
@@ -50,7 +50,7 @@ public class MongoHelperLockIntegrationTests
         var lockCollection = helper1.Database.GetCollection<MongoLockDocument>("_locks");
         var firstLock = await helper1.TryAcquireLockAsync("at-expiry-race", TimeSpan.FromMinutes(10));
         firstLock.Should().NotBeNull();
-        await using var originalLock = firstLock!;
+        await using var originalLock = firstLock;
         timeProvider.Advance(TimeSpan.FromMinutes(10));
 
         // Act
@@ -62,7 +62,7 @@ public class MongoHelperLockIntegrationTests
         (await extensionTask).Should().BeFalse();
         var acquiredLock = await acquisitionTask;
         acquiredLock.Should().NotBeNull();
-        await using var successorLock = acquiredLock!;
+        await using var successorLock = acquiredLock;
         var lockDocument = await lockCollection.Find(x => x.Id == "at-expiry-race").SingleAsync();
         lockDocument.Holder.Should().Be("holder-2");
         lockDocument.LeaseUntilUtc.Should().Be(successorLock.ValidUntilUtc);
@@ -80,7 +80,7 @@ public class MongoHelperLockIntegrationTests
         var lockCollection = helper1.Database.GetCollection<MongoLockDocument>("_locks");
         var acquiredLock = await helper1.TryAcquireLockAsync("before-expiry-race", TimeSpan.FromMinutes(10));
         acquiredLock.Should().NotBeNull();
-        await using var lockInstance = acquiredLock!;
+        await using var lockInstance = acquiredLock;
         timeProvider.Advance(TimeSpan.FromMinutes(1));
 
         // Act
@@ -121,7 +121,7 @@ public class MongoHelperLockIntegrationTests
         lockInstance.Should().NotBeNull();
 
         // Act
-        await mongoHelper.ReleaseLockAsync("direct-release-lock", "direct-release-holder", lockInstance!.ValidUntilUtc);
+        await mongoHelper.ReleaseLockAsync("direct-release-lock", "direct-release-holder", lockInstance.ValidUntilUtc);
 
         // Assert
         var lockDoc = await lockCollection.Find(x => x.Id == "direct-release-lock").FirstOrDefaultAsync();
@@ -150,7 +150,7 @@ public class MongoHelperLockIntegrationTests
         lockInstance.Should().NotBeNull();
 
         // Act - Try to release with wrong holder ID
-        await mongoHelper.ReleaseLockAsync("protected-lock", "wrong-holder", lockInstance!.ValidUntilUtc);
+        await mongoHelper.ReleaseLockAsync("protected-lock", "wrong-holder", lockInstance.ValidUntilUtc);
 
         // Assert - Lock should still exist
         var lockDoc = await lockCollection.Find(x => x.Id == "protected-lock").FirstOrDefaultAsync();
@@ -362,7 +362,8 @@ public class MongoHelperLockIntegrationTests
         await cts.CancelAsync();
 
         // Act
-        var act = async () => await mongoHelper.TryAcquireLockAsync("cancel-lock", cancellationToken: cts.Token);
+        var cancellationToken = cts.Token;
+        var act = async () => await mongoHelper.TryAcquireLockAsync("cancel-lock", cancellationToken: cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -466,11 +467,11 @@ public class MongoHelperLockIntegrationTests
         var lockCollection = helper1.Database.GetCollection<MongoLockDocument>("_locks");
         var firstLock = await helper1.TryAcquireLockAsync("stolen-lock", TimeSpan.FromMinutes(1));
         firstLock.Should().NotBeNull();
-        await using var originalLock = firstLock!;
+        await using var originalLock = firstLock;
         timeProvider.Advance(TimeSpan.FromMinutes(1));
         var secondLock = await helper2.TryAcquireLockAsync("stolen-lock", TimeSpan.FromMinutes(5));
         secondLock.Should().NotBeNull();
-        await using var successorLock = secondLock!;
+        await using var successorLock = secondLock;
 
         // Act
         var result = await originalLock.TryExtendAsync();
@@ -494,7 +495,7 @@ public class MongoHelperLockIntegrationTests
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
         var acquiredLock = await mongoHelper.TryAcquireLockAsync("expired-unclaimed-lock", TimeSpan.FromMinutes(1));
         acquiredLock.Should().NotBeNull();
-        await using var lockInstance = acquiredLock!;
+        await using var lockInstance = acquiredLock;
         var originalExpiry = lockInstance.ValidUntilUtc;
         timeProvider.Advance(TimeSpan.FromMinutes(1));
 
@@ -521,12 +522,12 @@ public class MongoHelperLockIntegrationTests
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
         var acquiredStaleLock = await mongoHelper.TryAcquireLockAsync("stale-extension-lock", TimeSpan.FromMinutes(1));
         acquiredStaleLock.Should().NotBeNull();
-        await using var staleLock = acquiredStaleLock!;
+        await using var staleLock = acquiredStaleLock;
         var staleExpiry = staleLock.ValidUntilUtc;
         timeProvider.Advance(TimeSpan.FromMinutes(1));
         var acquiredSuccessorLock = await mongoHelper.TryAcquireLockAsync("stale-extension-lock", TimeSpan.FromMinutes(5));
         acquiredSuccessorLock.Should().NotBeNull();
-        await using var successorLock = acquiredSuccessorLock!;
+        await using var successorLock = acquiredSuccessorLock;
         var successorExpiry = successorLock.ValidUntilUtc;
 
         // Act
@@ -552,7 +553,7 @@ public class MongoHelperLockIntegrationTests
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
         var acquiredLock = await mongoHelper.TryAcquireLockAsync("extend-lock", TimeSpan.FromMinutes(5));
         acquiredLock.Should().NotBeNull();
-        await using var lockInstance = acquiredLock!;
+        await using var lockInstance = acquiredLock;
         timeProvider.Advance(TimeSpan.FromMinutes(1));
         var expectedExpiry = timeProvider.GetUtcNow().AddMinutes(10).UtcDateTime;
 

@@ -45,7 +45,7 @@ public class MongoOptionsTests
         var services = new ServiceCollection();
         services.AddMongo(o =>
         {
-            o.Url = new("mongodb://localhost:27017/test");
+            o.Url = new MongoUrl("mongodb://localhost:27017/test");
             o.CollectionTypeMap[typeof(String)] = String.Empty;
         });
 
@@ -76,22 +76,6 @@ public class MongoOptionsTests
         // Assert
         act.Should().Throw<OptionsValidationException>()
            .WithMessage("*MongoOptions.Url must be configured*");
-    }
-
-    [Test]
-    public void AddMongo_WithConnectionString_RegistersUrlAndValidates()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        services.AddMongo("mongodb://localhost:27017/mydb");
-
-        // Act
-        var provider = services.BuildServiceProvider();
-        var options = provider.GetRequiredService<IOptions<MongoOptions>>().Value;
-
-        // Assert
-        options.Url.Should().NotBeNull();
-        options.Url!.DatabaseName.Should().Be("mydb");
     }
 
     [Test]
@@ -127,6 +111,22 @@ public class MongoOptionsTests
 
         // Assert
         factoryMock.Verify(f => f.CreateConnection(It.IsAny<MongoUrl>(), databaseName), Times.Once);
+    }
+
+    [Test]
+    public void AddMongo_WithConnectionString_RegistersUrlAndValidates()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddMongo("mongodb://localhost:27017/mydb");
+
+        // Act
+        var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<MongoOptions>>().Value;
+
+        // Assert
+        options.Url.Should().NotBeNull();
+        options.Url!.DatabaseName.Should().Be("mydb");
     }
 
     [Test]
@@ -178,5 +178,32 @@ public class MongoOptionsTests
         value.Url.Should().NotBeNull();
         value.Url!.Server.Host.Should().Be("localhost");
         value.Url.DatabaseName.Should().Be("test");
+    }
+
+    [Test]
+    public void Validate_NullCollectionTypeMap_ReturnsValidationFailure()
+    {
+        var validator = new MongoOptionsValidation();
+        var options = new MongoOptions
+        {
+            Url = new MongoUrl("mongodb://localhost:27017/test"),
+            CollectionTypeMap = null!
+        };
+
+        var result = validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain("MongoOptions.CollectionTypeMap must not be null");
+    }
+
+    [Test]
+    public void Validate_NullOptions_ReturnsValidationFailure()
+    {
+        var validator = new MongoOptionsValidation();
+
+        var result = validator.Validate(null, null);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain("Options instance is null");
     }
 }

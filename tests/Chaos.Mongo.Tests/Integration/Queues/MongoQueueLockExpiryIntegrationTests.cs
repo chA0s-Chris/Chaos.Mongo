@@ -45,7 +45,7 @@ public class MongoQueueLockExpiryIntegrationTests
         await queue.StartSubscriptionAsync();
 
         // Act
-        await queue.PublishAsync(new()
+        await queue.PublishAsync(new LeasePayload
         {
             Value = "recover-me"
         });
@@ -101,7 +101,7 @@ public class MongoQueueLockExpiryIntegrationTests
         try
         {
             // Act
-            await firstQueue.PublishAsync(new()
+            await firstQueue.PublishAsync(new LeasePayload
             {
                 Value = "handoff-me"
             });
@@ -285,11 +285,11 @@ public class MongoQueueLockExpiryIntegrationTests
     {
         private readonly SemaphoreSlim _attemptSemaphore = new(0);
         private readonly List<DateTimeOffset> _attemptStartedAtUtc = [];
-        private readonly List<LeasePayload> _successfulPayloads = [];
         private readonly SemaphoreSlim _successSemaphore = new(0);
+        private readonly List<LeasePayload> _successfulPayloads = [];
+        public IReadOnlyList<DateTimeOffset> AttemptStartedAtUtc => _attemptStartedAtUtc;
 
         public Int32 Attempts { get; private set; }
-        public IReadOnlyList<DateTimeOffset> AttemptStartedAtUtc => _attemptStartedAtUtc;
         public IReadOnlyList<LeasePayload> SuccessfulPayloads => _successfulPayloads;
 
         public async Task WaitForAttempts(Int32 count, TimeSpan timeout)

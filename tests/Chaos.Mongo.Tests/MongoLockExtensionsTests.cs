@@ -9,7 +9,7 @@ using NUnit.Framework;
 
 public class MongoLockExtensionsTests
 {
-    private static readonly TimeSpan _defaultLeaseTime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultLeaseTime = TimeSpan.FromMinutes(5);
 
     [Test]
     public async Task EnsureValid_AfterDisposal_ShouldThrowInvalidOperationException()
@@ -126,7 +126,8 @@ public class MongoLockExtensionsTests
         await cancellationTokenSource.CancelAsync();
 
         // Act
-        var act = async () => await mongoLock.ExtendAsync(cancellationToken: cancellationTokenSource.Token);
+        var cancellationToken = cancellationTokenSource.Token;
+        var act = async () => await mongoLock.ExtendAsync(cancellationToken: cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -211,11 +212,11 @@ public class MongoLockExtensionsTests
         TimeProvider timeProvider,
         Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null)
     {
-        return new(id,
-                   validUntilUtc,
-                   _defaultLeaseTime,
-                   timeProvider,
-                   _ => Task.CompletedTask,
-                   extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
+        return new MongoLock(id,
+                             validUntilUtc,
+                             DefaultLeaseTime,
+                             timeProvider,
+                             _ => Task.CompletedTask,
+                             extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
     }
 }

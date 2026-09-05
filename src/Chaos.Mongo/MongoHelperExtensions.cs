@@ -13,7 +13,8 @@ public static class MongoHelperExtensions
     /// Acquire a distributed lock in MongoDB with automatic retry on contention.
     /// </summary>
     /// <remarks>
-    /// This method will retry indefinitely until the lock is acquired or the <paramref name="cancellationToken"/> is cancelled.
+    /// This method will retry indefinitely until the lock is acquired or the <paramref name="cancellationToken"/> is
+    /// cancelled.
     /// The lock is automatically released when the returned <see cref="IMongoLock"/> is disposed.
     /// If the lock is not explicitly released, it will automatically expire after <paramref name="leaseTime"/>.
     /// </remarks>
@@ -154,7 +155,10 @@ public static class MongoHelperExtensions
     /// <param name="sessionOptions">Optional session options.</param>
     /// <param name="transactionOptions">Optional transaction options.</param>
     /// <param name="cancellationToken">Optional cancellation token.</param>
-    /// <returns>A client session with an active transaction if successful, or <c>null</c> if transactions are not supported or an error occurs.</returns>
+    /// <returns>
+    /// A client session with an active transaction if successful, or <c>null</c> if transactions are not supported or
+    /// an error occurs.
+    /// </returns>
     /// <remarks>
     ///     <para>
     ///     This method is useful when you want to use transactions if available but continue without them if not supported.

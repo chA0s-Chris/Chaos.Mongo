@@ -220,7 +220,7 @@ internal class FailingTestMigration : IMongoMigration
         {
             await collection.InsertOneAsync(
                 session,
-                new()
+                new TestDocument
                 {
                     Id = ObjectId.GenerateNewId(),
                     Name = "Test"
@@ -230,7 +230,7 @@ internal class FailingTestMigration : IMongoMigration
         else
         {
             await collection.InsertOneAsync(
-                new()
+                new TestDocument
                 {
                     Id = ObjectId.GenerateNewId(),
                     Name = "Test"

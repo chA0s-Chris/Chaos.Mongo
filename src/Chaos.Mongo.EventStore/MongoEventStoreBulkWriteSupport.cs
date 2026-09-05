@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 
 internal static class MongoEventStoreBulkWriteSupport
 {
-    private static readonly ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>> _serverVersions = new();
+    private static readonly ConditionalWeakTable<IMongoClient, Lazy<Task<Version>>> ServerVersions = new();
 
     public static async Task EnsureSupportedAsync(
         IMongoClient client,
@@ -17,9 +17,9 @@ internal static class MongoEventStoreBulkWriteSupport
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var cachedVersion = _serverVersions.GetValue(
+        var cachedVersion = ServerVersions.GetValue(
             client,
-            _ => new(() => GetServerVersionAsync(database)));
+            _ => new Lazy<Task<Version>>(() => GetServerVersionAsync(database)));
 
         Version serverVersion;
         try
@@ -37,10 +37,10 @@ internal static class MongoEventStoreBulkWriteSupport
         {
             // The shared lookup itself failed: evict it so the next caller retries. Only remove
             // the entry we awaited, in case a concurrent caller already installed a fresh one.
-            if (_serverVersions.TryGetValue(client, out var currentVersion) &&
+            if (ServerVersions.TryGetValue(client, out var currentVersion) &&
                 ReferenceEquals(currentVersion, cachedVersion))
             {
-                _serverVersions.Remove(client);
+                ServerVersions.Remove(client);
             }
 
             throw;
@@ -57,7 +57,7 @@ internal static class MongoEventStoreBulkWriteSupport
     private static async Task<Version> GetServerVersionAsync(IMongoDatabase database)
     {
         var buildInfo = await database.RunCommandAsync(
-            new BsonDocumentCommand<BsonDocument>(new("buildInfo", 1)));
+            new BsonDocumentCommand<BsonDocument>(new BsonDocument("buildInfo", 1)));
         return ParseServerVersion(buildInfo);
     }
 
@@ -71,7 +71,7 @@ internal static class MongoEventStoreBulkWriteSupport
             var build = versionArray.Count > 2 && versionArray[2].IsNumeric
                 ? versionArray[2].ToInt32()
                 : 0;
-            return new(versionArray[0].ToInt32(), versionArray[1].ToInt32(), build);
+            return new Version(versionArray[0].ToInt32(), versionArray[1].ToInt32(), build);
         }
 
         if (buildInfo.TryGetValue("version", out var versionValue) &&
@@ -103,12 +103,12 @@ internal static class MongoEventStoreBulkWriteSupport
         if (numericParts.Count >= 2)
         {
             version = numericParts.Count >= 3
-                ? new(numericParts[0], numericParts[1], numericParts[2])
-                : new(numericParts[0], numericParts[1]);
+                ? new Version(numericParts[0], numericParts[1], numericParts[2])
+                : new Version(numericParts[0], numericParts[1]);
             return true;
         }
 
-        version = new();
+        version = new Version();
         return false;
     }
 }

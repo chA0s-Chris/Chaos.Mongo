@@ -120,10 +120,11 @@ public class MongoHelperExtensionsIntegrationTests
         cts.CancelAfter(TimeSpan.FromMilliseconds(200));
 
         // Act - helper2 tries to acquire but should be cancelled during retry
+        var cancellationToken = cts.Token;
         var act = async () => await helper2.AcquireLockAsync(
             uniqueLockName,
             retryDelay: TimeSpan.FromMilliseconds(50),
-            cancellationToken: cts.Token);
+            cancellationToken: cancellationToken);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -254,13 +255,13 @@ public class MongoHelperExtensionsIntegrationTests
         var counters = mongoHelper.GetCollection<Counter>();
         var testDocuments = mongoHelper.GetCollection<TestDocument>();
 
-        await counters.InsertOneAsync(new()
+        await counters.InsertOneAsync(new Counter
         {
             Id = "Test",
             Value = 42
         });
 
-        await testDocuments.InsertOneAsync(new()
+        await testDocuments.InsertOneAsync(new TestDocument
         {
             Id = ObjectId.GenerateNewId(),
             Value = 0
@@ -327,7 +328,7 @@ public class MongoHelperExtensionsIntegrationTests
                           .GetRequiredService<IMongoHelper>();
 
         var counters = mongoHelper.GetCollection<Counter>();
-        await counters.InsertOneAsync(new()
+        await counters.InsertOneAsync(new Counter
         {
             Id = "Test",
             Value = 42

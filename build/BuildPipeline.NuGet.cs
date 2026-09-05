@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace BuildPipeline;
 
+using JetBrains.Annotations;
 using Nuke.Common;
 using Nuke.Common.IO;
 using Nuke.Common.Tools.DotNet;
@@ -60,6 +61,7 @@ internal partial class BuildPipeline
                                       .AddPair("Version", SemanticVersion));
               });
 
+    [UsedImplicitly]
     private Target Publish => target =>
         target.DependsOn(Pack)
               .OnlyWhenDynamic(() => !NuGetApiKey.IsNullOrWhiteSpace() && !NuGetFeedUri.IsNullOrWhiteSpace())

@@ -35,7 +35,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
 
         var indexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = "idx_name_unique_" + Guid.NewGuid(),
                 Unique = true
@@ -74,7 +74,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Create index on Name field
         var firstIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName
             });
@@ -84,7 +84,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Act - Create index on Value field with same name (conflicting key spec)
         var secondIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Value),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName
             });
@@ -124,7 +124,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Create index with unique = true
         var firstIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName,
                 Unique = true
@@ -135,7 +135,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Act - Create index with unique = false (conflicting option)
         var secondIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName,
                 Unique = false
@@ -173,7 +173,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         var indexName = "idx_name_same_" + Guid.NewGuid();
         var indexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName,
                 Unique = true
@@ -213,7 +213,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
 
         var indexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = "idx_cancel_" + Guid.NewGuid()
             });
@@ -249,7 +249,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
 
         var indexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = "idx_session_cancel_" + Guid.NewGuid()
             });
@@ -258,6 +258,8 @@ public class MongoIndexManagerExtensionsIntegrationTests
         await cts.CancelAsync();
 
         // Act & Assert
+        // The assertion is awaited before session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var act = async () => await indexManager.CreateOneOrUpdateAsync(session, indexModel, cancellationToken: cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -285,7 +287,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
 
         var indexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = "idx_session_new_" + Guid.NewGuid(),
                 Unique = true
@@ -326,7 +328,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Create index on Name field
         var firstIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName
             });
@@ -336,7 +338,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Act - Create index on Value field with same name (conflicting key spec)
         var secondIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Value),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName
             });
@@ -378,7 +380,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Create index with unique = true
         var firstIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName,
                 Unique = true
@@ -389,7 +391,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
         // Act - Create index with unique = false (conflicting option)
         var secondIndexModel = new CreateIndexModel<TestDocument>(
             Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
-            new()
+            new CreateIndexOptions
             {
                 Name = indexName,
                 Unique = false
@@ -410,6 +412,8 @@ public class MongoIndexManagerExtensionsIntegrationTests
 
     private class TestDocument
     {
+        // MongoDB accesses this identifier through BSON serialization.
+        // ReSharper disable once UnusedMember.Local
         [BsonId]
         public ObjectId Id { get; init; }
 

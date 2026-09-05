@@ -17,7 +17,10 @@ public class MongoConfiguratorRunner : IMongoConfiguratorRunner
     /// <param name="mongoHelper">The MongoDB helper instance.</param>
     /// <param name="logger">The logger instance.</param>
     /// <param name="configurators">The collection of configurators to run.</param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="mongoHelper"/>, <paramref name="logger"/>, or <paramref name="configurators"/> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="mongoHelper"/>, <paramref name="logger"/>, or
+    /// <paramref name="configurators"/> is null.
+    /// </exception>
     public MongoConfiguratorRunner(IMongoHelper mongoHelper,
                                    ILogger<MongoConfiguratorRunner> logger,
                                    IEnumerable<IMongoConfigurator> configurators)

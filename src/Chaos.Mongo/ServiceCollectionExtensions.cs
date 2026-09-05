@@ -60,7 +60,10 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The service collection to add MongoDB services to.</param>
     /// <param name="connectionString">The MongoDB connection string.</param>
-    /// <param name="databaseName">Optional database name to use. If not specified, the database name from the connection string is used.</param>
+    /// <param name="databaseName">
+    /// Optional database name to use. If not specified, the database name from the connection
+    /// string is used.
+    /// </param>
     /// <param name="configure">Optional action to configure additional <see cref="MongoOptions"/>.</param>
     /// <returns>A <see cref="MongoBuilder"/> for configuring MongoDB services.</returns>
     /// <exception cref="ArgumentException">Thrown when <paramref name="connectionString"/> is null or whitespace.</exception>
@@ -70,7 +73,7 @@ public static class ServiceCollectionExtensions
 
         return services.AddMongo(options =>
         {
-            options.Url = new(connectionString);
+            options.Url = new MongoUrl(connectionString);
             options.DefaultDatabase = databaseName;
             configure?.Invoke(options);
         });
@@ -132,6 +135,6 @@ public static class ServiceCollectionExtensions
 
         services.AddHostedService<MongoHostedService>(); // only registered once even if called for multiple queues
 
-        return new(services);
+        return new MongoBuilder(services);
     }
 }

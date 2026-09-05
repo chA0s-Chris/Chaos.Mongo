@@ -44,7 +44,7 @@ public class MongoQueueRetentionIntegrationTests
         try
         {
             // Act
-            await queue.PublishAsync(new()
+            await queue.PublishAsync(new RetentionPayload
             {
                 Value = "delete-me"
             });
@@ -86,7 +86,7 @@ public class MongoQueueRetentionIntegrationTests
         try
         {
             // Act
-            await queue.PublishAsync(new()
+            await queue.PublishAsync(new RetentionPayload
             {
                 Value = "retain-me"
             });

@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Benchmarks;
 
 using BenchmarkDotNet.Attributes;
 using Chaos.Mongo.Configuration;
+using Docker.DotNet.Models;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
 using Testcontainers.MongoDb;
@@ -11,23 +12,25 @@ using Testcontainers.MongoDb;
 [MemoryDiagnoser]
 public class EventStoreAppendBenchmarks
 {
-    private static readonly BenchmarkScenario[] _scenarioMatrix =
+    private const Int32 OperationsPerBenchmarkInvocation = 32;
+
+    private static readonly BenchmarkScenario[] ScenarioMatrix =
     [
         new("SingleEventNoCheckpoint", 1),
         new("MediumBatchNoCheckpoint", 10),
         new("CheckpointForcingBatch", 50, 1)
     ];
-    private const Int32 OperationsPerBenchmarkInvocation = 32;
+
     private BenchmarkContext _baseline = null!;
     private Int32 _baselineInvocation;
-    private MongoDbContainer _container = null!;
+    private MongoDbContainer? _container;
     private BenchmarkContext _optimized = null!;
     private Int32 _optimizedInvocation;
 
     [ParamsSource(nameof(Scenarios))]
     public BenchmarkScenario Scenario { get; set; } = null!;
 
-    public IEnumerable<BenchmarkScenario> Scenarios => _scenarioMatrix;
+    public IEnumerable<BenchmarkScenario> Scenarios => ScenarioMatrix;
 
     [Benchmark(OperationsPerInvoke = OperationsPerBenchmarkInvocation)]
     public async Task AppendWithBulkWrite()
@@ -70,10 +73,10 @@ public class EventStoreAppendBenchmarks
                      .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
                      .WithCreateParameterModifier(parameters =>
                      {
-                         parameters.HostConfig ??= new();
+                         parameters.HostConfig ??= new HostConfig();
                          parameters.HostConfig.Ulimits =
                          [
-                             new()
+                             new Ulimit
                              {
                                  Name = "nofile",
                                  Soft = 65536,
@@ -94,7 +97,7 @@ public class EventStoreAppendBenchmarks
         WarmupAsync(_optimized.Store).GetAwaiter().GetResult();
     }
 
-    private static async Task DisposeContextAsync(BenchmarkContext context)
+    private static async Task DisposeContextAsync(BenchmarkContext? context)
     {
         if (context is null)
         {
@@ -128,10 +131,11 @@ public class EventStoreAppendBenchmarks
 
     private async Task<BenchmarkContext> CreateContextAsync(String scenario, Boolean bulkWriteOptimizationEnabled)
     {
+        var container = _container ?? throw new InvalidOperationException("The MongoDB container has not been initialized.");
         var databaseName = $"EventStoreBenchmark_{scenario}_{Guid.NewGuid():N}";
         var services = new ServiceCollection()
                        .AddMongo(
-                           MongoUrl.Create(_container.GetConnectionString()),
+                           MongoUrl.Create(container.GetConnectionString()),
                            configure: options =>
                            {
                                options.DefaultDatabase = databaseName;
@@ -161,7 +165,7 @@ public class EventStoreAppendBenchmarks
             await configurator.ConfigureAsync(mongoHelper);
         }
 
-        return new(
+        return new BenchmarkContext(
             services,
             services.GetRequiredService<IEventStore<BenchmarkOrderAggregate>>(),
             mongoHelper,

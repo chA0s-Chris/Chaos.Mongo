@@ -23,7 +23,6 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     where TPayload : class, new()
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
-    private static readonly TimeSpan MaxLeaseRecoveryWakeInterval = TimeSpan.FromSeconds(1);
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
@@ -106,7 +105,8 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
     {
         await collection.Indexes
                         .CreateOneOrUpdateAsync(
-                            new(Builders<MongoQueueItem<TPayload>>.IndexKeys
+                            new CreateIndexModel<MongoQueueItem<TPayload>>(
+                                Builders<MongoQueueItem<TPayload>>.IndexKeys
                                                                   .Ascending(x => x.IsClosed)
                                                                   .Ascending(x => x.IsLocked)
                                                                   .Ascending(x => x.LockedUtc)
@@ -124,7 +124,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                     Name = ClosedItemTtlIndexName,
                     ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
                     PartialFilterExpression = new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(
-                        new()
+                        new BsonDocument
                         {
                             { nameof(MongoQueueItem.IsClosed), true },
                             { nameof(MongoQueueItem.IsTerminal), new BsonDocument("$in", new BsonArray([false, BsonNull.Value])) },
@@ -284,7 +284,7 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                 Builders<MongoQueueItem<TPayload>>.Update
                                                   .Set(x => x.IsLocked, true)
                                                   .Set(x => x.LockedUtc, acquiredLockUtc),
-                new()
+                new FindOneAndUpdateOptions<MongoQueueItem<TPayload>, MongoQueueItem<TPayload>>
                 {
                     ReturnDocument = ReturnDocument.Before
                 },
@@ -400,9 +400,9 @@ public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload
                                _queueDefinition.CollectionName);
 
         var sortDefinition = _payloadPrioritizer.CreateSortDefinition<TPayload>();
-        var leaseRecoveryWakeInterval = _queueDefinition.LockLeaseTime < MaxLeaseRecoveryWakeInterval
+        var leaseRecoveryWakeInterval = _queueDefinition.LockLeaseTime < MongoQueueSubscriptionDefaults.MaxLeaseRecoveryWakeInterval
             ? _queueDefinition.LockLeaseTime
-            : MaxLeaseRecoveryWakeInterval;
+            : MongoQueueSubscriptionDefaults.MaxLeaseRecoveryWakeInterval;
         var countOptions = new CountOptions
         {
             Limit = 1

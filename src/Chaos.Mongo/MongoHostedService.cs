@@ -37,7 +37,7 @@ public class MongoHostedService : IHostedLifecycleService
         ArgumentNullException.ThrowIfNull(serviceScopeFactory);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
-        _queues = [..queues];
+        _queues = [.. queues];
         _serviceScopeFactory = serviceScopeFactory;
         _logger = logger;
         _options = options.Value;

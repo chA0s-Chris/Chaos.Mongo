@@ -25,7 +25,7 @@ public class CollectionTypeMapTests
         var options = new MongoOptions
         {
             UseDefaultCollectionNames = false,
-            CollectionTypeMap = new()
+            CollectionTypeMap = new Dictionary<Type, String>()
         };
 
         var sut = new CollectionTypeMap(Options.Create(options));
@@ -45,7 +45,7 @@ public class CollectionTypeMapTests
         var options = new MongoOptions
         {
             UseDefaultCollectionNames = true,
-            CollectionTypeMap = new()
+            CollectionTypeMap = new Dictionary<Type, String>()
         };
 
         var sut = new CollectionTypeMap(Options.Create(options));
@@ -78,7 +78,7 @@ public class CollectionTypeMapTests
         var options = new MongoOptions
         {
             UseDefaultCollectionNames = false,
-            CollectionTypeMap = new()
+            CollectionTypeMap = new Dictionary<Type, String>
             {
                 { typeof(MappedType), "mapped_collection" }
             }

@@ -44,6 +44,11 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     public String CollectionPrefix { get; set; } = typeof(TAggregate).Name;
 
     /// <summary>
+    /// Gets the event types registered for this aggregate, mapped to their discriminator names.
+    /// </summary>
+    public Dictionary<Type, String> EventTypes { get; } = new();
+
+    /// <summary>
     /// Gets the name of the events collection.
     /// </summary>
     public String EventsCollectionName => $"{CollectionPrefix}{EventsCollectionSuffix}";
@@ -53,11 +58,6 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Defaults to <c>"_Events"</c>.
     /// </summary>
     public String EventsCollectionSuffix { get; set; } = "_Events";
-
-    /// <summary>
-    /// Gets the event types registered for this aggregate, mapped to their discriminator names.
-    /// </summary>
-    public Dictionary<Type, String> EventTypes { get; } = new();
 
     /// <summary>
     /// Gets the name of the read-model collection.

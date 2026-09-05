@@ -93,47 +93,47 @@ public class OutboxIndexContractIntegrationTests
         var highId = ObjectId.GenerateNewId(now.AddMinutes(-4));
         await collection.InsertManyAsync(
         [
-            new()
+            new OutboxMessage
             {
                 Id = highId,
                 Type = "TestPayload",
-                Payload = new("Name", "same-attempt-higher-id"),
+                Payload = new BsonDocument("Name", "same-attempt-higher-id"),
                 State = OutboxMessageState.Pending,
                 NextAttemptUtc = now.AddMinutes(-1),
                 IsLocked = false
             },
-            new()
+            new OutboxMessage
             {
                 Id = lowId,
                 Type = "TestPayload",
-                Payload = new("Name", "same-attempt-lower-id"),
+                Payload = new BsonDocument("Name", "same-attempt-lower-id"),
                 State = OutboxMessageState.Pending,
                 NextAttemptUtc = now.AddMinutes(-1),
                 IsLocked = false
             },
-            new()
+            new OutboxMessage
             {
                 Id = ObjectId.GenerateNewId(now.AddMinutes(-3)),
                 Type = "TestPayload",
-                Payload = new("Name", "earliest-attempt"),
+                Payload = new BsonDocument("Name", "earliest-attempt"),
                 State = OutboxMessageState.Pending,
                 NextAttemptUtc = now.AddMinutes(-2),
                 IsLocked = false
             },
-            new()
+            new OutboxMessage
             {
                 Id = ObjectId.GenerateNewId(now.AddMinutes(-2)),
                 Type = "TestPayload",
-                Payload = new("Name", "future-attempt"),
+                Payload = new BsonDocument("Name", "future-attempt"),
                 State = OutboxMessageState.Pending,
                 NextAttemptUtc = now.AddMinutes(5),
                 IsLocked = false
             },
-            new()
+            new OutboxMessage
             {
                 Id = ObjectId.GenerateNewId(now.AddMinutes(-1)),
                 Type = "TestPayload",
-                Payload = new("Name", "fresh-lock"),
+                Payload = new BsonDocument("Name", "fresh-lock"),
                 State = OutboxMessageState.Pending,
                 NextAttemptUtc = now.AddMinutes(-3),
                 IsLocked = true,

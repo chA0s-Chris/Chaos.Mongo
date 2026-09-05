@@ -94,7 +94,7 @@ public class MongoBuilder
             _registeredConfiguratorTypes.Add(implementationType);
         }
 
-        DiscoveredConfigurators = [..DiscoveredConfigurators, ..implementationTypes];
+        DiscoveredConfigurators = [.. DiscoveredConfigurators, .. implementationTypes];
         return this;
     }
 
@@ -105,7 +105,8 @@ public class MongoBuilder
     /// <returns>This builder instance for method chaining.</returns>
     /// <remarks>
     /// Migrations are executed in order based on their <see cref="Migrations.IMongoMigration.Id"/> during application startup
-    /// when <see cref="MongoOptions.ApplyMigrationsOnStartup"/> is enabled, or manually via <see cref="Migrations.IMongoMigrationRunner"/>.
+    /// when <see cref="MongoOptions.ApplyMigrationsOnStartup"/> is enabled, or manually via
+    /// <see cref="Migrations.IMongoMigrationRunner"/>.
     /// </remarks>
     public MongoBuilder WithMigration<T>()
         where T : class, IMongoMigration
@@ -133,10 +134,12 @@ public class MongoBuilder
     /// <remarks>
     ///     <para>
     ///     Discovered migration types are added to the <see cref="DiscoveredMigrations"/> property.
-    ///     Migrations are executed in order based on their <see cref="Migrations.IMongoMigration.Id"/> using ordinal string comparison.
+    ///     Migrations are executed in order based on their <see cref="Migrations.IMongoMigration.Id"/> using ordinal string
+    ///     comparison.
     ///     </para>
     ///     <para>
-    ///     It is recommended to use timestamp-based ID prefixes (e.g., "20250110_InitialSchema") to ensure predictable ordering.
+    ///     It is recommended to use timestamp-based ID prefixes (e.g., "20250110_InitialSchema") to ensure predictable
+    ///     ordering.
     ///     </para>
     /// </remarks>
     public MongoBuilder WithMigrationAutoDiscovery(IEnumerable<Assembly>? assembliesToScan = null)
@@ -158,7 +161,7 @@ public class MongoBuilder
             _registeredMigrationTypes.Add(implementationType);
         }
 
-        DiscoveredMigrations = [..DiscoveredMigrations, ..implementationTypes];
+        DiscoveredMigrations = [.. DiscoveredMigrations, .. implementationTypes];
 
         return this;
     }
@@ -170,7 +173,10 @@ public class MongoBuilder
     /// <param name="configure">The configuration action for the queue builder.</param>
     /// <returns>This builder instance for method chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="configure"/> is null.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when a registration for a MongoDB queue with the same payload type already exists.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a registration for a MongoDB queue with the same payload type
+    /// already exists.
+    /// </exception>
     public MongoBuilder WithQueue<TPayload>(Action<MongoQueueBuilder<TPayload>> configure)
         where TPayload : class, new()
     {

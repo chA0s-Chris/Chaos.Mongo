@@ -207,20 +207,6 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
-    /// Configures the queue to not automatically start its subscription during application startup.
-    /// </summary>
-    /// <remarks>
-    /// The subscription can be started manually using <see cref="IMongoQueue.StartSubscriptionAsync"/>.
-    /// This is the default behavior.
-    /// </remarks>
-    /// <returns>This builder instance for method chaining.</returns>
-    public MongoQueueBuilder<TPayload> WithoutAutoStartSubscription()
-    {
-        _autoStartSubscription = false;
-        return this;
-    }
-
-    /// <summary>
     /// Configures the queue to use a specific payload handler type.
     /// </summary>
     /// <typeparam name="TPayloadHandler">The type of payload handler to use.</typeparam>
@@ -289,6 +275,20 @@ public sealed class MongoQueueBuilder<TPayload>
         }
 
         _queryLimit = queryLimit;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the queue to not automatically start its subscription during application startup.
+    /// </summary>
+    /// <remarks>
+    /// The subscription can be started manually using <see cref="IMongoQueue.StartSubscriptionAsync"/>.
+    /// This is the default behavior.
+    /// </remarks>
+    /// <returns>This builder instance for method chaining.</returns>
+    public MongoQueueBuilder<TPayload> WithoutAutoStartSubscription()
+    {
+        _autoStartSubscription = false;
         return this;
     }
 

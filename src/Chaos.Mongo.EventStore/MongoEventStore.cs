@@ -55,7 +55,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             MongoWriteException { WriteError.Category: ServerErrorCategory.DuplicateKey } => true,
             MongoBulkWriteException bulkWriteException => bulkWriteException.WriteErrors.Any(error => error.Category == ServerErrorCategory.DuplicateKey),
             ClientBulkWriteException clientBulkWriteException => clientBulkWriteException.WriteErrors.Values.Any(error => error.Category ==
-                    ServerErrorCategory.DuplicateKey),
+                                                                                                                     ServerErrorCategory.DuplicateKey),
             _ => false
         };
 
@@ -64,7 +64,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         FilterDefinition<TDocument> filter)
     {
         var renderedFilter = filter.Render(
-            new(collection.DocumentSerializer, collection.Settings.SerializerRegistry));
+            new RenderArgs<TDocument>(collection.DocumentSerializer, collection.Settings.SerializerRegistry));
         return new BsonDocumentFilterDefinition<BsonDocument>(renderedFilter);
     }
 
@@ -154,7 +154,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                               .Find(Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId))
                               .FirstOrDefaultAsync(cancellationToken);
 
-        aggregate ??= new()
+        aggregate ??= new TAggregate
         {
             Id = aggregateId,
             CreatedUtc = now
@@ -224,7 +224,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         var checkpoint = shouldCreateCheckpoint
             ? new CheckpointDocument<TAggregate>
             {
-                Id = new(aggregateId, lastVersion),
+                Id = new CheckpointId(aggregateId, lastVersion),
                 State = aggregate
             }
             : null;
@@ -268,7 +268,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                         await helper.Client.BulkWriteAsync(
                             session,
                             models,
-                            new()
+                            new ClientBulkWriteOptions
                             {
                                 IsOrdered = true
                             },

@@ -79,25 +79,12 @@ public class OutboxIntegrationTests
         using var session = await _mongoHelper.Client.StartSessionAsync();
         session.StartTransaction();
 
+        // The assertion is awaited before session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var act = () => _outbox.AddMessageAsync(session, new UnregisteredPayload());
 
         await act.Should().ThrowAsync<InvalidOperationException>()
                  .WithMessage("*not registered*");
-    }
-
-    [Test]
-    public async Task AddMessageAsync_WithoutTransaction_ThrowsInvalidOperationException()
-    {
-        using var session = await _mongoHelper.Client.StartSessionAsync();
-        // Not starting a transaction
-
-        var act = () => _outbox.AddMessageAsync(session, new TestPayload
-        {
-            Name = "Test"
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-                 .WithMessage("*active MongoDB transaction*");
     }
 
     [Test]
@@ -126,6 +113,23 @@ public class OutboxIntegrationTests
         var payload = messages[0].DeserializePayload<TestPayload>();
         payload.Name.Should().Be("Test");
         payload.Value.Should().Be(42);
+    }
+
+    [Test]
+    public async Task AddMessageAsync_WithoutTransaction_ThrowsInvalidOperationException()
+    {
+        using var session = await _mongoHelper.Client.StartSessionAsync();
+        // Not starting a transaction
+
+        // The assertion is awaited before session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
+        var act = () => _outbox.AddMessageAsync(session, new TestPayload
+        {
+            Name = "Test"
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage("*active MongoDB transaction*");
     }
 
     [Test]
@@ -375,8 +379,5 @@ public class OutboxIntegrationTests
         throw new TimeoutException($"Condition was not met within {timeout}.");
     }
 
-    private class UnregisteredPayload
-    {
-        public String Data { get; set; } = String.Empty;
-    }
+    private class UnregisteredPayload { }
 }

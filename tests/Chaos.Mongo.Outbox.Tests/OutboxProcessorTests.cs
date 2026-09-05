@@ -298,7 +298,7 @@ public class OutboxProcessorTests
     [Test]
     public async Task ProcessMessage_PublishFails_SchedulesRetryAtMaxDelayWhenBackoffWouldOverflow()
     {
-        _options = new()
+        _options = new OutboxOptions
         {
             CollectionName = "TestOutbox",
             BatchSize = 10,
@@ -419,7 +419,7 @@ public class OutboxProcessorTests
     [SetUp]
     public void SetUp()
     {
-        _options = new()
+        _options = new OutboxOptions
         {
             CollectionName = "TestOutbox",
             BatchSize = 10,
@@ -430,26 +430,26 @@ public class OutboxProcessorTests
             RetryBackoffMaxDelay = TimeSpan.FromSeconds(30)
         };
 
-        _timeProvider = new(DateTimeOffset.UtcNow);
-        _loggerMock = new();
+        _timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        _loggerMock = new Mock<ILogger<OutboxProcessor>>();
 
-        _collectionMock = new();
-        _databaseMock = new();
+        _collectionMock = new Mock<IMongoCollection<OutboxMessage>>();
+        _databaseMock = new Mock<IMongoDatabase>();
         _databaseMock
             .Setup(d => d.GetCollection<OutboxMessage>(_options.CollectionName, null))
             .Returns(_collectionMock.Object);
 
-        _mongoHelperMock = new();
+        _mongoHelperMock = new Mock<IMongoHelper>();
         _mongoHelperMock.Setup(h => h.Database).Returns(_databaseMock.Object);
 
-        _publisherMock = new();
+        _publisherMock = new Mock<IOutboxPublisher>();
 
         var serviceScopeMock = new Mock<IServiceScope>();
         var services = new ServiceCollection();
         services.AddSingleton(_publisherMock.Object);
         serviceScopeMock.Setup(s => s.ServiceProvider).Returns(services.BuildServiceProvider());
 
-        _scopeFactoryMock = new();
+        _scopeFactoryMock = new Mock<IServiceScopeFactory>();
         _scopeFactoryMock.Setup(f => f.CreateScope()).Returns(serviceScopeMock.Object);
     }
 
@@ -508,7 +508,8 @@ public class OutboxProcessorTests
         await WaitForSignalAsync(lockReleaseAttempted);
 
         // The processor should not throw despite the lock release failure
-        var act = () => sut.StopAsync(cts.Token);
+        var cancellationToken = cts.Token;
+        var act = () => sut.StopAsync(cancellationToken);
         await act.Should().NotThrowAsync();
 
         VerifyLoggedWarning("Failed to release lock");
@@ -549,12 +550,12 @@ public class OutboxProcessorTests
 
     private static OutboxMessage CreatePendingMessage(Int32 retryCount = 0)
     {
-        return new()
+        return new OutboxMessage
         {
             Id = ObjectId.GenerateNewId(),
             State = OutboxMessageState.Pending,
             Type = "TestPayload",
-            Payload = new("Name", "Test"),
+            Payload = new BsonDocument("Name", "Test"),
             RetryCount = retryCount,
             IsLocked = false
         };
@@ -567,7 +568,7 @@ public class OutboxProcessorTests
 
     private OutboxProcessor CreateSut()
     {
-        return new(
+        return new OutboxProcessor(
             _mongoHelperMock.Object,
             _options,
             _scopeFactoryMock.Object,
