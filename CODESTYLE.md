@@ -13,7 +13,7 @@ The code style rules are described in the `.editorconfig` file.
 - Keep methods small and focused (ideally < 30 lines)
 
 ### Types and Constructors
-- Classes always declare explicit constructors - primary constructors on classes are not permitted
+- Do not use primary constructors on classes. When a class needs a constructor, declare an explicit constructor.
 - Assign constructor dependencies to `private readonly` fields (or to properties where the type exposes them)
 - Positional records and positional record structs remain fine - the rule covers classes only
 
