@@ -5,8 +5,9 @@ namespace Chaos.Mongo.Outbox;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
-/// Runs outbox-specific configurators. Used by <see cref="OutboxHostedService"/>
-/// to ensure indexes exist before any processor starts.
+/// Initializes every registered outbox, default and typed, so their indexes exist before processors start.
+/// This is the manual initialization entry point; automatic startup via <see cref="OutboxHostedService"/>
+/// initializes only the outboxes registered with automatic startup and does not use this runner.
 /// </summary>
 public interface IOutboxConfiguratorRunner
 {
