@@ -5,6 +5,7 @@ namespace Chaos.Mongo.Outbox.Tests;
 using Chaos.Mongo.Configuration;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using MongoDB.Driver;
 using NUnit.Framework;
 
@@ -215,7 +216,9 @@ public class MongoBuilderExtensionsTests
                                 .WithMessage<TestPayload>()
                                 .WithAutoStartProcessor());
 
-        services.Should().Contain(d => d.ImplementationType == typeof(OutboxHostedService));
+        services.AddLogging();
+        using var provider = services.BuildServiceProvider();
+        provider.GetServices<IHostedService>().Should().ContainSingle(s => s is OutboxHostedService);
     }
 
     [Test]

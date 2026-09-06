@@ -14,6 +14,7 @@ Transactional outbox support for MongoDB, built on top of `Chaos.Mongo`.
   - [IOutboxProcessor](#ioutboxprocessor)
 - [Configuration](#configuration)
   - [Registering the Outbox](#registering-the-outbox)
+  - [Multiple Typed Outboxes](#multiple-typed-outboxes)
   - [Builder Options](#builder-options)
   - [Processing Filter](#processing-filter)
   - [Processor Startup](#processor-startup)
@@ -254,6 +255,102 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 - `OutboxOptions`
 - `OutboxConfigurator` for index creation
 - `OutboxHostedService` when `WithAutoStartProcessor()` is enabled
+
+### Multiple Typed Outboxes
+
+Use marker types to select independent destinations. Markers supply identity only;
+they are never instantiated and need no public constructor.
+
+```csharp
+public sealed class NotificationsOutbox { }
+public sealed class AuditOutbox { }
+
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox<NotificationsOutbox>(o => o
+        .WithCollectionName("NotificationOutbox")
+        .WithMessage<OrderPlacedMessage>("OrderNotification")
+        .WithPublisher<NotificationsPublisher>(ServiceLifetime.Scoped)
+        .WithMaxRetries(3)
+        .WithAutoStartProcessor())
+    .WithOutbox<AuditOutbox>(o => o
+        .WithCollectionName("AuditOutbox")
+        .WithMessage<OrderPlacedMessage>("OrderAudit")
+        .WithPublisher<AuditPublisher>(ServiceLifetime.Singleton)
+        .WithRetentionPeriod(TimeSpan.FromDays(30)));
+```
+
+Resolve `IOutbox<NotificationsOutbox>` and `IOutbox<AuditOutbox>` through constructor
+injection or the service provider. Each destination owns its collection, message
+registry, publisher, processor, batch size, polling interval, lock timeout,
+processing filter, retry policy, and retention indexes. Sharing a payload type is
+supported; its discriminator can differ between destinations without changing the
+stored payload format. Registration validates messages against the destination's
+own registry when enqueueing.
+
+The existing `WithOutbox(...)`, `IOutbox`, and `IOutboxProcessor` remain the default
+outbox and can coexist with typed registrations. Typed registrations do not populate
+the untyped services. Duplicate marker registrations fail, even across different
+`MongoBuilder` instances sharing one service collection. Collection names must be
+distinct across all outboxes in the shared database, including the default outbox;
+comparison is ordinal and case-sensitive. Every builder still defaults to `"Outbox"`,
+so select explicit collection names when configuring multiple destinations. Errors
+identify the conflicting outboxes and collection.
+
+Publishers continue to implement `IOutboxPublisher`. Each destination resolves its
+own configured implementation once per nonempty batch, within a fresh DI scope.
+Transient is the default lifetime. Scoped publishers and their scoped dependencies
+live for that batch; singleton publishers live for their destination's service
+provider lifetime and must not depend on scoped services. Reusing the same publisher
+implementation type across destinations creates separate publisher registrations,
+including separate singleton instances. Typed publishers are resolved internally
+for their destination; the untyped `IOutboxPublisher` represents the default outbox.
+
+`WithAutoStartProcessor()` initializes and starts each enabled outbox. One shared
+hosted service coordinates these processors. General MongoDB configurator startup
+and outbox startup share each configurator's successful initialization, including
+concurrent host startup. Failed or canceled initialization can be retried and does
+not permit automatic processing to start. Successful initialization is cached for
+the configurator's lifetime; restarting a processor does not recreate indexes.
+
+For manual initialization and lifecycle control:
+
+```csharp
+await services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync(token);
+var processor = services.GetRequiredService<IOutboxProcessor<AuditOutbox>>();
+await processor.StartAsync(token);
+// Later, when this destination should stop:
+await processor.StopAsync(shutdownToken);
+```
+
+Here `services` is an `IServiceProvider`. The runner initializes **all** registered
+outboxes, including ones without automatic startup. Enabling
+`MongoOptions.RunConfiguratorsOnStartup` also initializes all outboxes. Without
+either option, initialize manually before starting a processor. Automatic startup
+alone initializes only enabled destinations. Starting or stopping one processor
+does not affect another; manual processors are the caller's lifecycle responsibility.
+Host shutdown signals every automatic processor before waiting for their completion,
+so a delayed publisher cannot postpone another destination's cancellation. The host's
+shutdown token bounds that wait. Processing and lifecycle diagnostics carry
+`OutboxIdentity` (marker type name or `Default`) and `CollectionName`.
+
+Use the same compatible MongoDB session to enqueue atomically to multiple destinations:
+
+```csharp
+var notifications = services.GetRequiredService<IOutbox<NotificationsOutbox>>();
+var audit = services.GetRequiredService<IOutbox<AuditOutbox>>();
+using var session = await mongo.Client.StartSessionAsync(cancellationToken: token);
+session.StartTransaction();
+await notifications.AddMessageAsync(session, payload, cancellationToken: token);
+await audit.AddMessageAsync(session, payload, cancellationToken: token);
+await session.CommitTransactionAsync(token);
+```
+
+The caller owns the transaction. Aborting it rolls back both writes, along with
+other business writes in the same transaction. All outboxes use the existing
+`IMongoHelper` database; there are no per-outbox connections or databases. After
+commit, each processor publishes independently with at-least-once delivery and no
+cross-outbox ordering guarantee. A slow or failing publisher does not occupy another
+destination's processor.
 
 ### Builder Options
 

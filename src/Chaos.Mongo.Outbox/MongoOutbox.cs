@@ -54,7 +54,7 @@ public sealed class MongoOutbox : IOutbox
         {
             throw new InvalidOperationException(
                 $"Payload type '{payloadType.Name}' is not registered. " +
-                "Use WithMessage<TPayload>() in the outbox builder to register it.");
+                $"Use WithMessage<TPayload>() in outbox '{_options.Identity}' (collection '{_options.CollectionName}') to register it.");
         }
 
         var bsonPayload = payload.ToBsonDocument(payloadType, BsonSerializer.LookupSerializer(payloadType));

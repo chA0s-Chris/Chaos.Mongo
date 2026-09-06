@@ -87,4 +87,6 @@ public sealed class OutboxOptions
     /// Defaults to <c>5 minutes</c>.
     /// </summary>
     public TimeSpan RetryBackoffMaxDelay { get; init; } = DefaultRetryBackoffMaxDelay;
+
+    internal String Identity { get; init; } = "Default";
 }

@@ -5,8 +5,9 @@ namespace Chaos.Mongo.Outbox;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
-/// Runs outbox-specific configurators. Used by <see cref="OutboxHostedService"/>
-/// to ensure indexes exist before any processor starts.
+/// Initializes every registered outbox, default and typed, so their indexes exist before processors start.
+/// This is the manual initialization entry point; automatic startup via <see cref="OutboxHostedService"/>
+/// initializes only the outboxes registered with automatic startup and does not use this runner.
 /// </summary>
 public interface IOutboxConfiguratorRunner
 {
@@ -23,7 +24,7 @@ public interface IOutboxConfiguratorRunner
 /// </summary>
 public sealed class OutboxConfiguratorRunner : IOutboxConfiguratorRunner
 {
-    private readonly OutboxConfigurator _configurator;
+    private readonly IEnumerable<OutboxConfigurator> _configurators;
     private readonly ILogger<OutboxConfiguratorRunner> _logger;
     private readonly IMongoHelper _mongoHelper;
 
@@ -41,15 +42,31 @@ public sealed class OutboxConfiguratorRunner : IOutboxConfiguratorRunner
         ArgumentNullException.ThrowIfNull(configurator);
         ArgumentNullException.ThrowIfNull(logger);
         _mongoHelper = mongoHelper;
-        _configurator = configurator;
+        _configurators = [configurator];
+        _logger = logger;
+    }
+
+    internal OutboxConfiguratorRunner(IMongoHelper mongoHelper, IEnumerable<OutboxConfigurator> configurators,
+                                      ILogger<OutboxConfiguratorRunner> logger)
+    {
+        _mongoHelper = mongoHelper;
+        _configurators = configurators;
         _logger = logger;
     }
 
     /// <inheritdoc/>
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Running outbox configurator to ensure indexes exist");
-        await _configurator.ConfigureAsync(_mongoHelper, cancellationToken);
-        _logger.LogInformation("Outbox configurator completed");
+        foreach (var configurator in _configurators)
+        {
+            using var logScope = _logger.BeginScope(new Dictionary<String, Object>
+            {
+                ["OutboxIdentity"] = configurator.Options.Identity,
+                ["CollectionName"] = configurator.Options.CollectionName
+            });
+            _logger.LogInformation("Running outbox configurator to ensure indexes exist");
+            await configurator.ConfigureAsync(_mongoHelper, cancellationToken);
+            _logger.LogInformation("Outbox configurator completed");
+        }
     }
 }
