@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 
 
+
+## v0.8.0 (2026-09-05)
+
+### ✨ Features
+
+- Add optional outbox message eligibility filtering (#137) by @chA0s-Chris
+
+
 ## v0.7.1 (2026-08-25)
 
 ### 💥 Breaking Changes
