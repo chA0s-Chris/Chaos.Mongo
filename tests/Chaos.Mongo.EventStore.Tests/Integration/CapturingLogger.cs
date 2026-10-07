@@ -6,12 +6,15 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 
 /// <summary>
-/// Logger test double that records the level and message of every log entry.
+/// Logger test double that records the level and message of every log entry and optionally lets a test
+/// react synchronously to an entry while the logging code waits.
 /// </summary>
 /// <typeparam name="TCategory">The logger category.</typeparam>
 internal sealed class CapturingLogger<TCategory> : ILogger<TCategory>
 {
     public ConcurrentQueue<(LogLevel Level, String Message)> Entries { get; } = new();
+
+    public Action<LogLevel, String>? OnLog { get; set; }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -22,5 +25,9 @@ internal sealed class CapturingLogger<TCategory> : ILogger<TCategory>
                             TState state,
                             Exception? exception,
                             Func<TState, Exception?, String> formatter)
-        => Entries.Enqueue((logLevel, formatter(state, exception)));
+    {
+        var message = formatter(state, exception);
+        Entries.Enqueue((logLevel, message));
+        OnLog?.Invoke(logLevel, message);
+    }
 }

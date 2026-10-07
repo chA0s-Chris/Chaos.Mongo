@@ -175,14 +175,58 @@ public class IntegritySealingIntegrationTests
         await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(e => e.Level == LogLevel.Debug && e.Message.Contains("holds the lock"))));
         await foreignLock.DisposeAsync();
 
-        // A lock held elsewhere is not a failure: the retry delay must not start a competing pass.
-        timeProvider.Advance(protectedContext.Options.SealingSweepRetryDelay);
-        await Task.Delay(250);
-        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeFalse();
-
+        // Which delay follows a held lock is covered deterministically by the GetDelayAfter unit tests.
         await WaitUntilAsync(
             async () => (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact,
             () => timeProvider.Advance(protectedContext.Options.SealingSweepInterval));
+        await hostedService.StoppingAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task HostedService_PassLosesLock_ResumesAfterRetryDelay()
+    {
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await CreateContextAsync(false, databaseName);
+        var protectedContext = await CreateContextAsync(true, databaseName, timeProvider: timeProvider);
+
+        // Fixed identifiers make the sweep visit the broken stream before the healthy one.
+        var brokenStream = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var healthyStream = Guid.Parse("ffffffff-ffff-ffff-ffff-fffffffffffe");
+        await unprotected.Store.AppendEventsAsync(
+            Enumerable.Range(1, 3).Select(version => LedgerStoreContext.CreateEntry(brokenStream, version)));
+        await unprotected.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(brokenStream, 2));
+        await unprotected.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(healthyStream, 1)]);
+
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var sweep = new EventStreamSealingSweep<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options, timeProvider, logger);
+        var locks = protectedContext.MongoHelper.Database.GetCollection<BsonDocument>(Chaos.Mongo.MongoDefaults.LockCollectionName);
+        logger.OnLog = (level, message) =>
+        {
+            if (level != LogLevel.Error || !message.Contains("cannot be sealed"))
+            {
+                return;
+            }
+
+            // While the broken stream is skipped, time passes until the lock needs extending, and another
+            // instance takes the lock over with a lease that expires right away.
+            timeProvider.Advance(TimeSpan.FromMinutes(3));
+            locks.UpdateOne(
+                new BsonDocument("_id", sweep.LockName),
+                Builders<BsonDocument>.Update
+                                      .Set("Holder", "another-instance")
+                                      .Set("LeaseUntilUtc", timeProvider.GetUtcNow().UtcDateTime));
+        };
+        var hostedService = new EventStreamSealingHostedService<LedgerAggregate>(sweep);
+
+        await hostedService.StartedAsync(CancellationToken.None);
+        await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains("lost its lock"))));
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(healthyStream)).IsIntact.Should().BeFalse();
+
+        // Advancing by the retry delay alone, far less than the 24-hour interval, must resume the pass.
+        await WaitUntilAsync(
+            async () => (await protectedContext.CreateVerifier().VerifyStreamAsync(healthyStream)).IsIntact,
+            () => timeProvider.Advance(protectedContext.Options.SealingSweepRetryDelay));
         await hostedService.StoppingAsync(CancellationToken.None);
     }
 

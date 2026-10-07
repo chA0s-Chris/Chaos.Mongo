@@ -175,6 +175,19 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
         }
     }
 
+    /// <summary>
+    /// Chooses the delay before the next pass. A pass that failed (<c>null</c>) or lost its lock is incomplete
+    /// and retried soon. A lock held elsewhere is not: its holder runs the pass, and polling for it would
+    /// start competing passes instead.
+    /// </summary>
+    /// <param name="outcome">How the pass ended, or <c>null</c> when it failed.</param>
+    /// <param name="options">The event store options.</param>
+    /// <returns>The delay before the next pass.</returns>
+    internal static TimeSpan GetDelayAfter(SealingPassOutcome? outcome, MongoEventStoreOptions<TAggregate> options)
+        => outcome is SealingPassOutcome.Completed or SealingPassOutcome.LockUnavailable
+            ? options.SealingSweepInterval
+            : options.SealingSweepRetryDelay;
+
     private static Boolean IsCancellation(Exception exception, CancellationToken cancellationToken)
         => exception is OperationCanceledException && cancellationToken.IsCancellationRequested;
 
@@ -230,15 +243,10 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var delay = _options.SealingSweepInterval;
+            SealingPassOutcome? outcome = null;
             try
             {
-                if (await RunPassAsync(cancellationToken) == SealingPassOutcome.LockLost)
-                {
-                    // A pass that lost its lock is incomplete and retried soon. A lock held elsewhere is not:
-                    // its holder runs the pass, and polling for it would start competing passes instead.
-                    delay = _options.SealingSweepRetryDelay;
-                }
+                outcome = await RunPassAsync(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -248,12 +256,11 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             {
                 _logger.LogError(ex, "Integrity sealing pass for collection {CollectionName} failed and is retried",
                                  _options.EventsCollectionName);
-                delay = _options.SealingSweepRetryDelay;
             }
 
             try
             {
-                await Task.Delay(delay, _timeProvider, cancellationToken);
+                await Task.Delay(GetDelayAfter(outcome, _options), _timeProvider, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
