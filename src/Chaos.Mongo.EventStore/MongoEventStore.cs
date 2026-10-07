@@ -320,8 +320,12 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
         await EnsureBulkWriteOptimizationSupportedAsync(cancellationToken);
 
-        // Both append paths insert the same serialized documents, so they persist identical bytes.
-        var eventDocuments = eventList.Select(SerializeEvent).ToList();
+        // Serialized documents are only needed to seal events or to feed the client bulk write. Without
+        // either, events are inserted typed, which avoids an intermediate document per event. The server
+        // stores _id first in every case, so all paths persist identical bytes.
+        var eventDocuments = _options.IntegrityProtectionEnabled || _options.BulkWriteOptimizationEnabled
+            ? eventList.Select(SerializeEvent).ToList()
+            : null;
 
         // 5. Persist changes inside transaction
         try
@@ -330,11 +334,12 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 async (helper, session, ct) =>
                 {
                     var eventsCollection = GetEventsCollection();
-                    var documents = _options.IntegrityProtectionEnabled
+                    var documents = _options.IntegrityProtectionEnabled && eventDocuments is not null
                         ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
                         : eventDocuments;
 
-                    if (_options.BulkWriteOptimizationEnabled)
+                    // Documents always exist when the bulk write is enabled; the null check only proves it.
+                    if (_options.BulkWriteOptimizationEnabled && documents is not null)
                     {
                         var models = new List<BulkWriteModel>(documents.Count + (checkpoint is null ? 1 : 2));
 
@@ -372,7 +377,14 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                     else
                     {
                         // 5a. Insert events
-                        await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
+                        if (documents is null)
+                        {
+                            await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
+                        }
+                        else
+                        {
+                            await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
+                        }
 
                         // 5b. Upsert read model
                         await readModelCollection.ReplaceOneAsync(
