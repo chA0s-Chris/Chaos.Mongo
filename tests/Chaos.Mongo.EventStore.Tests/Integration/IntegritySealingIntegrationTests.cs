@@ -160,7 +160,7 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
-    public async Task HostedService_LockHeldByAnotherInstance_RetriesAfterRetryDelay()
+    public async Task HostedService_LockHeldByAnotherInstance_WaitsForSweepInterval()
     {
         var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -175,10 +175,14 @@ public class IntegritySealingIntegrationTests
         await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(e => e.Level == LogLevel.Debug && e.Message.Contains("holds the lock"))));
         await foreignLock.DisposeAsync();
 
-        // Advancing by the retry delay alone, far less than the 24-hour interval, must trigger the next pass.
+        // A lock held elsewhere is not a failure: the retry delay must not start a competing pass.
+        timeProvider.Advance(protectedContext.Options.SealingSweepRetryDelay);
+        await Task.Delay(250);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeFalse();
+
         await WaitUntilAsync(
             async () => (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact,
-            () => timeProvider.Advance(protectedContext.Options.SealingSweepRetryDelay));
+            () => timeProvider.Advance(protectedContext.Options.SealingSweepInterval));
         await hostedService.StoppingAsync(CancellationToken.None);
     }
 
@@ -202,9 +206,9 @@ public class IntegritySealingIntegrationTests
                                   StreamsChecked = 2
                               });
 
-        var completed = await protectedContext.Sweep.RunPassAsync();
+        var outcome = await protectedContext.Sweep.RunPassAsync();
 
-        completed.Should().BeTrue();
+        outcome.Should().Be(SealingPassOutcome.Completed);
         var verifier = protectedContext.CreateVerifier();
         (await verifier.VerifyStreamAsync(streamOrder[0])).IsIntact.Should().BeFalse();
         (await verifier.VerifyStreamAsync(streamOrder[1])).IsIntact.Should().BeFalse();
@@ -224,9 +228,9 @@ public class IntegritySealingIntegrationTests
         var aggregateId = await unprotected.AppendStreamAsync(5);
         await unprotected.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 4));
 
-        var completed = await protectedContext.Sweep.RunPassAsync();
+        var outcome = await protectedContext.Sweep.RunPassAsync();
 
-        completed.Should().BeTrue();
+        outcome.Should().Be(SealingPassOutcome.Completed);
         var status = await protectedContext.Sweep.GetStatusAsync();
         status.Should().NotBeNull();
         status.EventsSealed.Should().Be(2);
@@ -235,16 +239,16 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
-    public async Task RunPassAsync_LockHeldByAnotherInstance_ReturnsFalseWithoutSealing()
+    public async Task RunPassAsync_LockHeldByAnotherInstance_ReturnsLockUnavailableWithoutSealing()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
         var aggregateId = await unprotected.AppendStreamAsync(1);
         await using var foreignLock = await protectedContext.MongoHelper.TryAcquireLockAsync(protectedContext.Sweep.LockName);
         foreignLock.Should().NotBeNull();
 
-        var completed = await protectedContext.Sweep.RunPassAsync();
+        var outcome = await protectedContext.Sweep.RunPassAsync();
 
-        completed.Should().BeFalse();
+        outcome.Should().Be(SealingPassOutcome.LockUnavailable);
         (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId))
             .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.NotSealed));
         (await protectedContext.Sweep.GetStatusAsync()).Should().BeNull();
@@ -265,9 +269,9 @@ public class IntegritySealingIntegrationTests
             await unprotected.AppendStreamAsync(2)
         };
 
-        var completed = await protectedContext.Sweep.RunPassAsync();
+        var outcome = await protectedContext.Sweep.RunPassAsync();
 
-        completed.Should().BeTrue();
+        outcome.Should().Be(SealingPassOutcome.Completed);
         foreach (var aggregateId in healthyStreams)
         {
             (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
@@ -316,9 +320,9 @@ public class IntegritySealingIntegrationTests
         await unprotected.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(brokenStream, 2));
         var healthyStream = await unprotected.AppendStreamAsync(2);
 
-        var completed = await protectedContext.Sweep.RunPassAsync();
+        var outcome = await protectedContext.Sweep.RunPassAsync();
 
-        completed.Should().BeTrue();
+        outcome.Should().Be(SealingPassOutcome.Completed);
         (await protectedContext.CreateVerifier().VerifyStreamAsync(healthyStream)).IsIntact.Should().BeTrue();
         (await protectedContext.CreateVerifier().VerifyStreamAsync(brokenStream))
             .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.NotSealed));
@@ -340,9 +344,9 @@ public class IntegritySealingIntegrationTests
         };
         var sealedStream = await protectedContext.AppendStreamAsync(2);
 
-        var completed = await protectedContext.Sweep.RunPassAsync();
+        var outcome = await protectedContext.Sweep.RunPassAsync();
 
-        completed.Should().BeTrue();
+        outcome.Should().Be(SealingPassOutcome.Completed);
         foreach (var aggregateId in unsealedStreams.Append(sealedStream))
         {
             (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();

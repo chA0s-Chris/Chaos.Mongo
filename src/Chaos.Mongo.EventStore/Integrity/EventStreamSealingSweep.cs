@@ -67,15 +67,15 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     /// Runs one sealing pass, or resumes an interrupted one, unless another instance holds the sweep lock.
     /// </summary>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns><c>true</c> when the pass completed; <c>false</c> when the lock was unavailable or lost.</returns>
-    public async Task<Boolean> RunPassAsync(CancellationToken cancellationToken = default)
+    /// <returns>How the pass ended.</returns>
+    public async Task<SealingPassOutcome> RunPassAsync(CancellationToken cancellationToken = default)
     {
         await using var sweepLock = await _mongoHelper.TryAcquireLockAsync(LockName, Chaos.Mongo.MongoDefaults.LockLeaseTime, cancellationToken);
         if (sweepLock is null)
         {
             _logger.LogDebug("Integrity sealing pass for collection {CollectionName} skipped; another instance holds the lock",
                              _options.EventsCollectionName);
-            return false;
+            return SealingPassOutcome.LockUnavailable;
         }
 
         var state = await GetStatusAsync(cancellationToken);
@@ -96,7 +96,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                 state.Cursor = null;
                 state.PassCompletedUtc = _timeProvider.GetUtcNow().UtcDateTime;
                 await SaveStateAsync(state, cancellationToken);
-                return true;
+                return SealingPassOutcome.Completed;
             }
 
             if (!await IsStreamHeadSealedAsync(streamId, cancellationToken))
@@ -124,13 +124,14 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
 
         _logger.LogWarning("Integrity sealing pass for collection {CollectionName} lost its lock and stops at the last checked stream",
                            _options.EventsCollectionName);
-        return false;
+        return SealingPassOutcome.LockLost;
     }
 
     /// <summary>
     /// Starts the background loop: one pass immediately, then one per
-    /// <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepInterval"/>. A failed or incomplete pass
-    /// is retried after <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepRetryDelay"/> instead.
+    /// <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepInterval"/>. A failed pass, or one that lost
+    /// the sweep lock, is retried after <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepRetryDelay"/>
+    /// instead; a lock held by another instance waits the full interval.
     /// </summary>
     /// <param name="cancellationToken">A cancellation token linked to the loop.</param>
     /// <returns>A completed task; the loop runs in the background.</returns>
@@ -232,10 +233,10 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             var delay = _options.SealingSweepInterval;
             try
             {
-                if (!await RunPassAsync(cancellationToken))
+                if (await RunPassAsync(cancellationToken) == SealingPassOutcome.LockLost)
                 {
-                    // An incomplete pass, because the lock was unavailable or lost, is retried soon
-                    // instead of after a full interval, so unsealed streams are caught up promptly.
+                    // A pass that lost its lock is incomplete and retried soon. A lock held elsewhere is not:
+                    // its holder runs the pass, and polling for it would start competing passes instead.
                     delay = _options.SealingSweepRetryDelay;
                 }
             }
