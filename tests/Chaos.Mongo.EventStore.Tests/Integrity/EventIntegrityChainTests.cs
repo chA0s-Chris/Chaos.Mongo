@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integrity;
 
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
+using MongoDB.Bson;
 using NUnit.Framework;
 
 public class EventIntegrityChainTests
@@ -63,5 +64,40 @@ public class EventIntegrityChainTests
         integrity.PreviousHash.Should().Equal(previousHash);
         integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash));
         integrity.SealMode.Should().Be(IntegritySealMode.Retroactive);
+    }
+
+    [Test]
+    public void TryRead_MalformedDocument_ReturnsFalse()
+    {
+        var document = new BsonDocument
+        {
+            { "FormatVersion", 1 },
+            { "Hash", "not-binary" }
+        };
+
+        var result = EventIntegrityChain.TryRead(document, out var integrity);
+
+        result.Should().BeFalse();
+        integrity.Should().BeNull();
+    }
+
+    [Test]
+    public void TryRead_NonDocumentValue_ReturnsFalse()
+    {
+        var result = EventIntegrityChain.TryRead(new BsonString("tampered"), out var integrity);
+
+        result.Should().BeFalse();
+        integrity.Should().BeNull();
+    }
+
+    [Test]
+    public void TryRead_SealedIntegrity_ReturnsIntegrity()
+    {
+        var sealedIntegrity = EventIntegrityChain.Seal([1, 2, 3], new Byte[32], IntegritySealMode.Append);
+
+        var result = EventIntegrityChain.TryRead(sealedIntegrity.ToBsonDocument(), out var integrity);
+
+        result.Should().BeTrue();
+        integrity.Should().BeEquivalentTo(sealedIntegrity);
     }
 }

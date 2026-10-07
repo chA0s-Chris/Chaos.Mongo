@@ -2,6 +2,9 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Integrity;
 
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -78,4 +81,30 @@ internal static class EventIntegrityChain
             PreviousHash = previousHash,
             SealMode = sealMode
         };
+
+    /// <summary>
+    /// Reads stored integrity data. Malformed data, for example after tampering, yields <c>false</c>
+    /// instead of an exception, so callers can report it like any other integrity failure.
+    /// </summary>
+    /// <param name="value">The value of the <c>_integrity</c> element.</param>
+    /// <param name="integrity">The integrity data when it could be read.</param>
+    /// <returns><c>true</c> when the value is well-formed integrity data; otherwise <c>false</c>.</returns>
+    public static Boolean TryRead(BsonValue value, [NotNullWhen(true)] out EventIntegrity? integrity)
+    {
+        integrity = null;
+        if (value is not BsonDocument document)
+        {
+            return false;
+        }
+
+        try
+        {
+            integrity = BsonSerializer.Deserialize<EventIntegrity>(document);
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or BsonException)
+        {
+            return false;
+        }
+    }
 }

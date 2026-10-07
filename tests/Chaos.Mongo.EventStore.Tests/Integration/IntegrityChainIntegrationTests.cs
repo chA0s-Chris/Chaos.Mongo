@@ -201,6 +201,26 @@ public class IntegrityChainIntegrationTests
     }
 
     [Test]
+    public async Task VerifyStreamAsync_ExtraIntegrityElement_ReportsIntactAndKeepsTypedReads()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendStreamAsync(context);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1),
+            Builders<BsonDocument>.Update.Set($"{EventIntegrityChain.ElementName}.AnchorId", "future-field"));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var events = new List<Event<LedgerAggregate>>();
+        await foreach (var @event in context.Store.GetEventStream(aggregateId))
+        {
+            events.Add(@event);
+        }
+
+        result.IsIntact.Should().BeTrue();
+        events.Should().HaveCount(3);
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_InsertedEventWithRecomputedChain_ReportsShiftedSuccessor()
     {
         var context = await CreateContextAsync();
@@ -231,6 +251,23 @@ public class IntegrityChainIntegrationTests
 
         result.Should().Be(StreamVerificationResult.Intact);
         result.IsIntact.Should().BeTrue();
+    }
+
+    [Test]
+    [TestCase("_integrity")]
+    [TestCase("_integrity.Hash")]
+    [TestCase("_integrity.SealMode")]
+    public async Task VerifyStreamAsync_MalformedIntegrity_ReportsMalformedIntegrity(String field)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendStreamAsync(context);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update.Set(field, "tampered"));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
     }
 
     [Test]

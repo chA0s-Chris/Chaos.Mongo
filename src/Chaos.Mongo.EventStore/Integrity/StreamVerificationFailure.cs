@@ -18,6 +18,11 @@ internal enum StreamVerificationFailure
     NotSealed,
 
     /// <summary>
+    /// The event's integrity data cannot be read, for example because elements have unexpected types.
+    /// </summary>
+    MalformedIntegrity,
+
+    /// <summary>
     /// The event's integrity data uses an unsupported format version or algorithm.
     /// </summary>
     UnsupportedFormat,

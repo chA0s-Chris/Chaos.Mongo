@@ -17,6 +17,19 @@ using System.Reflection;
 public class IntegrityRegistrationTests
 {
     [Test]
+    public void EventIntegrityClassMap_PinsElementNamesAndIgnoresExtraElements()
+    {
+        new MongoBuilder(new ServiceCollection()).WithEventStore<RegistrationFormatAggregate>(es => es
+                                                                                                  .WithEvent<RegistrationFormatEvent>());
+
+        var classMap = BsonClassMap.LookupClassMap(typeof(EventIntegrity));
+
+        classMap.IgnoreExtraElements.Should().BeTrue();
+        classMap.AllMemberMaps.Select(m => m.ElementName)
+                .Should().BeEquivalentTo("FormatVersion", "Algorithm", "PreviousHash", "Hash", "SealMode");
+    }
+
+    [Test]
     public void IntegrityTypesAndMembers_AreNotPublic()
     {
         var integrityTypes = typeof(EventIntegrity).Assembly
@@ -93,6 +106,22 @@ public class IntegrityRegistrationTests
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("*RegistrationPreRegisteredCollidingEvent*Marker*'_integrity'*reserved*");
     }
+
+    [Test]
+    public void WithEventStore_PreRegisteredIntermediateBaseMapsReservedElement_ThrowsInvalidOperationException()
+    {
+        BsonClassMap.RegisterClassMap<RegistrationIntermediateBase>(cm =>
+        {
+            cm.AutoMap();
+            cm.MapMember(e => e.Marker).SetElementName("_integrity");
+        });
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<RegistrationIntermediateAggregate>(es => es.WithEvent<RegistrationIntermediateEvent>());
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*RegistrationIntermediateEvent*Marker*RegistrationIntermediateBase*'_integrity'*reserved*");
+    }
 }
 
 public sealed class RegistrationVisibilityAggregate : Aggregate;
@@ -128,4 +157,23 @@ public sealed class RegistrationPreRegisteredCollidingEvent : Event<Registration
     public String? Marker { get; set; }
 
     public override void Execute(RegistrationPreRegisteredCollisionAggregate aggregate) { }
+}
+
+public sealed class RegistrationFormatAggregate : Aggregate;
+
+public sealed class RegistrationFormatEvent : Event<RegistrationFormatAggregate>
+{
+    public override void Execute(RegistrationFormatAggregate aggregate) { }
+}
+
+public sealed class RegistrationIntermediateAggregate : Aggregate;
+
+public abstract class RegistrationIntermediateBase : Event<RegistrationIntermediateAggregate>
+{
+    public String? Marker { get; set; }
+}
+
+public sealed class RegistrationIntermediateEvent : RegistrationIntermediateBase
+{
+    public override void Execute(RegistrationIntermediateAggregate aggregate) { }
 }

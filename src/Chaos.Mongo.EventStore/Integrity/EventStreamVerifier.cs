@@ -3,7 +3,6 @@
 namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 /// <summary>
@@ -77,12 +76,16 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                                                           out Byte[] hash)
     {
         hash = [];
-        if (integrityValue is not BsonDocument integrityDocument)
+        if (integrityValue is null)
         {
             return StreamVerificationFailure.NotSealed;
         }
 
-        var integrity = BsonSerializer.Deserialize<EventIntegrity>(integrityDocument);
+        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity))
+        {
+            return StreamVerificationFailure.MalformedIntegrity;
+        }
+
         if (integrity.FormatVersion != EventIntegrityChain.FormatVersion ||
             !String.Equals(integrity.Algorithm, EventIntegrityChain.Algorithm, StringComparison.Ordinal))
         {

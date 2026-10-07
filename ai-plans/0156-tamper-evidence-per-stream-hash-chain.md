@@ -71,6 +71,7 @@ _integrity: { FormatVersion: 1, Algorithm: "SHA-256", PreviousHash: BinData, Has
 - `Hash = SHA-256(canonical ‖ PreviousHash)`.
 - `canonical` is the event document's BSON without the `_integrity` element.
 - The genesis value is SHA-256 over a fixed domain-separation tag, the UTF-8 `AggregateType` value, a zero byte, and the `AggregateId` in big-endian RFC 4122 byte order.
+- The genesis input (the current aggregate type name vs. the stored `AggregateType` of version 1, which would survive class renames) is deliberately left open until the format freezes in #160.
 - Write path:
   1. Both paths in `MongoEventStore.AppendEventsAsync` always serialize events to `BsonDocument`, also with protection disabled. The bulk path already does; the default path changes from typed `InsertManyAsync` to inserting `BsonDocument`s into the same collection. Unit tests that stub only `GetCollection<Event<TAggregate>>` (e.g. in `MongoEventStoreBulkWriteTests`) must be adjusted for the `BsonDocument` collection, without introducing new Moq usage (see `tests/AGENTS.md`).
   2. With protection enabled, hash `ToBson()` of that document.

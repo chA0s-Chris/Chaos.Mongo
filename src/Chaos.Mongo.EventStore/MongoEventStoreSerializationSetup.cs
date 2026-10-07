@@ -153,13 +153,24 @@ public static class MongoEventStoreSerializationSetup
             $"'{EventIntegrityChain.ElementName}' element. Let the event store register the event base class map.");
     }
 
+    /// <summary>
+    /// Walks the CLR type hierarchy rather than <see cref="BsonClassMap.BaseClassMap"/>, which is only
+    /// set once a class map is frozen, so intermediate base classes registered by consumers are covered.
+    /// </summary>
     private static void EnsureNoReservedElementCollision<TAggregate>(BsonClassMap eventClassMap)
         where TAggregate : class, IAggregate, new()
     {
-        for (var classMap = eventClassMap;
-             classMap is not null && classMap.ClassType != typeof(Event<TAggregate>);
-             classMap = classMap.BaseClassMap)
+        var registeredClassMaps = BsonClassMap.GetRegisteredClassMaps().ToDictionary(classMap => classMap.ClassType);
+        for (var type = eventClassMap.ClassType;
+             type is not null && type != typeof(Event<TAggregate>);
+             type = type.BaseType)
         {
+            var classMap = type == eventClassMap.ClassType ? eventClassMap : registeredClassMaps.GetValueOrDefault(type);
+            if (classMap is null)
+            {
+                continue;
+            }
+
             var collision = classMap.DeclaredMemberMaps.FirstOrDefault(m => m.ElementName == EventIntegrityChain.ElementName);
             if (collision is not null)
             {
@@ -180,10 +191,19 @@ public static class MongoEventStoreSerializationSetup
             return;
         }
 
+        // Element names are pinned so convention packs cannot change the stored format, and extra
+        // elements are ignored so fields added by later format versions do not break typed reads.
         BsonClassMap.RegisterClassMap<EventIntegrity>(cm =>
         {
             cm.AutoMap();
-            cm.GetMemberMap(i => i.SealMode).SetSerializer(new EnumSerializer<IntegritySealMode>(BsonType.String));
+            cm.SetIgnoreExtraElements(true);
+            cm.GetMemberMap(i => i.FormatVersion).SetElementName(nameof(EventIntegrity.FormatVersion));
+            cm.GetMemberMap(i => i.Algorithm).SetElementName(nameof(EventIntegrity.Algorithm));
+            cm.GetMemberMap(i => i.PreviousHash).SetElementName(nameof(EventIntegrity.PreviousHash));
+            cm.GetMemberMap(i => i.Hash).SetElementName(nameof(EventIntegrity.Hash));
+            cm.GetMemberMap(i => i.SealMode)
+              .SetElementName(nameof(EventIntegrity.SealMode))
+              .SetSerializer(new EnumSerializer<IntegritySealMode>(BsonType.String));
         });
     }
 }
