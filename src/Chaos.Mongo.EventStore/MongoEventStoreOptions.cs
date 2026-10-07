@@ -69,4 +69,26 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Defaults to <c>false</c>.
     /// </summary>
     internal Boolean IntegrityProtectionEnabled { get; set; }
+
+    /// <summary>
+    /// Gets the name of the collection that stores the integrity sealing state.
+    /// </summary>
+    internal String IntegrityStateCollectionName => $"{CollectionPrefix}{IntegrityStateCollectionSuffix}";
+
+    /// <summary>
+    /// Gets or sets the suffix appended to the collection prefix for the integrity sealing state collection.
+    /// Defaults to <c>"_IntegrityState"</c>.
+    /// </summary>
+    internal String IntegrityStateCollectionSuffix { get; set; } = "_IntegrityState";
+
+    /// <summary>
+    /// Gets or sets the maximum number of events sealed retroactively in one transaction. The append
+    /// safety net uses the same bound. Defaults to 1,000.
+    /// </summary>
+    internal Int32 SealingChunkSize { get; set; } = 1000;
+
+    /// <summary>
+    /// Gets or sets the delay between two passes of the background sealing sweep. Defaults to 24 hours.
+    /// </summary>
+    internal TimeSpan SealingSweepInterval { get; set; } = TimeSpan.FromHours(24);
 }

@@ -36,14 +36,14 @@ Everything stays internal until #160 makes the feature public.
 
 ### Layer 2: Retroactive sealing
 
-- [ ] A background sealing sweep, registered only for protected aggregate types, seals every event without `_integrity` with seal mode `Retroactive`. This covers events written before protection was enabled and events written while it was disabled.
-- [ ] Retroactive sealing appends only the `_integrity` element. The remaining stored bytes stay identical, and the resulting chain passes the internal stream verification.
-- [ ] The sweep runs one pass on startup and then periodically (default 24 hours, configurable), on exactly one instance at a time.
-- [ ] An interrupted pass resumes from its persisted position instead of starting over.
-- [ ] Sealing progress (streams checked and sealed, pass start and completion times) is queryable through an internal API.
-- [ ] An append to a stream with at most one sealing chunk of unsealed predecessors seals them in the same transaction before appending. With more, the append fails with `MongoEventStoreException` without persisting anything, and the stream is caught up by the sweep.
-- [ ] Concurrent sealing of the same stream by the sweep and an append produces one consistent chain.
-- [ ] Automated tests cover the behavior above, including a stream longer than one sealing chunk and an append to a stream with more unsealed predecessors than one chunk.
+- [x] A background sealing sweep, registered only for protected aggregate types, seals every event without `_integrity` with seal mode `Retroactive`. This covers events written before protection was enabled and events written while it was disabled.
+- [x] Retroactive sealing appends only the `_integrity` element. The remaining stored bytes stay identical, and the resulting chain passes the internal stream verification.
+- [x] The sweep runs one pass on startup and then periodically (default 24 hours, configurable), on exactly one instance at a time.
+- [x] An interrupted pass resumes from its persisted position instead of starting over.
+- [x] Sealing progress (streams checked and sealed, pass start and completion times) is queryable through an internal API.
+- [x] An append to a stream with at most one sealing chunk of unsealed predecessors seals them in the same transaction before appending. With more, the append fails with `MongoEventStoreException` without persisting anything, and the stream is caught up by the sweep.
+- [x] Concurrent sealing of the same stream by the sweep and an append produces one consistent chain.
+- [x] Automated tests cover the behavior above, including a stream longer than one sealing chunk and an append to a stream with more unsealed predecessors than one chunk.
 
 ## Technical Details
 

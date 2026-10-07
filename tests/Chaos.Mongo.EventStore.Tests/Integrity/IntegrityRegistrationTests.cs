@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integrity;
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Attributes;
 using NUnit.Framework;
@@ -65,6 +66,19 @@ public class IntegrityRegistrationTests
     }
 
     [Test]
+    public void WithEventStore_IntegrityProtection_RegistersSealingSweepAndHostedService()
+    {
+        var services = new ServiceCollection();
+
+        new MongoBuilder(services).WithEventStore<RegistrationSweepAggregate>(es => es
+                                                                                    .WithEvent<RegistrationSweepEvent>()
+                                                                                    .WithIntegrityProtection());
+
+        services.Should().Contain(d => d.ServiceType == typeof(EventStreamSealingSweep<RegistrationSweepAggregate>));
+        services.Should().Contain(d => d.ServiceType == typeof(IHostedService) && d.ImplementationFactory != null);
+    }
+
+    [Test]
     public void WithEventStore_PreRegisteredBaseMapWithProtection_ThrowsInvalidOperationException()
     {
         BsonClassMap.RegisterClassMap<Event<RegistrationPreRegisteredAggregate>>(cm => cm.AutoMap());
@@ -122,6 +136,17 @@ public class IntegrityRegistrationTests
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("*RegistrationIntermediateEvent*Marker*RegistrationIntermediateBase*'_integrity'*reserved*");
     }
+
+    [Test]
+    public void WithEventStore_WithoutIntegrityProtection_RegistersNoSealingSweep()
+    {
+        var services = new ServiceCollection();
+
+        new MongoBuilder(services).WithEventStore<RegistrationNoSweepAggregate>(es => es.WithEvent<RegistrationNoSweepEvent>());
+
+        services.Should().NotContain(d => d.ServiceType == typeof(EventStreamSealingSweep<RegistrationNoSweepAggregate>));
+        services.Should().NotContain(d => d.ServiceType == typeof(IHostedService));
+    }
 }
 
 public sealed class RegistrationVisibilityAggregate : Aggregate;
@@ -176,4 +201,18 @@ public abstract class RegistrationIntermediateBase : Event<RegistrationIntermedi
 public sealed class RegistrationIntermediateEvent : RegistrationIntermediateBase
 {
     public override void Execute(RegistrationIntermediateAggregate aggregate) { }
+}
+
+public sealed class RegistrationSweepAggregate : Aggregate;
+
+public sealed class RegistrationSweepEvent : Event<RegistrationSweepAggregate>
+{
+    public override void Execute(RegistrationSweepAggregate aggregate) { }
+}
+
+public sealed class RegistrationNoSweepAggregate : Aggregate;
+
+public sealed class RegistrationNoSweepEvent : Event<RegistrationNoSweepAggregate>
+{
+    public override void Execute(RegistrationNoSweepAggregate aggregate) { }
 }

@@ -19,6 +19,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     private readonly String _aggregateTypeName;
     private readonly IMongoHelper _mongoHelper;
     private readonly MongoEventStoreOptions<TAggregate> _options;
+    private readonly EventStreamSealer<TAggregate> _sealer;
 
     public MongoEventStore(IMongoHelper mongoHelper, MongoEventStoreOptions<TAggregate> options)
     {
@@ -27,6 +28,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         _mongoHelper = mongoHelper;
         _options = options;
         _aggregateTypeName = typeof(TAggregate).Name;
+        _sealer = new EventStreamSealer<TAggregate>(mongoHelper, options);
     }
 
     /// <summary>
@@ -161,8 +163,8 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         if (!predecessor.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) ||
             integrityValue is not BsonDocument integrityDocument)
         {
-            throw new MongoEventStoreException(
-                $"Version {version} of aggregate '{aggregateId}' is not sealed, so its integrity chain cannot be continued.");
+            // Safety net: seal the unsealed prefix in this transaction, bounded by one sealing chunk.
+            return await _sealer.SealForAppendAsync(session, aggregateId, version, cancellationToken);
         }
 
         return BsonSerializer.Deserialize<EventIntegrity>(integrityDocument).Hash;

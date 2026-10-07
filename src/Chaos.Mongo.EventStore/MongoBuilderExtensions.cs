@@ -3,7 +3,10 @@
 namespace Chaos.Mongo.EventStore;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.EventStore.Integrity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 /// <summary>
 /// Extension methods for <see cref="MongoBuilder"/> to register event store services.
@@ -58,6 +61,19 @@ public static class MongoBuilderExtensions
 
         // Register IAggregateRepository<TAggregate>
         builder.Services.AddScoped<IAggregateRepository<TAggregate>, MongoAggregateRepository<TAggregate>>();
+
+        if (options.IntegrityProtectionEnabled)
+        {
+            // Retroactively seal events stored without integrity data
+            builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
+                                              sp.GetRequiredService<IMongoHelper>(),
+                                              options,
+                                              sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                              sp.GetService<ILogger<EventStreamSealingSweep<TAggregate>>>() ??
+                                              NullLogger<EventStreamSealingSweep<TAggregate>>.Instance));
+            builder.Services.AddHostedService(sp => new EventStreamSealingHostedService<TAggregate>(
+                                                  sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+        }
 
         return builder;
     }
