@@ -63,4 +63,10 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets the name of the read-model collection.
     /// </summary>
     public String ReadModelCollectionName => CollectionPrefix;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether appended events are sealed into a per-stream hash chain.
+    /// Defaults to <c>false</c>.
+    /// </summary>
+    internal Boolean IntegrityProtectionEnabled { get; set; }
 }

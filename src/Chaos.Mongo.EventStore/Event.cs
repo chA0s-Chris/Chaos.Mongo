@@ -2,6 +2,8 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore;
 
+using Chaos.Mongo.EventStore.Integrity;
+
 /// <summary>
 /// Abstract base class for domain events targeting a specific aggregate type.
 /// </summary>
@@ -38,6 +40,12 @@ public abstract class Event<TAggregate> where TAggregate : class, IAggregate, ne
     /// The event store validates that versions are sequential with no gaps.
     /// </summary>
     public Int64 Version { get; set; }
+
+    /// <summary>
+    /// Gets or sets the integrity data that seals this event into its stream's hash chain.
+    /// Stored in the reserved <c>_integrity</c> element; <c>null</c> for events of unprotected streams.
+    /// </summary>
+    internal EventIntegrity? Integrity { get; set; }
 
     /// <summary>
     /// Applies this event's changes to the given aggregate instance.

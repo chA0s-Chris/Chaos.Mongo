@@ -21,18 +21,18 @@ Everything stays internal until #160 makes the feature public.
 
 ### Layer 1: Chain on append
 
-- [ ] Integrity protection is opt-in per aggregate type through internal configuration, and nothing new is publicly reachable; a reflection-based test asserts that the new integrity types and members are not public.
-- [ ] With protection disabled, stored event documents and append behavior are unchanged, and the existing test suite passes.
-- [ ] With protection enabled, every appended event stores `_integrity` with format version, algorithm (SHA-256), previous hash, hash and seal mode `Append`.
-- [ ] Version 1 chains from the genesis value; every later version chains from its predecessor's stored hash.
-- [ ] Both append paths (default and bulk write) persist byte-identical event documents for identical input.
-- [ ] The hash recomputed from the stored raw bytes, with `_integrity` removed at byte level, equals the hash computed at write time. This holds for `Int64` values within `Int32` range, GUIDs, decimals, nested documents and `CreatedUtc` values with sub-millisecond ticks.
-- [ ] Appending to a protected stream whose predecessor event is missing fails with `MongoEventStoreException`, and nothing is persisted.
-- [ ] Concurrent appends to the same stream produce a linear chain.
-- [ ] An internal stream verification recomputes the chain from raw documents and reports the first broken version for modified, deleted, reordered and inserted events.
-- [ ] A member mapped to the reserved element name `_integrity`, or a pre-registered `Event<TAggregate>` class map without the integrity member, fails at registration with a clear error.
-- [ ] Automated tests cover the behavior above.
-- [ ] `EventStoreAppendBenchmarks` compares protection disabled and enabled for new streams and for appends to existing streams (version > 1), on both append paths.
+- [x] Integrity protection is opt-in per aggregate type through internal configuration, and nothing new is publicly reachable; a reflection-based test asserts that the new integrity types and members are not public.
+- [x] With protection disabled, stored event documents and append behavior are unchanged, and the existing test suite passes.
+- [x] With protection enabled, every appended event stores `_integrity` with format version, algorithm (SHA-256), previous hash, hash and seal mode `Append`.
+- [x] Version 1 chains from the genesis value; every later version chains from its predecessor's stored hash.
+- [x] Both append paths (default and bulk write) persist byte-identical event documents for identical input.
+- [x] The hash recomputed from the stored raw bytes, with `_integrity` removed at byte level, equals the hash computed at write time. This holds for `Int64` values within `Int32` range, GUIDs, decimals, nested documents and `CreatedUtc` values with sub-millisecond ticks.
+- [x] Appending to a protected stream whose predecessor event is missing fails with `MongoEventStoreException`, and nothing is persisted.
+- [x] Concurrent appends to the same stream produce a linear chain.
+- [x] An internal stream verification recomputes the chain from raw documents and reports the first broken version for modified, deleted, reordered and inserted events.
+- [x] A member mapped to the reserved element name `_integrity`, or (with protection enabled, so unprotected registrations stay unchanged) a pre-registered `Event<TAggregate>` class map without the integrity member, fails at registration with a clear error.
+- [x] Automated tests cover the behavior above.
+- [x] `EventStoreAppendBenchmarks` compares protection disabled and enabled for new streams and for appends to existing streams (version > 1), on both append paths.
 
 ### Layer 2: Retroactive sealing
 
@@ -76,7 +76,7 @@ _integrity: { FormatVersion: 1, Algorithm: "SHA-256", PreviousHash: BinData, Has
   2. With protection enabled, hash `ToBson()` of that document.
   3. Append `_integrity` as the last element.
   4. Insert.
-- The class-map serializer writes `_id` first, so the server stores the bytes exactly as sent. A test asserts that the write-time hash equals the recomputation from the stored bytes.
+- The class-map serializer writes the discriminator `_t` before `_id`, but the server always stores `_id` first. Events are therefore serialized with `_id` moved to the front, which leaves stored documents unchanged and makes the server store the bytes exactly as sent. A test asserts that the write-time hash equals the recomputation from the stored bytes. (Corrected during implementation; the draft wrongly assumed `_id` is written first.)
 - Duplicate-key translation must keep working for `BsonDocument` inserts; existing tests cover it.
 - Verification and sealing read `RawBsonDocument` and remove the top-level `_integrity` element at byte level (cut the element bytes and correct the length prefix). They never decode and re-encode. This byte-level helper needs its own focused tests: element absent, first, middle or last.
 - **No `CreatedUtc` truncation.** BSON already stores milliseconds, and the hash covers the serialized bytes. Deviation from the issue text, agreed during planning; #156 is updated accordingly.

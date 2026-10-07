@@ -12,6 +12,7 @@ using Testcontainers.MongoDb;
 [MemoryDiagnoser]
 public class EventStoreAppendBenchmarks
 {
+    private const Int32 ExistingStreamPoolSize = 256;
     private const Int32 OperationsPerBenchmarkInvocation = 32;
 
     private static readonly BenchmarkScenario[] ScenarioMatrix =
@@ -26,6 +27,19 @@ public class EventStoreAppendBenchmarks
     private MongoDbContainer? _container;
     private BenchmarkContext _optimized = null!;
     private Int32 _optimizedInvocation;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether appends target pre-seeded streams (version &gt; 1)
+    /// instead of new aggregates. Only appends to existing streams read their predecessor.
+    /// </summary>
+    [Params(false, true)]
+    public Boolean ExistingStream { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether appended events are sealed into a hash chain.
+    /// </summary>
+    [Params(false, true)]
+    public Boolean IntegrityProtection { get; set; }
 
     [ParamsSource(nameof(Scenarios))]
     public BenchmarkScenario Scenario { get; set; } = null!;
@@ -95,6 +109,12 @@ public class EventStoreAppendBenchmarks
 
         WarmupAsync(_baseline.Store).GetAwaiter().GetResult();
         WarmupAsync(_optimized.Store).GetAwaiter().GetResult();
+
+        if (ExistingStream)
+        {
+            SeedExistingStreamsAsync(_baseline).GetAwaiter().GetResult();
+            SeedExistingStreamsAsync(_optimized).GetAwaiter().GetResult();
+        }
     }
 
     private static async Task DisposeContextAsync(BenchmarkContext? context)
@@ -106,6 +126,26 @@ public class EventStoreAppendBenchmarks
 
         await context.MongoHelper.Client.DropDatabaseAsync(context.DatabaseName);
         await context.ServiceProvider.DisposeAsync();
+    }
+
+    private static async Task SeedExistingStreamsAsync(BenchmarkContext context)
+    {
+        for (var index = 0; index < ExistingStreamPoolSize; index++)
+        {
+            var stream = new ExistingStreamSlot(Guid.CreateVersion7());
+            await context.Store.AppendEventsAsync(
+            [
+                new BenchmarkOrderAdjustedEvent
+                {
+                    Id = Guid.CreateVersion7(),
+                    AggregateId = stream.AggregateId,
+                    Version = 1,
+                    AmountDelta = 1
+                }
+            ]);
+            stream.NextVersion = 2;
+            context.ExistingStreams.Add(stream);
+        }
     }
 
     private static async Task WarmupAsync(IEventStore<BenchmarkOrderAggregate> eventStore)
@@ -125,8 +165,16 @@ public class EventStoreAppendBenchmarks
 
     private async Task<BenchmarkOrderAggregate> AppendAsync(BenchmarkContext context, Int32 invocation)
     {
-        var aggregateId = Guid.CreateVersion7();
-        return await context.Store.AppendEventsAsync(CreateEvents(aggregateId, invocation));
+        if (!ExistingStream)
+        {
+            return await context.Store.AppendEventsAsync(CreateEvents(Guid.CreateVersion7(), 1, invocation));
+        }
+
+        // Round-robin over pre-seeded streams, so every append reads its predecessor.
+        var stream = context.ExistingStreams[invocation % context.ExistingStreams.Count];
+        var events = CreateEvents(stream.AggregateId, stream.NextVersion, invocation);
+        stream.NextVersion += events.Count;
+        return await context.Store.AppendEventsAsync(events);
     }
 
     private async Task<BenchmarkContext> CreateContextAsync(String scenario, Boolean bulkWriteOptimizationEnabled)
@@ -155,6 +203,11 @@ public class EventStoreAppendBenchmarks
                            {
                                builder.WithBulkWriteOptimization();
                            }
+
+                           if (IntegrityProtection)
+                           {
+                               builder.WithIntegrityProtection();
+                           }
                        })
                        .Services
                        .BuildServiceProvider();
@@ -172,11 +225,11 @@ public class EventStoreAppendBenchmarks
             databaseName);
     }
 
-    private IReadOnlyList<Event<BenchmarkOrderAggregate>> CreateEvents(Guid aggregateId, Int32 invocationCount)
+    private IReadOnlyList<Event<BenchmarkOrderAggregate>> CreateEvents(Guid aggregateId, Int64 firstVersion, Int32 invocationCount)
     {
         var events = new List<Event<BenchmarkOrderAggregate>>(Scenario.EventCount);
 
-        for (var version = 1; version <= Scenario.EventCount; version++)
+        for (var version = firstVersion; version < firstVersion + Scenario.EventCount; version++)
         {
             events.Add(new BenchmarkOrderAdjustedEvent
             {
@@ -200,7 +253,10 @@ public class EventStoreAppendBenchmarks
         ServiceProvider ServiceProvider,
         IEventStore<BenchmarkOrderAggregate> Store,
         IMongoHelper MongoHelper,
-        String DatabaseName);
+        String DatabaseName)
+    {
+        public List<ExistingStreamSlot> ExistingStreams { get; } = [];
+    }
 
     private sealed class BenchmarkOrderAdjustedEvent : Event<BenchmarkOrderAggregate>
     {
@@ -213,5 +269,17 @@ public class EventStoreAppendBenchmarks
     private sealed class BenchmarkOrderAggregate : Aggregate
     {
         public Decimal TotalAmount { get; set; }
+    }
+
+    private sealed class ExistingStreamSlot
+    {
+        public ExistingStreamSlot(Guid aggregateId)
+        {
+            AggregateId = aggregateId;
+        }
+
+        public Guid AggregateId { get; }
+
+        public Int64 NextVersion { get; set; }
     }
 }

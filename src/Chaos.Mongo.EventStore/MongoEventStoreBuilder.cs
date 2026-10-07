@@ -106,4 +106,14 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
         Options.EventsCollectionSuffix = suffix;
         return this;
     }
+
+    /// <summary>
+    /// Enables tamper evidence: appended events are sealed into a per-stream hash chain.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    internal MongoEventStoreBuilder<TAggregate> WithIntegrityProtection()
+    {
+        Options.IntegrityProtectionEnabled = true;
+        return this;
+    }
 }

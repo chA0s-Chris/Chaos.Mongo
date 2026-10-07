@@ -3,7 +3,9 @@
 namespace Chaos.Mongo.EventStore;
 
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using System.Runtime.CompilerServices;
 
@@ -69,6 +71,25 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <summary>
+    /// Serializes an event in the element order MongoDB stores it. The class-map serializer writes the
+    /// discriminator before <c>_id</c>, but the server always moves <c>_id</c> to the front. Doing so
+    /// before insertion keeps the bytes that are hashed identical to the bytes that are stored.
+    /// </summary>
+    private static BsonDocument SerializeEvent(Event<TAggregate> @event)
+    {
+        var document = @event.ToBsonDocument();
+        var idIndex = document.IndexOfName("_id");
+        if (idIndex > 0)
+        {
+            var idElement = document.GetElement(idIndex);
+            document.RemoveAt(idIndex);
+            document.InsertAt(0, idElement);
+        }
+
+        return document;
+    }
+
+    /// <summary>
     /// Creates the exception describing an append whose first event version was already committed.
     /// Resubmitting an event that is already stored is an idempotent retry rather than a conflict,
     /// so the stored event IDs decide which exception the caller sees.
@@ -111,11 +132,75 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     private IMongoCollection<CheckpointDocument<TAggregate>> GetCheckpointCollection()
         => _mongoHelper.Database.GetCollection<CheckpointDocument<TAggregate>>(_options.CheckpointCollectionName);
 
+    private IMongoCollection<BsonDocument> GetEventDocumentsCollection()
+        => _mongoHelper.Database.GetCollection<BsonDocument>(_options.EventsCollectionName);
+
     private IMongoCollection<Event<TAggregate>> GetEventsCollection()
         => _mongoHelper.Database.GetCollection<Event<TAggregate>>(_options.EventsCollectionName);
 
     private IMongoCollection<TAggregate> GetReadModelCollection()
         => _mongoHelper.Database.GetCollection<TAggregate>(_options.ReadModelCollectionName);
+
+    private async Task<Byte[]> ReadPredecessorHashAsync(
+        IClientSessionHandle session,
+        Guid aggregateId,
+        Int64 version,
+        CancellationToken cancellationToken)
+    {
+        var predecessor = await GetEventDocumentsCollection()
+                                .Find(session, EventDocumentFields<TAggregate>.ForVersion<BsonDocument>(aggregateId, version))
+                                .Project(Builders<BsonDocument>.Projection.Include(EventIntegrityChain.ElementName))
+                                .FirstOrDefaultAsync(cancellationToken);
+
+        if (predecessor is null)
+        {
+            throw new MongoEventStoreException(
+                $"Version {version} of aggregate '{aggregateId}' is missing, so its integrity chain cannot be continued.");
+        }
+
+        if (!predecessor.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) ||
+            integrityValue is not BsonDocument integrityDocument)
+        {
+            throw new MongoEventStoreException(
+                $"Version {version} of aggregate '{aggregateId}' is not sealed, so its integrity chain cannot be continued.");
+        }
+
+        return BsonSerializer.Deserialize<EventIntegrity>(integrityDocument).Hash;
+    }
+
+    /// <summary>
+    /// Seals the serialized events into the stream's hash chain. Runs inside the append transaction,
+    /// so the predecessor is read with the same snapshot that the unique version index protects.
+    /// Returns new documents and leaves <paramref name="eventDocuments"/> unchanged, keeping the
+    /// callback repeatable when the driver retries the transaction.
+    /// </summary>
+    private async Task<List<BsonDocument>> SealEventDocumentsAsync(
+        IClientSessionHandle session,
+        List<Event<TAggregate>> eventList,
+        List<BsonDocument> eventDocuments,
+        CancellationToken cancellationToken)
+    {
+        var aggregateId = eventList[0].AggregateId;
+        var firstVersion = eventList[0].Version;
+        var previousHash = firstVersion == 1
+            ? EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId)
+            : await ReadPredecessorHashAsync(session, aggregateId, firstVersion - 1, cancellationToken);
+
+        var sealedDocuments = new List<BsonDocument>(eventDocuments.Count);
+        for (var index = 0; index < eventDocuments.Count; index++)
+        {
+            var integrity = EventIntegrityChain.Seal(eventDocuments[index].ToBson(), previousHash, IntegritySealMode.Append);
+            sealedDocuments.Add(new BsonDocument(eventDocuments[index].Elements)
+            {
+                { EventIntegrityChain.ElementName, integrity.ToBsonDocument() }
+            });
+
+            eventList[index].Integrity = integrity;
+            previousHash = integrity.Hash;
+        }
+
+        return sealedDocuments;
+    }
 
     /// <inheritdoc/>
     public async Task<TAggregate> AppendEventsAsync(
@@ -133,6 +218,10 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         foreach (var @event in eventList)
         {
             @event.AggregateType = _aggregateTypeName;
+
+            // Integrity data is owned by the event store and must never enter the hashed document.
+            @event.Integrity = null;
+
             if (@event.CreatedUtc == default)
             {
                 @event.CreatedUtc = now;
@@ -231,6 +320,9 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
         await EnsureBulkWriteOptimizationSupportedAsync(cancellationToken);
 
+        // Both append paths insert the same serialized documents, so they persist identical bytes.
+        var eventDocuments = eventList.Select(SerializeEvent).ToList();
+
         // 5. Persist changes inside transaction
         try
         {
@@ -238,16 +330,19 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 async (helper, session, ct) =>
                 {
                     var eventsCollection = GetEventsCollection();
+                    var documents = _options.IntegrityProtectionEnabled
+                        ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
+                        : eventDocuments;
 
                     if (_options.BulkWriteOptimizationEnabled)
                     {
-                        var models = new List<BulkWriteModel>(eventList.Count + (checkpoint is null ? 1 : 2));
+                        var models = new List<BulkWriteModel>(documents.Count + (checkpoint is null ? 1 : 2));
 
-                        foreach (var @event in eventList)
+                        foreach (var document in documents)
                         {
                             models.Add(new BulkWriteInsertOneModel<BsonDocument>(
                                            eventsCollection.CollectionNamespace,
-                                           @event.ToBsonDocument()));
+                                           document));
                         }
 
                         models.Add(new BulkWriteReplaceOneModel<BsonDocument>(
@@ -277,7 +372,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                     else
                     {
                         // 5a. Insert events
-                        await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
+                        await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
 
                         // 5b. Upsert read model
                         await readModelCollection.ReplaceOneAsync(
