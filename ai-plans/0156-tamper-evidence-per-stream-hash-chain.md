@@ -49,7 +49,7 @@ Everything stays internal until #160 makes the feature public.
 
 ### Configuration and visibility
 
-- New internal `MongoEventStoreBuilder<TAggregate>.WithIntegrityProtection()` and a corresponding internal flag on `MongoEventStoreOptions<TAggregate>`. The sweep interval is configured there too.
+- New internal `MongoEventStoreBuilder<TAggregate>.WithIntegrityProtection()` and a corresponding internal flag on `MongoEventStoreOptions<TAggregate>`. The sweep interval, the retry delay after a failed pass (default 1 minute) and the sealing chunk size are configured there too and validated at registration.
 - New `src/Chaos.Mongo.EventStore/Properties/InternalsVisibleTo.cs`, following `src/Chaos.Mongo/Properties/InternalsVisibleTo.cs`. It is wrapped in `#if !NUGET_RELEASE` and grants access to `Chaos.Mongo.EventStore.Tests` and `Chaos.Mongo.EventStore.Benchmarks`.
 
 ### Storage and mapping
@@ -107,7 +107,7 @@ _integrity: { FormatVersion: 1, Algorithm: "SHA-256", PreviousHash: BinData, Has
   - Continue from the last sealed event (or genesis) in version order.
   - Each event gets `$set: { _integrity }` with the filter `{ _id, _integrity: { $exists: false } }`.
   - The sweep seals in bounded chunks, one transaction per chunk (internal default chunk size 1,000 events, configurable).
-  - The append safety net uses the same bound. Within it, it seals the unsealed prefix in the append transaction. Beyond it, the append fails with `MongoEventStoreException` ("stream not yet sealed") instead of risking a transaction that exceeds `transactionLifetimeLimitSeconds`.
+  - The append safety net uses the same bound. It reads one window of at most chunk size + 1 events at or below the predecessor (descending) and looks for the sealed boundary inside it, so its cost stays bounded. Within the bound, it seals the unsealed prefix in the append transaction. Beyond it, the append fails with `MongoEventStoreException` ("stream not yet sealed") instead of risking a transaction that exceeds `transactionLifetimeLimitSeconds`.
   - A concurrent seal inside a transaction surfaces as a write conflict (`TransientTransactionError`); the driver reruns the callback, which then reads the events as already sealed.
   - A zero match count is not retried by the driver and should not occur under snapshot isolation. If it does, it is treated as a concurrent modification: the append fails with `MongoConcurrencyException`, and the caller retries per the existing optimistic-concurrency contract. The sweep re-reads the stream and continues.
 - **State document.** A sweep state document per aggregate type (new collection `{CollectionPrefix}_IntegrityState`, via an internal suffix option analogous to `EventsCollectionSuffix`/`CheckpointCollectionSuffix`) persists:
@@ -116,7 +116,9 @@ _integrity: { FormatVersion: 1, Algorithm: "SHA-256", PreviousHash: BinData, Has
   - the pass timestamps
 
   The internal progress API reads it. Its location is a draft and may move to the module-level anchoring configuration introduced in #158.
+- **Failure handling.** A stream that cannot be sealed (missing version, malformed `_integrity`, repeated concurrent modification) is logged and skipped, so it cannot stall the pass. Transient failures abort the pass, which is retried after the retry delay and resumes at the same stream. Events sealed by committed chunks are counted even when a later chunk fails.
 - **Anchor reference.** The reference from retroactively sealed events to their sealing anchor is added in #158.
+- **Limitation before anchoring.** Until anchoring exists (#158), retroactive sealing can re-seal a manipulated suffix whose `_integrity` was stripped; evidence against that only comes from anchors. The verifier therefore does not treat `Append` → `Retroactive` transitions as a failure; #160 reports them as an informational signal.
 
 ### Benchmarks
 

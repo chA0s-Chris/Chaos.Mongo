@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -47,6 +48,22 @@ public class IntegritySealingIntegrationTests
 
         LedgerStoreContext.ReadIntegrity(await protectedContext.FindEventAsync(aggregateId, 4))
                           .SealMode.Should().Be(IntegritySealMode.Append);
+    }
+
+    [Test]
+    public async Task AppendSealingWindow_LongUnsealedStream_ReadsAtMostOneChunk()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync(options => options.SealingChunkSize = 2);
+        var aggregateId = await unprotected.AppendStreamAsync(50);
+
+        var window = await ExplainAsync(
+            protectedContext,
+            SealingSweepQueries<LedgerAggregate>.AppendSealingWindow(aggregateId, 50),
+            protectedContext.Options.SealingChunkSize + 1);
+
+        window["nReturned"].ToInt64().Should().Be(3);
+        window["totalKeysExamined"].ToInt64().Should().BeLessThanOrEqualTo(4);
+        window["totalDocsExamined"].ToInt64().Should().BeLessThanOrEqualTo(3);
     }
 
     [Test]
@@ -98,6 +115,34 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task HostedService_FailedPass_RetriesAfterRetryDelay()
+    {
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var aggregateId = await unprotected.AppendStreamAsync(2);
+        var stateCollection = protectedContext.MongoHelper.Database
+                                              .GetCollection<BsonDocument>(protectedContext.Options.IntegrityStateCollectionName);
+        await stateCollection.InsertOneAsync(new BsonDocument
+        {
+            { "_id", IntegritySealingState.DocumentId },
+            { "StreamsChecked", "unreadable" }
+        });
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var sweep = new EventStreamSealingSweep<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options, timeProvider, logger);
+        var hostedService = new EventStreamSealingHostedService<LedgerAggregate>(sweep);
+
+        await hostedService.StartedAsync(CancellationToken.None);
+        await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains("is retried"))));
+        await stateCollection.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
+
+        // Advancing by the retry delay alone, far less than the 24-hour interval, must trigger the next pass.
+        await WaitUntilAsync(
+            async () => (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact,
+            () => timeProvider.Advance(protectedContext.Options.SealingSweepRetryDelay));
+        await hostedService.StoppingAsync(CancellationToken.None);
+    }
+
+    [Test]
     public async Task RunPassAsync_InterruptedPass_ResumesAfterPersistedCursor()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -133,6 +178,23 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task RunPassAsync_LaterChunkFails_CountsEventsOfCommittedChunks()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync(options => options.SealingChunkSize = 2);
+        var aggregateId = await unprotected.AppendStreamAsync(5);
+        await unprotected.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 4));
+
+        var completed = await protectedContext.Sweep.RunPassAsync();
+
+        completed.Should().BeTrue();
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.EventsSealed.Should().Be(2);
+        status.StreamsSealed.Should().Be(1);
+        status.StreamsChecked.Should().Be(1);
+    }
+
+    [Test]
     public async Task RunPassAsync_LockHeldByAnotherInstance_ReturnsFalseWithoutSealing()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -146,6 +208,36 @@ public class IntegritySealingIntegrationTests
         (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId))
             .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.NotSealed));
         (await protectedContext.Sweep.GetStatusAsync()).Should().BeNull();
+    }
+
+    [Test]
+    public async Task RunPassAsync_MalformedIntegrityOnSealedPrefix_SkipsStreamAndSealsLaterStreams()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var corruptedStream = await protectedContext.AppendStreamAsync(2);
+        await unprotected.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(corruptedStream, 3)]);
+        await protectedContext.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(corruptedStream, 2),
+            Builders<BsonDocument>.Update.Set(EventIntegrityChain.ElementName, "tampered"));
+        var healthyStreams = new[]
+        {
+            await unprotected.AppendStreamAsync(2),
+            await unprotected.AppendStreamAsync(2)
+        };
+
+        var completed = await protectedContext.Sweep.RunPassAsync();
+
+        completed.Should().BeTrue();
+        foreach (var aggregateId in healthyStreams)
+        {
+            (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
+        }
+
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(corruptedStream))
+            .Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.StreamsChecked.Should().Be(3);
     }
 
     [Test]
@@ -229,15 +321,30 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task SealNextChunkAsync_StaleSealedVersion_ThrowsMongoConcurrencyException()
+    {
+        var context = await CreateContextAsync(true);
+        var aggregateId = await context.AppendStreamAsync(2);
+        var sealer = new EventStreamSealer<LedgerAggregate>(context.MongoHelper, context.Options);
+
+        var act = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) => sealer.SealNextChunkAsync(session, aggregateId, 0, ct));
+
+        await act.Should().ThrowAsync<MongoConcurrencyException>().WithMessage("*sealed concurrently*");
+    }
+
+    [Test]
     public async Task SweepQueries_ReadOnlyIndexEntriesPerStream()
     {
         var context = await CreateContextAsync(true);
-        var longStream = await context.AppendStreamAsync(50);
         await context.AppendStreamAsync(50);
+        await context.AppendStreamAsync(50);
+        var streamOrder = await ReadStreamOrderAsync(context);
 
         var nextStream = await ExplainAsync(context, SealingSweepQueries<LedgerAggregate>.NextStream(null));
-        var nextAfterCursor = await ExplainAsync(context, SealingSweepQueries<LedgerAggregate>.NextStream(longStream));
-        var head = await ExplainAsync(context, SealingSweepQueries<LedgerAggregate>.StreamHead(longStream));
+        var nextAfterCursor = await ExplainAsync(context, SealingSweepQueries<LedgerAggregate>.NextStream(streamOrder[0]));
+        var head = await ExplainAsync(context, SealingSweepQueries<LedgerAggregate>.StreamHead(streamOrder[0]));
+
+        nextAfterCursor["nReturned"].ToInt64().Should().Be(1, "the stream after the cursor must be found without scanning its events");
 
         foreach (var stats in new[]
                  {
@@ -278,7 +385,7 @@ public class IntegritySealingIntegrationTests
         }
     }
 
-    private static async Task<BsonDocument> ExplainAsync(LedgerStoreContext context, SweepQuery query)
+    private static async Task<BsonDocument> ExplainAsync(LedgerStoreContext context, SweepQuery query, Int32 limit = 1)
     {
         var command = new BsonDocument
         {
@@ -289,7 +396,7 @@ public class IntegritySealingIntegrationTests
                     { "filter", query.Filter },
                     { "sort", query.Sort },
                     { "projection", query.Projection },
-                    { "limit", 1 }
+                    { "limit", limit }
                 }
             },
             { "verbosity", "executionStats" }

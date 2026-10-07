@@ -78,6 +78,7 @@ public static class MongoEventStoreSerializationSetup
         // Register the Event<TAggregate> base class map. The integrity member is mapped regardless of
         // whether protection is enabled: class maps are process-global and shared by every store.
         RegisterEventIntegrityClassMap();
+        RegisterIntegritySealingStateClassMap();
         var eventBaseType = typeof(Event<TAggregate>);
         if (!BsonClassMap.IsClassMapRegistered(eventBaseType))
         {
@@ -207,6 +208,31 @@ public static class MongoEventStoreSerializationSetup
               .SetElementName(nameof(EventIntegrity.SealMode))
               .SetIsRequired(true)
               .SetSerializer(new EnumSerializer<IntegritySealMode>(BsonType.String));
+        });
+    }
+
+    private static void RegisterIntegritySealingStateClassMap()
+    {
+        if (BsonClassMap.IsClassMapRegistered(typeof(IntegritySealingState)))
+        {
+            return;
+        }
+
+        // Element names and the cursor's GUID representation are pinned, so neither convention packs nor a
+        // globally registered GUID serializer change the stored state.
+        BsonClassMap.RegisterClassMap<IntegritySealingState>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(s => s.Id);
+            cm.GetMemberMap(s => s.Cursor)
+              .SetElementName(nameof(IntegritySealingState.Cursor))
+              .SetSerializer(new NullableSerializer<Guid>(GuidStandardSerializer));
+            cm.GetMemberMap(s => s.PassStartedUtc).SetElementName(nameof(IntegritySealingState.PassStartedUtc));
+            cm.GetMemberMap(s => s.PassCompletedUtc).SetElementName(nameof(IntegritySealingState.PassCompletedUtc));
+            cm.GetMemberMap(s => s.StreamsChecked).SetElementName(nameof(IntegritySealingState.StreamsChecked));
+            cm.GetMemberMap(s => s.StreamsSealed).SetElementName(nameof(IntegritySealingState.StreamsSealed));
+            cm.GetMemberMap(s => s.EventsSealed).SetElementName(nameof(IntegritySealingState.EventsSealed));
         });
     }
 }

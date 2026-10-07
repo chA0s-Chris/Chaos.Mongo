@@ -91,4 +91,10 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets or sets the delay between two passes of the background sealing sweep. Defaults to 24 hours.
     /// </summary>
     internal TimeSpan SealingSweepInterval { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Gets or sets the delay before a failed sealing pass is retried. The retry resumes the failed pass.
+    /// Defaults to 1 minute.
+    /// </summary>
+    internal TimeSpan SealingSweepRetryDelay { get; set; } = TimeSpan.FromMinutes(1);
 }

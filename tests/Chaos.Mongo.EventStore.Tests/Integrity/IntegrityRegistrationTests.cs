@@ -6,6 +6,7 @@ using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Attributes;
 using NUnit.Framework;
@@ -28,6 +29,23 @@ public class IntegrityRegistrationTests
         classMap.IgnoreExtraElements.Should().BeTrue();
         classMap.AllMemberMaps.Select(m => m.ElementName)
                 .Should().BeEquivalentTo("FormatVersion", "Algorithm", "PreviousHash", "Hash", "SealMode");
+    }
+
+    [Test]
+    public void IntegritySealingStateClassMap_PinsElementNamesAndStandardGuidCursor()
+    {
+        new MongoBuilder(new ServiceCollection()).WithEventStore<RegistrationStateAggregate>(es => es.WithEvent<RegistrationStateEvent>());
+        var cursor = Guid.NewGuid();
+
+        var document = new IntegritySealingState
+        {
+            Cursor = cursor
+        }.ToBsonDocument();
+
+        document.Names.Should().BeEquivalentTo(
+            "_id", "Cursor", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "EventsSealed");
+        document["Cursor"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);
+        document["Cursor"].AsGuid.Should().Be(cursor);
     }
 
     [Test]
@@ -76,6 +94,34 @@ public class IntegrityRegistrationTests
 
         services.Should().Contain(d => d.ServiceType == typeof(EventStreamSealingSweep<RegistrationSweepAggregate>));
         services.Should().Contain(d => d.ServiceType == typeof(IHostedService) && d.ImplementationFactory != null);
+    }
+
+    [Test]
+    [TestCase("chunk", "*sealing chunk size*greater than 0*")]
+    [TestCase("interval", "*sealing sweep interval*greater than zero*")]
+    [TestCase("retry", "*sealing sweep retry delay*greater than zero*")]
+    public void WithEventStore_InvalidSealingOption_ThrowsInvalidOperationException(String option, String expectedMessage)
+    {
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<RegistrationValidationAggregate>(es =>
+        {
+            es.WithEvent<RegistrationValidationEvent>().WithIntegrityProtection();
+            switch (option)
+            {
+                case "chunk":
+                    es.Options.SealingChunkSize = 0;
+                    break;
+                case "interval":
+                    es.Options.SealingSweepInterval = TimeSpan.Zero;
+                    break;
+                default:
+                    es.Options.SealingSweepRetryDelay = TimeSpan.FromSeconds(-1);
+                    break;
+            }
+        });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage(expectedMessage);
     }
 
     [Test]
@@ -215,4 +261,18 @@ public sealed class RegistrationNoSweepAggregate : Aggregate;
 public sealed class RegistrationNoSweepEvent : Event<RegistrationNoSweepAggregate>
 {
     public override void Execute(RegistrationNoSweepAggregate aggregate) { }
+}
+
+public sealed class RegistrationStateAggregate : Aggregate;
+
+public sealed class RegistrationStateEvent : Event<RegistrationStateAggregate>
+{
+    public override void Execute(RegistrationStateAggregate aggregate) { }
+}
+
+public sealed class RegistrationValidationAggregate : Aggregate;
+
+public sealed class RegistrationValidationEvent : Event<RegistrationValidationAggregate>
+{
+    public override void Execute(RegistrationValidationAggregate aggregate) { }
 }

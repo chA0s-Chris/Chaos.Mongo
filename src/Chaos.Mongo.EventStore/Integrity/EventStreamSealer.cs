@@ -4,7 +4,6 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using Chaos.Mongo.EventStore.Errors;
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 /// <summary>
@@ -48,19 +47,26 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         Int64 predecessorVersion,
         CancellationToken cancellationToken)
     {
-        var prefix = await FindSealedPrefixAsync(session, aggregateId, null, cancellationToken);
-        var events = await ReadEventsAfterAsync(session, aggregateId, prefix.Version, _options.SealingChunkSize + 1, cancellationToken);
+        // Read one bounded window below the append and look for the sealed boundary inside it, so a long
+        // unsealed stream costs at most one chunk of reads before the append fails.
+        var window = await ReadAppendWindowAsync(session, aggregateId, predecessorVersion, cancellationToken);
         try
         {
-            if (events.Count > _options.SealingChunkSize)
+            var boundary = window.FindIndex(document => document.Contains(EventIntegrityChain.ElementName));
+            if (boundary < 0 && window.Count > _options.SealingChunkSize)
             {
                 throw new MongoEventStoreException(
                     $"Aggregate '{aggregateId}' has more than {_options.SealingChunkSize} events that are not yet sealed. " +
                     "The stream is not yet sealed; the sealing sweep catches it up.");
             }
 
-            var lastHash = await SealAsync(session, aggregateId, events, prefix, cancellationToken);
-            if (prefix.Version + events.Count != predecessorVersion)
+            var prefix = boundary < 0
+                ? new SealedPrefix(0, EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId))
+                : ReadSealedPrefix(window[boundary], aggregateId);
+            var unsealed = window.Take(boundary < 0 ? window.Count : boundary).Reverse().ToList();
+
+            var lastHash = await SealAsync(session, aggregateId, unsealed, prefix, cancellationToken);
+            if (prefix.Version + unsealed.Count != predecessorVersion)
             {
                 throw new MongoConcurrencyException(
                     $"The stream of aggregate '{aggregateId}' changed concurrently while sealing it before an append.");
@@ -70,7 +76,7 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         }
         finally
         {
-            DisposeAll(events);
+            DisposeAll(window);
         }
     }
 
@@ -114,8 +120,17 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         }
     }
 
-    private static Byte[] ReadHash(BsonDocument document)
-        => BsonSerializer.Deserialize<EventIntegrity>(document[EventIntegrityChain.ElementName].AsBsonDocument).Hash;
+    private static SealedPrefix ReadSealedPrefix(BsonDocument document, Guid aggregateId)
+    {
+        var version = document[EventDocumentFields<TAggregate>.Version].ToInt64();
+        if (!EventIntegrityChain.TryRead(document[EventIntegrityChain.ElementName], out var integrity))
+        {
+            throw new MongoEventStoreException(
+                $"The integrity data of version {version} of aggregate '{aggregateId}' is malformed, so the stream cannot be sealed.");
+        }
+
+        return new SealedPrefix(version, integrity.Hash);
+    }
 
     private async Task<SealedPrefix> FindSealedPrefixAsync(
         IClientSessionHandle session,
@@ -129,7 +144,9 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
             return genesis;
         }
 
-        var projection = Builders<BsonDocument>.Projection.Include(EventIntegrityChain.ElementName);
+        var projection = Builders<BsonDocument>.Projection
+                                               .Include(EventIntegrityChain.ElementName)
+                                               .Include(EventDocumentFields<TAggregate>.Version);
         if (knownSealedVersion is { } version)
         {
             var known = await GetEventsCollection()
@@ -139,7 +156,7 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
 
             if (known is not null && known.Contains(EventIntegrityChain.ElementName))
             {
-                return new SealedPrefix(version, ReadHash(known));
+                return ReadSealedPrefix(known, aggregateId);
             }
         }
 
@@ -151,16 +168,31 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         var lastSealed = await GetEventsCollection()
                                .Find(session, filter)
                                .Sort(new BsonDocument(EventDocumentFields<TAggregate>.Version, -1))
-                               .Project(projection.Include(EventDocumentFields<TAggregate>.Version))
+                               .Project(projection)
                                .FirstOrDefaultAsync(cancellationToken);
 
         return lastSealed is null
             ? genesis
-            : new SealedPrefix(lastSealed[EventDocumentFields<TAggregate>.Version].ToInt64(), ReadHash(lastSealed));
+            : ReadSealedPrefix(lastSealed, aggregateId);
     }
 
     private IMongoCollection<BsonDocument> GetEventsCollection()
         => _mongoHelper.Database.GetCollection<BsonDocument>(_options.EventsCollectionName);
+
+    private Task<List<RawBsonDocument>> ReadAppendWindowAsync(
+        IClientSessionHandle session,
+        Guid aggregateId,
+        Int64 predecessorVersion,
+        CancellationToken cancellationToken)
+    {
+        var query = SealingSweepQueries<TAggregate>.AppendSealingWindow(aggregateId, predecessorVersion);
+        return _mongoHelper.Database
+                           .GetCollection<RawBsonDocument>(_options.EventsCollectionName)
+                           .Find(session, query.Filter)
+                           .Sort(query.Sort)
+                           .Limit(_options.SealingChunkSize + 1)
+                           .ToListAsync(cancellationToken);
+    }
 
     private Task<List<RawBsonDocument>> ReadEventsAfterAsync(
         IClientSessionHandle session,

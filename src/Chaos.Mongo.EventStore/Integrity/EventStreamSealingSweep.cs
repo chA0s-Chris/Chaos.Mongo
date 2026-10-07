@@ -19,6 +19,11 @@ using MongoDB.Driver;
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : class, IAggregate, new()
 {
+    /// <summary>
+    /// The number of consecutive concurrent modifications after which a stream is skipped in the current pass.
+    /// </summary>
+    internal const Int32 MaxConcurrencyRetries = 10;
+
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
     private readonly MongoEventStoreOptions<TAggregate> _options;
@@ -96,27 +101,19 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
 
             if (!await IsStreamHeadSealedAsync(streamId, cancellationToken))
             {
-                Int32? sealedEvents;
                 try
                 {
-                    sealedEvents = await SealStreamAsync(streamId, sweepLock, cancellationToken);
+                    if (!await SealStreamAsync(streamId, sweepLock, state, cancellationToken))
+                    {
+                        break;
+                    }
                 }
-                catch (MongoEventStoreException ex)
+                catch (Exception ex) when (!IsCancellation(ex, cancellationToken) && !IsTransient(ex))
                 {
+                    // A stream that cannot be sealed must not stall the pass for every later stream. Transient
+                    // failures abort the pass instead, so the retry resumes at this stream.
                     _logger.LogError(ex, "Stream {AggregateId} in collection {CollectionName} cannot be sealed",
                                      streamId, _options.EventsCollectionName);
-                    sealedEvents = 0;
-                }
-
-                if (sealedEvents is not { } count)
-                {
-                    break;
-                }
-
-                if (count > 0)
-                {
-                    state.StreamsSealed++;
-                    state.EventsSealed += count;
                 }
             }
 
@@ -176,6 +173,14 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
         }
     }
 
+    private static Boolean IsCancellation(Exception exception, CancellationToken cancellationToken)
+        => exception is OperationCanceledException && cancellationToken.IsCancellationRequested;
+
+    private static Boolean IsTransient(Exception exception)
+        => exception is MongoConnectionException or MongoExecutionTimeoutException or TimeoutException ||
+           (exception is MongoException mongoException &&
+            (mongoException.HasErrorLabel("TransientTransactionError") || mongoException.HasErrorLabel("RetryableWriteError")));
+
     private async Task<Boolean> EnsureLockAsync(IMongoLock sweepLock, CancellationToken cancellationToken)
     {
         if (!sweepLock.IsValid)
@@ -223,6 +228,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            var delay = _options.SealingSweepInterval;
             try
             {
                 await RunPassAsync(cancellationToken);
@@ -233,12 +239,14 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Integrity sealing pass for collection {CollectionName} failed", _options.EventsCollectionName);
+                _logger.LogError(ex, "Integrity sealing pass for collection {CollectionName} failed and is retried",
+                                 _options.EventsCollectionName);
+                delay = _options.SealingSweepRetryDelay;
             }
 
             try
             {
-                await Task.Delay(_options.SealingSweepInterval, _timeProvider, cancellationToken);
+                await Task.Delay(delay, _timeProvider, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -258,11 +266,16 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             cancellationToken);
 
     /// <summary>
-    /// Seals a stream chunk by chunk, one transaction per chunk, and returns the number of sealed events.
+    /// Seals a stream chunk by chunk, one transaction per chunk, counting every committed chunk in the
+    /// pass state. Returns <c>false</c> when the sweep lock was lost.
     /// </summary>
-    private async Task<Int32?> SealStreamAsync(Guid aggregateId, IMongoLock sweepLock, CancellationToken cancellationToken)
+    private async Task<Boolean> SealStreamAsync(Guid aggregateId,
+                                                IMongoLock sweepLock,
+                                                IntegritySealingState state,
+                                                CancellationToken cancellationToken)
     {
-        var sealedEvents = 0;
+        var streamCounted = false;
+        var concurrencyRetries = 0;
         Int64? knownSealedVersion = null;
 
         while (await EnsureLockAsync(sweepLock, cancellationToken))
@@ -274,21 +287,37 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                     (_, session, ct) => _sealer.SealNextChunkAsync(session, aggregateId, knownSealedVersion, ct),
                     cancellationToken: cancellationToken);
             }
-            catch (MongoConcurrencyException)
+            catch (MongoConcurrencyException ex)
             {
+                if (++concurrencyRetries > MaxConcurrencyRetries)
+                {
+                    throw new MongoEventStoreException(
+                        $"Stream '{aggregateId}' was modified concurrently {MaxConcurrencyRetries} times while sealing it.", ex);
+                }
+
                 // Another writer sealed part of the stream; re-read it and continue.
                 knownSealedVersion = null;
                 continue;
             }
 
-            sealedEvents += result.SealedCount;
+            concurrencyRetries = 0;
             knownSealedVersion = result.LastSealedVersion;
+            if (result.SealedCount > 0)
+            {
+                state.EventsSealed += result.SealedCount;
+                if (!streamCounted)
+                {
+                    state.StreamsSealed++;
+                    streamCounted = true;
+                }
+            }
+
             if (!result.HasMore)
             {
-                return sealedEvents;
+                return true;
             }
         }
 
-        return null;
+        return false;
     }
 }

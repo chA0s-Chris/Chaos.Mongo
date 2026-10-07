@@ -36,6 +36,7 @@ public static class MongoBuilderExtensions
         configure(esBuilder);
 
         var options = esBuilder.Options;
+        ValidateIntegrityOptions(options);
 
         if (options.EventTypes.Count == 0)
         {
@@ -76,5 +77,32 @@ public static class MongoBuilderExtensions
         }
 
         return builder;
+    }
+
+    private static void ValidateIntegrityOptions<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        if (!options.IntegrityProtectionEnabled)
+        {
+            return;
+        }
+
+        if (options.SealingChunkSize <= 0)
+        {
+            throw new InvalidOperationException(
+                $"The sealing chunk size for aggregate type {typeof(TAggregate).Name} must be greater than 0.");
+        }
+
+        if (options.SealingSweepInterval <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"The sealing sweep interval for aggregate type {typeof(TAggregate).Name} must be greater than zero.");
+        }
+
+        if (options.SealingSweepRetryDelay <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"The sealing sweep retry delay for aggregate type {typeof(TAggregate).Name} must be greater than zero.");
+        }
     }
 }
