@@ -18,6 +18,23 @@ public class IntegritySealingIntegrationTests
     private MongoDbContainer _container;
 
     [Test]
+    [TestCase("_integrity")]
+    [TestCase("_integrity.Hash")]
+    public async Task AppendEventsAsync_MalformedPredecessorIntegrity_ThrowsMongoEventStoreExceptionAndPersistsNothing(String field)
+    {
+        var context = await CreateContextAsync(true);
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update.Set(field, "tampered"));
+
+        var act = () => context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*version 2*malformed*");
+        (await context.CountEventsAsync(aggregateId)).Should().Be(2);
+    }
+
+    [Test]
     public async Task AppendEventsAsync_MoreUnsealedPredecessorsThanOneChunk_ThrowsAndPersistsNothing()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync(options => options.SealingChunkSize = 2);
@@ -134,6 +151,29 @@ public class IntegritySealingIntegrationTests
         await hostedService.StartedAsync(CancellationToken.None);
         await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains("is retried"))));
         await stateCollection.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
+
+        // Advancing by the retry delay alone, far less than the 24-hour interval, must trigger the next pass.
+        await WaitUntilAsync(
+            async () => (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact,
+            () => timeProvider.Advance(protectedContext.Options.SealingSweepRetryDelay));
+        await hostedService.StoppingAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task HostedService_LockHeldByAnotherInstance_RetriesAfterRetryDelay()
+    {
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var aggregateId = await unprotected.AppendStreamAsync(2);
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var sweep = new EventStreamSealingSweep<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options, timeProvider, logger);
+        var hostedService = new EventStreamSealingHostedService<LedgerAggregate>(sweep);
+        var foreignLock = await protectedContext.MongoHelper.TryAcquireLockAsync(sweep.LockName);
+        foreignLock.Should().NotBeNull();
+
+        await hostedService.StartedAsync(CancellationToken.None);
+        await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(e => e.Level == LogLevel.Debug && e.Message.Contains("holds the lock"))));
+        await foreignLock.DisposeAsync();
 
         // Advancing by the retry delay alone, far less than the 24-hour interval, must trigger the next pass.
         await WaitUntilAsync(

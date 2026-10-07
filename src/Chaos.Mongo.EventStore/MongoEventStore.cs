@@ -5,7 +5,6 @@ namespace Chaos.Mongo.EventStore;
 using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using System.Runtime.CompilerServices;
 
@@ -160,14 +159,19 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 $"Version {version} of aggregate '{aggregateId}' is missing, so its integrity chain cannot be continued.");
         }
 
-        if (!predecessor.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) ||
-            integrityValue is not BsonDocument integrityDocument)
+        if (!predecessor.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue))
         {
             // Safety net: seal the unsealed prefix in this transaction, bounded by one sealing chunk.
             return await _sealer.SealForAppendAsync(session, aggregateId, version, cancellationToken);
         }
 
-        return BsonSerializer.Deserialize<EventIntegrity>(integrityDocument).Hash;
+        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity))
+        {
+            throw new MongoEventStoreException(
+                $"The integrity data of version {version} of aggregate '{aggregateId}' is malformed, so its integrity chain cannot be continued.");
+        }
+
+        return integrity.Hash;
     }
 
     /// <summary>

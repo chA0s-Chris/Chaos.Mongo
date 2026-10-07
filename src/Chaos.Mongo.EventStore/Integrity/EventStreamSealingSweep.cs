@@ -129,7 +129,8 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
 
     /// <summary>
     /// Starts the background loop: one pass immediately, then one per
-    /// <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepInterval"/>.
+    /// <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepInterval"/>. A failed or incomplete pass
+    /// is retried after <see cref="MongoEventStoreOptions{TAggregate}.SealingSweepRetryDelay"/> instead.
     /// </summary>
     /// <param name="cancellationToken">A cancellation token linked to the loop.</param>
     /// <returns>A completed task; the loop runs in the background.</returns>
@@ -231,7 +232,12 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             var delay = _options.SealingSweepInterval;
             try
             {
-                await RunPassAsync(cancellationToken);
+                if (!await RunPassAsync(cancellationToken))
+                {
+                    // An incomplete pass, because the lock was unavailable or lost, is retried soon
+                    // instead of after a full interval, so unsealed streams are caught up promptly.
+                    delay = _options.SealingSweepRetryDelay;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
