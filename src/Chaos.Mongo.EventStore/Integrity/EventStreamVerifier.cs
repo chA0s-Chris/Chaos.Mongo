@@ -26,6 +26,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// <summary>
     /// Recomputes the hash chain of a stream and reports the first broken version.
     /// </summary>
+    /// <remarks>
+    /// A consistent chain does not reveal deleted newest events or a deleted stream, because the
+    /// remaining events still form a valid chain. Detecting that requires a trusted expected head,
+    /// which anchoring provides.
+    /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The verification result.</returns>

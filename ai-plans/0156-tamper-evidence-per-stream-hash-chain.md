@@ -29,7 +29,7 @@ Everything stays internal until #160 makes the feature public.
 - [x] The hash recomputed from the stored raw bytes, with `_integrity` removed at byte level, equals the hash computed at write time. This holds for `Int64` values within `Int32` range, GUIDs, decimals, nested documents and `CreatedUtc` values with sub-millisecond ticks.
 - [x] Appending to a protected stream whose predecessor event is missing fails with `MongoEventStoreException`, and nothing is persisted.
 - [x] Concurrent appends to the same stream produce a linear chain.
-- [x] An internal stream verification recomputes the chain from raw documents and reports the first broken version for modified, deleted, reordered and inserted events.
+- [x] An internal stream verification recomputes the chain from raw documents and reports the first broken version for modified, reordered and inserted events, and for deleted events that are followed by a later event. Deleting the newest events or a whole stream leaves a consistent shorter chain; this is detected only against anchored heads (#158).
 - [x] A member mapped to the reserved element name `_integrity`, or (with protection enabled, so unprotected registrations stay unchanged) a pre-registered `Event<TAggregate>` class map without the integrity member, fails at registration with a clear error.
 - [x] Automated tests cover the behavior above.
 - [x] `EventStoreAppendBenchmarks` compares protection disabled and enabled for new streams and for appends to existing streams (version > 1), on both append paths.
@@ -81,6 +81,7 @@ _integrity: { FormatVersion: 1, Algorithm: "SHA-256", PreviousHash: BinData, Has
 - Duplicate-key translation must keep working for `BsonDocument` inserts; existing tests cover it.
 - Verification and sealing read `RawBsonDocument` and remove the top-level `_integrity` element at byte level (cut the element bytes and correct the length prefix). They never decode and re-encode. This byte-level helper needs its own focused tests: element absent, first, middle or last.
 - **No `CreatedUtc` truncation.** BSON already stores milliseconds, and the hash covers the serialized bytes. Deviation from the issue text, agreed during planning; #156 is updated accordingly.
+- **Truncation needs anchoring.** A chain only proves consistency up to its last remaining event. Deleting the newest events, or a whole stream, leaves a valid shorter chain, and the read model cannot act as the trusted head because anyone who can write events can also rewrite it. As specified in #154, truncation and stream deletion are detected against anchored heads (#158).
 
 ### Append with protection
 
