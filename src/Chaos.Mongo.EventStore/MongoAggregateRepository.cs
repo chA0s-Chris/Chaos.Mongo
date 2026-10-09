@@ -138,6 +138,10 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
 
         foreach (var evt in events)
         {
+            // The server-side filter is the primary exclusion; this guard keeps replay correct if it does not apply.
+            if (evt is ObservationalEvent<TAggregate>)
+                continue;
+
             LegacyRevision.Normalize(evt);
             evt.Execute(aggregate);
             aggregate.Version = evt.Version;

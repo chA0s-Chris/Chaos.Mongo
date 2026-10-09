@@ -208,7 +208,7 @@ Events represent facts that have occurred. They are immutable and append-only.
 |----------|-------------|
 | `Id` | Unique event identifier (used for idempotency) |
 | `AggregateId` | The aggregate this event belongs to |
-| `Version` | Position of the event in its aggregate's stream; supplied by the caller |
+| `Version` | Position of the event in its aggregate's stream; set by the caller, or `0` to let the event store assign it |
 | `Revision` | Aggregate revision after this event (set automatically; caller-supplied values are overwritten) |
 | `AggregateType` | Discriminator for the aggregate type (set automatically) |
 | `CreatedUtc` | Timestamp (set automatically if not provided) |

@@ -44,8 +44,9 @@ public abstract class Event<TAggregate> where TAggregate : class, IAggregate, ne
 
     /// <summary>
     /// Gets or sets the position of this event in its aggregate's stream.
-    /// Must be set by the caller to sequential values starting from the stream's highest position + 1.
-    /// The event store validates that positions are sequential with no gaps.
+    /// Either left at <c>0</c> to have the event store assign the next position, or set by the caller to
+    /// sequential values starting from the stream's highest position + 1. The event store validates that
+    /// explicit positions are sequential with no gaps.
     /// </summary>
     public Int64 Version { get; set; }
 
