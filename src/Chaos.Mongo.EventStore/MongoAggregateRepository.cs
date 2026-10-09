@@ -67,7 +67,7 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
                         new BsonDocument("$in", new BsonArray
                         {
                             concreteDiscriminator,
-                            new BsonArray(discriminators)
+                            new BsonDocument("$literal", new BsonArray(discriminators))
                         })
                     })));
     }

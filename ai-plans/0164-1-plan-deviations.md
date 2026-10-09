@@ -22,12 +22,16 @@ individual Technical Details were realized.
 
 ### Aggregate `Version` and `Revision` during a batch
 
-- **Planned:** Apart from revisions and checkpoints, appending state-changing events "otherwise behaves as today".
+- **Originally planned:** Apart from revisions and checkpoints, appending state-changing events "otherwise behaves as today".
   Before, `Execute` saw the aggregate's pre-batch `Version` for every event of a batch, and `Version` was set once
   after the batch.
 - **Implemented:** `Revision` and `Version` are updated on the aggregate after each state-changing event. A later event
-  in the same batch therefore sees the values produced by the events before it. Stored documents and the final
-  aggregate are unchanged.
+  in the same batch therefore sees the values produced by the events before it. This is a breaking change:
+  `Execute` implementations that read `aggregate.Version` can produce different final state, even in batches
+  containing only state-changing events.
+- **Plan correction:** The Layer 1 acceptance criterion now explicitly includes this compatibility exception.
+  `docs/event-store.md` documents the breaking behavior, and `BatchMetadataIntegrationTests` verifies per-event
+  metadata during append and matching state in the read model and replay, for both write modes and new/existing streams.
 - **Why:** An observational event's `Validate` in a mixed batch must observe the state, including the revision, that
   the preceding events produced. Updating the values per event keeps the state and its metadata consistent.
 

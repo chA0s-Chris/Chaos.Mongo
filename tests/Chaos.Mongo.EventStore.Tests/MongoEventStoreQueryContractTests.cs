@@ -39,10 +39,10 @@ public class MongoEventStoreQueryContractTests
                                 }),
                                 "$_t"
                             }),
-                        new BsonArray
+                        new BsonDocument("$literal", new BsonArray
                         {
                             "OrderViewed"
-                        }
+                        })
                     })
             });
 
