@@ -34,6 +34,8 @@ public class BatchMetadataIntegrationTests
                            .WithEventStore<BatchMetadataAggregate>(builder =>
                            {
                                builder.WithEvent<BatchMetadataRecordedEvent>("BatchMetadataRecorded")
+                                      .WithEvent<BatchMetadataOverwritingEvent>("BatchMetadataOverwriting")
+                                      .WithEvent<BatchMetadataOverwritingObservation>("BatchMetadataOverwritingObservation")
                                       .WithCollectionPrefix("BatchMetadata");
 
                                if (_bulkWrite)
@@ -84,6 +86,44 @@ public class BatchMetadataIntegrationTests
             .Should().BeEquivalentTo(aggregate, options => options.Excluding(a => a.CreatedUtc));
     }
 
+    [Test]
+    public async Task AppendEventsAsync_HandlersOverwritingMetadata_KeepStoreAssignedMetadata()
+    {
+        var aggregateId = Guid.NewGuid();
+        await _eventStore.AppendEventsAsync([Overwriting(aggregateId, 1)]);
+
+        var aggregate = await _eventStore.AppendEventsAsync(
+        [
+            Overwriting(aggregateId, 2),
+            new BatchMetadataOverwritingObservation
+            {
+                AggregateId = aggregateId,
+                Version = 3
+            },
+            Overwriting(aggregateId, 4)
+        ]);
+
+        aggregate.Version.Should().Be(4);
+        aggregate.Revision.Should().Be(3);
+        aggregate.OverwritesApplied.Should().Be(3);
+        (await _aggregateRepository.GetAsync(aggregateId)).Should().BeEquivalentTo(aggregate, options => options.Excluding(a => a.CreatedUtc));
+
+        var revisions = new List<Int64>();
+        await foreach (var @event in _eventStore.GetEventStream(aggregateId))
+        {
+            revisions.Add(@event.Revision);
+        }
+
+        revisions.Should().Equal(1, 2, 2, 3);
+    }
+
+    private static BatchMetadataOverwritingEvent Overwriting(Guid aggregateId, Int64 version)
+        => new()
+        {
+            AggregateId = aggregateId,
+            Version = version
+        };
+
     private static BatchMetadataRecordedEvent Recorded(Guid aggregateId, Int64 version)
         => new()
         {
@@ -94,6 +134,7 @@ public class BatchMetadataIntegrationTests
 
 public class BatchMetadataAggregate : Aggregate
 {
+    public Int32 OverwritesApplied { get; set; }
     public List<Int64> RevisionsSeen { get; set; } = [];
     public List<Int64> VersionsSeen { get; set; } = [];
 }
@@ -104,5 +145,30 @@ public class BatchMetadataRecordedEvent : Event<BatchMetadataAggregate>
     {
         aggregate.VersionsSeen.Add(aggregate.Version);
         aggregate.RevisionsSeen.Add(aggregate.Revision);
+    }
+}
+
+/// <summary>
+/// Mimics an object mapper that copies every same-named member of the event onto the aggregate.
+/// </summary>
+public class BatchMetadataOverwritingEvent : Event<BatchMetadataAggregate>
+{
+    public override void Execute(BatchMetadataAggregate aggregate)
+    {
+        aggregate.Version = Version;
+        aggregate.Revision = Revision;
+        aggregate.OverwritesApplied++;
+    }
+}
+
+/// <summary>
+/// Writes the metadata during validation, which observational events must not do.
+/// </summary>
+public class BatchMetadataOverwritingObservation : ObservationalEvent<BatchMetadataAggregate>
+{
+    protected override void Validate(BatchMetadataAggregate aggregate)
+    {
+        aggregate.Version = 0;
+        aggregate.Revision = 0;
     }
 }

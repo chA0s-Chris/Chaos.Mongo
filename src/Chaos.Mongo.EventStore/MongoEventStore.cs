@@ -39,17 +39,23 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     /// <summary>
     /// Applies the events to the aggregate in order and assigns each event the revision after it. A
     /// state-changing event increments the revision and moves the aggregate's version to its position; an
-    /// observational event records the revision it observed and changes neither.
+    /// observational event records the revision it observed and changes neither. The event store owns both
+    /// values: they are captured before and assigned after each event, so whatever an <c>Execute</c>
+    /// implementation writes to them, for example an object mapper copying same-named event members, is
+    /// overwritten.
     /// </summary>
     private static void ApplyEvents(List<Event<TAggregate>> eventList, TAggregate aggregate)
     {
         foreach (var @event in eventList)
         {
+            var revision = aggregate.Revision;
+            var version = aggregate.Version;
+
             if (@event is ObservationalEvent<TAggregate>)
             {
                 // Without a preceding state-changing event there is no aggregate to observe, and a non-empty
                 // stream would have no read model.
-                if (aggregate.Revision == 0)
+                if (revision == 0)
                 {
                     throw new MongoEventValidationException(
                         $"The observational event at version {@event.Version} of aggregate '{@event.AggregateId}' " +
@@ -61,11 +67,13 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             else
             {
                 @event.Execute(aggregate);
-                aggregate.Revision++;
-                aggregate.Version = @event.Version;
+                revision++;
+                version = @event.Version;
             }
 
-            @event.Revision = aggregate.Revision;
+            aggregate.Revision = revision;
+            aggregate.Version = version;
+            @event.Revision = revision;
         }
     }
 

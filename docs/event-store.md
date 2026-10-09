@@ -256,6 +256,7 @@ advance faster than revisions:
 > during append. An `Execute` implementation that reads `aggregate.Version` can therefore produce different final
 > state even in a batch containing only state-changing events. Review such implementations when upgrading. Per-event
 > metadata keeps append consistent with replay and lets observational validation see the preceding events' state.
+> The store owns both values: anything an `Execute` or `Validate` implementation assigns to them is overwritten.
 
 `AppendEventsAsync` validates positions against the stream head — the highest position in the events collection,
 including observational events — rather than against the read model. Use `GetExpectedNextVersionAsync` to obtain the
