@@ -193,16 +193,19 @@ public static class MongoEventStoreSerializationSetup
 
         // Element names are pinned so convention packs cannot change the stored format, and extra
         // elements are ignored so fields added by later format versions do not break typed reads.
+        // Every member is required, so a removed member is malformed instead of silently defaulting,
+        // which would, for example, turn a missing seal mode into Append.
         BsonClassMap.RegisterClassMap<EventIntegrity>(cm =>
         {
             cm.AutoMap();
             cm.SetIgnoreExtraElements(true);
-            cm.GetMemberMap(i => i.FormatVersion).SetElementName(nameof(EventIntegrity.FormatVersion));
-            cm.GetMemberMap(i => i.Algorithm).SetElementName(nameof(EventIntegrity.Algorithm));
-            cm.GetMemberMap(i => i.PreviousHash).SetElementName(nameof(EventIntegrity.PreviousHash));
-            cm.GetMemberMap(i => i.Hash).SetElementName(nameof(EventIntegrity.Hash));
+            cm.GetMemberMap(i => i.FormatVersion).SetElementName(nameof(EventIntegrity.FormatVersion)).SetIsRequired(true);
+            cm.GetMemberMap(i => i.Algorithm).SetElementName(nameof(EventIntegrity.Algorithm)).SetIsRequired(true);
+            cm.GetMemberMap(i => i.PreviousHash).SetElementName(nameof(EventIntegrity.PreviousHash)).SetIsRequired(true);
+            cm.GetMemberMap(i => i.Hash).SetElementName(nameof(EventIntegrity.Hash)).SetIsRequired(true);
             cm.GetMemberMap(i => i.SealMode)
               .SetElementName(nameof(EventIntegrity.SealMode))
+              .SetIsRequired(true)
               .SetSerializer(new EnumSerializer<IntegritySealMode>(BsonType.String));
         });
     }

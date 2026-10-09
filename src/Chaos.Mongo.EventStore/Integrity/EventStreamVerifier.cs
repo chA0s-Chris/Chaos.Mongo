@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Globalization;
 
 /// <summary>
 /// Verifies the hash chain of an event stream by recomputing it from the raw stored documents.
@@ -52,9 +53,9 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             {
                 using (rawDocument)
                 {
-                    if (!rawDocument.TryGetValue(versionElement, out var version) ||
-                        !version.IsNumeric ||
-                        version.ToInt64() != expectedVersion)
+                    if (!rawDocument.TryGetValue(versionElement, out var versionValue) ||
+                        !TryReadVersion(versionValue, out var version) ||
+                        version != expectedVersion)
                     {
                         return StreamVerificationResult.Broken(expectedVersion, StreamVerificationFailure.VersionGap);
                     }
@@ -73,6 +74,34 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         }
 
         return StreamVerificationResult.Intact;
+    }
+
+    /// <summary>
+    /// Reads a stored version without throwing on tampered values. Only whole numbers within the
+    /// <see cref="Int64"/> range are versions.
+    /// </summary>
+    private static Boolean TryReadVersion(BsonValue value, out Int64 version)
+    {
+        // 2^63, the first double above Int64.MaxValue.
+        const Double int64Limit = 9223372036854775808d;
+
+        switch (value)
+        {
+            case BsonInt32 int32:
+                version = int32.Value;
+                return true;
+            case BsonInt64 int64:
+                version = int64.Value;
+                return true;
+            case BsonDouble { Value: var number } when Double.IsInteger(number) && number >= -int64Limit && number < int64Limit:
+                version = (Int64)number;
+                return true;
+            case BsonDecimal128 decimal128:
+                return Int64.TryParse(decimal128.Value.ToString(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out version);
+            default:
+                version = 0;
+                return false;
+        }
     }
 
     private static StreamVerificationFailure? VerifyEvent(Byte[] document,

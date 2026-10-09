@@ -18,6 +18,13 @@ public class IntegrityChainIntegrationTests
     private static readonly DateTime FixedCreatedUtc = new DateTime(2026, 10, 7, 12, 30, 45, DateTimeKind.Utc).AddTicks(1234);
     private static readonly Guid FixedReference = Guid.Parse("8b4d4c1e-9e3f-4c55-a1a4-0f1e6c2d7b90");
 
+    private static readonly BsonValue[] NonVersionValues =
+    [
+        new BsonDecimal128(Decimal128.MaxValue),
+        new BsonDecimal128(Decimal128.Parse("3.5")),
+        new BsonDouble(3.5)
+    ];
+
     private readonly List<ServiceProvider> _serviceProviders = [];
     private MongoDbContainer _container;
 
@@ -271,6 +278,25 @@ public class IntegrityChainIntegrationTests
     }
 
     [Test]
+    [TestCase("FormatVersion")]
+    [TestCase("Algorithm")]
+    [TestCase("PreviousHash")]
+    [TestCase("Hash")]
+    [TestCase("SealMode")]
+    public async Task VerifyStreamAsync_MissingIntegrityMember_ReportsMalformedIntegrity(String member)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendStreamAsync(context);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update.Unset($"{EventIntegrityChain.ElementName}.{member}"));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_ModifiedEvent_ReportsHashMismatch()
     {
         var context = await CreateContextAsync();
@@ -282,6 +308,23 @@ public class IntegrityChainIntegrationTests
         var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
 
         result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch));
+    }
+
+    [Test]
+    [TestCaseSource(nameof(NonVersionValues))]
+    public async Task VerifyStreamAsync_NonIntegralOrOutOfRangeVersion_ReportsVersionGap(BsonValue version)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendStreamAsync(context);
+
+        // The last event keeps its position in version order, so the verifier has to read the tampered value.
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3),
+            Builders<BsonDocument>.Update.Set("Version", version));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.VersionGap));
     }
 
     [Test]
