@@ -3,8 +3,8 @@
 > Issue: [#164](https://github.com/chA0s-Chris/Chaos.Mongo/issues/164)
 
 Compares the implementation with [`0164-0-event-store-separate-stream-position.md`](0164-0-event-store-separate-stream-position.md).
-No follow-up plans exist. Every acceptance criterion of the plan is met; the deviations below concern how
-individual Technical Details were realized.
+No follow-up plans exist. Every acceptance criterion of the plan is met. Most deviations below concern how
+individual Technical Details were realized; one also led to a correction of a Layer 1 acceptance criterion.
 
 ## Layer 1: Model and append semantics
 
@@ -73,6 +73,17 @@ individual Technical Details were realized.
 - **Why:** `LookupClassMap` freezes the class map during registration. The serialization setup deliberately avoids
   freezing consumer class maps. The registered class map yields the same discriminator, including one a consumer set
   on their own class map.
+
+### Replay exclusion
+
+- **Planned:** Layer 1 skips observational events in memory during replay, and Layer 2 "moves the skip
+  server-side".
+- **Implemented:** The server-side discriminator filter is the primary exclusion, so registered observational events
+  are neither transferred nor executed. `MongoAggregateRepository` keeps the in-memory
+  `is ObservationalEvent<TAggregate>` guard as a backstop.
+- **Why:** The filter is derived from the discriminators collected by `RegisterClassMaps`. A repository whose options
+  never went through it, for example one built without `WithEventStore`, has no observational discriminators, so the
+  filter excludes nothing. The guard keeps replay correct in that case.
 
 ### Versions after a failed store-assigned append
 

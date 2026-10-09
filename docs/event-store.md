@@ -357,6 +357,9 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
 - **`Collection`**: Direct access to the MongoDB collection for advanced queries. Queries through it bypass the
   [legacy revision normalization](#documents-written-before-revisions).
 
+> **Breaking change:** `IAggregateRepository<TAggregate>` gained `GetAtRevisionAsync`. Custom implementations,
+> including hand-written test doubles, must implement it.
+
 ## Configuration
 
 ### Registering an Event Store
