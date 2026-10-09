@@ -79,6 +79,7 @@ public class BatchMetadataIntegrationTests
         Int64[] expectedMetadata = existingStream ? [0, 1, 2] : [0, 1];
         aggregate.VersionsSeen.Should().Equal(expectedMetadata);
         aggregate.RevisionsSeen.Should().Equal(expectedMetadata);
+        aggregate.EventRevisionsSeen.Should().Equal(expectedMetadata.Select(revision => revision + 1));
         aggregate.Version.Should().Be(firstVersion + 1);
         aggregate.Revision.Should().Be(firstVersion + 1);
         (await _aggregateRepository.GetAsync(aggregateId)).Should().BeEquivalentTo(aggregate, options => options.Excluding(a => a.CreatedUtc));
@@ -134,6 +135,7 @@ public class BatchMetadataIntegrationTests
 
 public class BatchMetadataAggregate : Aggregate
 {
+    public List<Int64> EventRevisionsSeen { get; set; } = [];
     public Int32 OverwritesApplied { get; set; }
     public List<Int64> RevisionsSeen { get; set; } = [];
     public List<Int64> VersionsSeen { get; set; } = [];
@@ -145,6 +147,7 @@ public class BatchMetadataRecordedEvent : Event<BatchMetadataAggregate>
     {
         aggregate.VersionsSeen.Add(aggregate.Version);
         aggregate.RevisionsSeen.Add(aggregate.Revision);
+        aggregate.EventRevisionsSeen.Add(Revision);
     }
 }
 

@@ -37,12 +37,12 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     internal Func<CancellationToken, Task>? AfterStreamHeadRead { get; set; }
 
     /// <summary>
-    /// Applies the events to the aggregate in order and assigns each event the revision after it. A
-    /// state-changing event increments the revision and moves the aggregate's version to its position; an
-    /// observational event records the revision it observed and changes neither. The event store owns both
-    /// values: they are captured before and assigned after each event, so whatever an <c>Execute</c>
-    /// implementation writes to them, for example an object mapper copying same-named event members, is
-    /// overwritten.
+    /// Applies the events to the aggregate in order. A state-changing event increments the revision and moves
+    /// the aggregate's version to its position; an observational event records the revision it observed and
+    /// changes neither. Each event's revision is assigned before its <c>Execute</c> runs, so the value is the
+    /// same on every attempt of a retried append. The event store owns the aggregate's version and revision:
+    /// they are assigned after each event, so whatever an <c>Execute</c> implementation writes to them, for
+    /// example an object mapper copying same-named event members, is overwritten.
     /// </summary>
     private static void ApplyEvents(List<Event<TAggregate>> eventList, TAggregate aggregate)
     {
@@ -61,19 +61,18 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                         $"The observational event at version {@event.Version} of aggregate '{@event.AggregateId}' " +
                         "requires a preceding state-changing event.");
                 }
-
-                @event.Execute(aggregate);
             }
             else
             {
-                @event.Execute(aggregate);
                 revision++;
                 version = @event.Version;
             }
 
+            @event.Revision = revision;
+            @event.Execute(aggregate);
+
             aggregate.Revision = revision;
             aggregate.Version = version;
-            @event.Revision = revision;
         }
     }
 

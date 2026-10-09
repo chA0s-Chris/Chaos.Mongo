@@ -37,7 +37,8 @@ public abstract class Event<TAggregate> where TAggregate : class, IAggregate, ne
     /// <summary>
     /// Gets or sets the aggregate revision after this event: the number of state-changing events up to and
     /// including this one. An <see cref="ObservationalEvent{TAggregate}"/> records the revision it observed.
-    /// Set automatically by the event store on append; caller-supplied values are overwritten.
+    /// Set automatically by the event store on append, before <see cref="Execute"/> runs; caller-supplied values
+    /// are overwritten.
     /// </summary>
     public Int64 Revision { get; set; }
 
