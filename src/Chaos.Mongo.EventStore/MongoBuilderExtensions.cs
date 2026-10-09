@@ -38,6 +38,12 @@ public static class MongoBuilderExtensions
         var options = esBuilder.Options;
         ValidateIntegrityOptions(options);
 
+        if (options.MaxAppendRetries < 0)
+        {
+            throw new InvalidOperationException(
+                $"The maximum number of append retries for aggregate type {typeof(TAggregate).Name} must not be negative.");
+        }
+
         if (options.EventTypes.Count == 0)
         {
             throw new InvalidOperationException(

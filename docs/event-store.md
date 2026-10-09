@@ -23,6 +23,10 @@ Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
   - [Appending Events](#appending-events)
   - [Reading Events](#reading-events)
 - [Concurrency and Idempotency](#concurrency-and-idempotency)
+  - [Store-Assigned Versions](#store-assigned-versions)
+  - [Optimistic Concurrency](#optimistic-concurrency)
+  - [Idempotency](#idempotency)
+- [Reconstructing Past States](#reconstructing-past-states)
 - [Transactional Outbox Pattern](#transactional-outbox-pattern)
 - [Benchmarking Bulk Writes](#benchmarking-bulk-writes)
 - [Architecture Decision: Bulk-Write Scope](#architecture-decision-bulk-write-scope)
@@ -42,7 +46,8 @@ dotnet add package Chaos.Mongo.EventStore
 - **Event Storage**: Append-only event streams per aggregate with automatic versioning
 - **Observational Events**: Events that document something about an aggregate, such as a read access, without changing it
 - **Read Models**: Automatically maintained read models updated within the same transaction as events
-- **Concurrency Control**: Optimistic concurrency via unique compound index on `(AggregateId, Version)`
+- **Concurrency Control**: Store-assigned positions with revision-based concurrency checks, or explicit positions
+  protected by the unique compound index on `(AggregateId, Version)`
 - **Idempotency**: Duplicate event detection via unique event IDs
 - **Checkpoints**: Optional periodic snapshots to speed up aggregate reconstruction
 - **Transactional Callbacks**: Execute additional operations (e.g., outbox messages) within the same transaction
@@ -259,8 +264,8 @@ advance faster than revisions:
 > The store owns both values: anything an `Execute` or `Validate` implementation assigns to them is overwritten.
 
 `AppendEventsAsync` validates positions against the stream head — the highest position in the events collection,
-including observational events — rather than against the read model. Use `GetExpectedNextVersionAsync` to obtain the
-next position.
+including observational events — rather than against the read model. Leave `Version` at `0` to let the event store
+assign positions, or use `GetExpectedNextVersionAsync` to obtain the next position yourself.
 
 ### Observational Events
 
@@ -295,8 +300,8 @@ Appending observational events:
 **First-event rule:** an observational event must observe an existing aggregate. If no state-changing event precedes it
 in the stream or earlier in the same batch, the append fails with `MongoEventValidationException` and persists nothing.
 
-`GetAtVersionAsync` skips observational events during replay, so the reconstructed aggregate's `Version` and `Revision`
-are those of the last state-changing event at or below the requested position.
+Reconstruction excludes observational events on the server, so they are neither transferred nor replayed; see
+[Reconstructing Past States](#reconstructing-past-states).
 
 ### Event Store
 
@@ -309,6 +314,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 
     Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
+        long? expectedRevision = null,
         Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken ct = default);
 
@@ -321,7 +327,11 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 ```
 
 - **`GetExpectedNextVersionAsync`**: Returns the next expected position for an aggregate (highest existing position + 1, or 1 if new)
-- **`AppendEventsAsync`**: Validates and persists events within a transaction, returns the updated aggregate as a commit-time snapshot
+- **`AppendEventsAsync`**: Validates and persists events within a transaction, returns the updated aggregate as a commit-time snapshot.
+  Leave `Version` at `0` to let the store assign positions; see [Concurrency and Idempotency](#concurrency-and-idempotency)
+
+> **Breaking change:** `expectedRevision` was inserted as the second parameter of `AppendEventsAsync`. Callers that
+> passed `onBeforeCommit` positionally must pass it by name (`onBeforeCommit: ...`) or supply `expectedRevision` first.
 - **`GetEventStream`**: Returns events for an aggregate, optionally bounded by version range
 
 ### Aggregate Repository
@@ -335,12 +345,15 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
 
     Task<TAggregate?> GetAtVersionAsync(Guid aggregateId, long version, CancellationToken ct = default);
 
+    Task<TAggregate?> GetAtRevisionAsync(Guid aggregateId, long revision, CancellationToken ct = default);
+
     IMongoCollection<TAggregate> Collection { get; }
 }
 ```
 
 - **`GetAsync`**: Returns the current read model (updated on each `AppendEventsAsync`)
 - **`GetAtVersionAsync`**: Reconstructs aggregate state at a specific stream position (uses checkpoints if available and skips observational events)
+- **`GetAtRevisionAsync`**: Reconstructs aggregate state at a specific revision; see [Reconstructing Past States](#reconstructing-past-states)
 - **`Collection`**: Direct access to the MongoDB collection for advanced queries. Queries through it bypass the
   [legacy revision normalization](#documents-written-before-revisions).
 
@@ -367,6 +380,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 | `WithCollectionPrefix(string prefix)`           | Sets collection name prefix                            | Aggregate type name |
 | `WithCheckpoints(int interval)`                 | Enables checkpoints at specified interval              | Disabled            |
 | `WithBulkWriteOptimization()`                   | Opts into the MongoDB 8+ client bulk-write append path | Disabled            |
+| `WithMaxAppendRetries(int retries)`             | Additional attempts of a store-assigned append that conflicts with concurrent writers | 3 |
 | `WithEventsCollectionSuffix(string suffix)`     | Sets events collection suffix                          | `_Events`           |
 | `WithCheckpointCollectionSuffix(string suffix)` | Sets checkpoint collection suffix                      | `_Checkpoints`      |
 
@@ -452,8 +466,10 @@ When enabled:
 - Each checkpoint snapshots the state after the batch. It is keyed by the aggregate ID and the stream position of the
   last state-changing event (`_id.Version`) and stores the aggregate revision in `Revision`. Checkpoints therefore no
   longer sit on exact multiples of N.
-- `GetAtVersionAsync` loads the nearest checkpoint at or below the target position and replays the remaining
-  state-changing events
+- `GetAtVersionAsync` and `GetAtRevisionAsync` load the nearest checkpoint at or below the target and replay the
+  remaining state-changing events
+- The configurators create indexes on `(_id.AggregateId, _id.Version)` and `(_id.AggregateId, Revision)` that serve
+  both nearest-checkpoint lookups
 - Checkpoints are stored in a separate collection (e.g., `Orders_Checkpoints`)
 
 ### Collections Created
@@ -502,6 +518,19 @@ public override void Execute(OrderAggregate aggregate)
 ```
 
 ### Appending Events
+
+The simplest way is to leave `Version` unset and let the event store assign the positions:
+
+```csharp
+public async Task<OrderAggregate> ShipOrderAsync(Guid orderId, long revisionShownToUser)
+{
+    return await _eventStore.AppendEventsAsync(
+        [new OrderShippedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId }],
+        expectedRevision: revisionShownToUser);
+}
+```
+
+Alternatively, set explicit positions:
 
 ```csharp
 public async Task<OrderAggregate> ShipOrderAsync(Guid orderId)
@@ -558,9 +587,42 @@ await foreach (var evt in _eventStore.GetEventStream(aggregateId, fromVersion: 5
 
 ## Concurrency and Idempotency
 
+An append runs in one of two modes, chosen by the events' `Version`: either all versions are `0` (store-assigned) or
+all are set explicitly. A batch that mixes both throws `ArgumentException`.
+
+In both modes, `expectedRevision` states the aggregate revision the caller prepared the events against. When it is
+supplied and differs from the aggregate's current revision, the append throws `MongoConcurrencyException` before
+anything is executed or persisted. Because observational events do not change the revision, an `expectedRevision`
+check is not disturbed by concurrent read-access logging.
+
+### Store-Assigned Versions
+
+When every event's `Version` is `0`, the event store assigns sequential positions after the stream head and writes them
+back to the events. If another writer commits to the same stream concurrently — either a position is taken before the
+transaction commits, or a state change is committed between reading the stream head and the read model — the append:
+
+1. reloads the stream head and the read model and waits for a consistent pair,
+2. re-checks `expectedRevision` against the fresh state,
+3. executes the events again against the fresh aggregate, and
+4. retries the transaction.
+
+Both kinds of conflict share one bound on the additional attempts after the first, configured with
+`WithMaxAppendRetries(int)` (default 3; `0` disables retries). When the bound is exhausted, the append throws
+`MongoConcurrencyException` naming the bound, and the events' versions are reset to `0` so the same instances can be
+appended again.
+
+Consequences:
+
+- `Execute` must be deterministic — it already has to be for in-memory validation, and it may now run once per attempt.
+- `onBeforeCommit` runs again on retry. The effects of an earlier attempt were rolled back with its aborted transaction.
+- Observational appends and state-changing appends with a matching `expectedRevision` succeed despite concurrently
+  interleaved writes; only a changed revision fails the append.
+- A duplicate event `Id` is an idempotency conflict, never retried, and surfaces as `MongoDuplicateEventException`.
+
 ### Optimistic Concurrency
 
-The event store detects concurrent writes in two places, and both report `MongoConcurrencyException`:
+With explicit versions, appends are never retried. The event store detects concurrent writes in two places, and both
+report `MongoConcurrencyException`:
 
 1. Process A reads aggregate at version 5, prepares event with version 6
 2. Process B reads aggregate at version 5, prepares event with version 6
@@ -573,15 +635,17 @@ Whether Process B fails before or inside its transaction depends on timing, not 
 - **Inside the transaction** — Process B passed that check before Process A committed, and the unique compound index on `(AggregateId, Version)` rejects the insert.
 
 Positions are compared with the stream head, which includes observational events, so an observational event that
-takes position 6 conflicts with a state-changing event prepared for position 6 just the same.
-
-Before executing the events, the append also checks that the read model's revision matches the revision of the stream
-head. The head is read first, so a mismatch means another writer committed a state change in between; the append fails
-with `MongoConcurrencyException` without persisting anything instead of executing against state it did not validate.
+takes position 6 conflicts with a state-changing event prepared for position 6 just the same. The head is read before
+the read model, so a read model whose revision differs from the head's means another writer committed a state change in
+between; the append fails with `MongoConcurrencyException` without persisting anything instead of executing against
+state it did not validate.
 
 A version *above* the stream head + 1 is a gap in the caller's own numbering rather than a conflict, so it throws `ArgumentException` and must not be retried. Resubmitting an event that is already stored throws `MongoDuplicateEventException`, whichever path detects it.
 
-**Handling Concurrency Conflicts:**
+Before executing the events, the append also checks that the read model's revision matches the revision of the stream
+head (see above). For explicit versions, a mismatch fails the append; store-assigned appends reload and retry instead.
+
+**Handling Concurrency Conflicts with Explicit Versions:**
 
 ```csharp
 public async Task UpdateWithRetryAsync(Guid aggregateId, Action<OrderAggregate> update)
@@ -627,6 +691,42 @@ catch (MongoDuplicateEventException)
 }
 ```
 
+## Reconstructing Past States
+
+`IAggregateRepository<TAggregate>` reconstructs historical states by replaying events:
+
+```csharp
+// The state after the 3rd state-changing event, regardless of how many observational events surround it
+var atRevision = await _repository.GetAtRevisionAsync(orderId, revision: 3);
+
+// The state as of stream position 10: everything at or below it
+var atPosition = await _repository.GetAtVersionAsync(orderId, version: 10);
+```
+
+Both methods load the nearest checkpoint at or below the target — by `_id.Version` for positions, by `Revision` for
+revisions — and replay only the state-changing events after it. Observational events are excluded on the server by the
+concrete discriminator of each registered observational type, so they are neither transferred nor executed. The
+discriminator of an unregistered type is not excluded, so an unknown event type, even one deriving from a registered
+observational type, still fails during deserialization.
+
+**Replay cost:** checkpoints are triggered by revisions, not positions. Many observational events between two
+checkpoints therefore do not cause a new checkpoint, and reconstruction reads past them (the server skips them, but
+still scans their index entries). If read-access logging produces long runs of observational events, choose the
+checkpoint interval accordingly.
+
+**Checkpoints created before revisions existed** lack the `Revision` element. The position-based lookup of
+`GetAtVersionAsync` still uses them, but `GetAtRevisionAsync` cannot match them and replays from an earlier checkpoint or
+from the beginning instead. The result is correct either way; to restore the shortcut, backfill the element once:
+
+```javascript
+db.Orders_Checkpoints.updateMany(
+  { Revision: { $exists: false } },
+  [ { $set: { Revision: "$_id.Version" } } ])
+```
+
+Checkpoints are a derived cache, so dropping the checkpoint collection is an alternative; new checkpoints are written as
+appends cross the interval.
+
 ## Documents Written Before Revisions
 
 Events, read models and checkpoints stored before `Revision` existed lack the element and would deserialize with
@@ -669,11 +769,11 @@ Register the outbox separately via `WithOutbox(...)` and inject `IOutbox` into t
 
 | Exception                       | Cause                                                                                                  | Recommended Action                    |
 |---------------------------------|--------------------------------------------------------------------------------------------------------|---------------------------------------|
-| `MongoConcurrencyException`     | The event's version was already committed for this aggregate, or a state change was committed concurrently | Reload aggregate and retry            |
+| `MongoConcurrencyException`     | `expectedRevision` does not match; with explicit versions, a concurrent commit; with store-assigned versions, conflicts beyond the retry bound | Reload aggregate and retry            |
 | `MongoDuplicateEventException`  | Event with same ID already exists                                                                      | Safe to ignore (idempotent)           |
 | `MongoEventValidationException` | Event preconditions not met, or an observational event has no preceding state-changing event          | Fix the event data or aggregate state |
 | `MongoEventStoreException`      | The stream contains events but the aggregate's read model is missing                                   | Restore or rebuild the read model     |
-| `ArgumentException`             | Invalid input (empty events, mixed aggregates, versions below 1, version gaps, non-sequential batches) | Fix caller code                       |
+| `ArgumentException`             | Invalid input (empty events, mixed aggregates, mixed unset and explicit versions, versions below 1, version gaps, non-sequential batches) | Fix caller code                       |
 
 ```csharp
 try
@@ -727,6 +827,9 @@ catch (MongoEventValidationException ex)
 
 ### Concurrency
 
-- **Handle `MongoConcurrencyException`**: Implement retry logic for concurrent updates
+- **Prefer store-assigned versions with `expectedRevision`**: The event store retries position races itself, and
+  observational events appended concurrently do not cause conflicts
+- **Handle `MongoConcurrencyException`**: Reload the aggregate when its revision changed, and implement retry logic for
+  explicit versions
 - **Use idempotent event IDs**: Generate event IDs deterministically when possible for safe retries
 - **Keep transactions short**: The event store validates outside the transaction to minimize lock time

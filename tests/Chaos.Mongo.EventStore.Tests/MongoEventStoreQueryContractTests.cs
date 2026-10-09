@@ -14,16 +14,94 @@ using System.Reflection;
 
 public class MongoEventStoreQueryContractTests
 {
+    /// <summary>
+    /// Gets the expected exclusion of observational events: the concrete discriminator is the last element of a
+    /// hierarchical discriminator array, or the scalar discriminator itself.
+    /// </summary>
+    private static BsonDocument ObservationalEventExclusion
+        => new(
+            "$not",
+            new BsonArray
+            {
+                new BsonDocument(
+                    "$in",
+                    new BsonArray
+                    {
+                        new BsonDocument(
+                            "$cond",
+                            new BsonArray
+                            {
+                                new BsonDocument("$isArray", "$_t"),
+                                new BsonDocument("$arrayElemAt", new BsonArray
+                                {
+                                    "$_t",
+                                    -1
+                                }),
+                                "$_t"
+                            }),
+                        new BsonArray
+                        {
+                            "OrderViewed"
+                        }
+                    })
+            });
+
+    [Test]
+    public async Task GetAtRevisionAsync_WhenCheckpointingEnabled_QueriesRevisionCheckpointThenRevisionBoundedEvents()
+    {
+        // Arrange
+        var aggregateId = Guid.NewGuid();
+        var options = CreateOptionsWithObservationalEvent();
+        var checkpoint = new CheckpointDocument<OrderAggregate>
+        {
+            Id = new CheckpointId(aggregateId, 4),
+            Revision = 3,
+            State = new OrderAggregate
+            {
+                Id = aggregateId,
+                CreatedUtc = DateTime.UtcNow,
+                Status = "Shipped",
+                Version = 4,
+                Revision = 3
+            }
+        };
+
+        var (checkpointCollection, checkpointQueryCapture) =
+            CapturingMongoCollectionProxy<CheckpointDocument<OrderAggregate>>.Create(CreateCursor(checkpoint));
+        var (eventsCollection, eventQueryCapture) =
+            CapturingMongoCollectionProxy<Event<OrderAggregate>>.Create(CreateCursor<Event<OrderAggregate>>());
+
+        var sut = CreateAggregateRepository(options, checkpointCollection, eventsCollection);
+
+        // Act
+        var aggregate = await sut.GetAtRevisionAsync(aggregateId, 5);
+
+        // Assert
+        aggregate.Should().NotBeNull();
+        aggregate.Version.Should().Be(4);
+        aggregate.Revision.Should().Be(3);
+
+        var renderedCheckpointFilter = Render(checkpointQueryCapture.CapturedFilter!);
+        ContainsEquality(renderedCheckpointFilter, "_id.AggregateId", CreateGuidValue(aggregateId)).Should().BeTrue();
+        ContainsComparison(renderedCheckpointFilter, nameof(CheckpointDocument<>.Revision), "$lte", new BsonInt64(5)).Should().BeTrue();
+        Render(checkpointQueryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(CheckpointDocument<>.Revision), -1));
+
+        var renderedEventFilter = Render(eventQueryCapture.CapturedFilter!);
+        ContainsEquality(renderedEventFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
+        ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(5)).Should().BeTrue();
+        ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Revision), "$lte", new BsonInt64(5)).Should().BeTrue();
+        ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Revision), "$exists", BsonBoolean.False).Should().BeTrue();
+        ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(5)).Should().BeTrue();
+        ContainsEquality(renderedEventFilter, "$expr", ObservationalEventExclusion).Should().BeTrue();
+        Render(eventQueryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+    }
+
     [Test]
     public async Task GetAtVersionAsync_WhenCheckpointingEnabled_QueriesLatestCheckpointThenRemainingEvents()
     {
         // Arrange
         var aggregateId = Guid.NewGuid();
-        var options = new MongoEventStoreOptions<OrderAggregate>
-        {
-            CollectionPrefix = "Orders",
-            CheckpointInterval = 3
-        };
+        var options = CreateOptionsWithObservationalEvent();
         var checkpoint = new CheckpointDocument<OrderAggregate>
         {
             Id = new CheckpointId(aggregateId, 3),
@@ -64,7 +142,31 @@ public class MongoEventStoreQueryContractTests
         ContainsEquality(renderedEventFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(4)).Should().BeTrue();
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(7)).Should().BeTrue();
+        ContainsEquality(renderedEventFilter, "$expr", ObservationalEventExclusion).Should().BeTrue();
         Render(eventQueryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+    }
+
+    [Test]
+    public async Task GetAtVersionAsync_WithoutObservationalEventTypes_DoesNotFilterDiscriminators()
+    {
+        // Arrange
+        var options = new MongoEventStoreOptions<OrderAggregate>
+        {
+            CollectionPrefix = "Orders"
+        };
+        var (checkpointCollection, _) =
+            CapturingMongoCollectionProxy<CheckpointDocument<OrderAggregate>>.Create(CreateCursor<CheckpointDocument<OrderAggregate>>());
+        var (eventsCollection, eventQueryCapture) =
+            CapturingMongoCollectionProxy<Event<OrderAggregate>>.Create(CreateCursor<Event<OrderAggregate>>());
+
+        var sut = CreateAggregateRepository(options, checkpointCollection, eventsCollection);
+
+        // Act
+        var aggregate = await sut.GetAtVersionAsync(Guid.NewGuid(), 7);
+
+        // Assert
+        aggregate.Should().BeNull();
+        ContainsField(Render(eventQueryCapture.CapturedFilter!), "$expr").Should().BeFalse();
     }
 
     [Test]
@@ -157,6 +259,14 @@ public class MongoEventStoreQueryContractTests
             _ => false
         };
 
+    private static Boolean ContainsField(BsonValue value, String field)
+        => value switch
+        {
+            BsonDocument document => document.Contains(field) || document.Elements.Any(element => ContainsField(element.Value, field)),
+            BsonArray array => array.Any(item => ContainsField(item, field)),
+            _ => false
+        };
+
     private static MongoAggregateRepository<OrderAggregate> CreateAggregateRepository(
         MongoEventStoreOptions<OrderAggregate> options,
         IMongoCollection<CheckpointDocument<OrderAggregate>> checkpointCollection,
@@ -224,6 +334,17 @@ public class MongoEventStoreQueryContractTests
 
     private static BsonBinaryData CreateGuidValue(Guid value)
         => new(value, GuidRepresentation.Standard);
+
+    private static MongoEventStoreOptions<OrderAggregate> CreateOptionsWithObservationalEvent()
+    {
+        var options = new MongoEventStoreOptions<OrderAggregate>
+        {
+            CollectionPrefix = "Orders",
+            CheckpointInterval = 3
+        };
+        options.EventTypes[typeof(OrderViewedEvent)] = "OrderViewed";
+        return options;
+    }
 
     private static BsonDocument Render(FilterDefinition<Event<OrderAggregate>> filter)
     {

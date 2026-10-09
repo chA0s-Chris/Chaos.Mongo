@@ -117,6 +117,13 @@ public static class MongoEventStoreSerializationSetup
             BsonClassMap.RegisterClassMap(classMap);
         }
 
+        // Derive the replay filter from the registered class maps rather than from EventTypes, because class
+        // maps registered by consumers keep their own discriminators.
+        options.ObservationalEventDiscriminators = options.EventTypes.Keys
+                                                          .Where(t => typeof(ObservationalEvent<TAggregate>).IsAssignableFrom(t))
+                                                          .Select(t => GetRegisteredClassMap(t).Discriminator)
+                                                          .ToList();
+
         // Register CheckpointId
         if (!BsonClassMap.IsClassMapRegistered(typeof(CheckpointId)))
         {

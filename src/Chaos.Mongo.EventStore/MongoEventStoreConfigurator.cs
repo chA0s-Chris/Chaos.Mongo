@@ -7,7 +7,8 @@ using MongoDB.Driver;
 
 /// <summary>
 /// Configurator that creates the unique compound index on <c>(AggregateId, Version)</c>
-/// in the events collection for a specific aggregate type.
+/// in the events collection for a specific aggregate type, and the nearest-checkpoint lookup indexes
+/// in the checkpoint collection when checkpoints are enabled.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 public sealed class MongoEventStoreConfigurator<TAggregate> : IMongoConfigurator
@@ -35,5 +36,31 @@ public sealed class MongoEventStoreConfigurator<TAggregate> : IMongoConfigurator
             });
 
         await eventsCollection.Indexes.CreateOneOrUpdateAsync(indexModel, cancellationToken: cancellationToken);
+
+        if (!_options.CheckpointsEnabled)
+        {
+            return;
+        }
+
+        var checkpointCollection = helper.Database.GetCollection<CheckpointDocument<TAggregate>>(_options.CheckpointCollectionName);
+        var checkpointKeys = Builders<CheckpointDocument<TAggregate>>.IndexKeys;
+
+        await checkpointCollection.Indexes.CreateOneOrUpdateAsync(
+            new CreateIndexModel<CheckpointDocument<TAggregate>>(
+                checkpointKeys.Ascending(c => c.Id.AggregateId).Descending(c => c.Id.Version),
+                new CreateIndexOptions
+                {
+                    Name = IndexNames.CheckpointAggregateIdWithVersion
+                }),
+            cancellationToken: cancellationToken);
+
+        await checkpointCollection.Indexes.CreateOneOrUpdateAsync(
+            new CreateIndexModel<CheckpointDocument<TAggregate>>(
+                checkpointKeys.Ascending(c => c.Id.AggregateId).Descending(c => c.Revision),
+                new CreateIndexOptions
+                {
+                    Name = IndexNames.CheckpointAggregateIdWithRevision
+                }),
+            cancellationToken: cancellationToken);
     }
 }

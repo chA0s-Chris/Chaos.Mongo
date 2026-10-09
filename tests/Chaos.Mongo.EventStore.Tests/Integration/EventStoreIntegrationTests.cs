@@ -518,7 +518,7 @@ public class EventStoreIntegrationTests
             {
                 Id = Guid.NewGuid(),
                 AggregateId = aggregateId,
-                Version = 0,
+                Version = -1,
                 CustomerName = "Lena",
                 TotalAmount = 10.00m
             }
@@ -577,7 +577,7 @@ public class EventStoreIntegrationTests
                     TotalAmount = 50.00m
                 }
             ],
-            (_, _, _, _) => throw new InvalidOperationException("Callback failure"));
+            onBeforeCommit: (_, _, _, _) => throw new InvalidOperationException("Callback failure"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
                  .WithMessage("Callback failure");
@@ -612,7 +612,7 @@ public class EventStoreIntegrationTests
                     TotalAmount = 50.00m
                 }
             ],
-            async (session, _, _, ct) =>
+            onBeforeCommit: async (session, _, _, ct) =>
             {
                 var message = new OutboxMessage
                 {

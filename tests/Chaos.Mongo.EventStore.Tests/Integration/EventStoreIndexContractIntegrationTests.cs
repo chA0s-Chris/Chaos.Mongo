@@ -15,6 +15,38 @@ public class EventStoreIndexContractIntegrationTests
     private MongoDbContainer _container;
 
     [Test]
+    public async Task ConfigureAsync_CreatesNearestCheckpointLookupIndexes()
+    {
+        // Arrange
+        var databaseName = $"EventStoreIndexContract_{Guid.NewGuid():N}";
+        await using var serviceProvider = CreateServiceProvider(databaseName);
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var checkpointCollection = helper.Database.GetCollection<BsonDocument>("Orders_Checkpoints");
+
+        // Act
+        foreach (var configurator in serviceProvider.GetServices<IMongoConfigurator>())
+        {
+            await configurator.ConfigureAsync(helper);
+        }
+
+        var indexes = await (await checkpointCollection.Indexes.ListAsync()).ToListAsync();
+
+        // Assert
+        indexes.Single(x => x["name"] == IndexNames.CheckpointAggregateIdWithVersion)["key"]
+               .AsBsonDocument.Should().BeEquivalentTo(new BsonDocument
+               {
+                   { "_id.AggregateId", 1 },
+                   { "_id.Version", -1 }
+               });
+        indexes.Single(x => x["name"] == IndexNames.CheckpointAggregateIdWithRevision)["key"]
+               .AsBsonDocument.Should().BeEquivalentTo(new BsonDocument
+               {
+                   { "_id.AggregateId", 1 },
+                   { nameof(CheckpointDocument<>.Revision), -1 }
+               });
+    }
+
+    [Test]
     public async Task ConfigureAsync_CreatesUniqueAggregateVersionIndex()
     {
         // Arrange
@@ -41,11 +73,30 @@ public class EventStoreIndexContractIntegrationTests
         aggregateVersionIndex["unique"].AsBoolean.Should().BeTrue();
     }
 
+    [Test]
+    public async Task ConfigureAsync_WithoutCheckpoints_CreatesNoCheckpointCollection()
+    {
+        // Arrange
+        var databaseName = $"EventStoreIndexContract_{Guid.NewGuid():N}";
+        await using var serviceProvider = CreateServiceProvider(databaseName, 0);
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+
+        // Act
+        foreach (var configurator in serviceProvider.GetServices<IMongoConfigurator>())
+        {
+            await configurator.ConfigureAsync(helper);
+        }
+
+        // Assert
+        var collectionNames = await (await helper.Database.ListCollectionNamesAsync()).ToListAsync();
+        collectionNames.Should().NotContain("Orders_Checkpoints");
+    }
+
     [OneTimeSetUp]
     public async Task GetMongoDbContainer()
         => _container = await MongoDbTestContainer.StartContainerAsync();
 
-    private ServiceProvider CreateServiceProvider(String databaseName)
+    private ServiceProvider CreateServiceProvider(String databaseName, Int32 checkpointInterval = 3)
     {
         var url = MongoUrl.Create(_container.GetConnectionString());
         return new ServiceCollection()
@@ -54,12 +105,18 @@ public class EventStoreIndexContractIntegrationTests
                    options.DefaultDatabase = databaseName;
                    options.RunConfiguratorsOnStartup = false;
                })
-               .WithEventStore<OrderAggregate>(es => es
-                                                     .WithEvent<OrderCreatedEvent>("OrderCreated")
-                                                     .WithEvent<OrderShippedEvent>("OrderShipped")
-                                                     .WithEvent<OrderCompletedEvent>("OrderCompleted")
-                                                     .WithCollectionPrefix("Orders")
-                                                     .WithCheckpoints(3))
+               .WithEventStore<OrderAggregate>(es =>
+               {
+                   es.WithEvent<OrderCreatedEvent>("OrderCreated")
+                     .WithEvent<OrderShippedEvent>("OrderShipped")
+                     .WithEvent<OrderCompletedEvent>("OrderCompleted")
+                     .WithCollectionPrefix("Orders");
+
+                   if (checkpointInterval > 0)
+                   {
+                       es.WithCheckpoints(checkpointInterval);
+                   }
+               })
                .Services
                .BuildServiceProvider();
     }

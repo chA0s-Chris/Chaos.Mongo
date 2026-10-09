@@ -25,6 +25,22 @@ public class MongoBuilderExtensionsTests
     }
 
     [Test]
+    public void WithEventStore_NegativeMaxAppendRetries_ThrowsInvalidOperationException()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        var act = () => builder.WithEventStore<TestAggregate>(es =>
+        {
+            es.WithEvent<TestCreatedEvent>();
+            es.Options.MaxAppendRetries = -1;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*append retries*TestAggregate*must not be negative*");
+    }
+
+    [Test]
     public void WithEventStore_NoEventTypesRegistered_ThrowsInvalidOperationException()
     {
         var services = new ServiceCollection();

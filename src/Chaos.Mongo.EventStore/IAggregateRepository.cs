@@ -32,12 +32,28 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
     Task<TAggregate?> GetAsync(Guid aggregateId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reconstructs the aggregate state at a specific revision.
+    /// </summary>
+    /// <remarks>
+    /// Uses checkpoints if available (loads the nearest checkpoint whose revision is ≤ the target, then replays
+    /// the remaining state-changing events). Observational events are excluded on the server and never replayed.
+    /// Checkpoints stored before revisions existed lack the revision and are not used until they are backfilled.
+    /// Returns <c>null</c> if the aggregate doesn't exist or has no events up to that revision.
+    /// </remarks>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="revision">The target revision to reconstruct.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The aggregate state at the specified revision, or <c>null</c>.</returns>
+    Task<TAggregate?> GetAtRevisionAsync(Guid aggregateId, Int64 revision, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reconstructs the aggregate state at a specific stream position.
     /// </summary>
     /// <remarks>
     /// Uses checkpoints if available (loads nearest checkpoint ≤ target version, then replays remaining events).
-    /// Observational events are skipped, so the returned aggregate's <see cref="IAggregate.Version"/> and
-    /// <see cref="IAggregate.Revision"/> are those of the last state-changing event at or below the target.
+    /// Observational events are excluded on the server and never replayed, so the returned aggregate's
+    /// <see cref="IAggregate.Version"/> and <see cref="IAggregate.Revision"/> are those of the last state-changing
+    /// event at or below the target.
     /// Returns <c>null</c> if the aggregate doesn't exist or has no events up to that version.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>

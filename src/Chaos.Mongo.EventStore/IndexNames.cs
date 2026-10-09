@@ -13,4 +13,16 @@ public static class IndexNames
     /// preventing concurrency conflicts.
     /// </summary>
     public const String AggregateIdWithVersionUnique = "AggregateId_with_Version_Unique";
+
+    /// <summary>
+    /// The name of the compound index on <c>(_id.AggregateId, Revision descending)</c> in the checkpoint collection,
+    /// which serves the revision-based nearest-checkpoint lookup.
+    /// </summary>
+    public const String CheckpointAggregateIdWithRevision = "Checkpoint_AggregateId_with_Revision";
+
+    /// <summary>
+    /// The name of the compound index on <c>(_id.AggregateId, _id.Version descending)</c> in the checkpoint
+    /// collection, which serves the position-based nearest-checkpoint lookup.
+    /// </summary>
+    public const String CheckpointAggregateIdWithVersion = "Checkpoint_AggregateId_with_Version";
 }

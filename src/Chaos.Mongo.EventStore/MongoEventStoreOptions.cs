@@ -60,6 +60,12 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     public String EventsCollectionSuffix { get; set; } = "_Events";
 
     /// <summary>
+    /// Gets or sets the number of additional attempts an append with store-assigned versions makes after the
+    /// first one, when another writer commits to the same stream concurrently. Defaults to 3.
+    /// </summary>
+    public Int32 MaxAppendRetries { get; set; } = 3;
+
+    /// <summary>
     /// Gets the name of the read-model collection.
     /// </summary>
     public String ReadModelCollectionName => CollectionPrefix;
@@ -80,6 +86,12 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Defaults to <c>"_IntegrityState"</c>.
     /// </summary>
     internal String IntegrityStateCollectionSuffix { get; set; } = "_IntegrityState";
+
+    /// <summary>
+    /// Gets or sets the discriminators of the registered observational event types, which reconstruction
+    /// excludes from replay. Set when the class maps are registered.
+    /// </summary>
+    internal IReadOnlyList<String> ObservationalEventDiscriminators { get; set; } = [];
 
     /// <summary>
     /// Gets or sets the maximum number of events sealed retroactively in one transaction. The append
