@@ -32,20 +32,24 @@ public class IntegrityRegistrationTests
     }
 
     [Test]
-    public void IntegritySealingStateClassMap_PinsElementNamesAndStandardGuidCursor()
+    public void IntegritySealingStateClassMap_PinsElementNamesAndStandardGuids()
     {
         new MongoBuilder(new ServiceCollection()).WithEventStore<RegistrationStateAggregate>(es => es.WithEvent<RegistrationStateEvent>());
         var cursor = Guid.NewGuid();
+        var lastSealedStream = Guid.NewGuid();
 
         var document = new IntegritySealingState
         {
-            Cursor = cursor
+            Cursor = cursor,
+            LastSealedStream = lastSealedStream
         }.ToBsonDocument();
 
         document.Names.Should().BeEquivalentTo(
-            "_id", "Cursor", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "EventsSealed");
+            "_id", "Cursor", "LastSealedStream", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "EventsSealed");
         document["Cursor"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);
         document["Cursor"].AsGuid.Should().Be(cursor);
+        document["LastSealedStream"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);
+        document["LastSealedStream"].AsGuid.Should().Be(lastSealedStream);
     }
 
     [Test]

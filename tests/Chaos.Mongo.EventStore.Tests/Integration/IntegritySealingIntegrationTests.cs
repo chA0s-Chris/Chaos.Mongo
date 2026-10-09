@@ -299,6 +299,53 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task RunPassAsync_LockLostWithinStream_KeepsCountsOfCommittedChunksAndCountsStreamOnce()
+    {
+        var timeProvider = new ClockHookTimeProvider();
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await CreateContextAsync(false, databaseName);
+        var protectedContext = await CreateContextAsync(true, databaseName, options => options.SealingChunkSize = 2, timeProvider);
+        var aggregateId = await unprotected.AppendStreamAsync(5);
+        var sweep = protectedContext.Sweep;
+        var states = protectedContext.MongoHelper.Database
+                                     .GetCollection<IntegritySealingState>(protectedContext.Options.IntegrityStateCollectionName);
+        var locks = protectedContext.MongoHelper.Database.GetCollection<BsonDocument>(Chaos.Mongo.MongoDefaults.LockCollectionName);
+        var lockStolen = false;
+        timeProvider.OnGetUtcNow = now =>
+        {
+            // The sweep reads the clock before every chunk. Once the first chunk is committed, another instance
+            // takes the lock over and the lease is due for extension, so the pass stops within the stream.
+            if (!lockStolen && states.Find(s => s.Id == IntegritySealingState.DocumentId).FirstOrDefault()?.EventsSealed > 0)
+            {
+                locks.UpdateOne(new BsonDocument("_id", sweep.LockName), Builders<BsonDocument>.Update.Set("Holder", "another-instance"));
+                lockStolen = true;
+            }
+
+            return lockStolen ? now.AddMinutes(3) : now;
+        };
+
+        var interruptedOutcome = await sweep.RunPassAsync();
+
+        interruptedOutcome.Should().Be(SealingPassOutcome.LockLost);
+        var interrupted = await sweep.GetStatusAsync();
+        interrupted.Should().NotBeNull();
+        interrupted.EventsSealed.Should().Be(2);
+        interrupted.StreamsSealed.Should().Be(1);
+
+        timeProvider.OnGetUtcNow = null;
+        await locks.DeleteOneAsync(new BsonDocument("_id", sweep.LockName));
+        var resumedOutcome = await sweep.RunPassAsync();
+
+        resumedOutcome.Should().Be(SealingPassOutcome.Completed);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
+        var status = await sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.EventsSealed.Should().Be(5);
+        status.StreamsSealed.Should().Be(1);
+        status.StreamsChecked.Should().Be(1);
+    }
+
+    [Test]
     public async Task RunPassAsync_MalformedIntegrityOnSealedPrefix_SkipsStreamAndSealsLaterStreams()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -326,6 +373,28 @@ public class IntegritySealingIntegrationTests
         var status = await protectedContext.Sweep.GetStatusAsync();
         status.Should().NotBeNull();
         status.StreamsChecked.Should().Be(3);
+    }
+
+    [Test]
+    public async Task RunPassAsync_PartiallySealedStream_ContinuesAfterSealedBoundary()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var aggregateId = await protectedContext.AppendStreamAsync(5);
+        await unprotected.Store.AppendEventsAsync(
+            Enumerable.Range(6, 4).Select(version => LedgerStoreContext.CreateEntry(aggregateId, version)));
+
+        var outcome = await protectedContext.Sweep.RunPassAsync();
+
+        outcome.Should().Be(SealingPassOutcome.Completed);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
+        LedgerStoreContext.ReadIntegrity(await protectedContext.FindEventAsync(aggregateId, 5))
+                          .SealMode.Should().Be(IntegritySealMode.Append);
+        LedgerStoreContext.ReadIntegrity(await protectedContext.FindEventAsync(aggregateId, 6))
+                          .SealMode.Should().Be(IntegritySealMode.Retroactive);
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.EventsSealed.Should().Be(4);
+        status.StreamsSealed.Should().Be(1);
     }
 
     [Test]
@@ -377,6 +446,33 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task RunPassAsync_StrippedIntegrityWithinSealedPrefix_SkipsStreamWithoutSealing()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var aggregateId = await protectedContext.AppendStreamAsync(5);
+        await protectedContext.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3),
+            Builders<BsonDocument>.Update.Unset(EventIntegrityChain.ElementName));
+        await unprotected.Store.AppendEventsAsync(
+            Enumerable.Range(6, 2).Select(version => LedgerStoreContext.CreateEntry(aggregateId, version)));
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var sweep = new EventStreamSealingSweep<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options, TimeProvider.System, logger);
+
+        var outcome = await sweep.RunPassAsync();
+
+        // The binary search lands below the stripped version, so sealing runs into sealed events and gives up.
+        outcome.Should().Be(SealingPassOutcome.Completed);
+        logger.Entries.Should().Contain(e => e.Level == LogLevel.Error && e.Message.Contains("cannot be sealed"));
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId))
+            .Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.NotSealed));
+        (await protectedContext.FindEventAsync(aggregateId, 6)).Contains(EventIntegrityChain.ElementName).Should().BeFalse();
+        var status = await sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.EventsSealed.Should().Be(0);
+        status.StreamsSealed.Should().Be(0);
+    }
+
+    [Test]
     public async Task RunPassAsync_UnsealedStreams_SealsEveryEventRetroactivelyAndReportsProgress()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -406,6 +502,20 @@ public class IntegritySealingIntegrationTests
         status.PassStartedUtc.Should().NotBeNull();
         status.PassCompletedUtc.Should().NotBeNull();
         status.IsPassInProgress.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task SealNextChunkAsync_MissingVersionInUnsealedRange_ThrowsMongoEventStoreException()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var aggregateId = await unprotected.AppendStreamAsync(5);
+        await unprotected.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2));
+        var sealer = new EventStreamSealer<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options);
+
+        // The first probe of the boundary search hits the missing version.
+        var act = () => protectedContext.MongoHelper.ExecuteInTransaction((_, session, ct) => sealer.SealNextChunkAsync(session, aggregateId, null, ct));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("Version 2 *is missing*");
     }
 
     [Test]
@@ -547,5 +657,19 @@ public class IntegritySealingIntegrationTests
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(true, databaseName, configureOptions);
         return (unprotected, protectedContext);
+    }
+
+    /// <summary>
+    /// System clock that lets a test react to, and shift, every clock read of the code under test.
+    /// </summary>
+    private sealed class ClockHookTimeProvider : TimeProvider
+    {
+        public Func<DateTimeOffset, DateTimeOffset>? OnGetUtcNow { get; set; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var now = base.GetUtcNow();
+            return OnGetUtcNow?.Invoke(now) ?? now;
+        }
     }
 }

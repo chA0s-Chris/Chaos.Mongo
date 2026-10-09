@@ -149,31 +149,57 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
                                                .Include(EventDocumentFields<TAggregate>.Version);
         if (knownSealedVersion is { } version)
         {
-            var known = await GetEventsCollection()
-                              .Find(session, EventDocumentFields<TAggregate>.ForVersion<BsonDocument>(aggregateId, version))
-                              .Project(projection)
-                              .FirstOrDefaultAsync(cancellationToken);
-
+            var known = await ReadVersionAsync(session, aggregateId, version, projection, cancellationToken);
             if (known is not null && known.Contains(EventIntegrityChain.ElementName))
             {
                 return ReadSealedPrefix(known, aggregateId);
             }
         }
 
-        var filter = new BsonDocument
-        {
-            { EventDocumentFields<TAggregate>.AggregateId, new BsonBinaryData(aggregateId, GuidRepresentation.Standard) },
-            { EventIntegrityChain.ElementName, new BsonDocument("$exists", true) }
-        };
-        var lastSealed = await GetEventsCollection()
-                               .Find(session, filter)
-                               .Sort(new BsonDocument(EventDocumentFields<TAggregate>.Version, -1))
-                               .Project(projection)
-                               .FirstOrDefaultAsync(cancellationToken);
+        var headQuery = SealingSweepQueries<TAggregate>.StreamHead(aggregateId);
+        var head = await GetEventsCollection()
+                         .Find(session, headQuery.Filter)
+                         .Sort(headQuery.Sort)
+                         .Project(headQuery.Projection)
+                         .FirstOrDefaultAsync(cancellationToken);
 
-        return lastSealed is null
+        if (head is null)
+        {
+            return genesis;
+        }
+
+        if (head.Contains(EventIntegrityChain.ElementName))
+        {
+            return ReadSealedPrefix(head, aggregateId);
+        }
+
+        // Sealed events form a prefix of the stream, so the boundary is found by a binary search over
+        // versions. Every probe is a point read on the (AggregateId, Version) index, which keeps the
+        // lookup at O(log n) reads instead of scanning the unsealed part of the stream.
+        var sealedVersion = 0L;
+        BsonDocument? sealedDocument = null;
+        var unsealedVersion = head[EventDocumentFields<TAggregate>.Version].ToInt64();
+        while (unsealedVersion - sealedVersion > 1)
+        {
+            var probeVersion = sealedVersion + ((unsealedVersion - sealedVersion) / 2);
+            var probe = await ReadVersionAsync(session, aggregateId, probeVersion, projection, cancellationToken) ??
+                        throw new MongoEventStoreException(
+                            $"Version {probeVersion} of aggregate '{aggregateId}' is missing, so the stream cannot be sealed.");
+
+            if (probe.Contains(EventIntegrityChain.ElementName))
+            {
+                sealedVersion = probeVersion;
+                sealedDocument = probe;
+            }
+            else
+            {
+                unsealedVersion = probeVersion;
+            }
+        }
+
+        return sealedDocument is null
             ? genesis
-            : ReadSealedPrefix(lastSealed, aggregateId);
+            : ReadSealedPrefix(sealedDocument, aggregateId);
     }
 
     private IMongoCollection<BsonDocument> GetEventsCollection()
@@ -215,6 +241,17 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
                            .Limit(limit)
                            .ToListAsync(cancellationToken);
     }
+
+    private async Task<BsonDocument?> ReadVersionAsync(
+        IClientSessionHandle session,
+        Guid aggregateId,
+        Int64 version,
+        ProjectionDefinition<BsonDocument> projection,
+        CancellationToken cancellationToken)
+        => await GetEventsCollection()
+                 .Find(session, EventDocumentFields<TAggregate>.ForVersion<BsonDocument>(aggregateId, version))
+                 .Project(projection)
+                 .FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>
     /// Seals the given events, which must directly follow the sealed prefix, and returns the last hash.

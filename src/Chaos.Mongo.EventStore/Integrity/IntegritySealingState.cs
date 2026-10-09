@@ -34,6 +34,12 @@ internal sealed class IntegritySealingState
     public Boolean IsPassInProgress => PassStartedUtc is not null && PassCompletedUtc is null;
 
     /// <summary>
+    /// Gets or sets the last aggregate in which the current pass sealed events, so a resumed pass does not
+    /// count that stream in <see cref="StreamsSealed"/> twice.
+    /// </summary>
+    public Guid? LastSealedStream { get; set; }
+
+    /// <summary>
     /// Gets or sets when the current or last pass completed, or <c>null</c> while a pass is in progress.
     /// </summary>
     public DateTime? PassCompletedUtc { get; set; }

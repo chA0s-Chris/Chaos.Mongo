@@ -218,8 +218,8 @@ public static class MongoEventStoreSerializationSetup
             return;
         }
 
-        // Element names and the cursor's GUID representation are pinned, so neither convention packs nor a
-        // globally registered GUID serializer change the stored state.
+        // Element names and the GUID representation of the aggregate identifiers are pinned, so neither
+        // convention packs nor a globally registered GUID serializer change the stored state.
         BsonClassMap.RegisterClassMap<IntegritySealingState>(cm =>
         {
             cm.AutoMap();
@@ -227,6 +227,9 @@ public static class MongoEventStoreSerializationSetup
             cm.MapIdMember(s => s.Id);
             cm.GetMemberMap(s => s.Cursor)
               .SetElementName(nameof(IntegritySealingState.Cursor))
+              .SetSerializer(new NullableSerializer<Guid>(GuidStandardSerializer));
+            cm.GetMemberMap(s => s.LastSealedStream)
+              .SetElementName(nameof(IntegritySealingState.LastSealedStream))
               .SetSerializer(new NullableSerializer<Guid>(GuidStandardSerializer));
             cm.GetMemberMap(s => s.PassStartedUtc).SetElementName(nameof(IntegritySealingState.PassStartedUtc));
             cm.GetMemberMap(s => s.PassCompletedUtc).SetElementName(nameof(IntegritySealingState.PassCompletedUtc));

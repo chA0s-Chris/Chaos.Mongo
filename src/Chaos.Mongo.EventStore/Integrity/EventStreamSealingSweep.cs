@@ -14,7 +14,8 @@ using MongoDB.Driver;
 /// <remarks>
 /// A pass runs on one instance at a time under a distributed lock. It enumerates stream heads from the
 /// events collection and relies on sealed events forming a prefix of their stream: a stream whose head is
-/// sealed is fully sealed. Progress is persisted after every stream, so an interrupted pass resumes.
+/// sealed is fully sealed. The cursor is persisted after every stream, so an interrupted pass resumes, and
+/// the counters are updated in the transaction of every chunk, so they match the committed seals.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : class, IAggregate, new()
@@ -95,7 +96,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             {
                 state.Cursor = null;
                 state.PassCompletedUtc = _timeProvider.GetUtcNow().UtcDateTime;
-                await SaveStateAsync(state, cancellationToken);
+                await SaveProgressAsync(state, cancellationToken);
                 return SealingPassOutcome.Completed;
             }
 
@@ -119,7 +120,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
 
             state.Cursor = streamId;
             state.StreamsChecked++;
-            await SaveStateAsync(state, cancellationToken);
+            await SaveProgressAsync(state, cancellationToken);
         }
 
         _logger.LogWarning("Integrity sealing pass for collection {CollectionName} lost its lock and stops at the last checked stream",
@@ -239,6 +240,26 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
         return head is null || head.Contains(EventIntegrityChain.ElementName);
     }
 
+    /// <summary>
+    /// Counts a committed chunk in the persisted state, inside the chunk's transaction, so the counters
+    /// cannot miss committed seals when the pass is interrupted afterward.
+    /// </summary>
+    private Task RecordSealedChunkAsync(IClientSessionHandle session,
+                                        IntegritySealingState state,
+                                        Guid aggregateId,
+                                        Int32 sealedCount,
+                                        CancellationToken cancellationToken)
+    {
+        var update = Builders<IntegritySealingState>.Update
+                                                    .Inc(s => s.EventsSealed, (Int64)sealedCount)
+                                                    .Inc(s => s.StreamsSealed, state.LastSealedStream == aggregateId ? 0L : 1L)
+                                                    .Set(s => s.LastSealedStream, aggregateId);
+        return GetStateCollection().UpdateOneAsync(session,
+                                                   s => s.Id == IntegritySealingState.DocumentId,
+                                                   update,
+                                                   cancellationToken: cancellationToken);
+    }
+
     private async Task RunLoopAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -269,6 +290,18 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
         }
     }
 
+    /// <summary>
+    /// Persists the cursor and pass progress without touching the counters, which only chunk transactions update.
+    /// </summary>
+    private Task SaveProgressAsync(IntegritySealingState state, CancellationToken cancellationToken)
+        => GetStateCollection().UpdateOneAsync(
+            s => s.Id == IntegritySealingState.DocumentId,
+            Builders<IntegritySealingState>.Update
+                                           .Set(s => s.Cursor, state.Cursor)
+                                           .Set(s => s.StreamsChecked, state.StreamsChecked)
+                                           .Set(s => s.PassCompletedUtc, state.PassCompletedUtc),
+            cancellationToken: cancellationToken);
+
     private Task SaveStateAsync(IntegritySealingState state, CancellationToken cancellationToken)
         => GetStateCollection().ReplaceOneAsync(
             s => s.Id == IntegritySealingState.DocumentId,
@@ -288,7 +321,6 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                                                 IntegritySealingState state,
                                                 CancellationToken cancellationToken)
     {
-        var streamCounted = false;
         var concurrencyRetries = 0;
         Int64? knownSealedVersion = null;
 
@@ -298,7 +330,16 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             try
             {
                 result = await _mongoHelper.ExecuteInTransaction(
-                    (_, session, ct) => _sealer.SealNextChunkAsync(session, aggregateId, knownSealedVersion, ct),
+                    async (_, session, ct) =>
+                    {
+                        var chunk = await _sealer.SealNextChunkAsync(session, aggregateId, knownSealedVersion, ct);
+                        if (chunk.SealedCount > 0)
+                        {
+                            await RecordSealedChunkAsync(session, state, aggregateId, chunk.SealedCount, ct);
+                        }
+
+                        return chunk;
+                    },
                     cancellationToken: cancellationToken);
             }
             catch (MongoConcurrencyException ex)
@@ -318,11 +359,12 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             knownSealedVersion = result.LastSealedVersion;
             if (result.SealedCount > 0)
             {
+                // Mirror the committed update, so later chunks and saves see the persisted counters.
                 state.EventsSealed += result.SealedCount;
-                if (!streamCounted)
+                if (state.LastSealedStream != aggregateId)
                 {
                     state.StreamsSealed++;
-                    streamCounted = true;
+                    state.LastSealedStream = aggregateId;
                 }
             }
 

@@ -21,7 +21,7 @@ internal sealed class EventStreamSealingHostedService<TAggregate> : IHostedLifec
     }
 
     /// <inheritdoc/>
-    public Task StartedAsync(CancellationToken cancellationToken) => _sweep.StartAsync(CancellationToken.None);
+    public Task StartedAsync(CancellationToken cancellationToken) => _sweep.StartAsync(cancellationToken);
 
     /// <inheritdoc/>
     public Task StartingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
