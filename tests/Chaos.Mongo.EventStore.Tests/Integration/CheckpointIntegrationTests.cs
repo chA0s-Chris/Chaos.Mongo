@@ -16,7 +16,7 @@ public class CheckpointIntegrationTests
     private IMongoHelper _mongoHelper;
 
     [Test]
-    public async Task AppendEvents_BatchSkippingIntervalMultiple_CreatesCheckpoint()
+    public async Task AppendEventsAsync_BatchSkippingIntervalMultiple_CreatesCheckpoint()
     {
         var aggregateId = Guid.NewGuid();
         await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Shipped(aggregateId, 2)]);
@@ -29,6 +29,47 @@ public class CheckpointIntegrationTests
         checkpoints[0].Id.Version.Should().Be(4);
         checkpoints[0].Revision.Should().Be(4);
         checkpoints[0].State.Status.Should().Be("Completed");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_MixedBatchEndingWithObservationalEvent_KeysCheckpointByLastStateChange()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        await _eventStore.AppendEventsAsync(
+        [
+            Created(aggregateId, 1),
+            Viewed(aggregateId, 2),
+            Shipped(aggregateId, 3),
+            Completed(aggregateId, 4),
+            Viewed(aggregateId, 5)
+        ]);
+
+        var checkpoints = await ReadCheckpointsAsync(aggregateId);
+        checkpoints.Should().ContainSingle();
+        checkpoints[0].Id.Version.Should().Be(4);
+        checkpoints[0].Revision.Should().Be(3);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_ObservationalEventsOnly_NeverCreateCheckpoint()
+    {
+        var aggregateId = Guid.NewGuid();
+        await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Shipped(aggregateId, 2)]);
+
+        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 3), Viewed(aggregateId, 4)]);
+        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 5)]);
+
+        (await ReadCheckpointsAsync(aggregateId)).Should().BeEmpty();
+
+        await _eventStore.AppendEventsAsync([Completed(aggregateId, 6)]);
+
+        var checkpoints = await ReadCheckpointsAsync(aggregateId);
+        checkpoints.Should().ContainSingle();
+        checkpoints[0].Id.Version.Should().Be(6);
+        checkpoints[0].Revision.Should().Be(3);
+        checkpoints[0].State.Version.Should().Be(6);
+        checkpoints[0].State.Revision.Should().Be(3);
     }
 
     [Test]
@@ -83,26 +124,6 @@ public class CheckpointIntegrationTests
     }
 
     [Test]
-    public async Task AppendEvents_MixedBatchEndingWithObservationalEvent_KeysCheckpointByLastStateChange()
-    {
-        var aggregateId = Guid.NewGuid();
-
-        await _eventStore.AppendEventsAsync(
-        [
-            Created(aggregateId, 1),
-            Viewed(aggregateId, 2),
-            Shipped(aggregateId, 3),
-            Completed(aggregateId, 4),
-            Viewed(aggregateId, 5)
-        ]);
-
-        var checkpoints = await ReadCheckpointsAsync(aggregateId);
-        checkpoints.Should().ContainSingle();
-        checkpoints[0].Id.Version.Should().Be(4);
-        checkpoints[0].Revision.Should().Be(3);
-    }
-
-    [Test]
     public async Task AppendEvents_NoCheckpointBeforeInterval()
     {
         var aggregateId = Guid.NewGuid();
@@ -139,31 +160,7 @@ public class CheckpointIntegrationTests
     }
 
     [Test]
-    public async Task AppendEvents_ObservationalEventsOnly_NeverCreateCheckpoint()
-    {
-        var aggregateId = Guid.NewGuid();
-        await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Shipped(aggregateId, 2)]);
-
-        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 3), Viewed(aggregateId, 4)]);
-        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 5)]);
-
-        (await ReadCheckpointsAsync(aggregateId)).Should().BeEmpty();
-
-        await _eventStore.AppendEventsAsync([Completed(aggregateId, 6)]);
-
-        var checkpoints = await ReadCheckpointsAsync(aggregateId);
-        checkpoints.Should().ContainSingle();
-        checkpoints[0].Id.Version.Should().Be(6);
-        checkpoints[0].Revision.Should().Be(3);
-        checkpoints[0].State.Version.Should().Be(6);
-        checkpoints[0].State.Revision.Should().Be(3);
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [Test]
-    public async Task Repository_GetAtVersion_FromCheckpointSkipsObservationalEvents()
+    public async Task GetAtVersionAsync_FromCheckpoint_SkipsObservationalEvents()
     {
         var aggregateId = Guid.NewGuid();
         await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Viewed(aggregateId, 2), Shipped(aggregateId, 3)]);
@@ -185,6 +182,9 @@ public class CheckpointIntegrationTests
         atCheckpoint.Revision.Should().Be(2);
         atCheckpoint.Status.Should().Be("Shipped");
     }
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task Repository_GetAtVersion_UsesCheckpoint()
