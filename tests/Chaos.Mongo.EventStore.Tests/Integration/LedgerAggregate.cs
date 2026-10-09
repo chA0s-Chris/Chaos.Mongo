@@ -22,6 +22,11 @@ public class LedgerEntryRecordedEvent : Event<LedgerAggregate>
     }
 }
 
+public class LedgerAuditedEvent : ObservationalEvent<LedgerAggregate>
+{
+    public String Auditor { get; set; } = String.Empty;
+}
+
 public class LedgerEntryDetails
 {
     public String Category { get; set; } = String.Empty;

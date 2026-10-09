@@ -21,9 +21,15 @@ public class EventStoreAppendBenchmarks
 
     private static readonly BenchmarkScenario[] ScenarioMatrix =
     [
-        new("SingleEventNoCheckpoint", 1),
-        new("MediumBatchNoCheckpoint", 10),
-        new("CheckpointForcingBatch", 50, 1)
+        new("SingleEventNoCheckpoint", 1, false),
+        new("SingleEventNoCheckpoint", 1, true),
+        new("MediumBatchNoCheckpoint", 10, false),
+        new("MediumBatchNoCheckpoint", 10, true),
+        new("CheckpointForcingBatch", 50, false, 1),
+        new("CheckpointForcingBatch", 50, true, 1),
+
+        // An observational event requires a preceding state-changing event, so it only targets existing streams.
+        new("SingleObservationalEvent", 1, true, Observational: true)
     ];
 
     private BenchmarkContext _baseline = null!;
@@ -31,13 +37,6 @@ public class EventStoreAppendBenchmarks
     private MongoDbContainer? _container;
     private BenchmarkContext _optimized = null!;
     private Int32 _optimizedInvocation;
-
-    /// <summary>
-    /// Gets or sets a value indicating whether appends target pre-seeded streams (version 2)
-    /// instead of new aggregates. Only appends to existing streams read their predecessor.
-    /// </summary>
-    [Params(false, true)]
-    public Boolean ExistingStream { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether appended events are sealed into a hash chain.
@@ -122,7 +121,7 @@ public class EventStoreAppendBenchmarks
     [IterationSetup]
     public void IterationSetup()
     {
-        if (!ExistingStream)
+        if (!Scenario.ExistingStream)
         {
             return;
         }
@@ -170,7 +169,7 @@ public class EventStoreAppendBenchmarks
 
     private async Task<BenchmarkOrderAggregate> AppendAsync(BenchmarkContext context, Int32 operation, Int32 invocation)
     {
-        if (!ExistingStream)
+        if (!Scenario.ExistingStream)
         {
             return await context.Store.AppendEventsAsync(CreateEvents(Guid.CreateVersion7(), 1, invocation));
         }
@@ -194,6 +193,7 @@ public class EventStoreAppendBenchmarks
                        .WithEventStore<BenchmarkOrderAggregate>(builder =>
                        {
                            builder.WithEvent<BenchmarkOrderAdjustedEvent>("OrderAdjusted")
+                                  .WithEvent<BenchmarkOrderViewedEvent>("OrderViewed")
                                   .WithCollectionPrefix("Orders");
 
                            if (Scenario.CheckpointInterval is { } checkpointInterval)
@@ -233,22 +233,45 @@ public class EventStoreAppendBenchmarks
 
         for (var version = firstVersion; version < firstVersion + Scenario.EventCount; version++)
         {
-            events.Add(new BenchmarkOrderAdjustedEvent
-            {
-                Id = Guid.CreateVersion7(),
-                AggregateId = aggregateId,
-                Version = version,
-                AmountDelta = invocationCount + version
-            });
+            events.Add(Scenario.Observational
+                           ? new BenchmarkOrderViewedEvent
+                           {
+                               Id = Guid.CreateVersion7(),
+                               AggregateId = aggregateId,
+                               Version = version
+                           }
+                           : new BenchmarkOrderAdjustedEvent
+                           {
+                               Id = Guid.CreateVersion7(),
+                               AggregateId = aggregateId,
+                               Version = version,
+                               AmountDelta = invocationCount + version
+                           });
         }
 
         return events;
     }
 
-    public sealed record BenchmarkScenario(String Name, Int32 EventCount, Int32? CheckpointInterval = null)
+    /// <summary>
+    /// A valid benchmark scenario.
+    /// </summary>
+    /// <param name="Name">The scenario name.</param>
+    /// <param name="EventCount">The number of events appended per operation.</param>
+    /// <param name="ExistingStream">
+    /// Whether appends target pre-seeded streams (version 2) instead of new aggregates. Only appends to
+    /// existing streams read their predecessor.
+    /// </param>
+    /// <param name="CheckpointInterval">The checkpoint interval, or <c>null</c> to disable checkpoints.</param>
+    /// <param name="Observational">Whether the appended events are observational.</param>
+    public sealed record BenchmarkScenario(
+        String Name,
+        Int32 EventCount,
+        Boolean ExistingStream,
+        Int32? CheckpointInterval = null,
+        Boolean Observational = false)
     {
         public override String ToString()
-            => Name;
+            => ExistingStream ? $"{Name}/ExistingStream" : $"{Name}/NewStream";
     }
 
     private sealed record BenchmarkContext(
@@ -272,4 +295,6 @@ public class EventStoreAppendBenchmarks
     {
         public Decimal TotalAmount { get; set; }
     }
+
+    private sealed class BenchmarkOrderViewedEvent : ObservationalEvent<BenchmarkOrderAggregate> { }
 }

@@ -29,9 +29,16 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
     /// <inheritdoc/>
     public async Task<TAggregate?> GetAsync(Guid aggregateId, CancellationToken cancellationToken = default)
     {
-        return await Collection
-                     .Find(Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId))
-                     .FirstOrDefaultAsync(cancellationToken);
+        var aggregate = await Collection
+                              .Find(Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId))
+                              .FirstOrDefaultAsync(cancellationToken);
+
+        if (aggregate is not null)
+        {
+            LegacyRevision.Normalize(aggregate);
+        }
+
+        return aggregate;
     }
 
     /// <inheritdoc/>
@@ -54,6 +61,7 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
 
             if (checkpoint is not null)
             {
+                LegacyRevision.Normalize(checkpoint);
                 aggregate = checkpoint.State;
                 fromVersion = checkpoint.Id.Version + 1;
             }
@@ -77,11 +85,18 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
             CreatedUtc = events[0].CreatedUtc
         };
 
+        // Observational events do not change the aggregate, so replay skips them. The aggregate's version
+        // and revision are those of the last state-changing event, as in the read model.
         foreach (var evt in events)
-            evt.Execute(aggregate);
+        {
+            if (evt is ObservationalEvent<TAggregate>)
+                continue;
 
-        if (events.Count > 0)
-            aggregate.Version = events[^1].Version;
+            LegacyRevision.Normalize(evt);
+            evt.Execute(aggregate);
+            aggregate.Version = evt.Version;
+            aggregate.Revision = evt.Revision;
+        }
 
         return aggregate;
     }

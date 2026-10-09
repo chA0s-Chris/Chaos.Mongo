@@ -60,6 +60,7 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                       .WithEventStore<LedgerAggregate>(es =>
                                       {
                                           es.WithEvent<LedgerEntryRecordedEvent>("LedgerEntryRecorded")
+                                            .WithEvent<LedgerAuditedEvent>("LedgerAudited")
                                             .WithCollectionPrefix("Ledgers");
 
                                           if (integrityProtection)
@@ -85,6 +86,19 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
 
         return context;
     }
+
+    public static LedgerAuditedEvent CreateAudit(Guid aggregateId,
+                                                 Int64 version,
+                                                 Guid? id = null,
+                                                 DateTime createdUtc = default)
+        => new()
+        {
+            Id = id ?? Guid.NewGuid(),
+            AggregateId = aggregateId,
+            Version = version,
+            CreatedUtc = createdUtc,
+            Auditor = "auditor"
+        };
 
     public static LedgerEntryRecordedEvent CreateEntry(Guid aggregateId,
                                                        Int64 version,
@@ -126,6 +140,13 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
     public Task<BsonDocument> FindEventAsync(Guid aggregateId, Int64 version)
         => Events.Find(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version)).SingleAsync();
 
+    public Task<List<BsonDocument>> ReadRawCheckpointsAsync(Guid aggregateId)
+        => MongoHelper.Database
+                      .GetCollection<BsonDocument>(Options.CheckpointCollectionName)
+                      .Find(Builders<BsonDocument>.Filter.Eq("_id.AggregateId", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)))
+                      .Sort(Builders<BsonDocument>.Sort.Ascending("_id.Version"))
+                      .ToListAsync();
+
     public async Task<Byte[]> ReadRawEventAsync(Guid aggregateId, Int64 version)
     {
         using var document = await MongoHelper.Database
@@ -134,6 +155,12 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                               .SingleAsync();
         return document.ToBson();
     }
+
+    public Task<BsonDocument> ReadRawReadModelAsync(Guid aggregateId)
+        => MongoHelper.Database
+                      .GetCollection<BsonDocument>(Options.ReadModelCollectionName)
+                      .Find(Builders<BsonDocument>.Filter.Eq("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)))
+                      .SingleAsync();
 
     public Task SetVersionAsync(Guid aggregateId, Int64 version, Int64 newVersion)
         => Events.UpdateOneAsync(

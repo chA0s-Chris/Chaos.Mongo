@@ -52,21 +52,19 @@ public class MongoEventStoreQueryContractTests
         aggregate.Version.Should().Be(3);
 
         checkpointQueryCapture.CapturedFilter.Should().NotBeNull();
-        checkpointQueryCapture.CapturedOptions.Should().NotBeNull();
-        checkpointQueryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        checkpointQueryCapture.CapturedSort.Should().NotBeNull();
         var renderedCheckpointFilter = Render(checkpointQueryCapture.CapturedFilter!);
         ContainsEquality(renderedCheckpointFilter, "_id.AggregateId", CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedCheckpointFilter, "_id.Version", "$lte", new BsonInt64(7)).Should().BeTrue();
-        Render(checkpointQueryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument("_id.Version", -1));
+        Render(checkpointQueryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument("_id.Version", -1));
 
         eventQueryCapture.CapturedFilter.Should().NotBeNull();
-        eventQueryCapture.CapturedOptions.Should().NotBeNull();
-        eventQueryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        eventQueryCapture.CapturedSort.Should().NotBeNull();
         var renderedEventFilter = Render(eventQueryCapture.CapturedFilter!);
         ContainsEquality(renderedEventFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(4)).Should().BeTrue();
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(7)).Should().BeTrue();
-        Render(eventQueryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+        Render(eventQueryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
     }
 
     [Test]
@@ -88,14 +86,13 @@ public class MongoEventStoreQueryContractTests
 
         // Assert
         queryCapture.CapturedFilter.Should().NotBeNull();
-        queryCapture.CapturedOptions.Should().NotBeNull();
-        queryCapture.CapturedOptions!.Sort.Should().NotBeNull();
+        queryCapture.CapturedSort.Should().NotBeNull();
 
         var renderedFilter = Render(queryCapture.CapturedFilter!);
         ContainsEquality(renderedFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
         ContainsComparison(renderedFilter, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(4)).Should().BeTrue();
         ContainsComparison(renderedFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(8)).Should().BeTrue();
-        Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+        Render(queryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
     }
 
     [Test]
@@ -118,13 +115,18 @@ public class MongoEventStoreQueryContractTests
         // Assert
         nextVersion.Should().Be(1);
         queryCapture.CapturedFilter.Should().NotBeNull();
-        queryCapture.CapturedOptions.Should().NotBeNull();
-        queryCapture.CapturedOptions!.Sort.Should().NotBeNull();
-        queryCapture.CapturedOptions.Limit.Should().Be(1);
+        queryCapture.CapturedSort.Should().NotBeNull();
+        queryCapture.CapturedLimit.Should().Be(1);
 
         var renderedFilter = Render(queryCapture.CapturedFilter!);
         ContainsEquality(renderedFilter, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
-        Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), -1));
+        Render(queryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), -1));
+        Render(queryCapture.CapturedProjection!).Should().BeEquivalentTo(new BsonDocument
+        {
+            { nameof(Event<OrderAggregate>.Version), 1 },
+            { nameof(Event<OrderAggregate>.Revision), 1 },
+            { "_id", 0 }
+        });
     }
 
     private static void BootstrapSerialization(MongoEventStoreOptions<OrderAggregate> options)
@@ -237,6 +239,13 @@ public class MongoEventStoreQueryContractTests
         return filter.Render(new RenderArgs<CheckpointDocument<OrderAggregate>>(serializer, serializerRegistry));
     }
 
+    private static BsonDocument Render(ProjectionDefinition<Event<OrderAggregate>, BsonDocument> projection)
+    {
+        var serializerRegistry = BsonSerializer.SerializerRegistry;
+        var serializer = serializerRegistry.GetSerializer<Event<OrderAggregate>>();
+        return projection.Render(new RenderArgs<Event<OrderAggregate>>(serializer, serializerRegistry)).Document;
+    }
+
     private static BsonDocument Render(SortDefinition<Event<OrderAggregate>> sort)
     {
         var serializerRegistry = BsonSerializer.SerializerRegistry;
@@ -262,7 +271,11 @@ public class MongoEventStoreQueryContractTests
 
         public FilterDefinition<TDocument>? CapturedFilter { get; private set; }
 
-        public FindOptions<TDocument, TDocument>? CapturedOptions { get; private set; }
+        public Int32? CapturedLimit { get; private set; }
+
+        public ProjectionDefinition<TDocument, BsonDocument>? CapturedProjection { get; private set; }
+
+        public SortDefinition<TDocument>? CapturedSort { get; private set; }
 
         public static (IMongoCollection<TDocument> Collection, CapturingMongoCollectionProxy<TDocument> Proxy) Create(
             IAsyncCursor<TDocument> cursor)
@@ -294,13 +307,15 @@ public class MongoEventStoreQueryContractTests
             };
         }
 
-        private void CaptureFind(Type projectionType, Object?[]? args)
-        {
-            if (projectionType != typeof(TDocument))
-            {
-                throw new NotSupportedException($"Projection '{projectionType}' is not supported by the capturing test collection.");
-            }
+        private static NotSupportedException UnsupportedProjection(Type projectionType)
+            => new($"Projection '{projectionType}' is not supported by the capturing test collection.");
 
+        /// <summary>
+        /// Captures typed finds and finds that project elements into a <see cref="BsonDocument"/>, such as
+        /// the stream-head read.
+        /// </summary>
+        private void CaptureFind(Object?[]? args)
+        {
             var (filterIndex, optionsIndex) = args?.Length switch
             {
                 3 => (0, 1),
@@ -309,19 +324,46 @@ public class MongoEventStoreQueryContractTests
             };
 
             CapturedFilter = (FilterDefinition<TDocument>)args[filterIndex]!;
-            CapturedOptions = (FindOptions<TDocument, TDocument>?)args[optionsIndex];
+            switch (args[optionsIndex])
+            {
+                case FindOptions<TDocument, TDocument> options:
+                    CapturedSort = options.Sort;
+                    CapturedLimit = options.Limit;
+                    break;
+                case FindOptions<TDocument, BsonDocument> options:
+                    CapturedSort = options.Sort;
+                    CapturedLimit = options.Limit;
+                    CapturedProjection = options.Projection;
+                    break;
+                default:
+                    throw new NotSupportedException("Unexpected Find options.");
+            }
         }
 
         private Object HandleFindAsync(Type projectionType, Object?[]? args)
         {
-            CaptureFind(projectionType, args);
-            return Task.FromResult(_cursor);
+            CaptureFind(args);
+            if (projectionType == typeof(TDocument))
+            {
+                return Task.FromResult(_cursor);
+            }
+
+            return projectionType == typeof(BsonDocument)
+                ? Task.FromResult(CreateCursor<BsonDocument>())
+                : throw UnsupportedProjection(projectionType);
         }
 
         private Object HandleFindSync(Type projectionType, Object?[]? args)
         {
-            CaptureFind(projectionType, args);
-            return _cursor;
+            CaptureFind(args);
+            if (projectionType == typeof(TDocument))
+            {
+                return _cursor;
+            }
+
+            return projectionType == typeof(BsonDocument)
+                ? CreateCursor<BsonDocument>()
+                : throw UnsupportedProjection(projectionType);
         }
     }
 }

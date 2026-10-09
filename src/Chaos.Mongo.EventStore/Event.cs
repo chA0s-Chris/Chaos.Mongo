@@ -35,9 +35,16 @@ public abstract class Event<TAggregate> where TAggregate : class, IAggregate, ne
     public Guid Id { get; set; }
 
     /// <summary>
-    /// Gets or sets the monotonically increasing version per aggregate.
-    /// Must be set by the caller to sequential values starting from the aggregate's current version + 1.
-    /// The event store validates that versions are sequential with no gaps.
+    /// Gets or sets the aggregate revision after this event: the number of state-changing events up to and
+    /// including this one. An <see cref="ObservationalEvent{TAggregate}"/> records the revision it observed.
+    /// Set automatically by the event store on append; caller-supplied values are overwritten.
+    /// </summary>
+    public Int64 Revision { get; set; }
+
+    /// <summary>
+    /// Gets or sets the position of this event in its aggregate's stream.
+    /// Must be set by the caller to sequential values starting from the stream's highest position + 1.
+    /// The event store validates that positions are sequential with no gaps.
     /// </summary>
     public Int64 Version { get; set; }
 

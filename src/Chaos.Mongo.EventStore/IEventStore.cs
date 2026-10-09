@@ -17,19 +17,28 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <remarks>
     ///     <para>
     ///     All events must target the same aggregate (same <see cref="Event{TAggregate}.AggregateId"/>)
-    ///     and must have sequential versions starting from the aggregate's current version + 1.
+    ///     and must have sequential versions starting from the stream's highest version + 1. The highest
+    ///     version is read from the events collection, so it includes observational events.
     ///     </para>
     ///     <para>
     ///     A first event whose version was already committed is treated as an optimistic-concurrency
     ///     conflict rather than invalid input, because another writer may have committed that version
-    ///     after the caller read the aggregate. Resubmitting an event that is already stored is an
+    ///     after the caller read the stream. Resubmitting an event that is already stored is an
     ///     idempotent retry and reports <see cref="MongoDuplicateEventException"/> instead. A version
-    ///     above the aggregate's current version + 1 remains invalid caller input.
+    ///     above the stream's highest version + 1 remains invalid caller input.
     ///     </para>
     ///     <para>
     ///     Events are first applied to the aggregate in memory to validate that the aggregate's
     ///     current state permits the operations. If validation succeeds, the events are persisted
     ///     within a transaction along with the updated read model and optional checkpoint.
+    ///     </para>
+    ///     <para>
+    ///     Each event's <see cref="Event{TAggregate}.Revision"/> is set by the event store. A state-changing
+    ///     event increments the aggregate's <see cref="IAggregate.Revision"/> and sets its
+    ///     <see cref="IAggregate.Version"/> to the event's position. An <see cref="ObservationalEvent{TAggregate}"/>
+    ///     records the revision it observed and changes neither; a batch of only observational events
+    ///     writes neither the read model nor a checkpoint. An observational event requires a preceding
+    ///     state-changing event in the stream or earlier in the same batch.
     ///     </para>
     ///     <para>
     ///     If an event's <see cref="Event{TAggregate}.Execute"/> method throws (e.g., because the
@@ -57,18 +66,23 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <returns>The aggregate with all events applied, as it was at commit time.</returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="events"/> is empty, contains events for different aggregates,
-    /// starts at a version below one, leaves a gap above the aggregate's current version, or
+    /// starts at a version below one, leaves a gap above the stream's highest version, or
     /// continues with non-sequential versions.
     /// </exception>
     /// <exception cref="MongoEventValidationException">
-    /// Thrown when an event cannot be applied because the aggregate's state does not permit it.
+    /// Thrown when an event cannot be applied because the aggregate's state does not permit it, and when
+    /// an observational event has no preceding state-changing event.
     /// </exception>
     /// <exception cref="MongoConcurrencyException">
-    /// Thrown when the first event's version was already committed for this aggregate, and when
-    /// another process inserts an event for the same aggregate version before this append commits.
+    /// Thrown when the first event's version was already committed for this aggregate, when a state change
+    /// was committed between reading the stream and reading the read model, and when another process
+    /// inserts an event for the same aggregate version before this append commits.
     /// </exception>
     /// <exception cref="MongoDuplicateEventException">
     /// Thrown when an event with the same ID already exists.
+    /// </exception>
+    /// <exception cref="MongoEventStoreException">
+    /// Thrown when the stream contains events but the aggregate's read model is missing.
     /// </exception>
     Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
@@ -78,6 +92,10 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <summary>
     /// Returns the event stream for an aggregate, ordered by version.
     /// </summary>
+    /// <remarks>
+    /// The stream includes observational events. Events stored before revisions existed are returned with
+    /// <see cref="Event{TAggregate}.Revision"/> equal to their version.
+    /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="fromVersion">The minimum version (inclusive). Defaults to 0 (all events).</param>
     /// <param name="toVersion">The maximum version (inclusive). Defaults to null (no upper bound).</param>

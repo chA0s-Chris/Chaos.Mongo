@@ -152,6 +152,7 @@ public class MongoBuilderExtensionsTests
     {
         public DateTime CreatedUtc { get; set; }
         public Guid Id { get; set; }
+        public Int64 Revision { get; set; }
         public Int64 Version { get; set; }
     }
 

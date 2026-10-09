@@ -17,6 +17,10 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
     /// <summary>
     /// Gets the underlying read-model collection for running custom queries.
     /// </summary>
+    /// <remarks>
+    /// Queries through this collection bypass the repository: read models stored before revisions existed
+    /// are returned with <see cref="IAggregate.Revision"/> <c>0</c> instead of their version.
+    /// </remarks>
     IMongoCollection<TAggregate> Collection { get; }
 
     /// <summary>
@@ -28,10 +32,12 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
     Task<TAggregate?> GetAsync(Guid aggregateId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reconstructs the aggregate state at a specific version.
+    /// Reconstructs the aggregate state at a specific stream position.
     /// </summary>
     /// <remarks>
     /// Uses checkpoints if available (loads nearest checkpoint ≤ target version, then replays remaining events).
+    /// Observational events are skipped, so the returned aggregate's <see cref="IAggregate.Version"/> and
+    /// <see cref="IAggregate.Revision"/> are those of the last state-changing event at or below the target.
     /// Returns <c>null</c> if the aggregate doesn't exist or has no events up to that version.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>

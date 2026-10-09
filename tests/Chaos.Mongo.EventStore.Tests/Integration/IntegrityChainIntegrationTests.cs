@@ -68,6 +68,62 @@ public class IntegrityChainIntegrationTests
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task AppendEventsAsync_BothAppendPaths_PersistIdenticalMixedStreams(Boolean integrityProtection)
+    {
+        static void EnableCheckpoints(MongoEventStoreOptions<LedgerAggregate> options) => options.CheckpointInterval = 2;
+        var defaultPath = await CreateContextAsync(integrityProtection, configureOptions: EnableCheckpoints);
+        var bulkWritePath = await CreateContextAsync(integrityProtection, true, EnableCheckpoints);
+        var aggregateId = Guid.NewGuid();
+        var eventIds = Enumerable.Range(0, 5).Select(_ => Guid.NewGuid()).ToArray();
+
+        foreach (var context in new[]
+                 {
+                     defaultPath,
+                     bulkWritePath
+                 })
+        {
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1, eventIds[0], FixedCreatedUtc)]);
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateAudit(aggregateId, 2, eventIds[1], FixedCreatedUtc)]);
+            await context.Store.AppendEventsAsync(
+            [
+                LedgerStoreContext.CreateEntry(aggregateId, 3, eventIds[2], FixedCreatedUtc),
+                LedgerStoreContext.CreateAudit(aggregateId, 4, eventIds[3], FixedCreatedUtc),
+                LedgerStoreContext.CreateEntry(aggregateId, 5, eventIds[4], FixedCreatedUtc)
+            ]);
+        }
+
+        for (var version = 1; version <= 5; version++)
+        {
+            var defaultBytes = await defaultPath.ReadRawEventAsync(aggregateId, version);
+            var bulkWriteBytes = await bulkWritePath.ReadRawEventAsync(aggregateId, version);
+            defaultBytes.Should().Equal(bulkWriteBytes, $"event {version} must be stored identically");
+        }
+
+        // The read model's creation time is taken from the clock of each append, so it is excluded.
+        var defaultReadModel = await defaultPath.ReadRawReadModelAsync(aggregateId);
+        var bulkWriteReadModel = await bulkWritePath.ReadRawReadModelAsync(aggregateId);
+        defaultReadModel.Remove(nameof(IAggregate.CreatedUtc));
+        bulkWriteReadModel.Remove(nameof(IAggregate.CreatedUtc));
+        defaultReadModel.Equals(bulkWriteReadModel).Should().BeTrue();
+        defaultReadModel[nameof(IAggregate.Version)].AsInt64.Should().Be(5);
+        defaultReadModel[nameof(IAggregate.Revision)].AsInt64.Should().Be(3);
+
+        var defaultCheckpoints = await defaultPath.ReadRawCheckpointsAsync(aggregateId);
+        var bulkWriteCheckpoints = await bulkWritePath.ReadRawCheckpointsAsync(aggregateId);
+        foreach (var checkpoint in defaultCheckpoints.Concat(bulkWriteCheckpoints))
+        {
+            checkpoint["State"].AsBsonDocument.Remove(nameof(IAggregate.CreatedUtc));
+        }
+
+        defaultCheckpoints.Should().HaveCount(1);
+        defaultCheckpoints.SequenceEqual(bulkWriteCheckpoints).Should().BeTrue();
+        defaultCheckpoints[0]["_id"]["Version"].AsInt64.Should().Be(5);
+        defaultCheckpoints[0]["Revision"].AsInt64.Should().Be(3);
+    }
+
+    [Test]
     public async Task AppendEventsAsync_ConcurrentAppendsWithIntegrityProtection_ProduceLinearChain()
     {
         var context = await CreateContextAsync();
@@ -99,9 +155,14 @@ public class IntegrityChainIntegrationTests
     {
         var context = await CreateContextAsync();
         var aggregateId = await context.AppendStreamAsync(3);
-        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3));
 
-        var act = () => context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
+        // The predecessor disappears after the append read the stream head, so only sealing detects it.
+        var store = (MongoEventStore<LedgerAggregate>)context.Store;
+        store.AfterStreamHeadRead = ct => context.Events.DeleteOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3),
+            ct);
+
+        var act = () => store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
 
         await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*Version 3*missing*");
         (await context.CountEventsAsync(aggregateId)).Should().Be(2);
@@ -274,6 +335,24 @@ public class IntegrityChainIntegrationTests
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task VerifyStreamAsync_MixedStream_ReportsIntact(Boolean bulkWrite)
+    {
+        var context = await CreateContextAsync(bulkWrite: bulkWrite);
+        var aggregateId = await context.AppendStreamAsync(1);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateAudit(aggregateId, 2)]);
+        await context.Store.AppendEventsAsync(
+            [LedgerStoreContext.CreateAudit(aggregateId, 3), LedgerStoreContext.CreateEntry(aggregateId, 4)]);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 5)]);
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.IsIntact.Should().BeTrue();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(5);
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_ModifiedEvent_ReportsHashMismatch()
     {
         var context = await CreateContextAsync();
@@ -360,9 +439,11 @@ public class IntegrityChainIntegrationTests
         }
     }
 
-    private async Task<LedgerStoreContext> CreateContextAsync(Boolean integrityProtection = true, Boolean bulkWrite = false)
+    private async Task<LedgerStoreContext> CreateContextAsync(Boolean integrityProtection = true,
+                                                              Boolean bulkWrite = false,
+                                                              Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null)
     {
-        var context = await LedgerStoreContext.CreateAsync(_container, integrityProtection, bulkWrite);
+        var context = await LedgerStoreContext.CreateAsync(_container, integrityProtection, bulkWrite, configureOptions: configureOptions);
         _contexts.Add(context);
         return context;
     }
