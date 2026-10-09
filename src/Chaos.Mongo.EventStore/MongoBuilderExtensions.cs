@@ -3,7 +3,10 @@
 namespace Chaos.Mongo.EventStore;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.EventStore.Integrity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 /// <summary>
 /// Extension methods for <see cref="MongoBuilder"/> to register event store services.
@@ -33,6 +36,7 @@ public static class MongoBuilderExtensions
         configure(esBuilder);
 
         var options = esBuilder.Options;
+        ValidateIntegrityOptions(options);
 
         if (options.EventTypes.Count == 0)
         {
@@ -59,6 +63,46 @@ public static class MongoBuilderExtensions
         // Register IAggregateRepository<TAggregate>
         builder.Services.AddScoped<IAggregateRepository<TAggregate>, MongoAggregateRepository<TAggregate>>();
 
+        if (options.IntegrityProtectionEnabled)
+        {
+            // Retroactively seal events stored without integrity data
+            builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
+                                              sp.GetRequiredService<IMongoHelper>(),
+                                              options,
+                                              sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                              sp.GetService<ILogger<EventStreamSealingSweep<TAggregate>>>() ??
+                                              NullLogger<EventStreamSealingSweep<TAggregate>>.Instance));
+            builder.Services.AddHostedService(sp => new EventStreamSealingHostedService<TAggregate>(
+                                                  sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+        }
+
         return builder;
+    }
+
+    private static void ValidateIntegrityOptions<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        if (!options.IntegrityProtectionEnabled)
+        {
+            return;
+        }
+
+        if (options.SealingChunkSize <= 0)
+        {
+            throw new InvalidOperationException(
+                $"The sealing chunk size for aggregate type {typeof(TAggregate).Name} must be greater than 0.");
+        }
+
+        if (options.SealingSweepInterval <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"The sealing sweep interval for aggregate type {typeof(TAggregate).Name} must be greater than zero.");
+        }
+
+        if (options.SealingSweepRetryDelay <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"The sealing sweep retry delay for aggregate type {typeof(TAggregate).Name} must be greater than zero.");
+        }
     }
 }
