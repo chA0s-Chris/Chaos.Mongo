@@ -2,8 +2,10 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
+using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
@@ -177,6 +179,49 @@ public class StoreAssignedAppendIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_RetryAfterConcurrentCommits_ExecutesWithCurrentAttemptRevision()
+    {
+        await using var serviceProvider = await CreateBatchMetadataProviderAsync();
+        var store = (MongoEventStore<BatchMetadataAggregate>)serviceProvider.GetRequiredService<IEventStore<BatchMetadataAggregate>>();
+        var competitor = new MongoEventStore<BatchMetadataAggregate>(
+            serviceProvider.GetRequiredService<IMongoHelper>(),
+            serviceProvider.GetRequiredService<MongoEventStoreOptions<BatchMetadataAggregate>>());
+        var aggregateId = Guid.NewGuid();
+        await store.AppendEventsAsync([Recorded(aggregateId)]);
+
+        var attempts = 0;
+        store.AfterStreamHeadRead = async ct =>
+        {
+            attempts++;
+            switch (attempts)
+            {
+                // The first attempt executes the event at revision 2, then loses its position to an observation.
+                case 1:
+                    await competitor.AppendEventsAsync(
+                        [
+                            new BatchMetadataOverwritingObservation
+                            {
+                                AggregateId = aggregateId
+                            }
+                        ],
+                        cancellationToken: ct);
+                    break;
+
+                // The second attempt meets a state change between its reads; the third executes at revision 3.
+                case 2:
+                    await competitor.AppendEventsAsync([Recorded(aggregateId)], cancellationToken: ct);
+                    break;
+            }
+        };
+
+        var aggregate = await store.AppendEventsAsync([Recorded(aggregateId)]);
+
+        attempts.Should().Be(3);
+        aggregate.Revision.Should().Be(3);
+        aggregate.EventRevisionsSeen.Should().Equal(1, 2, 3);
+    }
+
+    [Test]
     public async Task AppendEventsAsync_RetriesExhausted_ThrowsAndResetsVersions([Values] Boolean competingStateChange)
     {
         var context = await CreateContextAsync(options => options.MaxAppendRetries = 2);
@@ -277,6 +322,12 @@ public class StoreAssignedAppendIntegrationTests
     private static MongoEventStore<LedgerAggregate> CreateCompetitor(LedgerStoreContext context)
         => new(context.MongoHelper, context.Options);
 
+    private static BatchMetadataRecordedEvent Recorded(Guid aggregateId)
+        => new()
+        {
+            AggregateId = aggregateId
+        };
+
     private static LedgerEntryRecordedEvent Entry(Guid aggregateId, Guid? id = null)
         => LedgerStoreContext.CreateEntry(aggregateId, 0, id);
 
@@ -292,6 +343,37 @@ public class StoreAssignedAppendIntegrationTests
         {
             (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
         }
+    }
+
+    private async Task<ServiceProvider> CreateBatchMetadataProviderAsync()
+    {
+        var serviceProvider = new ServiceCollection()
+                              .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
+                              {
+                                  options.DefaultDatabase = $"StoreAssignedRetryTestDb_{Guid.NewGuid():N}";
+                                  options.RunConfiguratorsOnStartup = false;
+                              })
+                              .WithEventStore<BatchMetadataAggregate>(builder =>
+                              {
+                                  builder.WithEvent<BatchMetadataRecordedEvent>("BatchMetadataRecorded")
+                                         .WithEvent<BatchMetadataOverwritingObservation>("BatchMetadataOverwritingObservation")
+                                         .WithCollectionPrefix("BatchMetadata");
+
+                                  if (_integrityProtection)
+                                  {
+                                      builder.WithIntegrityProtection();
+                                  }
+                              })
+                              .Services
+                              .BuildServiceProvider();
+
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        foreach (var configurator in serviceProvider.GetServices<IMongoConfigurator>())
+        {
+            await configurator.ConfigureAsync(helper);
+        }
+
+        return serviceProvider;
     }
 
     private async Task<LedgerStoreContext> CreateContextAsync(Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null)
