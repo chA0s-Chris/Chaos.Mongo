@@ -5,4 +5,5 @@ using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Chaos.Mongo.EventStore.Tests")]
 [assembly: InternalsVisibleTo("Chaos.Mongo.EventStore.Benchmarks")]
+[assembly: InternalsVisibleTo("Chaos.Mongo.EventStore.LoadTests")]
 #endif

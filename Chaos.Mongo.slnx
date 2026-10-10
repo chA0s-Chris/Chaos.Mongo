@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Chaos.Mongo.EventStore.Benchmarks/Chaos.Mongo.EventStore.Benchmarks.csproj" />
+    <Project Path="benchmarks/Chaos.Mongo.EventStore.LoadTests/Chaos.Mongo.EventStore.LoadTests.csproj" />
   </Folder>
   <Folder Name="/build/">
     <Project Path="build/Nuke.csproj">

@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Benchmarks;
 
 using BenchmarkDotNet.Attributes;
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.EventStore.Integrity;
 using Docker.DotNet.Models;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -17,6 +18,7 @@ using Testcontainers.MongoDb;
 [InvocationCount(1)]
 public class EventStoreAppendBenchmarks
 {
+    private const Int32 ConsumerBatchSize = 1000;
     private const Int32 OperationsPerBenchmarkInvocation = 32;
 
     private static readonly BenchmarkScenario[] ScenarioMatrix =
@@ -39,10 +41,11 @@ public class EventStoreAppendBenchmarks
     private Int32 _optimizedInvocation;
 
     /// <summary>
-    /// Gets or sets a value indicating whether appended events are sealed into a hash chain.
+    /// Gets or sets the integrity protection and anchor candidate source. A candidate source runs its consumer
+    /// continuously during the measurement, so its server-side cost appears on the append side.
     /// </summary>
-    [Params(false, true)]
-    public Boolean IntegrityProtection { get; set; }
+    [Params(ProtectionMode.Off, ProtectionMode.Chain, ProtectionMode.ChainWithPendingCollection, ProtectionMode.ChainWithChangeStream)]
+    public ProtectionMode Protection { get; set; }
 
     [ParamsSource(nameof(Scenarios))]
     public BenchmarkScenario Scenario { get; set; } = null!;
@@ -112,6 +115,9 @@ public class EventStoreAppendBenchmarks
 
         AppendFirstEventAsync(_baseline.Store).GetAwaiter().GetResult();
         AppendFirstEventAsync(_optimized.Store).GetAwaiter().GetResult();
+
+        StartConsumerAsync(_baseline).GetAwaiter().GetResult();
+        StartConsumerAsync(_optimized).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -154,6 +160,13 @@ public class EventStoreAppendBenchmarks
             return;
         }
 
+        if (context.Consumer is { } consumer)
+        {
+            await consumer.Cancellation.CancelAsync();
+            await consumer.Loop;
+            consumer.Cancellation.Dispose();
+        }
+
         await context.MongoHelper.Client.DropDatabaseAsync(context.DatabaseName);
         await context.ServiceProvider.DisposeAsync();
     }
@@ -165,6 +178,24 @@ public class EventStoreAppendBenchmarks
         {
             context.FreshStreams.Add(await AppendFirstEventAsync(context.Store));
         }
+    }
+
+    /// <summary>
+    /// Starts the consumer of the candidate source outside the measurement. The first batch completes the
+    /// initial scan of a change stream, so the measured appends only see its steady state.
+    /// </summary>
+    private static async Task StartConsumerAsync(BenchmarkContext context)
+    {
+        if (context.ServiceProvider.GetService<IAnchorCandidateSource>() is not { } source)
+        {
+            return;
+        }
+
+        var consumer = new AnchorCandidateConsumer(context.MongoHelper, source);
+        await consumer.ConsumeBatchAsync(ConsumerBatchSize);
+
+        var cancellation = new CancellationTokenSource();
+        context.Consumer = new RunningConsumer(cancellation, consumer.RunAsync(ConsumerBatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token));
     }
 
     private async Task<BenchmarkOrderAggregate> AppendAsync(BenchmarkContext context, Int32 operation, Int32 invocation)
@@ -182,37 +213,49 @@ public class EventStoreAppendBenchmarks
     {
         var container = _container ?? throw new InvalidOperationException("The MongoDB container has not been initialized.");
         var databaseName = $"EventStoreBenchmark_{scenario}_{Guid.NewGuid():N}";
-        var services = new ServiceCollection()
-                       .AddMongo(
-                           MongoUrl.Create(container.GetConnectionString()),
-                           configure: options =>
+        var mongoBuilder = new ServiceCollection()
+                           .AddMongo(
+                               MongoUrl.Create(container.GetConnectionString()),
+                               configure: options =>
+                               {
+                                   options.DefaultDatabase = databaseName;
+                                   options.RunConfiguratorsOnStartup = false;
+                               })
+                           .WithEventStore<BenchmarkOrderAggregate>(builder =>
                            {
-                               options.DefaultDatabase = databaseName;
-                               options.RunConfiguratorsOnStartup = false;
-                           })
-                       .WithEventStore<BenchmarkOrderAggregate>(builder =>
-                       {
-                           builder.WithEvent<BenchmarkOrderAdjustedEvent>("OrderAdjusted")
-                                  .WithEvent<BenchmarkOrderViewedEvent>("OrderViewed")
-                                  .WithCollectionPrefix("Orders");
+                               builder.WithEvent<BenchmarkOrderAdjustedEvent>("OrderAdjusted")
+                                      .WithEvent<BenchmarkOrderViewedEvent>("OrderViewed")
+                                      .WithCollectionPrefix("Orders");
 
-                           if (Scenario.CheckpointInterval is { } checkpointInterval)
-                           {
-                               builder.WithCheckpoints(checkpointInterval);
-                           }
+                               if (Scenario.CheckpointInterval is { } checkpointInterval)
+                               {
+                                   builder.WithCheckpoints(checkpointInterval);
+                               }
 
-                           if (bulkWriteOptimizationEnabled)
-                           {
-                               builder.WithBulkWriteOptimization();
-                           }
+                               if (bulkWriteOptimizationEnabled)
+                               {
+                                   builder.WithBulkWriteOptimization();
+                               }
 
-                           if (IntegrityProtection)
-                           {
-                               builder.WithIntegrityProtection();
-                           }
-                       })
-                       .Services
-                       .BuildServiceProvider();
+                               if (Protection != ProtectionMode.Off)
+                               {
+                                   builder.WithIntegrityProtection();
+                               }
+                           });
+
+        var candidateSource = Protection switch
+        {
+            ProtectionMode.ChainWithPendingCollection => AnchorCandidateSourceKind.PendingCollection,
+            ProtectionMode.ChainWithChangeStream => AnchorCandidateSourceKind.ChangeStream,
+            _ => AnchorCandidateSourceKind.None
+        };
+
+        if (candidateSource != AnchorCandidateSourceKind.None)
+        {
+            mongoBuilder.WithAnchorCandidateSource(candidateSource);
+        }
+
+        var services = mongoBuilder.Services.BuildServiceProvider();
 
         var mongoHelper = services.GetRequiredService<IMongoHelper>();
         foreach (var configurator in services.GetServices<IMongoConfigurator>())
@@ -280,6 +323,8 @@ public class EventStoreAppendBenchmarks
         IMongoHelper MongoHelper,
         String DatabaseName)
     {
+        public RunningConsumer? Consumer { get; set; }
+
         public List<Guid> FreshStreams { get; } = [];
     }
 
@@ -297,4 +342,6 @@ public class EventStoreAppendBenchmarks
     }
 
     private sealed class BenchmarkOrderViewedEvent : ObservationalEvent<BenchmarkOrderAggregate> { }
+
+    private sealed record RunningConsumer(CancellationTokenSource Cancellation, Task Loop);
 }
