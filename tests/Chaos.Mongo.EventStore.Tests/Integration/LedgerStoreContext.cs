@@ -42,6 +42,14 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
     public EventStreamSealingSweep<LedgerAggregate> Sweep
         => ServiceProvider.GetRequiredService<EventStreamSealingSweep<LedgerAggregate>>();
 
+    /// <summary>
+    /// Registers a protected shipment event store next to the ledger store.
+    /// </summary>
+    public static void AddShipmentStore(MongoBuilder builder)
+        => builder.WithEventStore<ShipmentAggregate>(es => es.WithEvent<ShipmentDispatchedEvent>("ShipmentDispatched")
+                                                             .WithCollectionPrefix("Shipments")
+                                                             .WithIntegrityProtection());
+
     public static async Task<LedgerStoreContext> CreateAsync(MongoDbContainer container,
                                                              Boolean integrityProtection = true,
                                                              Boolean bulkWrite = false,
@@ -49,7 +57,8 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                                              Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
                                                              TimeProvider? timeProvider = null,
                                                              AnchorCandidateSourceKind anchorCandidateSource = AnchorCandidateSourceKind.None,
-                                                             String? applicationName = null)
+                                                             String? applicationName = null,
+                                                             Action<MongoBuilder>? configureMongo = null)
     {
         var services = new ServiceCollection();
         if (timeProvider is not null)
@@ -85,6 +94,7 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                        configureOptions?.Invoke(es.Options);
                                    });
 
+        configureMongo?.Invoke(mongoBuilder);
         if (anchorCandidateSource != AnchorCandidateSourceKind.None)
         {
             mongoBuilder.WithAnchorCandidateSource(anchorCandidateSource);
@@ -156,6 +166,12 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
 
     public Task<BsonDocument> FindEventAsync(Guid aggregateId, Int64 version)
         => Events.Find(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version)).SingleAsync();
+
+    public Task<BsonDocument> FindShipmentEventAsync(Guid aggregateId, Int64 version)
+        => MongoHelper.Database
+                      .GetCollection<BsonDocument>(ServiceProvider.GetRequiredService<MongoEventStoreOptions<ShipmentAggregate>>().EventsCollectionName)
+                      .Find(EventDocumentFields<ShipmentAggregate>.ForVersion<BsonDocument>(aggregateId, version))
+                      .SingleAsync();
 
     public Task<List<BsonDocument>> ReadRawCheckpointsAsync(Guid aggregateId)
         => MongoHelper.Database

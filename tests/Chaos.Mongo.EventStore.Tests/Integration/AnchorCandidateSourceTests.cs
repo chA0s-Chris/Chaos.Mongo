@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
@@ -106,6 +107,29 @@ public class AnchorCandidateSourceTests
         }
 
         candidates.Should().Contain(candidate => candidate.AggregateId == first && candidate.Version == 3);
+    }
+
+    [Test]
+    public async Task ConsumeBatchAsync_SeveralProtectedTypes_DeliversHeadOfEveryType()
+    {
+        var context = await CreateInitializedContextAsync(configureMongo: LedgerStoreContext.AddShipmentStore);
+        var shipments = context.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>();
+        var ledger = await context.AppendStreamAsync(2);
+        var shipment = Guid.NewGuid();
+        await shipments.AppendEventsAsync([ShipmentDispatchedEvent.Create(shipment, 1), ShipmentDispatchedEvent.Create(shipment, 2)]);
+
+        var candidates = AnchorCandidateConsumer.Reduce(
+            await ConsumeUntilAsync(context.CreateConsumer(),
+                                    consumed => consumed.Any(c => c.AggregateId == ledger && c.Version == 2) &&
+                                                consumed.Any(c => c.AggregateId == shipment && c.Version == 2)));
+
+        // Read models and checkpoints live in collections of their own and must not yield candidates.
+        candidates.Select(candidate => (candidate.AggregateType, candidate.AggregateId, candidate.Version))
+                  .Should().BeEquivalentTo([(nameof(LedgerAggregate), ledger, 2L), (nameof(ShipmentAggregate), shipment, 2L)]);
+        candidates.Single(candidate => candidate.AggregateId == ledger)
+                  .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(ledger, 2)).Hash);
+        candidates.Single(candidate => candidate.AggregateId == shipment)
+                  .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindShipmentEventAsync(shipment, 2)).Hash);
     }
 
     [Test]
@@ -245,13 +269,15 @@ public class AnchorCandidateSourceTests
 
     private async Task<LedgerStoreContext> CreateContextAsync(String? databaseName = null,
                                                               Boolean integrityProtection = true,
-                                                              Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null)
+                                                              Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
+                                                              Action<MongoBuilder>? configureMongo = null)
     {
         var context = await LedgerStoreContext.CreateAsync(_container,
                                                            integrityProtection,
                                                            databaseName: databaseName,
                                                            configureOptions: configureOptions,
-                                                           anchorCandidateSource: _sourceKind);
+                                                           anchorCandidateSource: _sourceKind,
+                                                           configureMongo: configureMongo);
         _contexts.Add(context);
         return context;
     }
@@ -261,9 +287,10 @@ public class AnchorCandidateSourceTests
     /// completed its initial scan and follows new commits.
     /// </summary>
     private async Task<LedgerStoreContext> CreateInitializedContextAsync(String? databaseName = null,
-                                                                         Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null)
+                                                                         Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
+                                                                         Action<MongoBuilder>? configureMongo = null)
     {
-        var context = await CreateContextAsync(databaseName, true, configureOptions);
+        var context = await CreateContextAsync(databaseName, true, configureOptions, configureMongo);
         await context.CreateConsumer().ConsumeBatchAsync(BatchSize);
         return context;
     }

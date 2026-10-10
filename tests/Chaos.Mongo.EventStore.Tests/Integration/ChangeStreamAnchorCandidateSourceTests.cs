@@ -31,6 +31,48 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     [Test]
+    public async Task ConsumeBatchAsync_RestartDuringRecoveryAcrossTypes_ContinuesScanInsteadOfRepeatingIt()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var context = await CreateContextAsync(databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
+        var shipments = context.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>();
+        var shipmentStreams = new[]
+        {
+            Guid.NewGuid(),
+            Guid.NewGuid()
+        };
+        foreach (var shipment in shipmentStreams)
+        {
+            await shipments.AppendEventsAsync([ShipmentDispatchedEvent.Create(shipment, 1)]);
+        }
+
+        var ledgerStreams = new[]
+        {
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(2)
+        };
+        var consumer = context.CreateConsumer();
+
+        // The ledger type is registered first, so the third batch crosses into the shipment type.
+        var beforeRestart = new List<AnchorCandidate>();
+        for (var batch = 0; batch < 3; batch++)
+        {
+            beforeRestart.AddRange(await consumer.ConsumeBatchAsync(1));
+        }
+
+        await context.DisposeAsync();
+        _contexts.Remove(context);
+        var restarted = await CreateContextAsync(databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
+        var afterRestart = await restarted.CreateConsumer().ConsumeBatchAsync(10);
+
+        beforeRestart.Select(candidate => candidate.AggregateType)
+                     .Should().Equal(nameof(LedgerAggregate), nameof(LedgerAggregate), nameof(ShipmentAggregate));
+        afterRestart.Should().ContainSingle().Which.AggregateType.Should().Be(nameof(ShipmentAggregate));
+        beforeRestart.Concat(afterRestart).Select(candidate => candidate.AggregateId)
+                     .Should().BeEquivalentTo(ledgerStreams.Concat(shipmentStreams));
+    }
+
+    [Test]
     public async Task ConsumeBatchAsync_RestartDuringRecovery_ContinuesScanInsteadOfRepeatingIt()
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
@@ -116,12 +158,15 @@ public class ChangeStreamAnchorCandidateSourceTests
     private static async Task<BsonDocument?> ReadStateAsync(LedgerStoreContext context)
         => await GetStateCollection(context).Find(new BsonDocument("_id", "changeStream")).FirstOrDefaultAsync();
 
-    private async Task<LedgerStoreContext> CreateContextAsync(String? databaseName = null, String? applicationName = null)
+    private async Task<LedgerStoreContext> CreateContextAsync(String? databaseName = null,
+                                                              String? applicationName = null,
+                                                              Action<MongoBuilder>? configureMongo = null)
     {
         var context = await LedgerStoreContext.CreateAsync(_container,
                                                            databaseName: databaseName,
                                                            anchorCandidateSource: AnchorCandidateSourceKind.ChangeStream,
-                                                           applicationName: applicationName);
+                                                           applicationName: applicationName,
+                                                           configureMongo: configureMongo);
         _contexts.Add(context);
         return context;
     }
