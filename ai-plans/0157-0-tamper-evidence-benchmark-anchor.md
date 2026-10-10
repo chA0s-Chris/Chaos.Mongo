@@ -102,3 +102,11 @@ internal interface IAnchorCandidateSource
 - Parameters: candidate source, append path, concurrency (16 and 64), warm-up and measurement duration. Appenders write to distinct pre-seeded streams while the source's consumer runs.
 - Three-node replica set: three `mongo:8` containers in one Docker network with `w: majority`. Latency is injected with `tc netem` (1 ms delay per direction, 2 ms round trip), which needs `NET_ADMIN` and a derived image with `iproute2`.
 - The load test connects from the host with `directConnection=true` to the primary, so the members' advertised host names do not matter; `w: majority` still waits for the secondaries. With netem on each container's egress, member-to-member round trips are 2 ms and client-to-primary round trips 1 ms; the results state both.
+
+### Carried into 0157-1
+
+Findings of the pre-PR review that do not affect the measurements or the decision, to be resolved when D is brought to production quality:
+
+- The recovery scan is bounded only by the number of candidates found. With many streams whose head is not yet sealed, one read scans every protected collection and persists no progress until it returns. Bound each batch by the number of streams examined; harness code that stops on empty batches must then use the completion of the scan instead.
+- Recovery can repeat indefinitely when a full scan takes longer than the oplog window: the stream then starts at a cluster time that has already left the oplog, which triggers another recovery. Decide how to detect and surface this (logging, a metric) and whether the stream should already be consumed during the scan.
+- Measured deviations from the expectations above: E adds no oplog entry, because a transaction is one `applyOps` entry; it enlarges that entry by about 460 bytes per append instead. Starting a change stream at an operation time before the oldest oplog entry does not trigger `ChangeStreamHistoryLost` on a fresh node whose oplog has never rolled over; the recovery test forces the error with a `failCommand` fail point instead, which needs `enableTestCommands` on the test container.
