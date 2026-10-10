@@ -7,5 +7,9 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 /// <param name="SealedCount">The number of events sealed by the chunk.</param>
 /// <param name="LastSealedVersion">The last sealed version of the stream after the chunk.</param>
+/// <param name="LastSealedHash">
+/// The hash of <paramref name="LastSealedVersion"/>, or the genesis value for an empty
+/// stream.
+/// </param>
 /// <param name="HasMore">Whether unsealed events remain after the chunk.</param>
-internal sealed record SealingChunkResult(Int32 SealedCount, Int64 LastSealedVersion, Boolean HasMore);
+internal sealed record SealingChunkResult(Int32 SealedCount, Int64 LastSealedVersion, Byte[] LastSealedHash, Boolean HasMore);

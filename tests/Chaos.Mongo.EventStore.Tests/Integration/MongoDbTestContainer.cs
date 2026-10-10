@@ -25,6 +25,8 @@ public static class MongoDbTestContainer
             Container = new MongoDbBuilder()
                         .WithImage("mongo:8")
                         .WithReplicaSet()
+                        // Test commands enable fail points, which force server errors such as a lost change-stream history.
+                        .WithCommand("--setParameter", "enableTestCommands=1")
                         // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
                         // pinned. See https://jira.mongodb.org/browse/SERVER-121912
                         .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")

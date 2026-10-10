@@ -25,6 +25,9 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
         Store = serviceProvider.GetRequiredService<IEventStore<LedgerAggregate>>();
     }
 
+    public IAnchorCandidateSource CandidateSource
+        => ServiceProvider.GetRequiredService<IAnchorCandidateSource>();
+
     public IMongoCollection<BsonDocument> Events
         => MongoHelper.Database.GetCollection<BsonDocument>(Options.EventsCollectionName);
 
@@ -44,7 +47,9 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                                              Boolean bulkWrite = false,
                                                              String? databaseName = null,
                                                              Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
-                                                             TimeProvider? timeProvider = null)
+                                                             TimeProvider? timeProvider = null,
+                                                             AnchorCandidateSourceKind anchorCandidateSource = AnchorCandidateSourceKind.None,
+                                                             String? applicationName = null)
     {
         var services = new ServiceCollection();
         if (timeProvider is not null)
@@ -52,31 +57,40 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
             services.AddSingleton(timeProvider);
         }
 
-        var serviceProvider = services.AddMongo(MongoUrl.Create(container.GetConnectionString()), configure: options =>
-                                      {
-                                          options.DefaultDatabase = databaseName ?? $"IntegrityTestDb_{Guid.NewGuid():N}";
-                                          options.RunConfiguratorsOnStartup = false;
-                                      })
-                                      .WithEventStore<LedgerAggregate>(es =>
-                                      {
-                                          es.WithEvent<LedgerEntryRecordedEvent>("LedgerEntryRecorded")
-                                            .WithEvent<LedgerAuditedEvent>("LedgerAudited")
-                                            .WithCollectionPrefix("Ledgers");
+        var url = new MongoUrlBuilder(container.GetConnectionString())
+        {
+            ApplicationName = applicationName
+        }.ToMongoUrl();
+        var mongoBuilder = services.AddMongo(url, configure: options =>
+                                   {
+                                       options.DefaultDatabase = databaseName ?? $"IntegrityTestDb_{Guid.NewGuid():N}";
+                                       options.RunConfiguratorsOnStartup = false;
+                                   })
+                                   .WithEventStore<LedgerAggregate>(es =>
+                                   {
+                                       es.WithEvent<LedgerEntryRecordedEvent>("LedgerEntryRecorded")
+                                         .WithEvent<LedgerAuditedEvent>("LedgerAudited")
+                                         .WithCollectionPrefix("Ledgers");
 
-                                          if (integrityProtection)
-                                          {
-                                              es.WithIntegrityProtection();
-                                          }
+                                       if (integrityProtection)
+                                       {
+                                           es.WithIntegrityProtection();
+                                       }
 
-                                          if (bulkWrite)
-                                          {
-                                              es.WithBulkWriteOptimization();
-                                          }
+                                       if (bulkWrite)
+                                       {
+                                           es.WithBulkWriteOptimization();
+                                       }
 
-                                          configureOptions?.Invoke(es.Options);
-                                      })
-                                      .Services
-                                      .BuildServiceProvider();
+                                       configureOptions?.Invoke(es.Options);
+                                   });
+
+        if (anchorCandidateSource != AnchorCandidateSourceKind.None)
+        {
+            mongoBuilder.WithAnchorCandidateSource(anchorCandidateSource);
+        }
+
+        var serviceProvider = mongoBuilder.Services.BuildServiceProvider();
 
         var context = new LedgerStoreContext(serviceProvider);
         foreach (var configurator in serviceProvider.GetServices<IMongoConfigurator>())
@@ -133,6 +147,9 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
 
     public Task<Int64> CountEventsAsync(Guid aggregateId)
         => Events.CountDocumentsAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId));
+
+    public AnchorCandidateConsumer CreateConsumer()
+        => new(MongoHelper, CandidateSource);
 
     public EventStreamVerifier<LedgerAggregate> CreateVerifier()
         => new(MongoHelper, Options);

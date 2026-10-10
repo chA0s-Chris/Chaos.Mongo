@@ -241,6 +241,25 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     }
 
     /// <summary>
+    /// Records the last sealed event of a chunk as a pending anchor candidate, inside the chunk's transaction,
+    /// when the pending-anchor collection is the candidate source.
+    /// </summary>
+    private Task RecordPendingAnchorAsync(IClientSessionHandle session,
+                                          Guid aggregateId,
+                                          SealingChunkResult chunk,
+                                          CancellationToken cancellationToken)
+    {
+        if (_options.Anchoring is not { WritesPendingAnchors: true } anchoring)
+        {
+            return Task.CompletedTask;
+        }
+
+        var entry = PendingAnchorEntry.Create(typeof(TAggregate).Name, aggregateId, chunk.LastSealedVersion, chunk.LastSealedHash);
+        return _mongoHelper.Database.GetCollection<BsonDocument>(anchoring.PendingAnchorsCollectionName)
+                           .InsertOneAsync(session, entry, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
     /// Counts a committed chunk in the persisted state, inside the chunk's transaction, so the counters
     /// cannot miss committed seals when the pass is interrupted afterward.
     /// </summary>
@@ -251,7 +270,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                                         CancellationToken cancellationToken)
     {
         var update = Builders<IntegritySealingState>.Update
-                                                    .Inc(s => s.EventsSealed, (Int64)sealedCount)
+                                                    .Inc(s => s.EventsSealed, sealedCount)
                                                     .Inc(s => s.StreamsSealed, state.LastSealedStream == aggregateId ? 0L : 1L)
                                                     .Set(s => s.LastSealedStream, aggregateId);
         return GetStateCollection().UpdateOneAsync(session,
@@ -336,6 +355,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                         if (chunk.SealedCount > 0)
                         {
                             await RecordSealedChunkAsync(session, state, aggregateId, chunk.SealedCount, ct);
+                            await RecordPendingAnchorAsync(session, aggregateId, chunk, ct);
                         }
 
                         return chunk;
