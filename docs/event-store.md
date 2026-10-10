@@ -717,6 +717,11 @@ checkpoints therefore do not cause a new checkpoint, and reconstruction reads pa
 still scans their index entries). If read-access logging produces long runs of observational events, choose the
 checkpoint interval accordingly.
 
+Events are indexed by position only, so `GetAtRevisionAsync` bounds its replay itself: when the target revision lies
+below the stream's current revision, it first looks up the position of the first event above the target and replays
+only up to that position. This costs a point read of the stream head plus an index scan from the checkpoint to that
+event, instead of reading the rest of the stream.
+
 **Checkpoints created before revisions existed** lack the `Revision` element. The position-based lookup of
 `GetAtVersionAsync` still uses them, but `GetAtRevisionAsync` cannot match them and replays from an earlier checkpoint or
 from the beginning instead. The result is correct either way; to restore the shortcut, backfill the element once:

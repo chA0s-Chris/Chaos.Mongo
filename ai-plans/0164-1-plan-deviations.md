@@ -85,6 +85,19 @@ individual Technical Details were realized; one also led to a correction of a La
   never went through it, for example one built without `WithEventStore`, has no observational discriminators, so the
   filter excludes nothing. The guard keeps replay correct in that case.
 
+### Revision replay bound
+
+- **Planned:** "Both event filters include `AggregateId` and a `Version` range starting after the checkpoint", and
+  revision-based replay uses `(Revision <= target) OR (Revision is missing AND Version <= target)`.
+- **Implemented:** `GetAtRevisionAsync` additionally bounds the range from above. It reads the stream head and, when
+  the target lies below the head's revision, finds the first event above the target (sorted by `Version`, limit 1)
+  and replays only positions below it. The revision filter stays part of the replay, so the bound is only an
+  optimization and concurrent appends cannot change the result.
+- **Why:** Only `(AggregateId, Version)` is indexed, so the planned filter scanned from the checkpoint to the end of
+  the stream. In an explain against MongoDB 8.2.9, reconstructing revision 550 of a 20,000-event stream from a
+  checkpoint at position 999 examined 19,001 documents to return 50; with the bound, the lookup and the replay
+  examine about 100 each. An extra events index on `Revision` would make every append pay for a read path.
+
 ### Versions after a failed store-assigned append
 
 - **Planned:** Not specified. Store-assigned positions are written to the events like generated IDs.

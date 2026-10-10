@@ -47,6 +47,80 @@ public class MongoEventStoreQueryContractTests
             });
 
     [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task GetAtRevisionAsync_TargetBelowStreamRevision_BoundsReplayByFirstEventAboveTarget(Boolean eventAboveTargetFound)
+    {
+        // Arrange
+        var aggregateId = Guid.NewGuid();
+        var options = CreateOptionsWithObservationalEvent();
+        var checkpoint = new CheckpointDocument<OrderAggregate>
+        {
+            Id = new CheckpointId(aggregateId, 4),
+            Revision = 3,
+            State = new OrderAggregate
+            {
+                Id = aggregateId,
+                CreatedUtc = DateTime.UtcNow,
+                Status = "Shipped",
+                Version = 4,
+                Revision = 3
+            }
+        };
+
+        var (checkpointCollection, _) =
+            CapturingMongoCollectionProxy<CheckpointDocument<OrderAggregate>>.Create(CreateCursor(checkpoint));
+        var (eventsCollection, eventQueryCapture) =
+            CapturingMongoCollectionProxy<Event<OrderAggregate>>.Create(CreateCursor<Event<OrderAggregate>>());
+        eventQueryCapture.EnqueueProjectedResult(new BsonDocument
+        {
+            { nameof(Event<OrderAggregate>.Version), 40L },
+            { nameof(Event<OrderAggregate>.Revision), 20L }
+        });
+        if (eventAboveTargetFound)
+        {
+            eventQueryCapture.EnqueueProjectedResult(new BsonDocument(nameof(Event<OrderAggregate>.Version), 9L));
+        }
+
+        var sut = CreateAggregateRepository(options, checkpointCollection, eventsCollection);
+
+        // Act
+        await sut.GetAtRevisionAsync(aggregateId, 5);
+
+        // Assert
+        eventQueryCapture.CapturedFinds.Should().HaveCount(3);
+        var (headRead, boundaryLookup, replay) = (eventQueryCapture.CapturedFinds[0],
+                                                  eventQueryCapture.CapturedFinds[1],
+                                                  eventQueryCapture.CapturedFinds[2]);
+
+        ContainsEquality(Render(headRead.Filter), nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
+        Render(headRead.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), -1));
+        headRead.Limit.Should().Be(1);
+
+        // The boundary lookup is an index scan from the checkpoint that stops at the first event above the target.
+        var renderedBoundary = Render(boundaryLookup.Filter);
+        ContainsEquality(renderedBoundary, nameof(Event<OrderAggregate>.AggregateId), CreateGuidValue(aggregateId)).Should().BeTrue();
+        ContainsComparison(renderedBoundary, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(5)).Should().BeTrue();
+        ContainsComparison(renderedBoundary, nameof(Event<OrderAggregate>.Revision), "$gt", new BsonInt64(5)).Should().BeTrue();
+        ContainsComparison(renderedBoundary, nameof(Event<OrderAggregate>.Revision), "$exists", BsonBoolean.False).Should().BeTrue();
+        ContainsComparison(renderedBoundary, nameof(Event<OrderAggregate>.Version), "$gt", new BsonInt64(5)).Should().BeTrue();
+        Render(boundaryLookup.Sort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+        boundaryLookup.Limit.Should().Be(1);
+        Render(boundaryLookup.Projection!).Should().BeEquivalentTo(new BsonDocument
+        {
+            { nameof(Event<OrderAggregate>.Version), 1 },
+            { "_id", 0 }
+        });
+
+        // The replay keeps the revision filter and adds the upper bound only when the boundary was found.
+        var renderedReplay = Render(replay.Filter);
+        ContainsComparison(renderedReplay, nameof(Event<OrderAggregate>.Version), "$gte", new BsonInt64(5)).Should().BeTrue();
+        ContainsComparison(renderedReplay, nameof(Event<OrderAggregate>.Revision), "$lte", new BsonInt64(5)).Should().BeTrue();
+        ContainsComparison(renderedReplay, nameof(Event<OrderAggregate>.Version), "$lt", new BsonInt64(9)).Should().Be(eventAboveTargetFound);
+        ContainsEquality(renderedReplay, "$expr", ObservationalEventExclusion).Should().BeTrue();
+    }
+
+    [Test]
     public async Task GetAtRevisionAsync_WhenCheckpointingEnabled_QueriesRevisionCheckpointThenRevisionBoundedEvents()
     {
         // Arrange
@@ -94,6 +168,10 @@ public class MongoEventStoreQueryContractTests
         ContainsComparison(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$lte", new BsonInt64(5)).Should().BeTrue();
         ContainsEquality(renderedEventFilter, "$expr", ObservationalEventExclusion).Should().BeTrue();
         Render(eventQueryCapture.CapturedSort!).Should().BeEquivalentTo(new BsonDocument(nameof(Event<OrderAggregate>.Version), 1));
+
+        // The stream has no event above the target, so only the head is read and the replay stays unbounded.
+        eventQueryCapture.CapturedFinds.Should().HaveCount(2);
+        ContainsOperator(renderedEventFilter, nameof(Event<OrderAggregate>.Version), "$lt").Should().BeFalse();
     }
 
     [Test]
@@ -267,6 +345,17 @@ public class MongoEventStoreQueryContractTests
             _ => false
         };
 
+    private static Boolean ContainsOperator(BsonValue value, String field, String comparisonOperator)
+        => value switch
+        {
+            BsonDocument document => (document.TryGetValue(field, out var filter) &&
+                                      filter is BsonDocument filterDocument &&
+                                      filterDocument.Contains(comparisonOperator)) ||
+                                     document.Elements.Any(element => ContainsOperator(element.Value, field, comparisonOperator)),
+            BsonArray array => array.Any(item => ContainsOperator(item, field, comparisonOperator)),
+            _ => false
+        };
+
     private static MongoAggregateRepository<OrderAggregate> CreateAggregateRepository(
         MongoEventStoreOptions<OrderAggregate> options,
         IMongoCollection<CheckpointDocument<OrderAggregate>> checkpointCollection,
@@ -381,16 +470,29 @@ public class MongoEventStoreQueryContractTests
         return sort.Render(new RenderArgs<CheckpointDocument<OrderAggregate>>(serializer, serializerRegistry));
     }
 
+    private sealed record CapturedFind<TDocument>(
+        FilterDefinition<TDocument> Filter,
+        SortDefinition<TDocument>? Sort,
+        Int32? Limit,
+        ProjectionDefinition<TDocument, BsonDocument>? Projection);
+
     private class CapturingMongoCollectionProxy<TDocument> : DispatchProxy
     {
         private static readonly IMongoIndexManager<TDocument> IndexManager = Mock.Of<IMongoIndexManager<TDocument>>();
         private readonly IMongoDatabase _database = Mock.Of<IMongoDatabase>();
+
+        private readonly Queue<BsonDocument[]> _projectedResults = new();
         private readonly MongoCollectionSettings _settings = new();
 
         private IMongoCollection<TDocument> _collection = null!;
         private IAsyncCursor<TDocument> _cursor = null!;
 
         public FilterDefinition<TDocument>? CapturedFilter { get; private set; }
+
+        /// <summary>
+        /// Gets every captured find in invocation order; the other captured properties describe the last one.
+        /// </summary>
+        public List<CapturedFind<TDocument>> CapturedFinds { get; } = [];
 
         public Int32? CapturedLimit { get; private set; }
 
@@ -408,6 +510,12 @@ public class MongoEventStoreQueryContractTests
             proxy._cursor = cursor;
             return (collection, proxy);
         }
+
+        /// <summary>
+        /// Queues the documents returned by the next find that projects into a <see cref="BsonDocument"/>. Finds
+        /// without a queued result return no documents.
+        /// </summary>
+        public void EnqueueProjectedResult(params BsonDocument[] documents) => _projectedResults.Enqueue(documents);
 
         protected override Object? Invoke(MethodInfo? targetMethod, Object?[]? args)
         {
@@ -450,6 +558,7 @@ public class MongoEventStoreQueryContractTests
                 case FindOptions<TDocument, TDocument> options:
                     CapturedSort = options.Sort;
                     CapturedLimit = options.Limit;
+                    CapturedProjection = null;
                     break;
                 case FindOptions<TDocument, BsonDocument> options:
                     CapturedSort = options.Sort;
@@ -459,6 +568,8 @@ public class MongoEventStoreQueryContractTests
                 default:
                     throw new NotSupportedException("Unexpected Find options.");
             }
+
+            CapturedFinds.Add(new CapturedFind<TDocument>(CapturedFilter, CapturedSort, CapturedLimit, CapturedProjection));
         }
 
         private Object HandleFindAsync(Type projectionType, Object?[]? args)
@@ -470,7 +581,7 @@ public class MongoEventStoreQueryContractTests
             }
 
             return projectionType == typeof(BsonDocument)
-                ? Task.FromResult(CreateCursor<BsonDocument>())
+                ? Task.FromResult(NextProjectedCursor())
                 : throw UnsupportedProjection(projectionType);
         }
 
@@ -483,8 +594,11 @@ public class MongoEventStoreQueryContractTests
             }
 
             return projectionType == typeof(BsonDocument)
-                ? CreateCursor<BsonDocument>()
+                ? NextProjectedCursor()
                 : throw UnsupportedProjection(projectionType);
         }
+
+        private IAsyncCursor<BsonDocument> NextProjectedCursor()
+            => CreateCursor(_projectedResults.Count > 0 ? _projectedResults.Dequeue() : []);
     }
 }
