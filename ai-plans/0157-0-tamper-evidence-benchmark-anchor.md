@@ -12,25 +12,25 @@ This plan implements both sources behind one internal abstraction, verifies both
 
 ### Decision criterion
 
-- [ ] Before any benchmark result of this plan exists, #154 records the decision criterion: E is chosen if chain + E with its consumer running, compared with chain + active D consumer, has a p99 latency at most 10 % higher and a throughput at most 10 % lower, each taken as the median of three load-test runs on the three-node replica set, at 16 and at 64 appenders, on both append paths. Otherwise D is chosen with a full-scan recovery path.
+- [x] Before any benchmark result of this plan exists, #154 records the decision criterion: E is chosen if chain + E with its consumer running, compared with chain + active D consumer, has a p99 latency at most 10 % higher and a throughput at most 10 % lower, each taken as the median of three load-test runs on the three-node replica set, at 16 and at 64 appenders, on both append paths. Otherwise D is chosen with a full-scan recovery path.
 
 ### Candidate sources
 
-- [ ] An internal candidate-source abstraction returns batches of `(AggregateType, AggregateId, Version, Hash)` candidates across all protected aggregate types and acknowledges a batch inside a caller-supplied transaction. At most one batch is outstanding at a time: reading again before acknowledging returns the unacknowledged candidates again, and acknowledging a batch covers everything read up to it. Acknowledged candidates are never returned again (at-least-once).
-- [ ] Option E: every append to a protected stream inserts one pending-anchor entry for its last event within the append transaction, on both append paths. Every chunk of retroactive sealing inserts one entry for its last sealed event within the chunk transaction. Acknowledging deletes the entries.
-- [ ] Option D: a change-stream source over the protected events collections returns candidates for appended and retroactively sealed events and persists its resume token in the acknowledging transaction.
-- [ ] D recovers without gaps when its resume point is no longer in the oplog or no token exists yet: it scans all stream heads and resumes the change stream from a cluster time taken before the scan.
-- [ ] Both sources pass the same correctness tests: a transaction that commits after a later one has been consumed and acknowledged is still delivered; reading again without acknowledging returns the same candidates; after a consumer restart, acknowledged candidates are not delivered again and unacknowledged ones are; aborted transactions never produce candidates.
-- [ ] A minimal consumer reads candidates, reduces them to the highest version per stream, and acknowledges them, without requesting timestamps.
-- [ ] Without integrity protection or without a configured candidate source, append behavior and stored data are unchanged: no pending-anchor writes and no change stream.
+- [x] An internal candidate-source abstraction returns batches of `(AggregateType, AggregateId, Version, Hash)` candidates across all protected aggregate types and acknowledges a batch inside a caller-supplied transaction. At most one batch is outstanding at a time: reading again before acknowledging returns the unacknowledged candidates again, and acknowledging a batch covers everything read up to it. Acknowledged candidates are never returned again (at-least-once).
+- [x] Option E: every append to a protected stream inserts one pending-anchor entry for its last event within the append transaction, on both append paths. Every chunk of retroactive sealing inserts one entry for its last sealed event within the chunk transaction. Acknowledging deletes the entries.
+- [x] Option D: a change-stream source over the protected events collections returns candidates for appended and retroactively sealed events and persists its resume token in the acknowledging transaction.
+- [x] D recovers without gaps when its resume point is no longer in the oplog or no token exists yet: it scans all stream heads and resumes the change stream from a cluster time taken before the scan.
+- [x] Both sources pass the same correctness tests: a transaction that commits after a later one has been consumed and acknowledged is still delivered; reading again without acknowledging returns the same candidates; after a consumer restart, acknowledged candidates are not delivered again and unacknowledged ones are; aborted transactions never produce candidates.
+- [x] A minimal consumer reads candidates, reduces them to the highest version per stream, and acknowledges them, without requesting timestamps.
+- [x] Without integrity protection or without a configured candidate source, append behavior and stored data are unchanged: no pending-anchor writes and no change stream.
 
 ### Benchmarks and decision
 
-- [ ] `EventStoreAppendBenchmarks` compares no protection, chain only, chain + E, and chain + active D consumer, each on both append paths, for new and existing streams.
-- [ ] A load test reports throughput, p50 and p99 latency for 16 and 64 concurrent appenders on distinct existing streams, for chain only (as a reference) and per candidate source, on each append path, against the single-node Testcontainers replica set and against a three-node replica set with `w: majority` and a 2 ms injected round-trip latency between members.
-- [ ] Oplog growth per append and candidate-consumption throughput (candidates per second, including catching up a backlog of appends and a backlog of retroactively sealed events) are measured for both sources.
-- [ ] The results and the decision, applying the recorded criterion, are documented in #154.
-- [ ] Automated tests cover the behavior above.
+- [x] `EventStoreAppendBenchmarks` compares no protection, chain only, chain + E, and chain + active D consumer, each on both append paths, for new and existing streams.
+- [x] A load test reports throughput, p50 and p99 latency for 16 and 64 concurrent appenders on distinct existing streams, for chain only (as a reference) and per candidate source, on each append path, against the single-node Testcontainers replica set and against a three-node replica set with `w: majority` and a 2 ms injected round-trip latency between members.
+- [x] Oplog growth per append and candidate-consumption throughput (candidates per second, including catching up a backlog of appends and a backlog of retroactively sealed events) are measured for both sources.
+- [x] The results and the decision, applying the recorded criterion, are documented in #154.
+- [x] Automated tests cover the behavior above.
 
 ## Technical Details
 
