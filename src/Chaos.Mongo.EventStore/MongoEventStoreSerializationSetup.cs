@@ -38,8 +38,10 @@ public static class MongoEventStoreSerializationSetup
     /// <typeparam name="TAggregate">The aggregate type.</typeparam>
     /// <param name="options">The event store options containing event type registrations.</param>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, or when integrity
-    /// protection is enabled but the event base class map was registered without the integrity member.
+    /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when integrity
+    /// protection is enabled but the event base class map was registered without the integrity member, or when
+    /// the event base class map or the class map declaring <see cref="IAggregate.Revision"/> was registered without
+    /// the revision member.
     /// </exception>
     public static void RegisterClassMaps<TAggregate>(MongoEventStoreOptions<TAggregate> options)
         where TAggregate : class, IAggregate, new()
@@ -75,6 +77,8 @@ public static class MongoEventStoreSerializationSetup
             }
         }
 
+        EnsureAggregateMapsRevision<TAggregate>();
+
         // Register the Event<TAggregate> base class map. The integrity member is mapped regardless of
         // whether protection is enabled: class maps are process-global and shared by every store.
         RegisterEventIntegrityClassMap();
@@ -95,6 +99,7 @@ public static class MongoEventStoreSerializationSetup
         }
 
         EnsureEventBaseMapsIntegrity(options);
+        EnsureEventBaseMapsRevision<TAggregate>();
 
         // Register each concrete event type with its discriminator
         foreach (var (eventType, discriminator) in options.EventTypes)
@@ -111,6 +116,13 @@ public static class MongoEventStoreSerializationSetup
             EnsureNoReservedElementCollision<TAggregate>(classMap);
             BsonClassMap.RegisterClassMap(classMap);
         }
+
+        // Derive the replay filter from the registered class maps rather than from EventTypes, because class
+        // maps registered by consumers keep their own discriminators.
+        options.ObservationalEventDiscriminators = options.EventTypes.Keys
+                                                          .Where(t => typeof(ObservationalEvent<TAggregate>).IsAssignableFrom(t))
+                                                          .Select(t => GetRegisteredClassMap(t).Discriminator)
+                                                          .ToList();
 
         // Register CheckpointId
         if (!BsonClassMap.IsClassMapRegistered(typeof(CheckpointId)))
@@ -134,6 +146,32 @@ public static class MongoEventStoreSerializationSetup
         }
     }
 
+    /// <summary>
+    /// The read model's revision is checked against the stream on every append, so a class map registered by a
+    /// consumer for the type declaring <see cref="IAggregate.Revision"/> must map it. Otherwise every read model would
+    /// load as a document stored before revisions existed.
+    /// </summary>
+    private static void EnsureAggregateMapsRevision<TAggregate>()
+        where TAggregate : class, IAggregate, new()
+    {
+        var declaringType = typeof(TAggregate).GetProperty(nameof(IAggregate.Revision))?.DeclaringType;
+        if (declaringType is null || !BsonClassMap.IsClassMapRegistered(declaringType))
+        {
+            return;
+        }
+
+        var classMap = GetRegisteredClassMap(declaringType);
+        if (classMap.DeclaredMemberMaps.Any(m => m.MemberName == nameof(IAggregate.Revision)))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"The class map of {declaringType.Name} for aggregate type {typeof(TAggregate).Name} was registered before the " +
+            $"event store and does not map the {nameof(IAggregate.Revision)} member, which the event store requires. " +
+            $"Map {nameof(IAggregate.Revision)}, for example with AutoMap().");
+    }
+
     private static void EnsureEventBaseMapsIntegrity<TAggregate>(MongoEventStoreOptions<TAggregate> options)
         where TAggregate : class, IAggregate, new()
     {
@@ -152,6 +190,24 @@ public static class MongoEventStoreSerializationSetup
             $"Integrity protection is enabled for aggregate type {typeof(TAggregate).Name}, but the class map of " +
             $"{eventBaseMap.ClassType.Name} was registered before the event store and does not map the reserved " +
             $"'{EventIntegrityChain.ElementName}' element. Let the event store register the event base class map.");
+    }
+
+    /// <summary>
+    /// Every append reads the stored revision, so an event base class map registered by a consumer must map it.
+    /// </summary>
+    private static void EnsureEventBaseMapsRevision<TAggregate>()
+        where TAggregate : class, IAggregate, new()
+    {
+        var eventBaseMap = GetRegisteredClassMap(typeof(Event<TAggregate>));
+        if (eventBaseMap.DeclaredMemberMaps.Any(m => m.MemberName == nameof(Event<TAggregate>.Revision)))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"The class map of {eventBaseMap.ClassType.Name} for aggregate type {typeof(TAggregate).Name} was registered " +
+            $"before the event store and does not map the {nameof(Event<TAggregate>.Revision)} member, which the event store " +
+            "requires. Let the event store register the event base class map.");
     }
 
     /// <summary>

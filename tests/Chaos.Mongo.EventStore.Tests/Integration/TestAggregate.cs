@@ -52,6 +52,21 @@ public class OrderCancelledEvent : Event<OrderAggregate>
     }
 }
 
+public class OrderViewedEvent : ObservationalEvent<OrderAggregate>
+{
+    public String ViewedBy { get; set; } = String.Empty;
+
+    protected override void Validate(OrderAggregate aggregate)
+    {
+        if (aggregate.Status == "Cancelled")
+        {
+            throw new Errors.MongoEventValidationException("Cannot view a cancelled order.");
+        }
+    }
+}
+
+public class OrderPrintedEvent : ObservationalEvent<OrderAggregate> { }
+
 public class OutboxMessage
 {
     public Guid AggregateId { get; set; }

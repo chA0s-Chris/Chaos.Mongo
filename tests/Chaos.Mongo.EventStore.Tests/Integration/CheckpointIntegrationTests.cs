@@ -16,6 +16,63 @@ public class CheckpointIntegrationTests
     private IMongoHelper _mongoHelper;
 
     [Test]
+    public async Task AppendEventsAsync_BatchSkippingIntervalMultiple_CreatesCheckpoint()
+    {
+        var aggregateId = Guid.NewGuid();
+        await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Shipped(aggregateId, 2)]);
+
+        // Revision 2 -> 4 jumps over the multiple 3 without ending on it.
+        await _eventStore.AppendEventsAsync([Shipped(aggregateId, 3), Completed(aggregateId, 4)]);
+
+        var checkpoints = await ReadCheckpointsAsync(aggregateId);
+        checkpoints.Should().ContainSingle();
+        checkpoints[0].Id.Version.Should().Be(4);
+        checkpoints[0].Revision.Should().Be(4);
+        checkpoints[0].State.Status.Should().Be("Completed");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_MixedBatchEndingWithObservationalEvent_KeysCheckpointByLastStateChange()
+    {
+        var aggregateId = Guid.NewGuid();
+
+        await _eventStore.AppendEventsAsync(
+        [
+            Created(aggregateId, 1),
+            Viewed(aggregateId, 2),
+            Shipped(aggregateId, 3),
+            Completed(aggregateId, 4),
+            Viewed(aggregateId, 5)
+        ]);
+
+        var checkpoints = await ReadCheckpointsAsync(aggregateId);
+        checkpoints.Should().ContainSingle();
+        checkpoints[0].Id.Version.Should().Be(4);
+        checkpoints[0].Revision.Should().Be(3);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_ObservationalEventsOnly_NeverCreateCheckpoint()
+    {
+        var aggregateId = Guid.NewGuid();
+        await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Shipped(aggregateId, 2)]);
+
+        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 3), Viewed(aggregateId, 4)]);
+        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 5)]);
+
+        (await ReadCheckpointsAsync(aggregateId)).Should().BeEmpty();
+
+        await _eventStore.AppendEventsAsync([Completed(aggregateId, 6)]);
+
+        var checkpoints = await ReadCheckpointsAsync(aggregateId);
+        checkpoints.Should().ContainSingle();
+        checkpoints[0].Id.Version.Should().Be(6);
+        checkpoints[0].Revision.Should().Be(3);
+        checkpoints[0].State.Version.Should().Be(6);
+        checkpoints[0].State.Revision.Should().Be(3);
+    }
+
+    [Test]
     public async Task AppendEvents_CreatesCheckpointAtInterval()
     {
         var aggregateId = Guid.NewGuid();
@@ -61,7 +118,9 @@ public class CheckpointIntegrationTests
 
         checkpoints.Should().HaveCount(1);
         checkpoints[0].Id.Version.Should().Be(3);
+        checkpoints[0].Revision.Should().Be(3);
         checkpoints[0].State.Status.Should().Be("Completed");
+        checkpoints[0].State.Revision.Should().Be(3);
     }
 
     [Test]
@@ -98,6 +157,30 @@ public class CheckpointIntegrationTests
                                                     .ToListAsync();
 
         checkpoints.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task GetAtVersionAsync_FromCheckpoint_SkipsObservationalEvents()
+    {
+        var aggregateId = Guid.NewGuid();
+        await _eventStore.AppendEventsAsync([Created(aggregateId, 1), Viewed(aggregateId, 2), Shipped(aggregateId, 3)]);
+        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 4)]);
+        await _eventStore.AppendEventsAsync([Completed(aggregateId, 5)]);
+        await _eventStore.AppendEventsAsync([Viewed(aggregateId, 6)]);
+
+        var atHead = await _eventRepository.GetAtVersionAsync(aggregateId, 6);
+        var atCheckpoint = await _eventRepository.GetAtVersionAsync(aggregateId, 4);
+
+        var readModel = await _eventRepository.GetAsync(aggregateId);
+        readModel.Should().NotBeNull();
+        atHead.Should().NotBeNull();
+        atHead.Version.Should().Be(readModel.Version).And.Be(5);
+        atHead.Revision.Should().Be(readModel.Revision).And.Be(3);
+        atHead.Status.Should().Be("Completed");
+        atCheckpoint.Should().NotBeNull();
+        atCheckpoint.Version.Should().Be(3);
+        atCheckpoint.Revision.Should().Be(2);
+        atCheckpoint.Status.Should().Be("Shipped");
     }
 
     [OneTimeSetUp]
@@ -151,6 +234,7 @@ public class CheckpointIntegrationTests
                                                        .WithEvent<OrderCreatedEvent>("OrderCreated")
                                                        .WithEvent<OrderShippedEvent>("OrderShipped")
                                                        .WithEvent<OrderCompletedEvent>("OrderCompleted")
+                                                       .WithEvent<OrderViewedEvent>("OrderViewed")
                                                        .WithCollectionPrefix("Orders")
                                                        .WithCheckpoints(3))
                  .Services
@@ -164,4 +248,42 @@ public class CheckpointIntegrationTests
         foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
             configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
     }
+
+    private static OrderCompletedEvent Completed(Guid aggregateId, Int64 version)
+        => new()
+        {
+            AggregateId = aggregateId,
+            Version = version
+        };
+
+    private static OrderCreatedEvent Created(Guid aggregateId, Int64 version)
+        => new()
+        {
+            AggregateId = aggregateId,
+            Version = version,
+            CustomerName = "Checkpointed",
+            TotalAmount = 10.00m
+        };
+
+    private static OrderShippedEvent Shipped(Guid aggregateId, Int64 version)
+        => new()
+        {
+            AggregateId = aggregateId,
+            Version = version
+        };
+
+    private static OrderViewedEvent Viewed(Guid aggregateId, Int64 version)
+        => new()
+        {
+            AggregateId = aggregateId,
+            Version = version,
+            ViewedBy = "auditor"
+        };
+
+    private Task<List<CheckpointDocument<OrderAggregate>>> ReadCheckpointsAsync(Guid aggregateId)
+        => _mongoHelper.Database
+                       .GetCollection<CheckpointDocument<OrderAggregate>>("Orders_Checkpoints")
+                       .Find(Builders<CheckpointDocument<OrderAggregate>>.Filter.Eq(c => c.Id.AggregateId, aggregateId))
+                       .SortBy(c => c.Id.Version)
+                       .ToListAsync();
 }

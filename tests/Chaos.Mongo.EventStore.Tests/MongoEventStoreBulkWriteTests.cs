@@ -125,10 +125,13 @@ public class MongoEventStoreBulkWriteTests
         var readModelCollection = MongoCollectionProxy<TestAggregate>.Create(
             options.ReadModelCollectionName,
             CreateCursor<TestAggregate>());
+        var eventsCollection = MongoCollectionProxy<Event<TestAggregate>>.Create(options.EventsCollectionName);
 
         var databaseMock = new Mock<IMongoDatabase>(MockBehavior.Strict);
         databaseMock.Setup(d => d.GetCollection<TestAggregate>(options.ReadModelCollectionName, null))
                     .Returns(readModelCollection);
+        databaseMock.Setup(d => d.GetCollection<Event<TestAggregate>>(options.EventsCollectionName, null))
+                    .Returns(eventsCollection);
         databaseMock.Setup(d => d.RunCommandAsync(
                                It.IsAny<Command<BsonDocument>>(),
                                It.IsAny<ReadPreference>(),
@@ -603,6 +606,7 @@ public class MongoEventStoreBulkWriteTests
         public String Status { get; set; } = String.Empty;
         public DateTime CreatedUtc { get; set; }
         public Guid Id { get; set; }
+        public Int64 Revision { get; set; }
         public Int64 Version { get; set; }
     }
 
@@ -616,6 +620,7 @@ public class MongoEventStoreBulkWriteTests
         public String Status { get; set; } = String.Empty;
         public DateTime CreatedUtc { get; set; }
         public Guid Id { get; set; }
+        public Int64 Revision { get; set; }
         public Int64 Version { get; set; }
     }
 
@@ -674,29 +679,45 @@ public class MongoEventStoreBulkWriteTests
             };
         }
 
-        private static void EnsureProjection(Type projectionType, Object?[]? args)
+        private static void EnsureFindShape(Object?[]? args)
         {
-            if (projectionType != typeof(TDocument))
-            {
-                throw new NotSupportedException($"Projection '{projectionType}' is not supported by the test collection.");
-            }
-
             if (args?.Length is not 3 and not 4)
             {
                 throw new NotSupportedException("Unexpected Find invocation shape.");
             }
         }
 
+        private static NotSupportedException UnsupportedProjection(Type projectionType)
+            => new($"Projection '{projectionType}' is not supported by the test collection.");
+
+        /// <summary>
+        /// Returns the configured cursor for typed finds and an empty cursor for finds that project
+        /// elements into a <see cref="BsonDocument"/>, such as the stream-head read.
+        /// </summary>
         private Object HandleFindAsync(Type projectionType, Object?[]? args)
         {
-            EnsureProjection(projectionType, args);
-            return Task.FromResult(_cursor);
+            EnsureFindShape(args);
+            if (projectionType == typeof(TDocument))
+            {
+                return Task.FromResult(_cursor);
+            }
+
+            return projectionType == typeof(BsonDocument)
+                ? Task.FromResult(CreateCursor<BsonDocument>())
+                : throw UnsupportedProjection(projectionType);
         }
 
         private Object HandleFindSync(Type projectionType, Object?[]? args)
         {
-            EnsureProjection(projectionType, args);
-            return _cursor;
+            EnsureFindShape(args);
+            if (projectionType == typeof(TDocument))
+            {
+                return _cursor;
+            }
+
+            return projectionType == typeof(BsonDocument)
+                ? CreateCursor<BsonDocument>()
+                : throw UnsupportedProjection(projectionType);
         }
     }
 }

@@ -78,7 +78,7 @@ public class BulkWriteOptimizationIntegrationTests
                     Version = 3
                 }
             ],
-            async (session, _, _, ct) =>
+            onBeforeCommit: async (session, _, _, ct) =>
             {
                 await outboxCollection.InsertOneAsync(
                     session,

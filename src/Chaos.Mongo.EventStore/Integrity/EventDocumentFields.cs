@@ -19,6 +19,11 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     public static String AggregateId => ElementNameOf(nameof(Event<TAggregate>.AggregateId));
 
     /// <summary>
+    /// Gets the element name of <see cref="Event{TAggregate}.Revision"/>.
+    /// </summary>
+    public static String Revision => ElementNameOf(nameof(Event<TAggregate>.Revision));
+
+    /// <summary>
     /// Gets the element name of <see cref="Event{TAggregate}.Version"/>.
     /// </summary>
     public static String Version => ElementNameOf(nameof(Event<TAggregate>.Version));

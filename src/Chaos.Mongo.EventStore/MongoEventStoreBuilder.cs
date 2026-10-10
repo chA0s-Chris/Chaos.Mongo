@@ -108,6 +108,20 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     }
 
     /// <summary>
+    /// Sets the number of additional attempts an append with store-assigned versions makes after the first
+    /// one, when another writer commits to the same stream concurrently. Defaults to 3.
+    /// </summary>
+    /// <param name="retries">The number of additional attempts; <c>0</c> disables retries.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="retries"/> is negative.</exception>
+    public MongoEventStoreBuilder<TAggregate> WithMaxAppendRetries(Int32 retries)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(retries);
+        Options.MaxAppendRetries = retries;
+        return this;
+    }
+
+    /// <summary>
     /// Enables tamper evidence: appended events are sealed into a per-stream hash chain.
     /// </summary>
     /// <returns>This builder instance for method chaining.</returns>

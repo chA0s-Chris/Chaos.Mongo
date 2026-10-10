@@ -25,6 +25,22 @@ public class MongoBuilderExtensionsTests
     }
 
     [Test]
+    public void WithEventStore_NegativeMaxAppendRetries_ThrowsInvalidOperationException()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        var act = () => builder.WithEventStore<TestAggregate>(es =>
+        {
+            es.WithEvent<TestCreatedEvent>();
+            es.Options.MaxAppendRetries = -1;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*append retries*TestAggregate*must not be negative*");
+    }
+
+    [Test]
     public void WithEventStore_NoEventTypesRegistered_ThrowsInvalidOperationException()
     {
         var services = new ServiceCollection();
@@ -152,6 +168,7 @@ public class MongoBuilderExtensionsTests
     {
         public DateTime CreatedUtc { get; set; }
         public Guid Id { get; set; }
+        public Int64 Revision { get; set; }
         public Int64 Version { get; set; }
     }
 

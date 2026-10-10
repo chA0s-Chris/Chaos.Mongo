@@ -18,6 +18,7 @@ public class MongoEventStoreBuilderTests
                      .WithBulkWriteOptimization()
                      .WithCheckpointCollectionSuffix("_Snap")
                      .WithEventsCollectionSuffix("_Evt")
+                     .WithMaxAppendRetries(5)
                      .WithEvent<TestCreatedEvent>("Created");
 
         result.Should().BeSameAs(builder);
@@ -35,6 +36,7 @@ public class MongoEventStoreBuilderTests
         builder.Options.BulkWriteOptimizationEnabled.Should().BeFalse();
         builder.Options.CheckpointsEnabled.Should().BeFalse();
         builder.Options.EventTypes.Should().BeEmpty();
+        builder.Options.MaxAppendRetries.Should().Be(3);
     }
 
     [Test]
@@ -166,10 +168,33 @@ public class MongoEventStoreBuilderTests
         builder.Options.EventsCollectionSuffix.Should().Be("_DomainEvents");
     }
 
+    [Test]
+    public void WithMaxAppendRetries_Negative_ThrowsArgumentOutOfRangeException()
+    {
+        var builder = new MongoEventStoreBuilder<TestAggregate>();
+
+        var act = () => builder.WithMaxAppendRetries(-1);
+
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("retries");
+    }
+
+    [Test]
+    [TestCase(0)]
+    [TestCase(7)]
+    public void WithMaxAppendRetries_NonNegative_SetsOption(Int32 retries)
+    {
+        var builder = new MongoEventStoreBuilder<TestAggregate>();
+
+        builder.WithMaxAppendRetries(retries);
+
+        builder.Options.MaxAppendRetries.Should().Be(retries);
+    }
+
     private sealed class TestAggregate : IAggregate
     {
         public DateTime CreatedUtc { get; set; }
         public Guid Id { get; set; }
+        public Int64 Revision { get; set; }
         public Int64 Version { get; set; }
     }
 

@@ -6,6 +6,7 @@ using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 /// <summary>
@@ -28,6 +29,52 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         _options = options;
         _aggregateTypeName = typeof(TAggregate).Name;
         _sealer = new EventStreamSealer<TAggregate>(mongoHelper, options);
+    }
+
+    /// <summary>
+    /// Gets or sets a callback invoked between reading the stream head and reading the read model, which
+    /// lets tests commit a competing event deterministically at that point.
+    /// </summary>
+    internal Func<CancellationToken, Task>? AfterStreamHeadRead { get; set; }
+
+    /// <summary>
+    /// Applies the events to the aggregate in order. A state-changing event increments the revision and moves
+    /// the aggregate's version to its position; an observational event records the revision it observed and
+    /// changes neither. Each event's revision is assigned before its <c>Execute</c> runs, so the value is the
+    /// same on every attempt of a retried append. The event store owns the aggregate's version and revision:
+    /// they are assigned after each event, so whatever an <c>Execute</c> implementation writes to them, for
+    /// example an object mapper copying same-named event members, is overwritten.
+    /// </summary>
+    private static void ApplyEvents(List<Event<TAggregate>> eventList, TAggregate aggregate)
+    {
+        foreach (var @event in eventList)
+        {
+            var revision = aggregate.Revision;
+            var version = aggregate.Version;
+
+            if (@event is ObservationalEvent<TAggregate>)
+            {
+                // Without a preceding state-changing event there is no aggregate to observe, and a non-empty
+                // stream would have no read model.
+                if (revision == 0)
+                {
+                    throw new MongoEventValidationException(
+                        $"The observational event at version {@event.Version} of aggregate '{@event.AggregateId}' " +
+                        "requires a preceding state-changing event.");
+                }
+            }
+            else
+            {
+                revision++;
+                version = @event.Version;
+            }
+
+            @event.Revision = revision;
+            @event.Execute(aggregate);
+
+            aggregate.Revision = revision;
+            aggregate.Version = version;
+        }
     }
 
     /// <summary>
@@ -62,6 +109,29 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             _ => false
         };
 
+    private static void PrepareEvents(List<Event<TAggregate>> eventList, String aggregateTypeName, DateTime now)
+    {
+        foreach (var @event in eventList)
+        {
+            @event.AggregateType = aggregateTypeName;
+
+            // Integrity data is owned by the event store and must never enter the hashed document.
+            @event.Integrity = null;
+
+            if (@event.CreatedUtc == default)
+            {
+                @event.CreatedUtc = now;
+            }
+
+            // The bulk-write path serializes events directly and bypasses the driver's
+            // id generation, so assign the id here to keep both append paths identical.
+            if (@event.Id == Guid.Empty)
+            {
+                @event.Id = CreateEventId();
+            }
+        }
+    }
+
     private static FilterDefinition<BsonDocument> RenderFilter<TDocument>(
         IMongoCollection<TDocument> collection,
         FilterDefinition<TDocument> filter)
@@ -91,13 +161,262 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <summary>
+    /// Checks the batch against itself: one aggregate, and either only unset versions or sequential versions
+    /// starting at one or above. A malformed batch is a caller error no reload can fix, so it must never surface
+    /// as a retryable conflict.
+    /// </summary>
+    /// <returns><c>true</c> when the event store assigns the versions; <c>false</c> for explicit versions.</returns>
+    private static Boolean ValidateBatch(List<Event<TAggregate>> events, Guid aggregateId)
+    {
+        foreach (var @event in events)
+        {
+            if (@event.AggregateId != aggregateId)
+            {
+                throw new ArgumentException(
+                    $"All events must target the same aggregate. Expected '{aggregateId}', but found '{@event.AggregateId}'.",
+                    nameof(events));
+            }
+        }
+
+        var unsetVersions = events.Count(e => e.Version == 0);
+        if (unsetVersions == events.Count)
+        {
+            return true;
+        }
+
+        if (unsetVersions > 0)
+        {
+            throw new ArgumentException(
+                "Events must either all leave their version unset (0) to have it assigned by the event store, or all set it explicitly.",
+                nameof(events));
+        }
+
+        var firstVersion = events[0].Version;
+        for (var index = 1; index < events.Count; index++)
+        {
+            var expectedBatchVersion = firstVersion + index;
+            if (events[index].Version != expectedBatchVersion)
+            {
+                throw new ArgumentException(
+                    "Events must have sequential versions. " +
+                    $"Expected version {expectedBatchVersion}, but found {events[index].Version}.",
+                    nameof(events));
+            }
+        }
+
+        if (firstVersion < 1)
+        {
+            throw new ArgumentException(
+                $"Event versions must start at 1, but found {firstVersion}.",
+                nameof(events));
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Makes one attempt to append the batch. Returns a conflict instead of throwing it when another writer
+    /// committed to the stream after it was read, so store-assigned appends can retry against fresh state.
+    /// </summary>
+    private async Task<AppendAttempt> AppendOnceAsync(
+        List<Event<TAggregate>> eventList,
+        Guid aggregateId,
+        Boolean storeAssigned,
+        Int64? expectedRevision,
+        DateTime now,
+        Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit,
+        CancellationToken cancellationToken)
+    {
+        // 1. Read the stream head, then the read model (outside the transaction for validation). Reading
+        // the head first guarantees that the read model is never older than the head it is checked against.
+        var head = await ReadStreamHeadAsync(aggregateId, cancellationToken);
+        if (storeAssigned)
+        {
+            for (var index = 0; index < eventList.Count; index++)
+            {
+                eventList[index].Version = head.Version + 1 + index;
+            }
+        }
+        else
+        {
+            await ValidatePositionsAsync(eventList, head, cancellationToken);
+        }
+
+        if (AfterStreamHeadRead is not null)
+        {
+            await AfterStreamHeadRead(cancellationToken);
+        }
+
+        var aggregate = await LoadAggregateAsync(aggregateId, head, now, cancellationToken);
+        if (aggregate.Revision != head.Revision)
+        {
+            return AppendAttempt.Conflicted(new MongoConcurrencyException(
+                                                $"A concurrency conflict occurred — the read model of aggregate '{aggregateId}' is at revision " +
+                                                $"{aggregate.Revision}, but its stream was read at revision {head.Revision}."));
+        }
+
+        if (expectedRevision is { } expected && expected != aggregate.Revision)
+        {
+            throw new MongoConcurrencyException(
+                $"A concurrency conflict occurred — expected aggregate '{aggregateId}' at revision {expected}, " +
+                $"but it is at revision {aggregate.Revision}.");
+        }
+
+        // Integrity data of an earlier attempt must not enter the hashed document of this one.
+        foreach (var @event in eventList)
+        {
+            @event.Integrity = null;
+        }
+
+        // 2. Apply events in memory (may throw MongoEventValidationException)
+        var previousRevision = aggregate.Revision;
+        ApplyEvents(eventList, aggregate);
+        var stateChanged = aggregate.Revision > previousRevision;
+
+        // 3. A checkpoint is due whenever the batch crosses a multiple of the interval, even when it
+        // skips over the exact multiple. Batches without state-changing events never cross one.
+        var checkpoint = _options.CheckpointsEnabled &&
+                         (aggregate.Revision / _options.CheckpointInterval) > (previousRevision / _options.CheckpointInterval)
+            ? new CheckpointDocument<TAggregate>
+            {
+                Id = new CheckpointId(aggregateId, aggregate.Version),
+                Revision = aggregate.Revision,
+                State = aggregate
+            }
+            : null;
+
+        await EnsureBulkWriteOptimizationSupportedAsync(cancellationToken);
+
+        // Serialized documents are only needed to seal events or to feed the client bulk write. Without
+        // either, events are inserted typed, which avoids an intermediate document per event. The server
+        // stores _id first in every case, so all paths persist identical bytes.
+        var eventDocuments = _options.IntegrityProtectionEnabled || _options.BulkWriteOptimizationEnabled
+            ? eventList.Select(SerializeEvent).ToList()
+            : null;
+
+        // 4. Persist changes inside transaction
+        try
+        {
+            await _mongoHelper.ExecuteInTransaction(
+                async (helper, session, ct) =>
+                {
+                    var eventsCollection = GetEventsCollection();
+                    var readModelCollection = GetReadModelCollection();
+                    var documents = _options.IntegrityProtectionEnabled && eventDocuments is not null
+                        ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
+                        : eventDocuments;
+
+                    // Documents always exist when the bulk write is enabled; the null check only proves it.
+                    if (_options.BulkWriteOptimizationEnabled && documents is not null)
+                    {
+                        var models = new List<BulkWriteModel>(documents.Count + (stateChanged ? 1 : 0) + (checkpoint is null ? 0 : 1));
+
+                        foreach (var document in documents)
+                        {
+                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
+                                           eventsCollection.CollectionNamespace,
+                                           document));
+                        }
+
+                        if (stateChanged)
+                        {
+                            models.Add(new BulkWriteReplaceOneModel<BsonDocument>(
+                                           readModelCollection.CollectionNamespace,
+                                           RenderFilter(readModelCollection, Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId)),
+                                           aggregate.ToBsonDocument(),
+                                           null,
+                                           null,
+                                           true));
+                        }
+
+                        if (checkpoint is not null)
+                        {
+                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
+                                           GetCheckpointCollection().CollectionNamespace,
+                                           checkpoint.ToBsonDocument()));
+                        }
+
+                        await helper.Client.BulkWriteAsync(
+                            session,
+                            models,
+                            new ClientBulkWriteOptions
+                            {
+                                IsOrdered = true
+                            },
+                            ct);
+                    }
+                    else
+                    {
+                        // 4a. Insert events
+                        if (documents is null)
+                        {
+                            await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
+                        }
+                        else
+                        {
+                            await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
+                        }
+
+                        // 4b. Upsert read model; observational events leave it untouched
+                        if (stateChanged)
+                        {
+                            await readModelCollection.ReplaceOneAsync(
+                                session,
+                                Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
+                                aggregate,
+                                new ReplaceOptions
+                                {
+                                    IsUpsert = true
+                                },
+                                ct);
+                        }
+
+                        // 4c. Create checkpoint if needed
+                        if (checkpoint is not null)
+                        {
+                            var checkpointCollection = GetCheckpointCollection();
+                            await checkpointCollection.InsertOneAsync(session, checkpoint, cancellationToken: ct);
+                        }
+                    }
+
+                    // 4d. Invoke user callback for additional transactional operations
+                    if (onBeforeCommit is not null)
+                        await onBeforeCommit(session, aggregate, helper, ct);
+                },
+                cancellationToken: cancellationToken);
+
+            return AppendAttempt.Committed(aggregate);
+        }
+        catch (MongoException ex) when (IsDuplicateKeyException(ex))
+        {
+            var message = GetDuplicateKeyMessage(ex);
+
+            if (message.Contains("index: _id_", StringComparison.Ordinal))
+            {
+                throw new MongoDuplicateEventException(
+                    "An event with the same ID already exists (idempotency conflict).", ex);
+            }
+
+            if (message.Contains(IndexNames.AggregateIdWithVersionUnique, StringComparison.Ordinal))
+            {
+                return AppendAttempt.Conflicted(new MongoConcurrencyException(
+                                                    "A concurrency conflict occurred — another process inserted an event for this aggregate version.",
+                                                    ex));
+            }
+
+            // Unknown duplicate key error (e.g. user-defined index) — let it propagate
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Creates the exception describing an append whose first event version was already committed.
     /// Resubmitting an event that is already stored is an idempotent retry rather than a conflict,
     /// so the stored event IDs decide which exception the caller sees.
     /// </summary>
     private async Task<MongoEventStoreException> CreateStaleVersionExceptionAsync(
         List<Event<TAggregate>> eventList,
-        Int64 currentVersion,
+        Int64 headVersion,
         CancellationToken cancellationToken)
     {
         var eventIds = eventList.Select(e => e.Id).ToList();
@@ -114,7 +433,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
         return new MongoConcurrencyException(
             $"A concurrency conflict occurred — version {eventList[0].Version} of this aggregate was already committed. " +
-            $"The aggregate is at version {currentVersion}.");
+            $"The stream is at version {headVersion}.");
     }
 
     private async Task EnsureBulkWriteOptimizationSupportedAsync(CancellationToken cancellationToken)
@@ -141,6 +460,38 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
     private IMongoCollection<TAggregate> GetReadModelCollection()
         => _mongoHelper.Database.GetCollection<TAggregate>(_options.ReadModelCollectionName);
+
+    /// <summary>
+    /// Loads the read model the batch executes against. A non-empty stream always has a read model.
+    /// </summary>
+    private async Task<TAggregate> LoadAggregateAsync(
+        Guid aggregateId,
+        StreamHead head,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var aggregate = await GetReadModelCollection()
+                              .Find(Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId))
+                              .FirstOrDefaultAsync(cancellationToken);
+
+        if (aggregate is null)
+        {
+            if (head.Version > 0)
+            {
+                throw new MongoEventStoreException(
+                    $"The stream of aggregate '{aggregateId}' is at version {head.Version}, but its read model is missing.");
+            }
+
+            return new TAggregate
+            {
+                Id = aggregateId,
+                CreatedUtc = now
+            };
+        }
+
+        LegacyRevision.Normalize(aggregate);
+        return aggregate;
+    }
 
     private async Task<Byte[]> ReadPredecessorHashAsync(
         IClientSessionHandle session,
@@ -172,6 +523,36 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         }
 
         return integrity.Hash;
+    }
+
+    /// <summary>
+    /// Reads the position and normalized revision of the last event in the stream through an indexed
+    /// point read on <c>(AggregateId, Version)</c>. Only these two elements are projected, so the head is
+    /// read without deserializing the event itself.
+    /// </summary>
+    private async Task<StreamHead> ReadStreamHeadAsync(Guid aggregateId, CancellationToken cancellationToken)
+    {
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var revisionElement = EventDocumentFields<TAggregate>.Revision;
+
+        var lastEvent = await GetEventsCollection()
+                              .Find(Builders<Event<TAggregate>>.Filter.Eq(e => e.AggregateId, aggregateId))
+                              .SortByDescending(e => e.Version)
+                              .Limit(1)
+                              .Project(Builders<Event<TAggregate>>.Projection
+                                                                  .Include(versionElement)
+                                                                  .Include(revisionElement)
+                                                                  .Exclude("_id"))
+                              .FirstOrDefaultAsync(cancellationToken);
+
+        if (lastEvent is null)
+        {
+            return new StreamHead(0, 0);
+        }
+
+        var version = lastEvent[versionElement].ToInt64();
+        var revision = lastEvent.TryGetValue(revisionElement, out var revisionValue) ? revisionValue.ToInt64() : 0;
+        return new StreamHead(version, LegacyRevision.Of(revision, version));
     }
 
     /// <summary>
@@ -208,9 +589,36 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         return sealedDocuments;
     }
 
+    /// <summary>
+    /// Validates the batch's positions against the stream head. A position that is already committed is an
+    /// optimistic-concurrency conflict, not invalid input: the caller prepared the event against state another
+    /// writer has since superseded. A position above the head + 1 is a gap in the caller's own numbering.
+    /// </summary>
+    private async Task ValidatePositionsAsync(
+        List<Event<TAggregate>> events,
+        StreamHead head,
+        CancellationToken cancellationToken)
+    {
+        var firstVersion = events[0].Version;
+        if (firstVersion <= head.Version)
+        {
+            throw await CreateStaleVersionExceptionAsync(events, head.Version, cancellationToken);
+        }
+
+        var expectedVersion = head.Version + 1;
+        if (firstVersion != expectedVersion)
+        {
+            throw new ArgumentException(
+                $"Events must have sequential versions starting from {expectedVersion}. " +
+                $"Expected version {expectedVersion}, but found {firstVersion}.",
+                nameof(events));
+        }
+    }
+
     /// <inheritdoc/>
     public async Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
+        Int64? expectedRevision = null,
         Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken cancellationToken = default)
     {
@@ -221,221 +629,45 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             throw new ArgumentException("At least one event is required.", nameof(events));
 
         var now = DateTime.UtcNow;
-        foreach (var @event in eventList)
-        {
-            @event.AggregateType = _aggregateTypeName;
-
-            // Integrity data is owned by the event store and must never enter the hashed document.
-            @event.Integrity = null;
-
-            if (@event.CreatedUtc == default)
-            {
-                @event.CreatedUtc = now;
-            }
-
-            // The bulk-write path serializes events directly and bypasses the driver's
-            // id generation, so assign the id here to keep both append paths identical.
-            if (@event.Id == Guid.Empty)
-            {
-                @event.Id = CreateEventId();
-            }
-        }
+        PrepareEvents(eventList, _aggregateTypeName, now);
 
         var aggregateId = eventList[0].AggregateId;
-        var readModelCollection = GetReadModelCollection();
+        var storeAssigned = ValidateBatch(eventList, aggregateId);
 
-        // 1. Load or create aggregate (outside transaction for validation)
-        var aggregate = await readModelCollection
-                              .Find(Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId))
-                              .FirstOrDefaultAsync(cancellationToken);
-
-        aggregate ??= new TAggregate
-        {
-            Id = aggregateId,
-            CreatedUtc = now
-        };
-
-        // 2. Validate events: same aggregate, sequential versions
-        foreach (var @event in eventList)
-        {
-            if (@event.AggregateId != aggregateId)
-            {
-                throw new ArgumentException(
-                    $"All events must target the same aggregate. Expected '{aggregateId}', but found '{@event.AggregateId}'.",
-                    nameof(events));
-            }
-        }
-
-        var firstVersion = eventList[0].Version;
-
-        // Check the batch against itself before comparing it to the aggregate: a malformed batch is
-        // a caller error no reload can fix, so it must never surface as a retryable conflict.
-        for (var index = 1; index < eventList.Count; index++)
-        {
-            var expectedBatchVersion = firstVersion + index;
-            if (eventList[index].Version != expectedBatchVersion)
-            {
-                throw new ArgumentException(
-                    "Events must have sequential versions. " +
-                    $"Expected version {expectedBatchVersion}, but found {eventList[index].Version}.",
-                    nameof(events));
-            }
-        }
-
-        if (firstVersion < 1)
-        {
-            throw new ArgumentException(
-                $"Event versions must start at 1, but found {firstVersion}.",
-                nameof(events));
-        }
-
-        // A version that is already committed is an optimistic-concurrency conflict, not invalid
-        // input: the caller prepared the event against state another writer has since superseded.
-        if (firstVersion <= aggregate.Version)
-        {
-            throw await CreateStaleVersionExceptionAsync(eventList, aggregate.Version, cancellationToken);
-        }
-
-        var expectedVersion = aggregate.Version + 1;
-        if (firstVersion != expectedVersion)
-        {
-            throw new ArgumentException(
-                $"Events must have sequential versions starting from {expectedVersion}. " +
-                $"Expected version {expectedVersion}, but found {firstVersion}.",
-                nameof(events));
-        }
-
-        // 3. Apply events in memory (may throw MongoEventValidationException)
-        foreach (var @event in eventList)
-        {
-            @event.Execute(aggregate);
-        }
-
-        // 4. Update version
-        var lastVersion = eventList[^1].Version;
-        aggregate.Version = lastVersion;
-
-        var shouldCreateCheckpoint = _options.CheckpointsEnabled && lastVersion % _options.CheckpointInterval == 0;
-        var checkpoint = shouldCreateCheckpoint
-            ? new CheckpointDocument<TAggregate>
-            {
-                Id = new CheckpointId(aggregateId, lastVersion),
-                State = aggregate
-            }
-            : null;
-
-        await EnsureBulkWriteOptimizationSupportedAsync(cancellationToken);
-
-        // Serialized documents are only needed to seal events or to feed the client bulk write. Without
-        // either, events are inserted typed, which avoids an intermediate document per event. The server
-        // stores _id first in every case, so all paths persist identical bytes.
-        var eventDocuments = _options.IntegrityProtectionEnabled || _options.BulkWriteOptimizationEnabled
-            ? eventList.Select(SerializeEvent).ToList()
-            : null;
-
-        // 5. Persist changes inside transaction
         try
         {
-            await _mongoHelper.ExecuteInTransaction(
-                async (helper, session, ct) =>
+            // Only store-assigned positions can be retried: explicit positions were chosen by the caller
+            // against state that a concurrent commit has superseded.
+            for (var retry = 0;; retry++)
+            {
+                var attempt = await AppendOnceAsync(eventList, aggregateId, storeAssigned, expectedRevision, now, onBeforeCommit, cancellationToken);
+                if (!attempt.IsConflict)
                 {
-                    var eventsCollection = GetEventsCollection();
-                    var documents = _options.IntegrityProtectionEnabled && eventDocuments is not null
-                        ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
-                        : eventDocuments;
+                    return attempt.Aggregate;
+                }
 
-                    // Documents always exist when the bulk write is enabled; the null check only proves it.
-                    if (_options.BulkWriteOptimizationEnabled && documents is not null)
-                    {
-                        var models = new List<BulkWriteModel>(documents.Count + (checkpoint is null ? 1 : 2));
+                if (!storeAssigned)
+                {
+                    throw attempt.Conflict;
+                }
 
-                        foreach (var document in documents)
-                        {
-                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
-                                           eventsCollection.CollectionNamespace,
-                                           document));
-                        }
-
-                        models.Add(new BulkWriteReplaceOneModel<BsonDocument>(
-                                       readModelCollection.CollectionNamespace,
-                                       RenderFilter(readModelCollection, Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId)),
-                                       aggregate.ToBsonDocument(),
-                                       null,
-                                       null,
-                                       true));
-
-                        if (checkpoint is not null)
-                        {
-                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
-                                           GetCheckpointCollection().CollectionNamespace,
-                                           checkpoint.ToBsonDocument()));
-                        }
-
-                        await helper.Client.BulkWriteAsync(
-                            session,
-                            models,
-                            new ClientBulkWriteOptions
-                            {
-                                IsOrdered = true
-                            },
-                            ct);
-                    }
-                    else
-                    {
-                        // 5a. Insert events
-                        if (documents is null)
-                        {
-                            await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
-                        }
-                        else
-                        {
-                            await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
-                        }
-
-                        // 5b. Upsert read model
-                        await readModelCollection.ReplaceOneAsync(
-                            session,
-                            Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
-                            aggregate,
-                            new ReplaceOptions
-                            {
-                                IsUpsert = true
-                            },
-                            ct);
-
-                        // 5c. Create checkpoint if needed
-                        if (checkpoint is not null)
-                        {
-                            var checkpointCollection = GetCheckpointCollection();
-                            await checkpointCollection.InsertOneAsync(session, checkpoint, cancellationToken: ct);
-                        }
-                    }
-
-                    // 5d. Invoke user callback for additional transactional operations
-                    if (onBeforeCommit is not null)
-                        await onBeforeCommit(session, aggregate, helper, ct);
-                },
-                cancellationToken: cancellationToken);
-
-            return aggregate;
+                if (retry >= _options.MaxAppendRetries)
+                {
+                    throw new MongoConcurrencyException(
+                        $"A concurrency conflict occurred — the append to aggregate '{aggregateId}' still conflicted with concurrent " +
+                        $"writers after {_options.MaxAppendRetries} retries (MaxAppendRetries).",
+                        attempt.Conflict);
+                }
+            }
         }
-        catch (MongoException ex) when (IsDuplicateKeyException(ex))
+        catch when (storeAssigned)
         {
-            var message = GetDuplicateKeyMessage(ex);
-
-            if (message.Contains("index: _id_", StringComparison.Ordinal))
+            // Leave failed store-assigned events reusable: a retry with the same instances must assign again.
+            foreach (var @event in eventList)
             {
-                throw new MongoDuplicateEventException(
-                    "An event with the same ID already exists (idempotency conflict).", ex);
+                @event.Version = 0;
             }
 
-            if (message.Contains(IndexNames.AggregateIdWithVersionUnique, StringComparison.Ordinal))
-            {
-                throw new MongoConcurrencyException(
-                    "A concurrency conflict occurred — another process inserted an event for this aggregate version.", ex);
-            }
-
-            // Unknown duplicate key error (e.g. user-defined index) — let it propagate
             throw;
         }
     }
@@ -465,6 +697,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         {
             foreach (var @event in cursor.Current)
             {
+                LegacyRevision.Normalize(@event);
                 yield return @event;
             }
         }
@@ -473,14 +706,36 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     /// <inheritdoc/>
     public async Task<Int64> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken cancellationToken = default)
     {
-        var eventsCollection = GetEventsCollection();
-
-        var lastEvent = await eventsCollection
-                              .Find(Builders<Event<TAggregate>>.Filter.Eq(e => e.AggregateId, aggregateId))
-                              .SortByDescending(e => e.Version)
-                              .Limit(1)
-                              .FirstOrDefaultAsync(cancellationToken);
-
-        return (lastEvent?.Version ?? 0) + 1;
+        var head = await ReadStreamHeadAsync(aggregateId, cancellationToken);
+        return head.Version + 1;
     }
+
+    /// <summary>
+    /// The outcome of one append attempt: the committed aggregate, or the conflict that prevented the commit.
+    /// </summary>
+    private sealed class AppendAttempt
+    {
+        private AppendAttempt(TAggregate? aggregate, MongoConcurrencyException? conflict)
+        {
+            Aggregate = aggregate;
+            Conflict = conflict;
+        }
+
+        public TAggregate? Aggregate { get; }
+
+        public MongoConcurrencyException? Conflict { get; }
+
+        [MemberNotNullWhen(true, nameof(Conflict))]
+        [MemberNotNullWhen(false, nameof(Aggregate))]
+        public Boolean IsConflict => Conflict is not null;
+
+        public static AppendAttempt Committed(TAggregate aggregate) => new(aggregate, null);
+
+        public static AppendAttempt Conflicted(MongoConcurrencyException conflict) => new(null, conflict);
+    }
+
+    /// <summary>
+    /// The position and revision of the last event in a stream; both are zero for an empty stream.
+    /// </summary>
+    private readonly record struct StreamHead(Int64 Version, Int64 Revision);
 }

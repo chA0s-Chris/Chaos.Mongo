@@ -23,7 +23,14 @@ public abstract class Aggregate : IAggregate
     public Guid Id { get; set; }
 
     /// <summary>
-    /// Gets or sets the version of the aggregate after the last applied event.
+    /// Gets or sets the revision of the aggregate: the number of state-changing events applied to it.
+    /// Observational events do not change it.
+    /// </summary>
+    public Int64 Revision { get; set; }
+
+    /// <summary>
+    /// Gets or sets the stream position of the last state-changing event applied to the aggregate.
+    /// Observational events appended later do not change it.
     /// </summary>
     public Int64 Version { get; set; }
 }
