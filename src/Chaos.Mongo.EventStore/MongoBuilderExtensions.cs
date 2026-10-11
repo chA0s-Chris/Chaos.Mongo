@@ -113,6 +113,64 @@ public static class MongoBuilderExtensions
     }
 
     /// <summary>
+    /// Configures the anchoring pipeline once at module level: a hosted service anchors the changed stream heads of all
+    /// protected aggregate types at the configured interval and has the anchors timestamped. It registers the
+    /// change-stream candidate source through <see cref="WithAnchorCandidates"/>.
+    /// </summary>
+    /// <param name="builder">The Mongo builder.</param>
+    /// <param name="configure">Configures the authorities, the completion hook and the run settings.</param>
+    /// <returns>The Mongo builder for method chaining.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when anchoring is already configured, when no timestamp authority is configured, or when a setting is out
+    /// of range.
+    /// </exception>
+    internal static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityAnchoringService)))
+        {
+            throw new InvalidOperationException("Integrity anchoring is already configured; configure it once at module level.");
+        }
+
+        var options = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
+        var anchoring = new IntegrityAnchoringBuilder(options);
+        configure(anchoring);
+        anchoring.Validate();
+
+        builder.WithAnchorCandidates();
+        builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
+        builder.Services.AddSingleton(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton(sp => new SealingAnchorLookup(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton(sp =>
+        {
+            var timeProvider = sp.GetService<TimeProvider>() ?? TimeProvider.System;
+            var notifier = anchoring.CompletionHook is { } hook
+                ? new AnchorCompletionNotifier(sp.GetRequiredService<IMongoHelper>(),
+                                               options,
+                                               sp,
+                                               hook,
+                                               timeProvider,
+                                               sp.GetService<ILogger<AnchorCompletionNotifier>>() ?? NullLogger<AnchorCompletionNotifier>.Instance)
+                : null;
+            return new AnchoringRun(sp.GetRequiredService<IMongoHelper>(),
+                                    sp.GetRequiredService<IAnchorCandidateSource>(),
+                                    anchoring.CreateAuthorities(sp),
+                                    options,
+                                    timeProvider,
+                                    sp.GetService<ILogger<AnchoringRun>>() ?? NullLogger<AnchoringRun>.Instance,
+                                    notifier);
+        });
+        builder.Services.AddSingleton(sp => new IntegrityAnchoringService(sp.GetRequiredService<AnchoringRun>(),
+                                                                          options,
+                                                                          sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                                                          sp.GetService<ILogger<IntegrityAnchoringService>>() ??
+                                                                          NullLogger<IntegrityAnchoringService>.Instance));
+        builder.Services.AddHostedService(sp => new IntegrityAnchoringHostedService(sp.GetRequiredService<IntegrityAnchoringService>()));
+        return builder;
+    }
+
+    /// <summary>
     /// Returns the instance registered for <typeparamref name="T"/>, registering a new one first if needed. Shared
     /// module-level state must be one instance regardless of how many event stores are registered.
     /// </summary>

@@ -33,12 +33,12 @@ The work is one story but four concerns with different reviewers in mind: the ti
 
 ### Layer 4: Operations
 
-- [ ] Anchoring is configured once at module level through an internal builder API with a default interval of 5 minutes. Registration fails with a clear error when no timestamp authority is configured; there is no default authority.
-- [ ] A hosted service runs the anchoring run at the configured interval after startup.
-- [ ] A hook notifies the application of every completed anchor, in anchor order and at least once.
-- [ ] When the oldest unanchored candidate is older than a configurable threshold (default 1 hour), this is reported through a log entry and a metric.
-- [ ] An internal lookup returns, for `(aggregateType, aggregateId, version)`, the first completed anchor whose leaf for that stream has a version greater than or equal to it, or none while the event is unanchored. Tests cover retroactively sealed, appended and unanchored events.
-- [ ] Automated tests cover the configuration, the hosted run, the hook and the delay alert.
+- [x] Anchoring is configured once at module level through an internal builder API with a default interval of 5 minutes. Registration fails with a clear error when no timestamp authority is configured; there is no default authority.
+- [x] A hosted service runs the anchoring run at the configured interval after startup.
+- [x] A hook notifies the application of every completed anchor, in anchor order and at least once.
+- [x] When the oldest unanchored candidate is older than a configurable threshold (default 1 hour), this is reported through a log entry and a metric.
+- [x] An internal lookup returns, for `(aggregateType, aggregateId, version)`, the first completed anchor whose leaf for that stream has a version greater than or equal to it, or none while the event is unanchored. Tests cover retroactively sealed, appended and unanchored events.
+- [x] Automated tests cover the configuration, the hosted run, the hook and the delay alert.
 
 ## Technical Details
 

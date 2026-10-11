@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Runtime.CompilerServices;
 
 /// <summary>
 /// Reads and writes anchor and leaf documents.
@@ -35,10 +36,12 @@ internal sealed class AnchorStore
     private const String HashField = "Hash";
     private const String IndexField = "Index";
     private const String LeavesByAnchorIndexName = "AnchorId_with_Index_Unique";
+    private const String LeavesByStreamIndexName = "AggregateType_with_AggregateId_with_AnchorSequence";
+    private const String NotifiedField = "Notified";
     private const String SequenceIndexName = "Sequence_Unique";
     private const String StatusIndexName = "Status";
     private const String TimestampsField = "Timestamps";
-
+    private const String UnnotifiedIndexName = "Unnotified_Sequence";
     private readonly IMongoHelper _mongoHelper;
     private readonly IntegrityAnchoringOptions _options;
 
@@ -148,7 +151,8 @@ internal sealed class AnchorStore
         var update = new BsonDocument("$set", new BsonDocument
         {
             { StatusField, nameof(AnchorStatus.Completed) },
-            { CompletedField, utcNow }
+            { CompletedField, utcNow },
+            { NotifiedField, false }
         });
         var result = await Anchors.UpdateOneAsync(ById(anchorId, AnchorStatus.AwaitingTimestamp), update, cancellationToken: cancellationToken);
         return result.ModifiedCount == 1;
@@ -190,6 +194,30 @@ internal sealed class AnchorStore
                                                new CreateIndexOptions
                                                {
                                                    Name = StatusIndexName
+                                               }),
+            cancellationToken: cancellationToken);
+        await Anchors.Indexes.CreateOneOrUpdateAsync(
+            new CreateIndexModel<BsonDocument>(new BsonDocument(SequenceField, 1),
+                                               new CreateIndexOptions<BsonDocument>
+                                               {
+                                                   Name = UnnotifiedIndexName,
+                                                   PartialFilterExpression = new BsonDocument
+                                                   {
+                                                       { StatusField, nameof(AnchorStatus.Completed) },
+                                                       { NotifiedField, false }
+                                                   }
+                                               }),
+            cancellationToken: cancellationToken);
+        await Leaves.Indexes.CreateOneOrUpdateAsync(
+            new CreateIndexModel<BsonDocument>(new BsonDocument
+                                               {
+                                                   { AggregateTypeField, 1 },
+                                                   { AggregateIdField, 1 },
+                                                   { AnchorSequenceField, 1 }
+                                               },
+                                               new CreateIndexOptions
+                                               {
+                                                   Name = LeavesByStreamIndexName
                                                }),
             cancellationToken: cancellationToken);
         await Leaves.Indexes.CreateOneOrUpdateAsync(
@@ -245,6 +273,39 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Finds the leaves of a stream with at least the given version, in anchor sequence order. Leaves of discarded or
+    /// uncommitted attempts are included; callers check the anchor.
+    /// </summary>
+    public IAsyncEnumerable<AnchorLeaf> FindStreamLeavesAsync(String aggregateType, Guid aggregateId, Int64 minimumVersion, CancellationToken cancellationToken)
+        => ReadAllAsync(Leaves.Find(new BsonDocument
+                              {
+                                  { AggregateTypeField, aggregateType },
+                                  { AggregateIdField, ToBson(aggregateId) },
+                                  { "Version", new BsonDocument("$gte", minimumVersion) }
+                              })
+                              .Sort(new BsonDocument
+                              {
+                                  { AggregateTypeField, 1 },
+                                  { AggregateIdField, 1 },
+                                  { AnchorSequenceField, 1 }
+                              }),
+                        ReadLeaf,
+                        cancellationToken);
+
+    /// <summary>
+    /// Finds the completed anchors whose completion was not yet notified, in sequence order.
+    /// </summary>
+    public IAsyncEnumerable<AnchorRecord> FindUnnotifiedAsync(CancellationToken cancellationToken)
+        => ReadAllAsync(Anchors.Find(new BsonDocument
+                               {
+                                   { StatusField, nameof(AnchorStatus.Completed) },
+                                   { NotifiedField, false }
+                               })
+                               .Sort(new BsonDocument(SequenceField, 1)),
+                        ReadAnchor,
+                        cancellationToken);
+
+    /// <summary>
     /// Inserts leaves of a prepared attempt.
     /// </summary>
     public Task InsertLeavesAsync(IEnumerable<AnchorLeaf> leaves, CancellationToken cancellationToken)
@@ -281,6 +342,19 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Marks a completed anchor as notified.
+    /// </summary>
+    public Task MarkNotifiedAsync(Guid anchorId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        var update = new BsonDocument("$set", new BsonDocument
+        {
+            { NotifiedField, true },
+            { "NotifiedUtc", utcNow }
+        });
+        return Anchors.UpdateOneAsync(ById(anchorId, AnchorStatus.Completed), update, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
     /// Reads the leaves of an anchor in leaf order.
     /// </summary>
     public async Task<IReadOnlyList<AnchorLeaf>> ReadLeavesAsync(Guid anchorId, CancellationToken cancellationToken)
@@ -300,6 +374,14 @@ internal sealed class AnchorStore
         var update = new BsonDocument("$set", new BsonDocument(AuthorityFailuresField, new BsonArray(failures.Select(ToBson))));
         return Anchors.UpdateOneAsync(ById(anchorId, AnchorStatus.AwaitingTimestamp), update, cancellationToken: cancellationToken);
     }
+
+    /// <summary>
+    /// Streams the leaves of an anchor in leaf order.
+    /// </summary>
+    public IAsyncEnumerable<AnchorLeaf> StreamLeavesAsync(Guid anchorId, CancellationToken cancellationToken)
+        => ReadAllAsync(Leaves.Find(new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
+                        ReadLeaf,
+                        cancellationToken);
 
     /// <summary>
     /// Reads a committed anchor document, that is one awaiting its timestamps or completed.
@@ -338,6 +420,20 @@ internal sealed class AnchorStore
             { "_id", ToBson(anchorId) },
             { StatusField, status.ToString() }
         };
+
+    private static async IAsyncEnumerable<T> ReadAllAsync<T>(IFindFluent<BsonDocument, BsonDocument> find,
+                                                             Func<BsonDocument, T> read,
+                                                             [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var cursor = await find.ToCursorAsync(cancellationToken);
+        while (await cursor.MoveNextAsync(cancellationToken))
+        {
+            foreach (var document in cursor.Current)
+            {
+                yield return read(document);
+            }
+        }
+    }
 
     private static IReadOnlyList<Byte[]> ReadBinaries(BsonValue value)
         => value.AsBsonArray.Select(item => item.AsByteArray).ToList();

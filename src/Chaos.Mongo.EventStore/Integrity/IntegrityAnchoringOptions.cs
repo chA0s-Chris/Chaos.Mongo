@@ -32,6 +32,17 @@ internal sealed class IntegrityAnchoringOptions
     public String ChangeStreamStateCollectionName { get; set; } = "IntegrityChangeStreamState";
 
     /// <summary>
+    /// Gets or sets the age of the oldest unanchored candidate above which a run reports the anchor delay through a
+    /// log entry and a metric. Defaults to 1 hour.
+    /// </summary>
+    public TimeSpan DelayThreshold { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Gets or sets the interval between anchoring runs. Defaults to 5 minutes.
+    /// </summary>
+    public TimeSpan Interval { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Gets or sets the number of leaves after which a run stops reading candidates; the remaining candidates go
     /// into the next run's anchor. A run also stops after reading as many batches as this maximum divided by
     /// <see cref="CandidateReadBatchSize"/>, so continuous changes to few streams, or changes that yield no candidate,

@@ -1,0 +1,324 @@
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// This file is licensed under the MIT license. See LICENSE in the project root for more information.
+namespace Chaos.Mongo.EventStore.Tests.Integration;
+
+using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.EventStore.Tests.Integrity;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using NUnit.Framework;
+using System.Runtime.CompilerServices;
+using Testcontainers.MongoDb;
+
+/// <summary>
+/// The operational surface of anchoring: module-level configuration, the hosted run, the completion hook, the delay
+/// alert and the sealing-anchor lookup.
+/// </summary>
+public class IntegrityAnchoringIntegrationTests
+{
+    private readonly List<LedgerStoreContext> _contexts = [];
+    private readonly List<TestTimestampAuthority> _testAuthorities = [];
+    private MongoDbContainer _container;
+
+    [Test]
+    public async Task CompletionHook_CompletedAnchors_AreNotifiedInOrderAtLeastOnceWithoutBlockingAnchoring()
+    {
+        var notified = new List<Int64>();
+        var attempts = new List<Int64>();
+        var leafCounts = new List<(Int32 Streamed, Int32 Expected)>();
+        var blockSecond = new StrongBox<Boolean>(false);
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())
+                                                                     .OnAnchorCompleted(async (services, anchor, ct) =>
+                                                                     {
+                                                                         attempts.Add(anchor.Sequence);
+                                                                         if (blockSecond.Value && anchor.Sequence == 2)
+                                                                         {
+                                                                             throw new InvalidOperationException("The hook is unavailable.");
+                                                                         }
+
+                                                                         var streamed = 0;
+                                                                         await foreach (var _ in services.GetRequiredService<AnchorLeafReader>()
+                                                                                                         .ReadLeavesAsync(anchor.Id, ct))
+                                                                         {
+                                                                             streamed++;
+                                                                         }
+
+                                                                         leafCounts.Add((streamed, anchor.LeafCount));
+                                                                         notified.Add(anchor.Sequence);
+                                                                     }));
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var first = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, first));
+
+        blockSecond.Value = true;
+        var second = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, second));
+        var third = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, third));
+        var notifiedWhileBlocked = notified.ToList();
+
+        blockSecond.Value = false;
+        await run.RunAsync();
+
+        notifiedWhileBlocked.Should().Equal(1);
+        notified.Should().Equal(1, 2, 3);
+        attempts.Count(sequence => sequence == 2).Should().BeGreaterThan(1);
+        leafCounts.Should().OnlyContain(count => count.Streamed == count.Expected);
+        (await store.Anchors.CountDocumentsAsync(new BsonDocument("Notified", false))).Should().Be(0);
+    }
+
+    [Test]
+    public async Task DelayAlert_OldestCandidateAboveThreshold_IsReportedThroughLogAndMetric()
+    {
+        var logger = new CapturingLogger<IntegrityAnchoringService>();
+        using var metrics = new AnchoringMetricsCollector();
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())
+                                                                     .WithDelayThreshold(TimeSpan.FromMilliseconds(1)),
+                                               configureServices: services => services.AddSingleton<ILogger<IntegrityAnchoringService>>(logger));
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+        await context.AppendStreamAsync(1);
+
+        await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.OldestCandidateUtc is not null);
+
+        logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("above the anchor delay threshold"));
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument &&
+                                                             measurement.Value > 0);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayInstrument);
+    }
+
+    [Test]
+    public async Task DelayAlert_OldestCandidateBelowThreshold_RecordsDelayWithoutAlert()
+    {
+        var logger = new CapturingLogger<IntegrityAnchoringService>();
+        using var metrics = new AnchoringMetricsCollector();
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()),
+                                               configureServices: services => services.AddSingleton<ILogger<IntegrityAnchoringService>>(logger));
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+        await context.AppendStreamAsync(1);
+
+        await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.OldestCandidateUtc is not null);
+
+        logger.Entries.Should().NotContain(entry => entry.Level == LogLevel.Warning);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayInstrument);
+        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument);
+    }
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [Test]
+    public async Task HostedService_AfterStartup_RunsAtTheConfiguredInterval()
+    {
+        var interval = TimeSpan.FromMinutes(10);
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()).WithInterval(interval),
+                                               timeProvider: timeProvider,
+                                               configureServices: services => services.AddLogging());
+        var store = GetStore(context);
+        var stateCollection = context.MongoHelper.Database.GetCollection<BsonDocument>(
+            context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>().ChangeStreamStateCollectionName);
+        var hostedService = context.ServiceProvider.GetServices<IHostedService>().OfType<IntegrityAnchoringHostedService>().Single();
+
+        await hostedService.StartAsync(CancellationToken.None);
+        await hostedService.StartedAsync(CancellationToken.None);
+        try
+        {
+            // The run at startup acknowledges the empty recovery scan of the new database.
+            await WaitUntilAsync(async () => await stateCollection.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty) > 0);
+            var stream = await context.AppendStreamAsync(1);
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            var anchoredBeforeInterval = await IsAnchoredAsync(store, stream);
+
+            await WaitUntilAsync(() => IsAnchoredAsync(store, stream), () => timeProvider.Advance(interval));
+
+            anchoredBeforeInterval.Should().BeFalse();
+        }
+        finally
+        {
+            await hostedService.StoppingAsync(CancellationToken.None);
+            await hostedService.StopAsync(CancellationToken.None);
+            await hostedService.StoppedAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task SealingAnchorLookup_AnchorAwaitingTimestamps_ReturnsNoneUntilItCompletes()
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.HttpFailure;
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var lookup = context.ServiceProvider.GetRequiredService<SealingAnchorLookup>();
+        var stream = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, result => Task.FromResult(result.Outcome == AnchoringRunOutcome.AwaitingTimestamps));
+
+        var whileAwaiting = await lookup.FindAsync(nameof(LedgerAggregate), stream, 1);
+        testAuthority.Mode = TestTimestampAuthorityMode.Valid;
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, stream));
+        var afterCompletion = await lookup.FindAsync(nameof(LedgerAggregate), stream, 1);
+
+        whileAwaiting.Should().BeNull();
+        afterCompletion.Should().NotBeNull();
+    }
+
+    [Test]
+    public async Task SealingAnchorLookup_AppendedEvents_ReturnsFirstCompletedAnchorCoveringTheVersion()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var lookup = context.ServiceProvider.GetRequiredService<SealingAnchorLookup>();
+        var stream = await context.AppendStreamAsync(3);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, stream, 3));
+
+        var forFirst = await lookup.FindAsync(nameof(LedgerAggregate), stream, 1);
+        var forHead = await lookup.FindAsync(nameof(LedgerAggregate), stream, 3);
+        var unanchored = await lookup.FindAsync(nameof(LedgerAggregate), stream, 4);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(stream, 4)]);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, stream, 4));
+        var forAppended = await lookup.FindAsync(nameof(LedgerAggregate), stream, 4);
+        var forFirstAfterwards = await lookup.FindAsync(nameof(LedgerAggregate), stream, 1);
+
+        forFirst!.Leaf.Version.Should().Be(3);
+        forFirst.Anchor.Status.Should().Be(AnchorStatus.Completed);
+        forHead!.Anchor.Id.Should().Be(forFirst.Anchor.Id);
+        unanchored.Should().BeNull();
+        forAppended!.Leaf.Version.Should().Be(4);
+        forAppended.Anchor.Sequence.Should().BeGreaterThan(forFirst.Anchor.Sequence);
+        forFirstAfterwards!.Anchor.Id.Should().Be(forFirst.Anchor.Id);
+        MerkleTree.VerifyInclusion(MerkleTree.HashLeaf(AnchorEncoding.EncodeLeaf(new AnchorCandidate(forAppended.Leaf.AggregateType,
+                                                                                                     forAppended.Leaf.AggregateId,
+                                                                                                     forAppended.Leaf.Version,
+                                                                                                     forAppended.Leaf.Hash,
+                                                                                                     default))),
+                                   forAppended.Leaf.Index,
+                                   forAppended.Anchor.LeafCount,
+                                   forAppended.Leaf.Proof,
+                                   forAppended.Anchor.MerkleRoot)
+                  .Should().BeTrue();
+    }
+
+    [Test]
+    public async Task SealingAnchorLookup_RetroactivelySealedEvents_ReturnsTheSealingAnchor()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await LedgerStoreContext.CreateAsync(_container, false, databaseName: databaseName);
+        _contexts.Add(unprotected);
+        var stream = await unprotected.AppendStreamAsync(4);
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()), databaseName);
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var lookup = context.ServiceProvider.GetRequiredService<SealingAnchorLookup>();
+
+        var beforeSealing = await lookup.FindAsync(nameof(LedgerAggregate), stream, 2);
+        await context.Sweep.RunPassAsync();
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, stream, 4));
+        var afterSealing = await lookup.FindAsync(nameof(LedgerAggregate), stream, 2);
+
+        beforeSealing.Should().BeNull();
+        afterSealing!.Leaf.Version.Should().Be(4);
+        afterSealing.Leaf.Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(stream, 4)).Hash);
+    }
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
+
+    private static AnchorStore GetStore(LedgerStoreContext context)
+        => new(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>());
+
+    private static async Task<Boolean> IsAnchoredAsync(AnchorStore store, Guid stream, Int64 version = 1)
+    {
+        var anchors = (await store.Anchors.Find(new BsonDocument(AnchorStore.StatusField, nameof(AnchorStatus.Completed))).ToListAsync())
+            .Select(AnchorStore.ReadAnchor);
+        foreach (var anchor in anchors)
+        {
+            var leaves = await store.ReadLeavesAsync(anchor.Id, CancellationToken.None);
+            if (leaves.Any(leaf => leaf.AggregateId == stream && leaf.Version >= version))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task RunUntilAsync(AnchoringRun run, Func<AnchoringRunResult, Task<Boolean>> isDone)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!await isDone(await run.RunAsync()))
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail("The expected anchoring state was not reached within the timeout.");
+            }
+
+            await Task.Delay(50);
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<Boolean>> condition, Action? whileWaiting = null)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!await condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail("The expected state was not reached within the timeout.");
+            }
+
+            whileWaiting?.Invoke();
+            await Task.Delay(100);
+        }
+    }
+
+    private async Task<LedgerStoreContext> CreateContextAsync(Action<IntegrityAnchoringBuilder> configure,
+                                                              String? databaseName = null,
+                                                              TimeProvider? timeProvider = null,
+                                                              Action<IServiceCollection>? configureServices = null)
+    {
+        var context = await LedgerStoreContext.CreateAsync(_container,
+                                                           databaseName: databaseName,
+                                                           timeProvider: timeProvider,
+                                                           configureMongo: mongo =>
+                                                           {
+                                                               configureServices?.Invoke(mongo.Services);
+                                                               mongo.WithIntegrityAnchoring(configure);
+                                                           });
+        _contexts.Add(context);
+        return context;
+    }
+
+    private TestTimestampAuthority CreateTestAuthority()
+    {
+        var testAuthority = new TestTimestampAuthority();
+        _testAuthorities.Add(testAuthority);
+        return testAuthority;
+    }
+}

@@ -49,6 +49,7 @@ internal sealed class AnchoringRun
     private readonly IReadOnlyList<ITimestampAuthority> _authorities;
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
+    private readonly AnchorCompletionNotifier? _notifier;
     private readonly IntegrityAnchoringOptions _options;
     private readonly IAnchorCandidateSource _source;
     private readonly AnchorStore _store;
@@ -59,7 +60,8 @@ internal sealed class AnchoringRun
                         IReadOnlyList<ITimestampAuthority> authorities,
                         IntegrityAnchoringOptions options,
                         TimeProvider timeProvider,
-                        ILogger<AnchoringRun> logger)
+                        ILogger<AnchoringRun> logger,
+                        AnchorCompletionNotifier? notifier = null)
     {
         ArgumentNullException.ThrowIfNull(mongoHelper);
         ArgumentNullException.ThrowIfNull(source);
@@ -74,6 +76,7 @@ internal sealed class AnchoringRun
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _notifier = notifier;
         _store = new AnchorStore(mongoHelper, options);
     }
 
@@ -103,58 +106,11 @@ internal sealed class AnchoringRun
 
         await _store.DiscardPreparingAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await _store.CleanUpDiscardedAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        await NotifyAsync(runLock, cancellationToken);
 
-        if (await _store.FindAwaitingTimestampAsync(cancellationToken) is { } pending)
-        {
-            var completed = await StampAsync(pending, runLock, cancellationToken);
-            await OnPhaseCompletedAsync(AnchoringPhase.PendingAnchorStamped, cancellationToken);
-            if (!completed)
-            {
-                var pendingOutcome = runLock.IsValid ? AnchoringRunOutcome.AwaitingTimestamps : AnchoringRunOutcome.LockLost;
-                return new AnchoringRunResult(pendingOutcome, await _store.FindAsync(pending.Id, cancellationToken), pending.OldestCandidateUtc);
-            }
-        }
-
-        var read = await ReadCandidatesAsync(runLock, cancellationToken);
-        if (read is null)
-        {
-            return new AnchoringRunResult(AnchoringRunOutcome.LockLost);
-        }
-
-        if (read.Heads.Count == 0)
-        {
-            // Persists the progress of the source, such as a scan over unsealed streams or a fresh resume token.
-            await _mongoHelper.ExecuteInTransaction((_, session, ct) => _source.AcknowledgeAsync(session, read.LastBatch, ct),
-                                                    cancellationToken: cancellationToken);
-            return new AnchoringRunResult(AnchoringRunOutcome.NoCandidates);
-        }
-
-        await OnPhaseCompletedAsync(AnchoringPhase.CandidatesRead, cancellationToken);
-
-        var anchor = await PrepareAsync(read, runLock, cancellationToken);
-        if (anchor is null)
-        {
-            return new AnchoringRunResult(AnchoringRunOutcome.LockLost, OldestCandidateUtc: read.OldestUtc);
-        }
-
-        await OnPhaseCompletedAsync(AnchoringPhase.LeavesWritten, cancellationToken);
-        if (!await EnsureLockAsync(runLock, cancellationToken))
-        {
-            return new AnchoringRunResult(AnchoringRunOutcome.LockLost, OldestCandidateUtc: read.OldestUtc);
-        }
-
-        await CommitAsync(anchor, read.LastBatch, cancellationToken);
-        anchor = anchor with
-        {
-            Status = AnchorStatus.AwaitingTimestamp
-        };
-        await OnPhaseCompletedAsync(AnchoringPhase.Committed, cancellationToken);
-
-        var stamped = await StampAsync(anchor, runLock, cancellationToken);
-        await OnPhaseCompletedAsync(AnchoringPhase.Stamped, cancellationToken);
-        var outcome = stamped ? AnchoringRunOutcome.Completed :
-            runLock.IsValid ? AnchoringRunOutcome.AwaitingTimestamps : AnchoringRunOutcome.LockLost;
-        return new AnchoringRunResult(outcome, await _store.FindAsync(anchor.Id, cancellationToken), read.OldestUtc);
+        var result = await RunPhasesAsync(runLock, cancellationToken);
+        await NotifyAsync(runLock, cancellationToken);
+        return result;
     }
 
     private static Boolean IsCancellation(Exception exception, CancellationToken cancellationToken)
@@ -209,6 +165,14 @@ internal sealed class AnchoringRun
         var remaining = runLock.ValidUntilUtc - _timeProvider.GetUtcNow().UtcDateTime;
         return remaining >= MongoDefaults.LockLeaseTime / 2 ||
                await runLock.TryExtendAsync(MongoDefaults.LockLeaseTime, cancellationToken);
+    }
+
+    private async Task NotifyAsync(IMongoLock runLock, CancellationToken cancellationToken)
+    {
+        if (_notifier is not null && await EnsureLockAsync(runLock, cancellationToken))
+        {
+            await _notifier.NotifyAsync(cancellationToken);
+        }
     }
 
     private Task OnPhaseCompletedAsync(AnchoringPhase phase, CancellationToken cancellationToken)
@@ -311,6 +275,61 @@ internal sealed class AnchoringRun
         } while (batch.HasMore && heads.Count < _options.MaxLeavesPerAnchor && batches < maxBatches);
 
         return new CandidateRead(heads.Values.ToList(), batch, oldest, newest);
+    }
+
+    private async Task<AnchoringRunResult> RunPhasesAsync(IMongoLock runLock, CancellationToken cancellationToken)
+    {
+        if (await _store.FindAwaitingTimestampAsync(cancellationToken) is { } pending)
+        {
+            var completed = await StampAsync(pending, runLock, cancellationToken);
+            await OnPhaseCompletedAsync(AnchoringPhase.PendingAnchorStamped, cancellationToken);
+            if (!completed)
+            {
+                var pendingOutcome = runLock.IsValid ? AnchoringRunOutcome.AwaitingTimestamps : AnchoringRunOutcome.LockLost;
+                return new AnchoringRunResult(pendingOutcome, await _store.FindAsync(pending.Id, cancellationToken), pending.OldestCandidateUtc);
+            }
+        }
+
+        var read = await ReadCandidatesAsync(runLock, cancellationToken);
+        if (read is null)
+        {
+            return new AnchoringRunResult(AnchoringRunOutcome.LockLost);
+        }
+
+        if (read.Heads.Count == 0)
+        {
+            // Persists the progress of the source, such as a scan over unsealed streams or a fresh resume token.
+            await _mongoHelper.ExecuteInTransaction((_, session, ct) => _source.AcknowledgeAsync(session, read.LastBatch, ct),
+                                                    cancellationToken: cancellationToken);
+            return new AnchoringRunResult(AnchoringRunOutcome.NoCandidates);
+        }
+
+        await OnPhaseCompletedAsync(AnchoringPhase.CandidatesRead, cancellationToken);
+
+        var anchor = await PrepareAsync(read, runLock, cancellationToken);
+        if (anchor is null)
+        {
+            return new AnchoringRunResult(AnchoringRunOutcome.LockLost, OldestCandidateUtc: read.OldestUtc);
+        }
+
+        await OnPhaseCompletedAsync(AnchoringPhase.LeavesWritten, cancellationToken);
+        if (!await EnsureLockAsync(runLock, cancellationToken))
+        {
+            return new AnchoringRunResult(AnchoringRunOutcome.LockLost, OldestCandidateUtc: read.OldestUtc);
+        }
+
+        await CommitAsync(anchor, read.LastBatch, cancellationToken);
+        anchor = anchor with
+        {
+            Status = AnchorStatus.AwaitingTimestamp
+        };
+        await OnPhaseCompletedAsync(AnchoringPhase.Committed, cancellationToken);
+
+        var stamped = await StampAsync(anchor, runLock, cancellationToken);
+        await OnPhaseCompletedAsync(AnchoringPhase.Stamped, cancellationToken);
+        var outcome = stamped ? AnchoringRunOutcome.Completed :
+            runLock.IsValid ? AnchoringRunOutcome.AwaitingTimestamps : AnchoringRunOutcome.LockLost;
+        return new AnchoringRunResult(outcome, await _store.FindAsync(anchor.Id, cancellationToken), read.OldestUtc);
     }
 
     /// <summary>
