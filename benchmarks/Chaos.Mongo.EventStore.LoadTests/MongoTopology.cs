@@ -6,6 +6,7 @@ using Docker.DotNet.Models;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using DotNet.Testcontainers.Networks;
+using System.Globalization;
 using Testcontainers.MongoDb;
 
 /// <summary>
@@ -77,7 +78,7 @@ internal sealed class MongoTopology : IAsyncDisposable
 
         await Task.WhenAll(containers.Select(container => container.StartAsync()));
 
-        var delay = $"{delayPerDirection.TotalMilliseconds}ms";
+        var delay = $"{delayPerDirection.TotalMilliseconds.ToString(CultureInfo.InvariantCulture)}ms";
         foreach (var container in containers)
         {
             await ExecAsync(container, "tc", "qdisc", "add", "dev", "eth0", "root", "netem", "delay", delay);
