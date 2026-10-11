@@ -19,8 +19,8 @@ The work is one story but four concerns with different reviewers in mind: the ti
 
 ### Layer 2: Candidate source
 
-- [ ] The candidate source supports consecutive reads before one acknowledgement, in the change stream and in the recovery scan, including the hand-over from scan to stream; acknowledging the last batch persists the position for all of them. Existing candidate-source tests still pass, except the one asserting that an unacknowledged batch is returned again, which is replaced; new tests cover consecutive reads, and a restart or `DiscardUnacknowledgedReads()` after unacknowledged reads, which delivers their candidates again.
-- [ ] Candidates carry their commit time: the change's cluster time, or the start of the scan for candidates found by a recovery scan.
+- [x] The candidate source supports consecutive reads before one acknowledgement, in the change stream and in the recovery scan, including the hand-over from scan to stream; acknowledging the last batch persists the position for all of them. Existing candidate-source tests still pass, except the one asserting that an unacknowledged batch is returned again, which is replaced; new tests cover consecutive reads, and a restart or `DiscardUnacknowledgedReads()` after unacknowledged reads, which delivers their candidates again.
+- [x] Candidates carry their commit time: the change's cluster time, or the start of the scan for candidates found by a recovery scan.
 
 ### Layer 3: Anchoring core
 

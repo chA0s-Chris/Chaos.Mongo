@@ -12,9 +12,10 @@ using MongoDB.Driver;
 /// <remarks>
 ///     <para>
 ///     The persisted position is the post-batch resume token of the last acknowledged batch, so even an idle
-///     stream keeps a recent token. A read without a preceding acknowledgement, after an acknowledgement whose
-///     transaction did not commit, after a failed read, or with a different batch size reopens the stream at the
-///     persisted position.
+///     stream keeps a recent token. Consecutive reads continue from the last read position, in the scan, in the
+///     stream and across the hand-over between them. A read after <see cref="DiscardUnacknowledgedReads"/>, after
+///     an acknowledgement whose transaction did not commit, after a failed read, or with a different batch size
+///     reopens at the persisted position.
 ///     </para>
 ///     <para>
 ///     Without a position, or when the position is no longer in the oplog, the source recovers: it takes the
@@ -86,9 +87,11 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     private readonly ProtectedStreamRegistry _registry;
     private readonly TimeProvider _timeProvider;
     private IChangeStreamCursor<BsonDocument>? _cursor;
-    private Int32 _cursorBatchSize;
     private BsonDocument? _expectedState;
-    private Boolean _hasOutstandingBatch;
+    private AnchorCandidateBatch? _lastBatch;
+    private Int32 _readBatchSize;
+    private Boolean _readFailed;
+    private BsonDocument? _readState;
     private Int64? _readVersion;
 
     public ChangeStreamAnchorCandidateSource(IMongoHelper mongoHelper,
@@ -121,6 +124,9 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                recovery[ScanStartedElement].ToUniversalTime(),
                null);
 
+    private static DateTime ToUtc(BsonTimestamp clusterTime)
+        => DateTimeOffset.FromUnixTimeSeconds(clusterTime.Timestamp).UtcDateTime;
+
     private static AnchorCandidate? TryCreateCandidate(BsonDocument change, Dictionary<String, ProtectedStreamType> types)
     {
         if (!change.TryGetValue("fullDocument", out var fullDocumentValue) ||
@@ -136,7 +142,8 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         return new AnchorCandidate(type.AggregateTypeName,
                                    fullDocument[type.AggregateIdElement].AsGuid,
                                    fullDocument[type.VersionElement].ToInt64(),
-                                   integrity.Hash);
+                                   integrity.Hash,
+                                   ToUtc(change["clusterTime"].AsBsonTimestamp));
     }
 
     /// <summary>
@@ -198,7 +205,11 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
             }
         });
 
-        var projection = new BsonDocument("ns", 1);
+        var projection = new BsonDocument
+        {
+            { "ns", 1 },
+            { "clusterTime", 1 }
+        };
         foreach (var element in _registry.Types.SelectMany(type => new[]
                  {
                      type.AggregateIdElement,
@@ -235,6 +246,17 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
             }
         };
     }
+
+    /// <summary>
+    /// Creates the state that acknowledging a batch with this position persists.
+    /// </summary>
+    private BsonDocument CreateState(Object position)
+        => position switch
+        {
+            StreamPosition streamPosition => CreateStreamState(streamPosition),
+            ScanPosition scanPosition => CreateScanState(scanPosition),
+            _ => throw new ArgumentException("The batch was not read from the change-stream source.", nameof(position))
+        };
 
     private BsonDocument CreateStreamState(StreamPosition position)
     {
@@ -315,8 +337,46 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         }
 
         var cursor = await _mongoHelper.Database.WatchAsync(CreatePipeline(), options, cancellationToken);
-        _cursorBatchSize = maxCandidates;
         return cursor;
+    }
+
+    /// <summary>
+    /// Reads the next batch from a position: the persisted one, or the one after the last unacknowledged read.
+    /// </summary>
+    private async Task<AnchorCandidateBatch> ReadFromAsync(BsonDocument? state, Int32 maxCandidates, CancellationToken cancellationToken)
+    {
+        if (state is null || (!state.Contains(ResumeTokenElement) && !state.Contains(OperationTimeElement) && !state.Contains(RecoveryElement)))
+        {
+            _logger.LogWarning("Anchor candidate recovery for database {DatabaseName} started: no change-stream position is persisted",
+                               _mongoHelper.Database.DatabaseNamespace.DatabaseName);
+            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
+        }
+
+        // A position covers the collections that were protected when it was written; sealed heads of a newly
+        // protected collection would otherwise never be returned, and a scan's type index would point elsewhere.
+        if (!Equals(state.GetValue(CollectionsElement, BsonNull.Value), GetCoveredCollections()))
+        {
+            CloseCursor();
+            _logger.LogWarning("Anchor candidate recovery for database {DatabaseName} started: the protected events collections changed",
+                               _mongoHelper.Database.DatabaseNamespace.DatabaseName);
+            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
+        }
+
+        if (state.GetValue(RecoveryElement, BsonNull.Value) is BsonDocument recovery)
+        {
+            return await ScanAsync(ReadScanPosition(recovery), maxCandidates, cancellationToken);
+        }
+
+        try
+        {
+            return await ReadStreamBatchAsync(state, maxCandidates, cancellationToken);
+        }
+        catch (MongoCommandException ex) when (ex.Code == ChangeStreamHistoryLostCode)
+        {
+            CloseCursor();
+            LogHistoryLost(state);
+            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
+        }
     }
 
     private async Task<AnchorCandidateBatch> ReadStreamBatchAsync(BsonDocument state, Int32 maxCandidates, CancellationToken cancellationToken)
@@ -385,7 +445,11 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                 head.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) &&
                 EventIntegrityChain.TryRead(integrityValue, out var integrity))
             {
-                candidates.Add(new AnchorCandidate(type.AggregateTypeName, aggregateId, head[type.VersionElement].ToInt64(), integrity.Hash));
+                candidates.Add(new AnchorCandidate(type.AggregateTypeName,
+                                                   aggregateId,
+                                                   head[type.VersionElement].ToInt64(),
+                                                   integrity.Hash,
+                                                   ToUtc(position.OperationTime)));
             }
 
             cursor = aggregateId;
@@ -413,13 +477,12 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(batch);
-
-        var state = batch.Position switch
+        if (!ReferenceEquals(batch, _lastBatch))
         {
-            StreamPosition position => CreateStreamState(position),
-            ScanPosition position => CreateScanState(position),
-            _ => throw new ArgumentException("The batch was not read from the change-stream source.", nameof(batch))
-        };
+            throw new ArgumentException("Only the batch returned by the last read of this source can be acknowledged.", nameof(batch));
+        }
+
+        var state = CreateState(batch.Position);
 
         // Only the state version that was read may be replaced, so a second consumer fails instead of rewinding progress.
         state[VersionElement] = (_readVersion ?? 0) + 1;
@@ -456,7 +519,20 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
 
         // Committed or not, a later read compares this with the persisted state and reopens on a mismatch.
         _expectedState = state;
-        _hasOutstandingBatch = false;
+        _readState = null;
+    }
+
+    /// <inheritdoc/>
+    public void DiscardUnacknowledgedReads()
+    {
+        _lastBatch = null;
+        if (_readState is null)
+        {
+            return;
+        }
+
+        CloseCursor();
+        _readState = null;
     }
 
     /// <inheritdoc/>
@@ -464,49 +540,25 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCandidates);
 
-        var state = await GetStateCollection().Find(new BsonDocument("_id", StateDocumentId)).FirstOrDefaultAsync(cancellationToken);
-        if (_hasOutstandingBatch || _cursor is null || _cursorBatchSize != maxCandidates || !Equals(state, _expectedState))
+        _lastBatch = null;
+        var persisted = await GetStateCollection().Find(new BsonDocument("_id", StateDocumentId)).FirstOrDefaultAsync(cancellationToken);
+        if (_readFailed || _readBatchSize != maxCandidates || !Equals(persisted, _expectedState))
         {
             CloseCursor();
-            _expectedState = state;
+            _readState = null;
+            _expectedState = persisted;
         }
 
-        // Stays set when the read fails, so the next read reopens the stream at the persisted position.
-        _hasOutstandingBatch = true;
-        _readVersion = state?.GetValue(VersionElement, BsonNull.Value) is { IsBsonNull: false } version ? version.ToInt64() : null;
+        // Stays set when the read fails, so the next read reopens at the persisted position.
+        _readFailed = true;
+        _readBatchSize = maxCandidates;
+        _readVersion = persisted?.GetValue(VersionElement, BsonNull.Value) is { IsBsonNull: false } version ? version.ToInt64() : null;
 
-        if (state is null || (!state.Contains(ResumeTokenElement) && !state.Contains(OperationTimeElement) && !state.Contains(RecoveryElement)))
-        {
-            _logger.LogWarning("Anchor candidate recovery for database {DatabaseName} started: no change-stream position is persisted",
-                               _mongoHelper.Database.DatabaseNamespace.DatabaseName);
-            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
-        }
-
-        // A position covers the collections that were protected when it was written; sealed heads of a newly
-        // protected collection would otherwise never be returned, and a scan's type index would point elsewhere.
-        if (!Equals(state.GetValue(CollectionsElement, BsonNull.Value), GetCoveredCollections()))
-        {
-            CloseCursor();
-            _logger.LogWarning("Anchor candidate recovery for database {DatabaseName} started: the protected events collections changed",
-                               _mongoHelper.Database.DatabaseNamespace.DatabaseName);
-            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
-        }
-
-        if (state.GetValue(RecoveryElement, BsonNull.Value) is BsonDocument recovery)
-        {
-            return await ScanAsync(ReadScanPosition(recovery), maxCandidates, cancellationToken);
-        }
-
-        try
-        {
-            return await ReadStreamBatchAsync(state, maxCandidates, cancellationToken);
-        }
-        catch (MongoCommandException ex) when (ex.Code == ChangeStreamHistoryLostCode)
-        {
-            CloseCursor();
-            LogHistoryLost(state);
-            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
-        }
+        var batch = await ReadFromAsync(_readState ?? persisted, maxCandidates, cancellationToken);
+        _readState = CreateState(batch.Position);
+        _lastBatch = batch;
+        _readFailed = false;
+        return batch;
     }
 
     /// <inheritdoc/>

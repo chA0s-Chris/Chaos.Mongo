@@ -159,6 +159,46 @@ public class ChangeStreamAnchorCandidateSourceTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    public async Task ReadBatchAsync_ConsecutiveReadsDuringRecovery_ContinueScanAndHandOverToStream()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var context = await CreateContextAsync(databaseName);
+        var scannedStreams = new[]
+        {
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(1)
+        };
+
+        // Three reads scan one stream each, and a fourth completes the scan, all without an acknowledgement.
+        var scanBatches = new List<AnchorCandidateBatch>();
+        for (var read = 0; read < 4; read++)
+        {
+            scanBatches.Add(await context.CandidateSource.ReadBatchAsync(1, CancellationToken.None));
+        }
+
+        var appended = await context.AppendStreamAsync(1);
+        var streamBatch = await ReadUntilAsync(context.CandidateSource, 1, read => read.Candidates.Any(c => c.AggregateId == appended));
+        var stateBeforeAcknowledgement = await ReadStateAsync(context);
+        await AcknowledgeInTransactionAsync(context.MongoHelper, context.CandidateSource, streamBatch);
+
+        await context.DisposeAsync();
+        _contexts.Remove(context);
+        var restarted = await CreateContextAsync(databaseName);
+        var afterRestart = await restarted.CreateConsumer().DrainAsync(10);
+
+        var scanned = scanBatches.SelectMany(batch => batch.Candidates).ToList();
+        scanned.Select(candidate => candidate.AggregateId).Should().Equal(scanBatches.Take(3).Select(batch => batch.Candidates.Single().AggregateId));
+        scanned.Select(candidate => candidate.AggregateId).Should().BeEquivalentTo(scannedStreams);
+        scanBatches[3].Candidates.Should().BeEmpty();
+        scanned.Select(candidate => candidate.CommittedUtc).Distinct().Should().ContainSingle()
+               .Which.Should().BeOnOrBefore(streamBatch.Candidates.Single(c => c.AggregateId == appended).CommittedUtc);
+        stateBeforeAcknowledgement.Should().BeNull();
+        afterRestart.Should().NotContain(candidate => scannedStreams.Contains(candidate.AggregateId) || (candidate.AggregateId == appended));
+        (await ReadStateAsync(restarted))!.Contains("Recovery").Should().BeFalse();
+    }
+
+    [Test]
     public async Task ReadBatchAsync_FailedRead_ReopensStreamAndDeliversCandidatesAgain()
     {
         var applicationName = $"interrupted-{Guid.NewGuid():N}";
