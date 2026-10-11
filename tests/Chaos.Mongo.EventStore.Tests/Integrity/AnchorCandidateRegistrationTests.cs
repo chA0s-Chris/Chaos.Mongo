@@ -29,6 +29,19 @@ public class AnchorCandidateRegistrationTests
     }
 
     [Test]
+    public void AddMongo_ProtectedTypesWithSameEventsCollection_Throws()
+    {
+        var builder = new ServiceCollection().AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test")
+                                             .WithEventStore<LedgerAggregate>(ConfigureLedger);
+
+        var act = () => builder.WithEventStore<ShipmentAggregate>(es => es.WithEvent<ShipmentDispatchedEvent>("ShipmentDispatched")
+                                                                          .WithCollectionPrefix("Ledgers")
+                                                                          .WithIntegrityProtection());
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*share the events collection 'Ledgers_Events'*");
+    }
+
+    [Test]
     public void AddMongo_ProtectedTypesWithSameName_Throws()
     {
         var builder = new ServiceCollection().AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test")
