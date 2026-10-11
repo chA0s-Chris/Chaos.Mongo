@@ -12,10 +12,10 @@ The work is one story but four concerns with different reviewers in mind: the ti
 
 ### Layer 1: Timestamp authorities
 
-- [ ] `ITimestampAuthority` returns a `TimestampToken` for a SHA-256 digest. The default `Rfc3161TimestampAuthority` POSTs an `application/timestamp-query` with an `HttpClient` obtained per authority from a `Func<IServiceProvider, HttpClient>`; `Chaos.Mongo.EventStore` gains no dependency on `Microsoft.Extensions.Http`.
-- [ ] Tokens are validated on receipt with `System.Security.Cryptography.Pkcs`: message imprint, nonce, signature, ESSCertID, and the certificate chain against the authority's trust configuration. Tokens with a wrong imprint, a wrong nonce, a broken signature or an untrusted chain are rejected.
-- [ ] A `TimestampToken` carries the raw token, the authority's certificate chain and the revocation data captured at stamping time.
-- [ ] Tests use a local, in-process RFC 3161 test authority with a self-signed test CA instead of an external service, validating with revocation mode `NoCheck`. The test CA's certificates name a CRL distribution point served by the test handler, and the issued token carries that CRL. The authority can also return invalid tokens, HTTP failures and an unavailable CRL, which fails the attempt.
+- [x] `ITimestampAuthority` returns a `TimestampToken` for a SHA-256 digest. The default `Rfc3161TimestampAuthority` POSTs an `application/timestamp-query` with an `HttpClient` obtained per authority from a `Func<IServiceProvider, HttpClient>`; `Chaos.Mongo.EventStore` gains no dependency on `Microsoft.Extensions.Http`.
+- [x] Tokens are validated on receipt with `System.Security.Cryptography.Pkcs`: message imprint, nonce, signature, ESSCertID, and the certificate chain against the authority's trust configuration. Tokens with a wrong imprint, a wrong nonce, a broken signature or an untrusted chain are rejected.
+- [x] A `TimestampToken` carries the raw token, the authority's certificate chain and the revocation data captured at stamping time.
+- [x] Tests use a local, in-process RFC 3161 test authority with a self-signed test CA instead of an external service, validating with revocation mode `NoCheck`. The test CA's certificates name a CRL distribution point served by the test handler, and the issued token carries that CRL. The authority can also return invalid tokens, HTTP failures and an unavailable CRL, which fails the attempt.
 
 ### Layer 2: Candidate source
 

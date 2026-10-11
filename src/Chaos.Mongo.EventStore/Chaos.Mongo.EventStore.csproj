@@ -10,4 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Chaos.Mongo\Chaos.Mongo.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
+  </ItemGroup>
 </Project>
