@@ -41,10 +41,10 @@ public class EventStoreAppendBenchmarks
     private Int32 _optimizedInvocation;
 
     /// <summary>
-    /// Gets or sets the integrity protection and anchor candidate source. A candidate source runs its consumer
-    /// continuously during the measurement, so its server-side cost appears on the append side.
+    /// Gets or sets the integrity protection and whether anchor candidates are collected. The candidate consumer
+    /// runs continuously during the measurement, so the change stream's server-side cost appears on the append side.
     /// </summary>
-    [Params(ProtectionMode.Off, ProtectionMode.Chain, ProtectionMode.ChainWithPendingCollection, ProtectionMode.ChainWithChangeStream)]
+    [Params(ProtectionMode.Off, ProtectionMode.Chain, ProtectionMode.ChainWithChangeStream)]
     public ProtectionMode Protection { get; set; }
 
     [ParamsSource(nameof(Scenarios))]
@@ -181,8 +181,8 @@ public class EventStoreAppendBenchmarks
     }
 
     /// <summary>
-    /// Starts the consumer of the candidate source outside the measurement. The first batch completes the
-    /// initial scan of a change stream, so the measured appends only see its steady state.
+    /// Starts the consumer of the candidate source outside the measurement. Draining completes the initial
+    /// recovery scan of the change stream, so the measured appends only see its steady state.
     /// </summary>
     private static async Task StartConsumerAsync(BenchmarkContext context)
     {
@@ -192,7 +192,7 @@ public class EventStoreAppendBenchmarks
         }
 
         var consumer = new AnchorCandidateConsumer(context.MongoHelper, source);
-        await consumer.ConsumeBatchAsync(ConsumerBatchSize);
+        await consumer.DrainAsync(ConsumerBatchSize);
 
         var cancellation = new CancellationTokenSource();
         context.Consumer = new RunningConsumer(cancellation, consumer.RunAsync(ConsumerBatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token));
@@ -243,16 +243,9 @@ public class EventStoreAppendBenchmarks
                                }
                            });
 
-        var candidateSource = Protection switch
+        if (Protection == ProtectionMode.ChainWithChangeStream)
         {
-            ProtectionMode.ChainWithPendingCollection => AnchorCandidateSourceKind.PendingCollection,
-            ProtectionMode.ChainWithChangeStream => AnchorCandidateSourceKind.ChangeStream,
-            _ => AnchorCandidateSourceKind.None
-        };
-
-        if (candidateSource != AnchorCandidateSourceKind.None)
-        {
-            mongoBuilder.WithAnchorCandidateSource(candidateSource);
+            mongoBuilder.WithAnchorCandidates();
         }
 
         var services = mongoBuilder.Services.BuildServiceProvider();

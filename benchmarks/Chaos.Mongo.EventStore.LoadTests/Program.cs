@@ -18,7 +18,7 @@ using System.Runtime.InteropServices;
 /// </remarks>
 public static class Program
 {
-    private static readonly LoadTestMode[] Modes = [LoadTestMode.Chain, LoadTestMode.ChainWithPendingCollection, LoadTestMode.ChainWithChangeStream];
+    private static readonly LoadTestMode[] Modes = [LoadTestMode.Chain, LoadTestMode.ChainWithChangeStream];
 
     public static async Task<Int32> Main(String[] args)
     {
@@ -79,18 +79,16 @@ public static class Program
 
     private static async Task RunConsumeAsync(MongoTopology topology)
     {
-        Console.WriteLine("| Backlog | Source | Candidates read | Streams | Seconds | Candidates/s | Streams/s |");
-        Console.WriteLine("|---|---|---|---|---|---|---|");
-        foreach (var mode in Modes.Skip(1))
-        {
-            var appends = await ConsumptionMeasurement.RunAppendBacklogAsync(topology.ConnectionString, mode, 1000, 20);
-            Console.WriteLine($"| 20,000 appends on 1,000 streams | {mode} | {appends.Candidates} | {appends.Streams} | {Format(appends.Seconds)} | " +
-                              $"{Format(appends.CandidatesPerSecond)} | {Format(appends.StreamsPerSecond)} |");
+        Console.WriteLine("| Backlog | Candidates read | Streams | Seconds | Candidates/s | Streams/s |");
+        Console.WriteLine("|---|---|---|---|---|---|");
 
-            var sealing = await ConsumptionMeasurement.RunRetroactiveSealingBacklogAsync(topology.ConnectionString, mode, 1000, 20);
-            Console.WriteLine($"| 20,000 retroactively sealed events on 1,000 streams | {mode} | {sealing.Candidates} | {sealing.Streams} | " +
-                              $"{Format(sealing.Seconds)} | {Format(sealing.CandidatesPerSecond)} | {Format(sealing.StreamsPerSecond)} |");
-        }
+        var appends = await ConsumptionMeasurement.RunAppendBacklogAsync(topology.ConnectionString, 1000, 20);
+        Console.WriteLine($"| 20,000 appends on 1,000 streams | {appends.Candidates} | {appends.Streams} | {Format(appends.Seconds)} | " +
+                          $"{Format(appends.CandidatesPerSecond)} | {Format(appends.StreamsPerSecond)} |");
+
+        var sealing = await ConsumptionMeasurement.RunRetroactiveSealingBacklogAsync(topology.ConnectionString, 1000, 20);
+        Console.WriteLine($"| 20,000 retroactively sealed events on 1,000 streams | {sealing.Candidates} | {sealing.Streams} | " +
+                          $"{Format(sealing.Seconds)} | {Format(sealing.CandidatesPerSecond)} | {Format(sealing.StreamsPerSecond)} |");
     }
 
     private static async Task RunLoadAsync(MongoTopology topology, Int32 runs, TimeSpan warmup, TimeSpan duration, Int32[] concurrencies)
@@ -137,21 +135,15 @@ public static class Program
                                                      P99: Median(entry.Value.Select(result => result.P99))));
 
         Console.WriteLine();
-        Console.WriteLine("Medians and the decision criterion of #154 (E: p99 at most 10 % higher and throughput at most 10 % lower than D):");
+        Console.WriteLine("Medians, and the change stream's overhead over chain only:");
         Console.WriteLine();
-        Console.WriteLine("| Path | Appenders | Chain appends/s | Chain p99 | E appends/s | E p99 | D appends/s | D p99 | E/D throughput | E/D p99 | Criterion |");
-        Console.WriteLine("|---|---|---|---|---|---|---|---|---|---|---|");
-        foreach (var ((bulkWrite, concurrency, _), _) in medians.Where(entry => entry.Key.Mode == LoadTestMode.Chain))
+        Console.WriteLine("| Path | Appenders | Chain appends/s | Chain p99 | D appends/s | D p99 | D/chain throughput | D/chain p99 |");
+        Console.WriteLine("|---|---|---|---|---|---|---|---|");
+        foreach (var ((bulkWrite, concurrency, _), chain) in medians.Where(entry => entry.Key.Mode == LoadTestMode.Chain))
         {
-            var chain = medians[(bulkWrite, concurrency, LoadTestMode.Chain)];
-            var e = medians[(bulkWrite, concurrency, LoadTestMode.ChainWithPendingCollection)];
             var d = medians[(bulkWrite, concurrency, LoadTestMode.ChainWithChangeStream)];
-            var throughputRatio = e.Throughput / d.Throughput;
-            var p99Ratio = e.P99 / d.P99;
-            var holds = throughputRatio >= 0.9 && p99Ratio <= 1.1;
             Console.WriteLine($"| {(bulkWrite ? "bulk write" : "default")} | {concurrency} | {Format(chain.Throughput)} | {Format(chain.P99)} | " +
-                              $"{Format(e.Throughput)} | {Format(e.P99)} | {Format(d.Throughput)} | {Format(d.P99)} | " +
-                              $"{Format(throughputRatio)} | {Format(p99Ratio)} | {(holds ? "holds" : "fails")} |");
+                              $"{Format(d.Throughput)} | {Format(d.P99)} | {Format(d.Throughput / chain.Throughput)} | {Format(d.P99 / chain.P99)} |");
         }
     }
 

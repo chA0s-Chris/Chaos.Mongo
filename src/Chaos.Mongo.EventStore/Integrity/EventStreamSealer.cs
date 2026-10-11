@@ -103,8 +103,8 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         try
         {
             var chunk = events.Take(_options.SealingChunkSize).ToList();
-            var lastHash = await SealAsync(session, aggregateId, chunk, prefix, cancellationToken);
-            return new SealingChunkResult(chunk.Count, prefix.Version + chunk.Count, lastHash, events.Count > chunk.Count);
+            await SealAsync(session, aggregateId, chunk, prefix, cancellationToken);
+            return new SealingChunkResult(chunk.Count, prefix.Version + chunk.Count, events.Count > chunk.Count);
         }
         finally
         {

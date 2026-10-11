@@ -71,7 +71,6 @@ public static class MongoBuilderExtensions
 
         if (options.IntegrityProtectionEnabled)
         {
-            options.Anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
             GetOrAddSingleton<ProtectedStreamRegistry>(builder.Services).Add(new ProtectedStreamType<TAggregate>(options));
 
             // Retroactively seal events stored without integrity data
@@ -89,44 +88,28 @@ public static class MongoBuilderExtensions
     }
 
     /// <summary>
-    /// Selects the module-level source of anchor candidates for all protected aggregate types.
+    /// Collects anchor candidates for all protected aggregate types from one change stream. Event stores may be
+    /// registered before or after this call; the source reads the protected types when it is resolved.
     /// </summary>
     /// <param name="builder">The Mongo builder.</param>
-    /// <param name="candidateSource">The candidate source.</param>
     /// <returns>The Mongo builder for method chaining.</returns>
-    internal static MongoBuilder WithAnchorCandidateSource(this MongoBuilder builder, AnchorCandidateSourceKind candidateSource)
+    internal static MongoBuilder WithAnchorCandidates(this MongoBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services).CandidateSource = candidateSource;
-        AddAnchorCandidateSource(builder.Services);
-        return builder;
-    }
-
-    /// <summary>
-    /// Registers the candidate source once. It reads the selected kind and the registry when it is resolved,
-    /// so the event stores may be registered before or after the selection.
-    /// </summary>
-    private static void AddAnchorCandidateSource(IServiceCollection services)
-    {
-        if (services.Any(s => s.ServiceType == typeof(IAnchorCandidateSource)))
+        var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IAnchorCandidateSource)))
         {
-            return;
+            return builder;
         }
 
-        services.AddSingleton<IAnchorCandidateSource>(sp =>
-        {
-            var anchoring = sp.GetRequiredService<IntegrityAnchoringOptions>();
-            return anchoring.CandidateSource switch
-            {
-                AnchorCandidateSourceKind.PendingCollection =>
-                    new PendingAnchorCandidateSource(sp.GetRequiredService<IMongoHelper>(), anchoring),
-                AnchorCandidateSourceKind.ChangeStream =>
-                    new ChangeStreamAnchorCandidateSource(sp.GetRequiredService<IMongoHelper>(),
-                                                          anchoring,
-                                                          GetOrCreateRegistry(sp)),
-                _ => throw new InvalidOperationException("No anchor candidate source is configured.")
-            };
-        });
+        builder.Services.AddSingleton<IAnchorCandidateSource>(sp => new ChangeStreamAnchorCandidateSource(
+                                                                  sp.GetRequiredService<IMongoHelper>(),
+                                                                  anchoring,
+                                                                  sp.GetService<ProtectedStreamRegistry>() ?? new ProtectedStreamRegistry(),
+                                                                  sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                                                  sp.GetService<ILogger<ChangeStreamAnchorCandidateSource>>() ??
+                                                                  NullLogger<ChangeStreamAnchorCandidateSource>.Instance));
+        return builder;
     }
 
     /// <summary>
@@ -144,9 +127,6 @@ public static class MongoBuilderExtensions
         services.AddSingleton(instance);
         return instance;
     }
-
-    private static ProtectedStreamRegistry GetOrCreateRegistry(IServiceProvider services)
-        => services.GetService<ProtectedStreamRegistry>() ?? new ProtectedStreamRegistry();
 
     private static void ValidateIntegrityOptions<TAggregate>(MongoEventStoreOptions<TAggregate> options)
         where TAggregate : class, IAggregate, new()

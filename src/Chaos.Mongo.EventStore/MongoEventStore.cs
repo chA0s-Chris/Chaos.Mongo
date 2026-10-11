@@ -305,7 +305,6 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                     var documents = _options.IntegrityProtectionEnabled && eventDocuments is not null
                         ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
                         : eventDocuments;
-                    var pendingAnchor = CreatePendingAnchorEntry(eventList);
 
                     // Documents always exist when the bulk write is enabled; the null check only proves it.
                     if (_options.BulkWriteOptimizationEnabled && documents is not null)
@@ -335,13 +334,6 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                             models.Add(new BulkWriteInsertOneModel<BsonDocument>(
                                            GetCheckpointCollection().CollectionNamespace,
                                            checkpoint.ToBsonDocument()));
-                        }
-
-                        if (pendingAnchor is not null)
-                        {
-                            models.Add(new BulkWriteInsertOneModel<BsonDocument>(
-                                           pendingAnchor.Collection.CollectionNamespace,
-                                           pendingAnchor.Entry));
                         }
 
                         await helper.Client.BulkWriteAsync(
@@ -385,15 +377,9 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                             var checkpointCollection = GetCheckpointCollection();
                             await checkpointCollection.InsertOneAsync(session, checkpoint, cancellationToken: ct);
                         }
-
-                        // 4d. Record the new stream head for anchoring
-                        if (pendingAnchor is not null)
-                        {
-                            await pendingAnchor.Collection.InsertOneAsync(session, pendingAnchor.Entry, cancellationToken: ct);
-                        }
                     }
 
-                    // 4e. Invoke user callback for additional transactional operations
+                    // 4d. Invoke user callback for additional transactional operations
                     if (onBeforeCommit is not null)
                         await onBeforeCommit(session, aggregate, helper, ct);
                 },
@@ -421,22 +407,6 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             // Unknown duplicate key error (e.g. user-defined index) — let it propagate
             throw;
         }
-    }
-
-    /// <summary>
-    /// Creates the pending-anchor entry for the sealed head of an append when the pending-anchor collection is
-    /// the candidate source. Only the last event is recorded, because it covers its predecessors through the chain.
-    /// </summary>
-    private PendingAnchorWrite? CreatePendingAnchorEntry(List<Event<TAggregate>> eventList)
-    {
-        if (_options.Anchoring is not { WritesPendingAnchors: true } anchoring || eventList[^1].Integrity is not { } integrity)
-        {
-            return null;
-        }
-
-        var head = eventList[^1];
-        return new PendingAnchorWrite(_mongoHelper.Database.GetCollection<BsonDocument>(anchoring.PendingAnchorsCollectionName),
-                                      PendingAnchorEntry.Create(_aggregateTypeName, head.AggregateId, head.Version, integrity.Hash));
     }
 
     /// <summary>
@@ -763,8 +733,6 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
         public static AppendAttempt Conflicted(MongoConcurrencyException conflict) => new(null, conflict);
     }
-
-    private sealed record PendingAnchorWrite(IMongoCollection<BsonDocument> Collection, BsonDocument Entry);
 
     /// <summary>
     /// The position and revision of the last event in a stream; both are zero for an empty stream.

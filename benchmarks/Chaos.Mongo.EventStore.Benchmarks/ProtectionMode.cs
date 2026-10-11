@@ -18,12 +18,7 @@ public enum ProtectionMode
     Chain,
 
     /// <summary>
-    /// The hash chain with pending-anchor entries (option E) and their consumer running.
-    /// </summary>
-    ChainWithPendingCollection,
-
-    /// <summary>
-    /// The hash chain with an active change-stream consumer (option D).
+    /// The hash chain with an active change-stream consumer collecting anchor candidates.
     /// </summary>
     ChainWithChangeStream
 }

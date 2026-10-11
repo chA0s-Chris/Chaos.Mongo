@@ -9,36 +9,16 @@ using NUnit.Framework;
 using Testcontainers.MongoDb;
 
 /// <summary>
-/// Correctness tests that every anchor candidate source must pass.
+/// Correctness tests of the anchor candidate source: no gaps with late commits, at-least-once delivery
+/// across restarts, and coverage of every protected aggregate type.
 /// </summary>
-[TestFixture("PendingCollection")]
-[TestFixture("ChangeStream")]
 public class AnchorCandidateSourceTests
 {
     private const Int32 BatchSize = 100;
 
     private readonly List<LedgerStoreContext> _contexts = [];
-    private readonly AnchorCandidateSourceKind _sourceKind;
     private MongoDbContainer _container;
 
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
-    }
-
-    public AnchorCandidateSourceTests(String sourceKind)
-    {
-        _sourceKind = Enum.Parse<AnchorCandidateSourceKind>(sourceKind);
-    }
 
     [Test]
     public async Task AcknowledgeAsync_TransactionAborts_ReturnsCandidatesAgain()
@@ -64,7 +44,7 @@ public class AnchorCandidateSourceTests
         var context = await CreateInitializedContextAsync();
 
         var act = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) =>
-                                                                     context.CandidateSource.AcknowledgeAsync(session, new AnchorCandidateBatch([], new Object()), ct));
+                                                                     context.CandidateSource.AcknowledgeAsync(session, new AnchorCandidateBatch([], new Object(), false), ct));
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -107,29 +87,6 @@ public class AnchorCandidateSourceTests
         }
 
         candidates.Should().Contain(candidate => candidate.AggregateId == first && candidate.Version == 3);
-    }
-
-    [Test]
-    public async Task ConsumeBatchAsync_SeveralProtectedTypes_DeliversHeadOfEveryType()
-    {
-        var context = await CreateInitializedContextAsync(configureMongo: LedgerStoreContext.AddShipmentStore);
-        var shipments = context.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>();
-        var ledger = await context.AppendStreamAsync(2);
-        var shipment = Guid.NewGuid();
-        await shipments.AppendEventsAsync([ShipmentDispatchedEvent.Create(shipment, 1), ShipmentDispatchedEvent.Create(shipment, 2)]);
-
-        var candidates = AnchorCandidateConsumer.Reduce(
-            await ConsumeUntilAsync(context.CreateConsumer(),
-                                    consumed => consumed.Any(c => c.AggregateId == ledger && c.Version == 2) &&
-                                                consumed.Any(c => c.AggregateId == shipment && c.Version == 2)));
-
-        // Read models and checkpoints live in collections of their own and must not yield candidates.
-        candidates.Select(candidate => (candidate.AggregateType, candidate.AggregateId, candidate.Version))
-                  .Should().BeEquivalentTo([(nameof(LedgerAggregate), ledger, 2L), (nameof(ShipmentAggregate), shipment, 2L)]);
-        candidates.Single(candidate => candidate.AggregateId == ledger)
-                  .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(ledger, 2)).Hash);
-        candidates.Single(candidate => candidate.AggregateId == shipment)
-                  .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindShipmentEventAsync(shipment, 2)).Hash);
     }
 
     [Test]
@@ -179,20 +136,30 @@ public class AnchorCandidateSourceTests
     }
 
     [Test]
-    public async Task RunAsync_UntilCancelled_AcknowledgesCandidatesAndStops()
+    public async Task ConsumeBatchAsync_SeveralProtectedTypes_DeliversHeadOfEveryType()
     {
-        var context = await CreateInitializedContextAsync();
-        var aggregateId = await context.AppendStreamAsync(1);
-        using var cancellation = new CancellationTokenSource();
+        var context = await CreateInitializedContextAsync(configureMongo: LedgerStoreContext.AddShipmentStore);
+        var shipments = context.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>();
+        var ledger = await context.AppendStreamAsync(2);
+        var shipment = Guid.NewGuid();
+        await shipments.AppendEventsAsync([ShipmentDispatchedEvent.Create(shipment, 1), ShipmentDispatchedEvent.Create(shipment, 2)]);
 
-        var loop = context.CreateConsumer().RunAsync(BatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token);
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        await cancellation.CancelAsync();
-        await loop;
+        var candidates = AnchorCandidateConsumer.Reduce(
+            await ConsumeUntilAsync(context.CreateConsumer(),
+                                    consumed => consumed.Any(c => c.AggregateId == ledger && c.Version == 2) &&
+                                                consumed.Any(c => c.AggregateId == shipment && c.Version == 2)));
 
-        var batch = await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
-        batch.Candidates.Should().NotContain(candidate => candidate.AggregateId == aggregateId);
+        // Read models and checkpoints live in collections of their own and must not yield candidates.
+        candidates.Select(candidate => (candidate.AggregateType, candidate.AggregateId, candidate.Version))
+                  .Should().BeEquivalentTo([(nameof(LedgerAggregate), ledger, 2L), (nameof(ShipmentAggregate), shipment, 2L)]);
+        candidates.Single(candidate => candidate.AggregateId == ledger)
+                  .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(ledger, 2)).Hash);
+        candidates.Single(candidate => candidate.AggregateId == shipment)
+                  .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindShipmentEventAsync(shipment, 2)).Hash);
     }
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task ReadBatchAsync_AfterRestart_ReturnsOnlyUnacknowledgedCandidates()
@@ -208,7 +175,7 @@ public class AnchorCandidateSourceTests
         _contexts.Remove(context);
         var restarted = await CreateContextAsync(databaseName);
         var candidates = await ConsumeUntilAsync(restarted.CreateConsumer(), consumed => consumed.Any(c => c.AggregateId == unacknowledged));
-        candidates.AddRange(await restarted.CreateConsumer().ConsumeBatchAsync(BatchSize));
+        candidates.AddRange(await restarted.CreateConsumer().DrainAsync(BatchSize));
 
         candidates.Should().NotContain(candidate => candidate.AggregateId == acknowledged);
     }
@@ -226,6 +193,33 @@ public class AnchorCandidateSourceTests
         second.Candidates.Should().BeEquivalentTo(first.Candidates);
     }
 
+    [Test]
+    public async Task RunAsync_UntilCancelled_AcknowledgesCandidatesAndStops()
+    {
+        var context = await CreateInitializedContextAsync();
+        var aggregateId = await context.AppendStreamAsync(1);
+        using var cancellation = new CancellationTokenSource();
+
+        var loop = context.CreateConsumer().RunAsync(BatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        await cancellation.CancelAsync();
+        await loop;
+
+        var batch = await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
+        batch.Candidates.Should().NotContain(candidate => candidate.AggregateId == aggregateId);
+    }
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
+
     private static async Task<List<AnchorCandidate>> ConsumeUntilAsync(AnchorCandidateConsumer consumer,
                                                                        Func<IReadOnlyCollection<AnchorCandidate>, Boolean> isComplete)
     {
@@ -238,7 +232,7 @@ public class AnchorCandidateSourceTests
                 Assert.Fail("The expected candidates were not delivered within the timeout.");
             }
 
-            consumed.AddRange(await consumer.ConsumeBatchAsync(BatchSize));
+            consumed.AddRange((await consumer.ConsumeBatchAsync(BatchSize)).Candidates);
         }
 
         return consumed;
@@ -276,7 +270,7 @@ public class AnchorCandidateSourceTests
                                                            integrityProtection,
                                                            databaseName: databaseName,
                                                            configureOptions: configureOptions,
-                                                           anchorCandidateSource: _sourceKind,
+                                                           anchorCandidates: true,
                                                            configureMongo: configureMongo);
         _contexts.Add(context);
         return context;
@@ -291,7 +285,7 @@ public class AnchorCandidateSourceTests
                                                                          Action<MongoBuilder>? configureMongo = null)
     {
         var context = await CreateContextAsync(databaseName, true, configureOptions, configureMongo);
-        await context.CreateConsumer().ConsumeBatchAsync(BatchSize);
+        await context.CreateConsumer().DrainAsync(BatchSize);
         return context;
     }
 }

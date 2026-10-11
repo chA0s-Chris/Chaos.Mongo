@@ -66,16 +66,9 @@ internal sealed class LoadTestStore : IAsyncDisposable
                                }
                            });
 
-        var candidateSource = mode switch
+        if (mode == LoadTestMode.ChainWithChangeStream)
         {
-            LoadTestMode.ChainWithPendingCollection => AnchorCandidateSourceKind.PendingCollection,
-            LoadTestMode.ChainWithChangeStream => AnchorCandidateSourceKind.ChangeStream,
-            _ => AnchorCandidateSourceKind.None
-        };
-
-        if (candidateSource != AnchorCandidateSourceKind.None)
-        {
-            mongoBuilder.WithAnchorCandidateSource(candidateSource);
+            mongoBuilder.WithAnchorCandidates();
         }
 
         var store = new LoadTestStore(mongoBuilder.Services.BuildServiceProvider(), databaseName);
@@ -111,20 +104,13 @@ internal sealed class LoadTestStore : IAsyncDisposable
     }
 
     /// <summary>
-    /// Reads and acknowledges batches until two consecutive batches come back empty.
+    /// Reads and acknowledges batches until the source has no more candidates right away.
     /// </summary>
     public async Task DrainUntilIdleAsync()
     {
-        if (CandidateSource is not { } source)
+        if (CandidateSource is { } source)
         {
-            return;
-        }
-
-        var consumer = new AnchorCandidateConsumer(MongoHelper, source);
-        var emptyBatches = 0;
-        while (emptyBatches < 2)
-        {
-            emptyBatches = (await consumer.ConsumeBatchAsync(ConsumerBatchSize)).Count == 0 ? emptyBatches + 1 : 0;
+            await new AnchorCandidateConsumer(MongoHelper, source).DrainAsync(ConsumerBatchSize);
         }
     }
 

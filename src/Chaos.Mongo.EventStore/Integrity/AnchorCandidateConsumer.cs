@@ -34,20 +34,44 @@ internal sealed class AnchorCandidateConsumer
     /// </summary>
     /// <param name="maxCandidates">The maximum number of candidates to read.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The candidates of the batch, one per stream.</returns>
-    public async Task<IReadOnlyList<AnchorCandidate>> ConsumeBatchAsync(Int32 maxCandidates, CancellationToken cancellationToken = default)
+    /// <returns>The candidates of the batch, one per stream, and whether more are available right away.</returns>
+    public async Task<ConsumedAnchorCandidates> ConsumeBatchAsync(Int32 maxCandidates, CancellationToken cancellationToken = default)
     {
         var batch = await _source.ReadBatchAsync(maxCandidates, cancellationToken);
         await _mongoHelper.ExecuteInTransaction((_, session, ct) => _source.AcknowledgeAsync(session, batch, ct),
                                                 cancellationToken: cancellationToken);
-        return Reduce(batch.Candidates);
+        return new ConsumedAnchorCandidates(Reduce(batch.Candidates), batch.HasMore);
     }
 
     /// <summary>
-    /// Consumes batches until cancelled, pausing whenever a batch comes back empty.
+    /// Consumes batches until the source reports that no more candidates are available right away, for example
+    /// to finish a recovery scan.
+    /// </summary>
+    /// <remarks>
+    /// Under sustained append load the change stream keeps returning full batches, so draining may not end.
+    /// Callers that run concurrently with appends bound it themselves, as an anchoring run does.
+    /// </remarks>
+    /// <param name="maxCandidates">The maximum number of candidates per batch.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The consumed candidates, one per stream.</returns>
+    public async Task<IReadOnlyList<AnchorCandidate>> DrainAsync(Int32 maxCandidates, CancellationToken cancellationToken = default)
+    {
+        var candidates = new List<AnchorCandidate>();
+        ConsumedAnchorCandidates consumed;
+        do
+        {
+            consumed = await ConsumeBatchAsync(maxCandidates, cancellationToken);
+            candidates.AddRange(consumed.Candidates);
+        } while (consumed.HasMore);
+
+        return Reduce(candidates);
+    }
+
+    /// <summary>
+    /// Consumes batches until cancelled, pausing whenever a batch has no candidates and no more are available.
     /// </summary>
     /// <param name="maxCandidates">The maximum number of candidates per batch.</param>
-    /// <param name="idleDelay">The pause after an empty batch.</param>
+    /// <param name="idleDelay">The pause after a batch without candidates and without more to come.</param>
     /// <param name="cancellationToken">A cancellation token that stops the loop.</param>
     /// <returns>A task that completes when the loop is cancelled.</returns>
     public async Task RunAsync(Int32 maxCandidates, TimeSpan idleDelay, CancellationToken cancellationToken)
@@ -56,8 +80,8 @@ internal sealed class AnchorCandidateConsumer
         {
             try
             {
-                var candidates = await ConsumeBatchAsync(maxCandidates, cancellationToken);
-                if (candidates.Count == 0)
+                var consumed = await ConsumeBatchAsync(maxCandidates, cancellationToken);
+                if (consumed.Candidates.Count == 0 && !consumed.HasMore)
                 {
                     await Task.Delay(idleDelay, cancellationToken);
                 }

@@ -56,7 +56,7 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                                              String? databaseName = null,
                                                              Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
                                                              TimeProvider? timeProvider = null,
-                                                             AnchorCandidateSourceKind anchorCandidateSource = AnchorCandidateSourceKind.None,
+                                                             Boolean anchorCandidates = false,
                                                              String? applicationName = null,
                                                              Action<MongoBuilder>? configureMongo = null)
     {
@@ -95,9 +95,9 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                    });
 
         configureMongo?.Invoke(mongoBuilder);
-        if (anchorCandidateSource != AnchorCandidateSourceKind.None)
+        if (anchorCandidates)
         {
-            mongoBuilder.WithAnchorCandidateSource(anchorCandidateSource);
+            mongoBuilder.WithAnchorCandidates();
         }
 
         var serviceProvider = mongoBuilder.Services.BuildServiceProvider();

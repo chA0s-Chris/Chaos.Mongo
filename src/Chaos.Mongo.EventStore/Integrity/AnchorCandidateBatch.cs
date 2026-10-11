@@ -8,18 +8,25 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 internal sealed class AnchorCandidateBatch
 {
-    public AnchorCandidateBatch(IReadOnlyList<AnchorCandidate> candidates, Object position)
+    public AnchorCandidateBatch(IReadOnlyList<AnchorCandidate> candidates, Object position, Boolean hasMore)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(position);
         Candidates = candidates;
         Position = position;
+        HasMore = hasMore;
     }
 
     /// <summary>
     /// Gets the candidates of the batch, possibly none.
     /// </summary>
     public IReadOnlyList<AnchorCandidate> Candidates { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether more candidates are available right away, for example while a recovery
+    /// scan is running. A batch can be empty and still have more to come.
+    /// </summary>
+    public Boolean HasMore { get; }
 
     /// <summary>
     /// Gets the opaque position of the source after this batch; only the source that created the batch reads it.

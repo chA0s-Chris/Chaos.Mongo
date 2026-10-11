@@ -12,15 +12,6 @@ using NUnit.Framework;
 public class AnchorCandidateRegistrationTests
 {
     [Test]
-    public void AddMongo_CandidateSourceNone_ResolvingSourceThrows()
-    {
-        using var services = CreateServices(builder => builder.WithAnchorCandidateSource(AnchorCandidateSourceKind.None));
-
-        services.Invoking(provider => provider.GetRequiredService<IAnchorCandidateSource>())
-                .Should().Throw<InvalidOperationException>().WithMessage("*No anchor candidate source*");
-    }
-
-    [Test]
     public void AddMongo_ProtectedEventStore_RegistersProtectedStreamType()
     {
         using var services = CreateServices(_ => { });
@@ -38,45 +29,7 @@ public class AnchorCandidateRegistrationTests
     }
 
     [Test]
-    [TestCase(true)]
-    [TestCase(false)]
-    public void AddMongo_SourceSelectedBeforeOrAfterEventStore_SharesAnchoringOptions(Boolean selectFirst)
-    {
-        var serviceCollection = new ServiceCollection();
-        var builder = serviceCollection.AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test");
-        if (selectFirst)
-        {
-            builder.WithAnchorCandidateSource(AnchorCandidateSourceKind.ChangeStream);
-        }
-
-        builder.WithEventStore<LedgerAggregate>(ConfigureLedger);
-        if (!selectFirst)
-        {
-            builder.WithAnchorCandidateSource(AnchorCandidateSourceKind.ChangeStream);
-        }
-
-        using var services = serviceCollection.BuildServiceProvider();
-
-        var anchoring = services.GetRequiredService<IntegrityAnchoringOptions>();
-        services.GetRequiredService<MongoEventStoreOptions<LedgerAggregate>>().Anchoring.Should().BeSameAs(anchoring);
-        anchoring.CandidateSource.Should().Be(AnchorCandidateSourceKind.ChangeStream);
-        services.GetRequiredService<IAnchorCandidateSource>().Should().BeOfType<ChangeStreamAnchorCandidateSource>();
-        serviceCollection.Count(s => s.ServiceType == typeof(IAnchorCandidateSource)).Should().Be(1);
-    }
-
-    [Test]
-    public void AddMongo_SourceWithoutProtectedEventStore_ResolvesSource()
-    {
-        var serviceCollection = new ServiceCollection();
-        serviceCollection.AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test")
-                         .WithAnchorCandidateSource(AnchorCandidateSourceKind.ChangeStream);
-        using var services = serviceCollection.BuildServiceProvider();
-
-        services.GetRequiredService<IAnchorCandidateSource>().Should().BeOfType<ChangeStreamAnchorCandidateSource>();
-    }
-
-    [Test]
-    public void AddMongo_UnprotectedEventStore_HasNoAnchoringOptions()
+    public void AddMongo_UnprotectedEventStore_RegistersNoProtectedStreamType()
     {
         var serviceCollection = new ServiceCollection();
         serviceCollection.AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test")
@@ -85,7 +38,6 @@ public class AnchorCandidateRegistrationTests
                                                                   .WithCollectionPrefix("Ledgers"));
         using var services = serviceCollection.BuildServiceProvider();
 
-        services.GetRequiredService<MongoEventStoreOptions<LedgerAggregate>>().Anchoring.Should().BeNull();
         services.GetService<ProtectedStreamRegistry>().Should().BeNull();
     }
 
@@ -106,6 +58,48 @@ public class AnchorCandidateRegistrationTests
 
         reduced.Select(candidate => (candidate.AggregateType, candidate.AggregateId, candidate.Version))
                .Should().BeEquivalentTo([("A", first, 3L), ("A", second, 1L), ("B", first, 5L)]);
+    }
+
+    [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public void WithAnchorCandidates_BeforeOrAfterEventStore_ResolvesSourceOverProtectedTypes(Boolean enableFirst)
+    {
+        var serviceCollection = new ServiceCollection();
+        var builder = serviceCollection.AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test");
+        if (enableFirst)
+        {
+            builder.WithAnchorCandidates();
+        }
+
+        builder.WithEventStore<LedgerAggregate>(ConfigureLedger);
+        builder.WithAnchorCandidates();
+        using var services = serviceCollection.BuildServiceProvider();
+
+        services.GetRequiredService<IAnchorCandidateSource>().Should().BeOfType<ChangeStreamAnchorCandidateSource>();
+        services.GetRequiredService<ProtectedStreamRegistry>().Types.Should().ContainSingle();
+        serviceCollection.Count(s => s.ServiceType == typeof(IAnchorCandidateSource)).Should().Be(1);
+        serviceCollection.Count(s => s.ServiceType == typeof(IntegrityAnchoringOptions)).Should().Be(1);
+    }
+
+    [Test]
+    public void WithAnchorCandidates_NotCalled_RegistersNoSource()
+    {
+        using var services = CreateServices(_ => { });
+
+        services.GetService<IAnchorCandidateSource>().Should().BeNull();
+        services.GetService<IntegrityAnchoringOptions>().Should().BeNull();
+    }
+
+    [Test]
+    public void WithAnchorCandidates_WithoutProtectedEventStore_ResolvesSource()
+    {
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test")
+                         .WithAnchorCandidates();
+        using var services = serviceCollection.BuildServiceProvider();
+
+        services.GetRequiredService<IAnchorCandidateSource>().Should().BeOfType<ChangeStreamAnchorCandidateSource>();
     }
 
     private static void ConfigureLedger(MongoEventStoreBuilder<LedgerAggregate> es)

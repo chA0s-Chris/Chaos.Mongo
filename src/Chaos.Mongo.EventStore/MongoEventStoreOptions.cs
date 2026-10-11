@@ -2,8 +2,6 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore;
 
-using Chaos.Mongo.EventStore.Integrity;
-
 /// <summary>
 /// Configuration options for an event store for a specific aggregate type.
 /// </summary>
@@ -71,12 +69,6 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets the name of the read-model collection.
     /// </summary>
     public String ReadModelCollectionName => CollectionPrefix;
-
-    /// <summary>
-    /// Gets or sets the module-level anchoring settings shared by all protected aggregate types, or <c>null</c>
-    /// when integrity protection is disabled.
-    /// </summary>
-    internal IntegrityAnchoringOptions? Anchoring { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether appended events are sealed into a per-stream hash chain.
