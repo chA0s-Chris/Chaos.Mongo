@@ -28,6 +28,12 @@ using MongoDB.Driver;
 ///     <list type="bullet">
 ///         <item>
 ///             <description>
+///             MongoDB 5.1 or later, because the recovery scan takes its cluster time from a snapshot read of a
+///             collection-less aggregate.
+///             </description>
+///         </item>
+///         <item>
+///             <description>
 ///             A replica set or a sharded cluster, as for the event store's transactions; a single-node replica
 ///             set suffices.
 ///             </description>
