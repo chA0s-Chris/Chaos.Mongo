@@ -24,12 +24,12 @@ The work is one story but four concerns with different reviewers in mind: the ti
 
 ### Layer 3: Anchoring core
 
-- [ ] An anchor covers every chain head changed since the previous anchor, including heads from transactions that committed late. Each stream contributes one leaf for its highest new version, and leaves are sorted deterministically.
-- [ ] An anchoring run is two-phase and crash-safe at every phase: tests simulate a crash after each phase and show that a new runner completes the anchor without losing or duplicating candidates. A run that reads candidates and fails before its commit point, followed by another run in the same process on the same source instance, anchors those candidates. Runs execute on exactly one instance under the Chaos.Mongo distributed lock.
-- [ ] Anchors are chained through the digest of their predecessor, and an interval without candidates creates no anchor and requests no timestamp.
-- [ ] Leaves and their inclusion proofs are stored outside the anchor document; an anchor whose tree data is well beyond 16 MB is created and completed.
-- [ ] Several authorities can stamp one anchor. An anchor completes once it holds a configurable minimum number of valid tokens (default 1). An unreachable or failing authority neither blocks appends nor loses anchors, and no new anchor is created while one awaits its timestamps.
-- [ ] Anchors store their tokens with certificate chains and revocation data, the hash algorithm and the anchored period, in a format that leaves room for RFC 4998 renewal.
+- [x] An anchor covers every chain head changed since the previous anchor, including heads from transactions that committed late. Each stream contributes one leaf for its highest new version, and leaves are sorted deterministically.
+- [x] An anchoring run is two-phase and crash-safe at every phase: tests simulate a crash after each phase and show that a new runner completes the anchor without losing or duplicating candidates. A run that reads candidates and fails before its commit point, followed by another run in the same process on the same source instance, anchors those candidates. Runs execute on exactly one instance under the Chaos.Mongo distributed lock.
+- [x] Anchors are chained through the digest of their predecessor, and an interval without candidates creates no anchor and requests no timestamp.
+- [x] Leaves and their inclusion proofs are stored outside the anchor document; an anchor whose tree data is well beyond 16 MB is created and completed.
+- [x] Several authorities can stamp one anchor. An anchor completes once it holds a configurable minimum number of valid tokens (default 1). An unreachable or failing authority neither blocks appends nor loses anchors, and no new anchor is created while one awaits its timestamps.
+- [x] Anchors store their tokens with certificate chains and revocation data, the hash algorithm and the anchored period, in a format that leaves room for RFC 4998 renewal.
 
 ### Layer 4: Operations
 
