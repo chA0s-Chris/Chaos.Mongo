@@ -134,15 +134,29 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     }
 
     /// <summary>
-    /// Takes the cluster time before scanning, so the stream started at it afterwards misses no commit.
+    /// Takes the cluster time before scanning, so the stream started at it afterwards misses no commit. A snapshot
+    /// read's cluster time lies behind every uncommitted write, so the scan cannot miss a commit that the stream
+    /// then skips. A read of a collection that does not exist yet reports no snapshot time, so the read is a
+    /// collection-less aggregate.
     /// </summary>
     private async Task<ScanPosition> BeginRecoveryAsync(CancellationToken cancellationToken)
     {
-        using var session = await _mongoHelper.Client.StartSessionAsync(cancellationToken: cancellationToken);
-        await GetStateCollection().Find(session, new BsonDocument("_id", StateDocumentId)).FirstOrDefaultAsync(cancellationToken);
-        var operationTime = session.OperationTime ??
-                            throw new InvalidOperationException("The server did not report an operation time; change streams need a replica set.");
-        return new ScanPosition(operationTime, 0, null, _timeProvider.GetUtcNow().UtcDateTime, null);
+        var command = new BsonDocument
+        {
+            { "aggregate", 1 },
+            {
+                "pipeline", new BsonArray
+                {
+                    new BsonDocument("$documents", new BsonArray())
+                }
+            },
+            { "cursor", new BsonDocument() },
+            { "readConcern", new BsonDocument("level", "snapshot") }
+        };
+        var reply = await _mongoHelper.Database.RunCommandAsync<BsonDocument>(command, cancellationToken: cancellationToken);
+        var snapshotTime = reply["cursor"].AsBsonDocument.GetValue("atClusterTime", BsonNull.Value) as BsonTimestamp ??
+                           throw new InvalidOperationException("The server did not report a snapshot time; change streams need a replica set.");
+        return new ScanPosition(snapshotTime, 0, null, _timeProvider.GetUtcNow().UtcDateTime, null);
     }
 
     private void CloseCursor()

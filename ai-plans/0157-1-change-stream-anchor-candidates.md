@@ -30,7 +30,7 @@ This plan removes E and brings D to the quality that the anchoring pipeline of #
 
 ### Delivery
 
-- Same branch, `0157-tamper-evidence-benchmark-anchor`. After this plan, the branch is merged as one PR that carries `skip-changelog` and closes #157 (delivery rules in #154).
+- Same branch, `0157-tamper-evidence-benchmark-anchor`. After this plan, the branch is merged as one PR that carries `enhancement`, because its title is a release-notes entry, and closes #157 (delivery rules in #154).
 - The decision record of `0157-0` stays unchanged. Its section "Carried into 0157-1" is resolved here.
 
 ### Removal
@@ -47,8 +47,8 @@ This plan removes E and brings D to the quality that the anchoring pipeline of #
 
 ### Batches
 
-- `AnchorCandidateBatch` gains `HasMore`. During a scan it is `true` while unscanned streams remain; on the stream it is `true` when the server returned a full batch (`BatchSize` raw change events, before filtering).
-- The change stream is opened with `BatchSize = maxCandidates` and reopened at the persisted position when a read asks for a different `maxCandidates`, so a batch never exceeds the requested size and `HasMore` compares against it.
+- `AnchorCandidateBatch` gains `HasMore`. During a scan it is `true` for every batch, including the one that completes the scan, because the stream continues from the scan's start; on the stream it is `true` for every non-empty batch (counting raw change events before filtering), because the server may return fewer changes than `BatchSize` while more are waiting.
+- The change stream is opened with `BatchSize = maxCandidates` and reopened at the persisted position when a read asks for a different `maxCandidates`, so a batch never exceeds the requested size.
 - `ReadBatchAsync` still returns what is currently available without waiting; an empty batch with `HasMore` is legitimate during a scan.
 - `AnchorCandidateConsumer.ConsumeBatchAsync` returns the reduced candidates together with `HasMore`, and `RunAsync` pauses only after a batch without candidates and without `HasMore`.
 - The harness helpers that drain until empty batches (`LoadTestStore.DrainUntilIdleAsync`, the consumer start in the benchmark) drain until `HasMore` is `false` instead, so the initial recovery of a change stream completes outside the measurement.

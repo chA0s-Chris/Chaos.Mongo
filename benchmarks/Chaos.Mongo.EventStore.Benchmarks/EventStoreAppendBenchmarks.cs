@@ -11,7 +11,7 @@ using MongoDB.Driver;
 using Testcontainers.MongoDb;
 
 /// <remarks>
-/// Each iteration runs exactly one invocation, because <see cref="IterationSetup"/> seeds one fresh
+/// Each iteration runs exactly one invocation, because <see cref="PrepareIteration"/> seeds one fresh
 /// stream per append of that invocation.
 /// </remarks>
 [MemoryDiagnoser]
