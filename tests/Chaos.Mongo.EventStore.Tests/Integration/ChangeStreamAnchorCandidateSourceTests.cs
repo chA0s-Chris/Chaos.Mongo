@@ -255,6 +255,24 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     [Test]
+    public async Task ReadBatchAsync_SealedEventReplaced_YieldsCandidate()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(1);
+        await context.CreateConsumer().DrainAsync(10);
+
+        // A replacement stands in for a sealing update that the server reports as a replace event. It must change the
+        // document, because the server logs an identical replacement as a no-op.
+        var sealedEvent = await context.Events.Find(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId)).SingleAsync();
+        sealedEvent["Replaced"] = true;
+        await context.Events.ReplaceOneAsync(new BsonDocument("_id", sealedEvent["_id"]), sealedEvent);
+
+        var batch = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Any(candidate => candidate.AggregateId == aggregateId));
+
+        batch.Candidates.Should().ContainSingle(candidate => candidate.AggregateId == aggregateId && candidate.Version == 1);
+    }
+
+    [Test]
     public async Task ReadBatchAsync_StartOfCompletedRecoveryLost_LogsErrorWithScanDuration()
     {
         var applicationName = $"recovery-lost-{Guid.NewGuid():N}";

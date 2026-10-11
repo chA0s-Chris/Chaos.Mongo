@@ -186,6 +186,13 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                     {
                         { "operationType", "update" },
                         { $"updateDescription.updatedFields.{EventIntegrityChain.ElementName}", new BsonDocument("$exists", true) }
+                    },
+
+                    // The server may report an update as a replacement when that representation is more concise.
+                    new BsonDocument
+                    {
+                        { "operationType", "replace" },
+                        { $"fullDocument.{EventIntegrityChain.ElementName}", new BsonDocument("$exists", true) }
                     }
                 }
             }
