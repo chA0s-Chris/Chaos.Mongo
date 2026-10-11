@@ -83,58 +83,30 @@ public class EventStoreAppendBenchmarks
     }
 
 
-    [GlobalSetup]
-    public void GlobalSetup()
+    /// <summary>
+    /// Starts only the consumer of the measured context, so the other context adds no background load.
+    /// </summary>
+    [GlobalSetup(Target = nameof(AppendWithBulkWrite))]
+    public void GlobalSetupWithBulkWrite()
     {
-        _container = new MongoDbBuilder("mongo:8")
-                     .WithReplicaSet()
-                     // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
-                     // pinned. See https://jira.mongodb.org/browse/SERVER-121912
-                     .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
-                     .WithCreateParameterModifier(parameters =>
-                     {
-                         parameters.HostConfig ??= new HostConfig();
-                         parameters.HostConfig.Ulimits =
-                         [
-                             new Ulimit
-                             {
-                                 Name = "nofile",
-                                 Soft = 65536,
-                                 Hard = 65536
-                             }
-                         ];
-                     })
-                     .Build();
-
-        _container.StartAsync().GetAwaiter().GetResult();
-        _baselineInvocation = 0;
-        _optimizedInvocation = 0;
-
-        _baseline = CreateContextAsync("baseline", false).GetAwaiter().GetResult();
-        _optimized = CreateContextAsync("optimized", true).GetAwaiter().GetResult();
-
-        AppendFirstEventAsync(_baseline.Store).GetAwaiter().GetResult();
-        AppendFirstEventAsync(_optimized.Store).GetAwaiter().GetResult();
-
-        StartConsumerAsync(_baseline).GetAwaiter().GetResult();
+        StartContainerAndContexts();
         StartConsumerAsync(_optimized).GetAwaiter().GetResult();
     }
 
-    /// <summary>
-    /// Seeds fresh streams outside the measurement, so every measured append to an existing stream
-    /// starts from identical state instead of a stream grown by earlier iterations.
-    /// </summary>
-    [IterationSetup]
-    public void IterationSetup()
+    [GlobalSetup(Target = nameof(AppendWithoutBulkWrite))]
+    public void GlobalSetupWithoutBulkWrite()
     {
-        if (!Scenario.ExistingStream)
-        {
-            return;
-        }
-
-        PrepareFreshStreamsAsync(_baseline).GetAwaiter().GetResult();
-        PrepareFreshStreamsAsync(_optimized).GetAwaiter().GetResult();
+        StartContainerAndContexts();
+        StartConsumerAsync(_baseline).GetAwaiter().GetResult();
     }
+
+    [IterationSetup(Target = nameof(AppendWithBulkWrite))]
+    public void IterationSetupWithBulkWrite()
+        => PrepareIteration(_optimized);
+
+    [IterationSetup(Target = nameof(AppendWithoutBulkWrite))]
+    public void IterationSetupWithoutBulkWrite()
+        => PrepareIteration(_baseline);
 
     private static async Task<Guid> AppendFirstEventAsync(IEventStore<BenchmarkOrderAggregate> eventStore)
     {
@@ -166,10 +138,6 @@ public class EventStoreAppendBenchmarks
     }
 
     /// <summary>
-    /// Starts the consumer of the candidate source outside the measurement. Draining completes the initial
-    /// recovery scan of the change stream, so the measured appends only see its steady state.
-    /// </summary>
-    /// <summary>
     /// Seeds fresh streams while the consumer is paused and drains their candidates before the consumer resumes, so
     /// consuming setup data cannot overlap the measured appends.
     /// </summary>
@@ -189,6 +157,10 @@ public class EventStoreAppendBenchmarks
         }
     }
 
+    /// <summary>
+    /// Starts the consumer of the candidate source outside the measurement. Draining completes the initial
+    /// recovery scan of the change stream, so the measured appends only see its steady state.
+    /// </summary>
     private static async Task StartConsumerAsync(BenchmarkContext context)
     {
         if (context.ServiceProvider.GetService<IAnchorCandidateSource>() is not { } source)
@@ -304,6 +276,51 @@ public class EventStoreAppendBenchmarks
         }
 
         return events;
+    }
+
+    /// <summary>
+    /// Seeds fresh streams outside the measurement, so every measured append to an existing stream
+    /// starts from identical state instead of a stream grown by earlier iterations.
+    /// </summary>
+    private void PrepareIteration(BenchmarkContext context)
+    {
+        if (Scenario.ExistingStream)
+        {
+            PrepareFreshStreamsAsync(context).GetAwaiter().GetResult();
+        }
+    }
+
+    private void StartContainerAndContexts()
+    {
+        _container = new MongoDbBuilder("mongo:8")
+                     .WithReplicaSet()
+                     // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
+                     // pinned. See https://jira.mongodb.org/browse/SERVER-121912
+                     .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
+                     .WithCreateParameterModifier(parameters =>
+                     {
+                         parameters.HostConfig ??= new HostConfig();
+                         parameters.HostConfig.Ulimits =
+                         [
+                             new Ulimit
+                             {
+                                 Name = "nofile",
+                                 Soft = 65536,
+                                 Hard = 65536
+                             }
+                         ];
+                     })
+                     .Build();
+
+        _container.StartAsync().GetAwaiter().GetResult();
+        _baselineInvocation = 0;
+        _optimizedInvocation = 0;
+
+        _baseline = CreateContextAsync("baseline", false).GetAwaiter().GetResult();
+        _optimized = CreateContextAsync("optimized", true).GetAwaiter().GetResult();
+
+        AppendFirstEventAsync(_baseline.Store).GetAwaiter().GetResult();
+        AppendFirstEventAsync(_optimized.Store).GetAwaiter().GetResult();
     }
 
     /// <summary>
