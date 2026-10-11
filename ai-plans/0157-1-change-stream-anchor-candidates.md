@@ -12,19 +12,19 @@ This plan removes E and brings D to the quality that the anchoring pipeline of #
 
 ### Removing the pending-anchor collection
 
-- [ ] Only the change-stream source remains: the pending-anchor source, its entries, its writes on both append paths and in retroactive sealing, and their tests are removed, and the append and sealing code paths behave as on `main` again.
-- [ ] `EventStoreAppendBenchmarks` offers no protection, chain only and chain + D, and the load test chain only and chain + D; neither offers E.
+- [x] Only the change-stream source remains: the pending-anchor source, its entries, its writes on both append paths and in retroactive sealing, and their tests are removed, and the append and sealing code paths behave as on `main` again.
+- [x] `EventStoreAppendBenchmarks` offers no protection, chain only and chain + D, and the load test chain only and chain + D; neither offers E.
 
 ### Change-stream source
 
-- [ ] Candidate collection is enabled through an internal module-level `WithAnchorCandidates()`. Without it, appends, sealing and stored data are unchanged and no change stream is opened. `IAnchorCandidateSource` remains the contract that #158 consumes.
-- [ ] Every batch reports whether more candidates are immediately available, so a consumer can drain a backlog or a recovery scan without relying on empty batches.
-- [ ] A recovery scan examines at most `maxCandidates` streams per batch and persists its position with each acknowledgement, so a batch returns promptly even when most stream heads are not yet sealed.
-- [ ] After a read fails, for example because of a non-resumable server error or a primary failover the driver does not resume, the next read reopens the stream at the persisted position and delivers the unacknowledged candidates again.
-- [ ] The start of every recovery is logged with its cause (no persisted position, or history lost). When the start time of a just-completed recovery has already left the oplog, the source logs an error that names the duration of the scan, because the oplog window is too small for a full scan.
-- [ ] The source's XML documentation states the operating requirements: a replica set or sharded cluster, an oplog window that covers the longest expected anchoring downtime plus a full recovery scan, the `changeStream` and `find` actions on the database, the restrictions of MongoDB-compatible services, and the extra server load on sharded clusters.
-- [ ] The documentation scope of #160 lists the same operating requirements.
-- [ ] Automated tests cover the behavior above; the correctness tests of `0157-0` run against the change-stream source alone.
+- [x] Candidate collection is enabled through an internal module-level `WithAnchorCandidates()`. Without it, appends, sealing and stored data are unchanged and no change stream is opened. `IAnchorCandidateSource` remains the contract that #158 consumes.
+- [x] Every batch reports whether more candidates are immediately available, so a consumer can drain a backlog or a recovery scan without relying on empty batches.
+- [x] A recovery scan examines at most `maxCandidates` streams per batch and persists its position with each acknowledgement, so a batch returns promptly even when most stream heads are not yet sealed.
+- [x] After a read fails, for example because of a non-resumable server error or a primary failover the driver does not resume, the next read reopens the stream at the persisted position and delivers the unacknowledged candidates again.
+- [x] The start of every recovery is logged with its cause (no persisted position, or history lost). When the start time of a just-completed recovery has already left the oplog, the source logs an error that names the duration of the scan, because the oplog window is too small for a full scan.
+- [x] The source's XML documentation states the operating requirements: a replica set or sharded cluster, an oplog window that covers the longest expected anchoring downtime plus a full recovery scan, the `changeStream` and `find` actions on the database, the restrictions of MongoDB-compatible services, and the extra server load on sharded clusters.
+- [x] The documentation scope of #160 lists the same operating requirements.
+- [x] Automated tests cover the behavior above; the correctness tests of `0157-0` run against the change-stream source alone.
 
 ## Technical Details
 
