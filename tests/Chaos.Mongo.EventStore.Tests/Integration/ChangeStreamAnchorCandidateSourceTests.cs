@@ -45,6 +45,31 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     [Test]
+    public async Task ConsumeBatchAsync_AppendDuringRecoveryScan_DrainContinuesIntoStreamUntilCaughtUp()
+    {
+        var context = await CreateContextAsync();
+        await context.AppendStreamAsync(1);
+        await context.AppendStreamAsync(1);
+        var consumer = context.CreateConsumer();
+
+        var batches = new List<ConsumedAnchorCandidates>
+        {
+            await consumer.ConsumeBatchAsync(1)
+        };
+
+        // The scan has already passed this stream, so only the change stream can deliver its new head.
+        var scanned = batches[0].Candidates.Should().ContainSingle().Subject.AggregateId;
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(scanned, 2)]);
+        do
+        {
+            batches.Add(await consumer.ConsumeBatchAsync(1));
+        } while (batches[^1].HasMore);
+
+        batches.SelectMany(batch => batch.Candidates).Should().Contain(candidate => candidate.AggregateId == scanned && candidate.Version == 2);
+        batches[^1].Candidates.Should().BeEmpty();
+    }
+
+    [Test]
     public async Task ConsumeBatchAsync_EmptyBatch_PersistsResumeToken()
     {
         var context = await CreateContextAsync();
@@ -92,7 +117,7 @@ public class ChangeStreamAnchorCandidateSourceTests
         await context.DisposeAsync();
         _contexts.Remove(context);
         var restarted = await CreateContextAsync(databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
-        var afterRestart = await restarted.CreateConsumer().DrainAsync(10);
+        var afterRestart = await ConsumeRecoveryScanAsync(restarted, 10);
 
         beforeRestart.Select(candidate => candidate.AggregateType)
                      .Should().Equal(nameof(LedgerAggregate), nameof(LedgerAggregate), nameof(ShipmentAggregate));
@@ -120,7 +145,7 @@ public class ChangeStreamAnchorCandidateSourceTests
         await context.DisposeAsync();
         _contexts.Remove(context);
         var restarted = await CreateContextAsync(databaseName);
-        var afterRestart = await restarted.CreateConsumer().DrainAsync(10);
+        var afterRestart = await ConsumeRecoveryScanAsync(restarted, 10);
 
         beforeRestart.Should().HaveCount(2);
         afterRestart.Select(candidate => candidate.AggregateId).Should().NotIntersectWith(beforeRestart.Select(candidate => candidate.AggregateId));
@@ -217,10 +242,12 @@ public class ChangeStreamAnchorCandidateSourceTests
         var twoVersions = await context.AppendStreamAsync(2);
         var oneVersion = await context.AppendStreamAsync(1);
 
-        // The next change stream this client opens fails as if its resume point had left the oplog.
+        // The next change stream this client opens fails as if its resume point had left the oplog. The drain left
+        // the stream open, so a restarted source reopens it at the persisted resume token.
         await ConfigureFailPointAsync(context, "aggregate", ChangeStreamAnchorCandidateSource.ChangeStreamHistoryLostCode, applicationName);
+        using var restarted = CreateSource(context, new CapturingLogger<ChangeStreamAnchorCandidateSource>());
 
-        var batch = await context.CandidateSource.ReadBatchAsync(10, CancellationToken.None);
+        var batch = await restarted.ReadBatchAsync(10, CancellationToken.None);
 
         // A scan yields only stream heads, whereas the change stream would also yield version 1 of the first stream.
         batch.Candidates.Select(candidate => (candidate.AggregateId, candidate.Version))
@@ -235,7 +262,9 @@ public class ChangeStreamAnchorCandidateSourceTests
         var aggregateId = await context.AppendStreamAsync(1);
         var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
         using var source = CreateSource(context, logger);
-        await new AnchorCandidateConsumer(context.MongoHelper, source).DrainAsync(10);
+
+        // A single batch completes the scan without opening the stream.
+        (await new AnchorCandidateConsumer(context.MongoHelper, source).ConsumeBatchAsync(10)).HasMore.Should().BeTrue();
 
         // The stream would start at the cluster time taken before the completed scan, which has left the oplog.
         await ConfigureFailPointAsync(context, "aggregate", ChangeStreamAnchorCandidateSource.ChangeStreamHistoryLostCode, applicationName);
@@ -294,17 +323,11 @@ public class ChangeStreamAnchorCandidateSourceTests
             await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1)]);
         }
 
-        var consumer = context.CreateConsumer();
-        var batches = new List<ConsumedAnchorCandidates>();
-        do
-        {
-            batches.Add(await consumer.ConsumeBatchAsync(2));
-        } while (batches[^1].HasMore);
+        var batches = await ConsumeRecoveryScanBatchesAsync(context, 2);
 
         batches[0].Candidates.Should().BeEmpty();
-        batches[0].HasMore.Should().BeTrue();
-        // Six streams take three full batches; a fourth finds that no stream is left.
-        batches.Should().HaveCount(4).And.OnlyContain(batch => batch.Candidates.Count <= 2);
+        // Six streams take three full batches; a fourth finds that no stream is left and hands over to the stream.
+        batches.Should().HaveCount(4).And.OnlyContain(batch => batch.Candidates.Count <= 2 && batch.HasMore);
         batches.SelectMany(batch => batch.Candidates).Select(candidate => candidate.AggregateId).Should().BeEquivalentTo(sealedStreams);
     }
 
@@ -346,6 +369,25 @@ public class ChangeStreamAnchorCandidateSourceTests
                 }
             }
         });
+
+    private static async Task<IReadOnlyList<AnchorCandidate>> ConsumeRecoveryScanAsync(LedgerStoreContext context, Int32 maxCandidates)
+        => AnchorCandidateConsumer.Reduce((await ConsumeRecoveryScanBatchesAsync(context, maxCandidates)).SelectMany(batch => batch.Candidates));
+
+    /// <summary>
+    /// Consumes batches until the recovery scan is complete. A drain would continue into the change stream, which
+    /// starts at the scan's cluster time and therefore delivers the commit at that time again.
+    /// </summary>
+    private static async Task<List<ConsumedAnchorCandidates>> ConsumeRecoveryScanBatchesAsync(LedgerStoreContext context, Int32 maxCandidates)
+    {
+        var consumer = context.CreateConsumer();
+        var batches = new List<ConsumedAnchorCandidates>();
+        do
+        {
+            batches.Add(await consumer.ConsumeBatchAsync(maxCandidates));
+        } while ((await ReadStateAsync(context))?.Contains("Recovery") == true);
+
+        return batches;
+    }
 
     private static ChangeStreamAnchorCandidateSource CreateSource(LedgerStoreContext context, CapturingLogger<ChangeStreamAnchorCandidateSource> logger)
         => new(context.MongoHelper,

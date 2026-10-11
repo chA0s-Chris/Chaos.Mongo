@@ -374,9 +374,11 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                                    completedUtc.Value - position.StartedUtc);
         }
 
+        // Even a completed scan reports more, because the stream from the scan's cluster time may already hold
+        // changes made during the scan; only an empty stream batch shows that the source is caught up.
         return new AnchorCandidateBatch(candidates,
                                         new ScanPosition(position.OperationTime, typeIndex, cursor, position.StartedUtc, completedUtc),
-                                        !isComplete);
+                                        true);
     }
 
     /// <inheritdoc/>
