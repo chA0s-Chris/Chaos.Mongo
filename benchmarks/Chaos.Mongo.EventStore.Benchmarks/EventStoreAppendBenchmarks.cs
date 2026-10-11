@@ -132,8 +132,8 @@ public class EventStoreAppendBenchmarks
             return;
         }
 
-        SeedFreshStreamsAsync(_baseline).GetAwaiter().GetResult();
-        SeedFreshStreamsAsync(_optimized).GetAwaiter().GetResult();
+        PrepareFreshStreamsAsync(_baseline).GetAwaiter().GetResult();
+        PrepareFreshStreamsAsync(_optimized).GetAwaiter().GetResult();
     }
 
     private static async Task<Guid> AppendFirstEventAsync(IEventStore<BenchmarkOrderAggregate> eventStore)
@@ -160,15 +160,24 @@ public class EventStoreAppendBenchmarks
             return;
         }
 
-        if (context.Consumer is { } consumer)
-        {
-            await consumer.Cancellation.CancelAsync();
-            await consumer.Loop;
-            consumer.Cancellation.Dispose();
-        }
-
+        await StopConsumerAsync(context);
         await context.MongoHelper.Client.DropDatabaseAsync(context.DatabaseName);
         await context.ServiceProvider.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Starts the consumer of the candidate source outside the measurement. Draining completes the initial
+    /// recovery scan of the change stream, so the measured appends only see its steady state.
+    /// </summary>
+    /// <summary>
+    /// Seeds fresh streams while the consumer is paused and drains their candidates before the consumer resumes, so
+    /// consuming setup data cannot overlap the measured appends.
+    /// </summary>
+    private static async Task PrepareFreshStreamsAsync(BenchmarkContext context)
+    {
+        await StopConsumerAsync(context);
+        await SeedFreshStreamsAsync(context);
+        await StartConsumerAsync(context);
     }
 
     private static async Task SeedFreshStreamsAsync(BenchmarkContext context)
@@ -180,10 +189,6 @@ public class EventStoreAppendBenchmarks
         }
     }
 
-    /// <summary>
-    /// Starts the consumer of the candidate source outside the measurement. Draining completes the initial
-    /// recovery scan of the change stream, so the measured appends only see its steady state.
-    /// </summary>
     private static async Task StartConsumerAsync(BenchmarkContext context)
     {
         if (context.ServiceProvider.GetService<IAnchorCandidateSource>() is not { } source)
@@ -196,6 +201,19 @@ public class EventStoreAppendBenchmarks
 
         var cancellation = new CancellationTokenSource();
         context.Consumer = new RunningConsumer(cancellation, consumer.RunAsync(ConsumerBatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token));
+    }
+
+    private static async Task StopConsumerAsync(BenchmarkContext context)
+    {
+        if (context.Consumer is not { } consumer)
+        {
+            return;
+        }
+
+        await consumer.Cancellation.CancelAsync();
+        await consumer.Loop;
+        consumer.Cancellation.Dispose();
+        context.Consumer = null;
     }
 
     private async Task<BenchmarkOrderAggregate> AppendAsync(BenchmarkContext context, Int32 operation, Int32 invocation)
