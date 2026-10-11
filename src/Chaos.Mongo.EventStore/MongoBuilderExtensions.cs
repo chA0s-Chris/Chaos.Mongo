@@ -71,6 +71,8 @@ public static class MongoBuilderExtensions
 
         if (options.IntegrityProtectionEnabled)
         {
+            GetOrAddSingleton<ProtectedStreamRegistry>(builder.Services).Add(new ProtectedStreamType<TAggregate>(options));
+
             // Retroactively seal events stored without integrity data
             builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
                                               sp.GetRequiredService<IMongoHelper>(),
@@ -83,6 +85,47 @@ public static class MongoBuilderExtensions
         }
 
         return builder;
+    }
+
+    /// <summary>
+    /// Collects anchor candidates for all protected aggregate types from one change stream. Event stores may be
+    /// registered before or after this call; the source reads the protected types when it is resolved.
+    /// </summary>
+    /// <param name="builder">The Mongo builder.</param>
+    /// <returns>The Mongo builder for method chaining.</returns>
+    internal static MongoBuilder WithAnchorCandidates(this MongoBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IAnchorCandidateSource)))
+        {
+            return builder;
+        }
+
+        builder.Services.AddSingleton<IAnchorCandidateSource>(sp => new ChangeStreamAnchorCandidateSource(
+                                                                  sp.GetRequiredService<IMongoHelper>(),
+                                                                  anchoring,
+                                                                  sp.GetService<ProtectedStreamRegistry>() ?? new ProtectedStreamRegistry(),
+                                                                  sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                                                  sp.GetService<ILogger<ChangeStreamAnchorCandidateSource>>() ??
+                                                                  NullLogger<ChangeStreamAnchorCandidateSource>.Instance));
+        return builder;
+    }
+
+    /// <summary>
+    /// Returns the instance registered for <typeparamref name="T"/>, registering a new one first if needed. Shared
+    /// module-level state must be one instance regardless of how many event stores are registered.
+    /// </summary>
+    private static T GetOrAddSingleton<T>(IServiceCollection services) where T : class, new()
+    {
+        if (services.FirstOrDefault(s => s.ServiceType == typeof(T))?.ImplementationInstance is T existing)
+        {
+            return existing;
+        }
+
+        var instance = new T();
+        services.AddSingleton(instance);
+        return instance;
     }
 
     private static void ValidateIntegrityOptions<TAggregate>(MongoEventStoreOptions<TAggregate> options)
