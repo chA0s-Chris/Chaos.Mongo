@@ -12,6 +12,9 @@ using MongoDB.Driver;
 /// Delivery is at-least-once. At most one batch is outstanding at a time: reading again before acknowledging
 /// returns the unacknowledged candidates again, and acknowledging a batch covers everything read up to it.
 /// Acknowledged candidates are never returned again, also not after a restart.
+/// Only one consumer may read at a time across all application instances; the anchoring run ensures this with
+/// its distributed lock. An acknowledgement fails when another consumer changed the persisted position since the
+/// batch was read.
 /// </remarks>
 internal interface IAnchorCandidateSource : IDisposable
 {

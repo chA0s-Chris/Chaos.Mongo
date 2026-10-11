@@ -65,12 +65,14 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     /// </summary>
     internal const Int32 ChangeStreamHistoryLostCode = 286;
 
+    private const String CollectionsElement = "Collections";
     private const String OperationTimeElement = "OperationTime";
     private const String RecoveryElement = "Recovery";
     private const String ResumeTokenElement = "ResumeToken";
     private const String ScanCompletedElement = "ScanCompletedUtc";
     private const String ScanStartedElement = "ScanStartedUtc";
     private const String StateDocumentId = "changeStream";
+    private const String VersionElement = "Version";
 
     private readonly ILogger<ChangeStreamAnchorCandidateSource> _logger;
     private readonly IMongoHelper _mongoHelper;
@@ -81,6 +83,7 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     private Int32 _cursorBatchSize;
     private BsonDocument? _expectedState;
     private Boolean _hasOutstandingBatch;
+    private Int64? _readVersion;
 
     public ChangeStreamAnchorCandidateSource(IMongoHelper mongoHelper,
                                              IntegrityAnchoringOptions options,
@@ -100,48 +103,10 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         _logger = logger;
     }
 
-    private static BsonDocument CreateScanState(ScanPosition position)
-    {
-        if (position.CompletedUtc is { } completed)
-        {
-            return CreateStreamState(new StreamPosition(null, position.OperationTime, position.StartedUtc, completed));
-        }
-
-        return new BsonDocument
-        {
-            { "_id", StateDocumentId },
-            {
-                RecoveryElement, new BsonDocument
-                {
-                    { OperationTimeElement, position.OperationTime },
-                    { "TypeIndex", position.TypeIndex },
-                    { "Cursor", position.Cursor is { } cursor ? new BsonBinaryData(cursor, GuidRepresentation.Standard) : BsonNull.Value },
-                    { ScanStartedElement, position.StartedUtc }
-                }
-            }
-        };
-    }
-
-    private static BsonDocument CreateStreamState(StreamPosition position)
-    {
-        var state = new BsonDocument("_id", StateDocumentId);
-        if (position.ResumeToken is not null)
-        {
-            state.Add(ResumeTokenElement, position.ResumeToken);
-            return state;
-        }
-
-        // Without a resume token, the stream keeps starting at the cluster time of the completed scan.
-        state.Add(OperationTimeElement,
-                  position.OperationTime ?? throw new InvalidOperationException("A stream position needs a resume token or an operation time."));
-        if (position.ScanStartedUtc is { } started && position.ScanCompletedUtc is { } completed)
-        {
-            state.Add(ScanStartedElement, started);
-            state.Add(ScanCompletedElement, completed);
-        }
-
-        return state;
-    }
+    private static InvalidOperationException CreateConflictException(Exception? innerException = null)
+        => new("Another consumer changed the anchor candidate state since this batch was read. " +
+               "Only one consumer may read anchor candidates at a time.",
+               innerException);
 
     private static ScanPosition ReadScanPosition(BsonDocument recovery)
         => new(recovery[OperationTimeElement].AsBsonTimestamp,
@@ -221,6 +186,61 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         return PipelineDefinition<ChangeStreamDocument<BsonDocument>, BsonDocument>.Create([match, new BsonDocument("$project", projection)]);
     }
 
+    private BsonDocument CreateScanState(ScanPosition position)
+    {
+        if (position.CompletedUtc is { } completed)
+        {
+            return CreateStreamState(new StreamPosition(null, position.OperationTime, position.StartedUtc, completed));
+        }
+
+        return new BsonDocument
+        {
+            { "_id", StateDocumentId },
+            { CollectionsElement, GetCoveredCollections() },
+            {
+                RecoveryElement, new BsonDocument
+                {
+                    { OperationTimeElement, position.OperationTime },
+                    { "TypeIndex", position.TypeIndex },
+                    { "Cursor", position.Cursor is { } cursor ? new BsonBinaryData(cursor, GuidRepresentation.Standard) : BsonNull.Value },
+                    { ScanStartedElement, position.StartedUtc }
+                }
+            }
+        };
+    }
+
+    private BsonDocument CreateStreamState(StreamPosition position)
+    {
+        var state = new BsonDocument
+        {
+            { "_id", StateDocumentId },
+            { CollectionsElement, GetCoveredCollections() }
+        };
+        if (position.ResumeToken is not null)
+        {
+            state.Add(ResumeTokenElement, position.ResumeToken);
+            return state;
+        }
+
+        // Without a resume token, the stream keeps starting at the cluster time of the completed scan.
+        state.Add(OperationTimeElement,
+                  position.OperationTime ?? throw new InvalidOperationException("A stream position needs a resume token or an operation time."));
+        if (position.ScanStartedUtc is { } started && position.ScanCompletedUtc is { } completed)
+        {
+            state.Add(ScanStartedElement, started);
+            state.Add(ScanCompletedElement, completed);
+        }
+
+        return state;
+    }
+
+    /// <summary>
+    /// The events collections the stream and the recovery scan cover, in registry order, which is the order the
+    /// scan's type index refers to.
+    /// </summary>
+    private BsonArray GetCoveredCollections()
+        => new(_registry.Types.Select(type => type.EventsCollectionName));
+
     private IMongoCollection<BsonDocument> GetStateCollection()
         => _mongoHelper.Database.GetCollection<BsonDocument>(_options.ChangeStreamStateCollectionName);
 
@@ -291,8 +311,9 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
             }
         }
 
-        // A full server batch means more changes may be waiting; the count includes changes that yield no candidate.
-        var hasMore = changes >= maxCandidates;
+        // The server may return fewer changes than the batch size while more are waiting, so only an empty batch,
+        // counting changes that yield no candidate, shows that the stream is caught up.
+        var hasMore = changes > 0;
         var resumeToken = _cursor.GetResumeToken();
         var position = resumeToken is null
             ? new StreamPosition(state.GetValue(ResumeTokenElement, BsonNull.Value) as BsonDocument,
@@ -371,14 +392,38 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
             _ => throw new ArgumentException("The batch was not read from the change-stream source.", nameof(batch))
         };
 
-        await GetStateCollection().ReplaceOneAsync(session,
-                                                   new BsonDocument("_id", StateDocumentId),
-                                                   state,
-                                                   new ReplaceOptions
-                                                   {
-                                                       IsUpsert = true
-                                                   },
-                                                   cancellationToken);
+        // Only the state version that was read may be replaced, so a second consumer fails instead of rewinding progress.
+        state[VersionElement] = (_readVersion ?? 0) + 1;
+        var filter = _readVersion is { } readVersion
+            ? new BsonDocument
+            {
+                { "_id", StateDocumentId },
+                { VersionElement, readVersion }
+            }
+            : new BsonDocument
+            {
+                { "_id", StateDocumentId },
+                { VersionElement, new BsonDocument("$exists", false) }
+            };
+        try
+        {
+            var result = await GetStateCollection().ReplaceOneAsync(session,
+                                                                    filter,
+                                                                    state,
+                                                                    new ReplaceOptions
+                                                                    {
+                                                                        IsUpsert = _readVersion is null
+                                                                    },
+                                                                    cancellationToken);
+            if (_readVersion is not null && result.MatchedCount == 0)
+            {
+                throw CreateConflictException();
+            }
+        }
+        catch (MongoWriteException ex) when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            throw CreateConflictException(ex);
+        }
 
         // Committed or not, a later read compares this with the persisted state and reopens on a mismatch.
         _expectedState = state;
@@ -399,17 +444,28 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
 
         // Stays set when the read fails, so the next read reopens the stream at the persisted position.
         _hasOutstandingBatch = true;
+        _readVersion = state?.GetValue(VersionElement, BsonNull.Value) is { IsBsonNull: false } version ? version.ToInt64() : null;
 
-        if (state?.GetValue(RecoveryElement, BsonNull.Value) is BsonDocument recovery)
-        {
-            return await ScanAsync(ReadScanPosition(recovery), maxCandidates, cancellationToken);
-        }
-
-        if (state is null || (!state.Contains(ResumeTokenElement) && !state.Contains(OperationTimeElement)))
+        if (state is null || (!state.Contains(ResumeTokenElement) && !state.Contains(OperationTimeElement) && !state.Contains(RecoveryElement)))
         {
             _logger.LogWarning("Anchor candidate recovery for database {DatabaseName} started: no change-stream position is persisted",
                                _mongoHelper.Database.DatabaseNamespace.DatabaseName);
             return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
+        }
+
+        // A position covers the collections that were protected when it was written; sealed heads of a newly
+        // protected collection would otherwise never be returned, and a scan's type index would point elsewhere.
+        if (!Equals(state.GetValue(CollectionsElement, BsonNull.Value), GetCoveredCollections()))
+        {
+            CloseCursor();
+            _logger.LogWarning("Anchor candidate recovery for database {DatabaseName} started: the protected events collections changed",
+                               _mongoHelper.Database.DatabaseNamespace.DatabaseName);
+            return await ScanAsync(await BeginRecoveryAsync(cancellationToken), maxCandidates, cancellationToken);
+        }
+
+        if (state.GetValue(RecoveryElement, BsonNull.Value) is BsonDocument recovery)
+        {
+            return await ScanAsync(ReadScanPosition(recovery), maxCandidates, cancellationToken);
         }
 
         try

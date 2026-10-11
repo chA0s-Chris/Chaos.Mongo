@@ -23,8 +23,10 @@ internal sealed class AnchorCandidateBatch
     public IReadOnlyList<AnchorCandidate> Candidates { get; }
 
     /// <summary>
-    /// Gets a value indicating whether more candidates are available right away, for example while a recovery
-    /// scan is running. A batch can be empty and still have more to come.
+    /// Gets a value indicating whether more candidates may be available right away. A recovery scan reports more
+    /// while unscanned streams remain, even for an empty batch; the change stream reports more for every non-empty
+    /// batch, because the server may return fewer changes than requested. Candidates left over are never lost; they
+    /// arrive with a later read.
     /// </summary>
     public Boolean HasMore { get; }
 

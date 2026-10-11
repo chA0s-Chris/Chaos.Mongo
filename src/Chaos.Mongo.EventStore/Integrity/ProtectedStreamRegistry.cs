@@ -18,9 +18,22 @@ internal sealed class ProtectedStreamRegistry
     /// Adds a protected aggregate type.
     /// </summary>
     /// <param name="type">The protected aggregate type.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a protected aggregate type with the same name is already registered.
+    /// </exception>
     public void Add(ProtectedStreamType type)
     {
         ArgumentNullException.ThrowIfNull(type);
+
+        // The name identifies a stream together with its aggregate ID in the genesis value and in anchor candidates.
+        if (_types.FirstOrDefault(registered => registered.AggregateTypeName == type.AggregateTypeName) is { } existing)
+        {
+            throw new InvalidOperationException(
+                $"The protected aggregate types stored in '{existing.EventsCollectionName}' and '{type.EventsCollectionName}' " +
+                $"share the name '{type.AggregateTypeName}'. Protected aggregate types must have unique names, because the " +
+                "name identifies their streams in the hash chain and in anchors.");
+        }
+
         _types.Add(type);
     }
 }

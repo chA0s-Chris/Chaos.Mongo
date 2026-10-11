@@ -17,6 +17,34 @@ public class ChangeStreamAnchorCandidateSourceTests
     private MongoDbContainer _container;
 
     [Test]
+    public async Task AcknowledgeAsync_StateChangedByAnotherConsumer_ThrowsAndKeepsTheirProgress()
+    {
+        var context = await CreateContextAsync();
+        await context.CreateConsumer().DrainAsync(10);
+        using var first = CreateSource(context, new CapturingLogger<ChangeStreamAnchorCandidateSource>());
+        using var second = CreateSource(context, new CapturingLogger<ChangeStreamAnchorCandidateSource>());
+
+        var stale = await second.ReadBatchAsync(10, CancellationToken.None);
+        await context.AppendStreamAsync(1);
+        await new AnchorCandidateConsumer(context.MongoHelper, first).DrainAsync(10);
+        var progress = await ReadStateAsync(context);
+
+        InvalidOperationException? conflict = null;
+        try
+        {
+            await AcknowledgeInTransactionAsync(context.MongoHelper, second, stale);
+        }
+        catch (InvalidOperationException ex)
+        {
+            conflict = ex;
+        }
+
+        conflict.Should().NotBeNull();
+        conflict.Message.Should().Contain("Only one consumer may read");
+        (await ReadStateAsync(context)).Should().Equal(progress);
+    }
+
+    [Test]
     public async Task ConsumeBatchAsync_EmptyBatch_PersistsResumeToken()
     {
         var context = await CreateContextAsync();
@@ -126,23 +154,32 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     [Test]
-    public async Task ReadBatchAsync_FullServerBatch_ReportsMoreAndReopensForLargerBatchSize()
+    public async Task ReadBatchAsync_ProtectedCollectionsChanged_RecoversHeadsOfTheNewType()
     {
-        var context = await CreateContextAsync();
-        await context.CreateConsumer().DrainAsync(10);
-        var streams = new[]
-        {
-            await context.AppendStreamAsync(1),
-            await context.AppendStreamAsync(1),
-            await context.AppendStreamAsync(1)
-        };
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
 
-        var partial = await ReadUntilAsync(context.CandidateSource, 2, read => read.Candidates.Count == 2);
-        var complete = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Count == 3);
+        // A sealed shipment head exists before candidates are collected for the shipment type.
+        var writer = await LedgerStoreContext.CreateAsync(_container, databaseName: databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
+        _contexts.Add(writer);
+        var shipment = Guid.NewGuid();
+        await writer.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>()
+                    .AppendEventsAsync([ShipmentDispatchedEvent.Create(shipment, 1)]);
 
-        partial.HasMore.Should().BeTrue();
-        complete.HasMore.Should().BeFalse();
-        complete.Candidates.Select(candidate => candidate.AggregateId).Should().BeEquivalentTo(streams);
+        var ledgerOnly = await CreateContextAsync(databaseName);
+        var ledgerConsumer = ledgerOnly.CreateConsumer();
+        await ledgerConsumer.DrainAsync(10);
+        await ledgerOnly.AppendStreamAsync(1);
+        await ledgerConsumer.DrainAsync(10);
+        var ledgerState = await ReadStateAsync(ledgerOnly);
+        ledgerState.Should().NotBeNull();
+        ledgerState.Contains("ResumeToken").Should().BeTrue();
+        await ledgerOnly.DisposeAsync();
+        _contexts.Remove(ledgerOnly);
+
+        var both = await CreateContextAsync(databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
+        var candidates = await both.CreateConsumer().DrainAsync(10);
+
+        candidates.Should().Contain(candidate => candidate.AggregateType == nameof(ShipmentAggregate) && candidate.AggregateId == shipment);
     }
 
     [Test]
@@ -210,6 +247,30 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     [Test]
+    public async Task ReadBatchAsync_StreamBatches_ReportMoreUntilAnEmptyBatchAndReopenForLargerBatchSize()
+    {
+        var context = await CreateContextAsync();
+        await context.CreateConsumer().DrainAsync(10);
+        var streams = new[]
+        {
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(1)
+        };
+
+        var partial = await ReadUntilAsync(context.CandidateSource, 2, read => read.Candidates.Count == 2);
+        var complete = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Count == 3);
+        await context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, complete, ct));
+        var caughtUp = await context.CandidateSource.ReadBatchAsync(10, CancellationToken.None);
+
+        partial.HasMore.Should().BeTrue();
+        complete.HasMore.Should().BeTrue();
+        complete.Candidates.Select(candidate => candidate.AggregateId).Should().BeEquivalentTo(streams);
+        caughtUp.Candidates.Should().BeEmpty();
+        caughtUp.HasMore.Should().BeFalse();
+    }
+
+    [Test]
     public async Task ReadBatchAsync_UnsealedStreamHeads_ExaminesBoundedNumberOfStreamsPerBatch()
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
@@ -257,6 +318,9 @@ public class ChangeStreamAnchorCandidateSourceTests
 
         _contexts.Clear();
     }
+
+    private static Task AcknowledgeInTransactionAsync(IMongoHelper mongoHelper, IAnchorCandidateSource source, AnchorCandidateBatch batch)
+        => mongoHelper.ExecuteInTransaction((_, session, ct) => source.AcknowledgeAsync(session, batch, ct));
 
     /// <summary>
     /// Makes the next <paramref name="command"/> of the client with <paramref name="applicationName"/> fail with
