@@ -152,6 +152,22 @@ public class IntegrityAnchoringIntegrationTests
     }
 
     [Test]
+    public async Task RunOnceAsync_FailingRun_LogsErrorForTheNextRunToRetry()
+    {
+        var logger = new CapturingLogger<IntegrityAnchoringService>();
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()),
+                                               configureServices: services => services.AddSingleton<ILogger<IntegrityAnchoringService>>(logger));
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        run.PhaseCompleted = (_, _) => throw new InvalidOperationException("The run failed.");
+
+        var result = await context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>().RunOnceAsync(CancellationToken.None);
+
+        result.Should().BeNull();
+        logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Error && entry.Message.Contains("anchoring run failed"));
+    }
+
+    [Test]
     public async Task SealingAnchorLookup_AnchorAwaitingTimestamps_ReturnsNoneUntilItCompletes()
     {
         var testAuthority = CreateTestAuthority();
