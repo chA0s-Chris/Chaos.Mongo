@@ -34,9 +34,9 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ArgumentNullException.ThrowIfNull(options.Uri, nameof(options));
         ArgumentNullException.ThrowIfNull(options.HttpClientFactory, nameof(options));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.MaximumClockSkew, TimeSpan.Zero, nameof(options));
-        if (!options.Uri.IsAbsoluteUri)
+        if (!options.Uri.IsAbsoluteUri || ((options.Uri.Scheme != Uri.UriSchemeHttp) && (options.Uri.Scheme != Uri.UriSchemeHttps)))
         {
-            throw new ArgumentException("The timestamp authority URI must be absolute.", nameof(options));
+            throw new ArgumentException("The timestamp authority URI must be an absolute HTTP or HTTPS URI.", nameof(options));
         }
 
         _options = options;

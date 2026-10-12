@@ -13,6 +13,7 @@ internal static class CrlDistributionPoints
     private const String ExtensionOid = "2.5.29.31";
     private static readonly Asn1Tag FullNameTag = new(TagClass.ContextSpecific, 0, true);
     private static readonly Asn1Tag NameTag = new(TagClass.ContextSpecific, 0, true);
+    private static readonly Asn1Tag RelativeNameTag = new(TagClass.ContextSpecific, 1, true);
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
     /// <summary>
@@ -85,10 +86,25 @@ internal static class CrlDistributionPoints
             return [];
         }
 
-        // The CHOICE inside [0] is either a full name [0] or a name relative to the CRL issuer [1], which has no URI.
+        // The CHOICE inside [0] is exactly one of a full name [0] or a name relative to the CRL issuer [1], which has
+        // no URI.
         var name = point.ReadSequence(NameTag);
-        return name.HasData && name.PeekTag().HasSameClassAndValue(FullNameTag)
-            ? ReadFullNameUris(name.ReadSequence(FullNameTag))
-            : [];
+        IReadOnlyList<Uri> uris;
+        if (name.PeekTag().HasSameClassAndValue(FullNameTag))
+        {
+            uris = ReadFullNameUris(name.ReadSequence(FullNameTag));
+        }
+        else if (name.PeekTag().HasSameClassAndValue(RelativeNameTag))
+        {
+            name.ReadEncodedValue();
+            uris = [];
+        }
+        else
+        {
+            throw new AsnContentException("A distribution point name must be a full name or a name relative to the CRL issuer.");
+        }
+
+        name.ThrowIfNotEmpty();
+        return uris;
     }
 }

@@ -14,6 +14,34 @@ public class CrlDistributionPointsTests
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
     [Test]
+    public void GetHttpUris_DuplicateNameInDistributionPoint_ThrowsAsnContentException()
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/a.crl");
+            }
+
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/b.crl");
+            }
+        }
+
+        var act = () =>
+        {
+            using var certificate = CreateCertificate(writer.Encode());
+            return CrlDistributionPoints.GetHttpUris(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
     public void GetHttpUris_MalformedExtension_ThrowsAsnContentException()
     {
         var act = () =>
@@ -40,6 +68,13 @@ public class CrlDistributionPointsTests
                 WriteUris(names, "https://crl.test/a.crl", "not a uri");
             });
             WriteFullNamePoint(writer, names => WriteUris(names, "ldap://ldap.test/cn=only"));
+            using (writer.PushSequence())
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSetOf(new Asn1Tag(TagClass.ContextSpecific, 1)))
+            {
+                // A name relative to the CRL issuer has no location.
+            }
+
             using (writer.PushSequence())
             using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
             using (writer.PushSetOf(new Asn1Tag(TagClass.ContextSpecific, 1)))

@@ -81,6 +81,20 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public void Constructor_NonHttpUri_ThrowsArgumentException()
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "ftp",
+            Uri = new Uri("ftp://tsa.test/timestamp")
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentException>().WithMessage("*absolute HTTP or HTTPS*");
+    }
+
+    [Test]
     public void Constructor_NonPositiveClockSkew_ThrowsArgumentOutOfRangeException()
     {
         var options = new Rfc3161TimestampAuthorityOptions
@@ -106,7 +120,7 @@ public class Rfc3161TimestampAuthorityTests
 
         var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
-        act.Should().Throw<ArgumentException>().WithMessage("*must be absolute*");
+        act.Should().Throw<ArgumentException>().WithMessage("*absolute HTTP or HTTPS*");
     }
 
     [TearDown]

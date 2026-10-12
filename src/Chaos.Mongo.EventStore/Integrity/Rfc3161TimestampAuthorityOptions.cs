@@ -49,7 +49,7 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     public X509Certificate2Collection TrustedRoots { get; } = [];
 
     /// <summary>
-    /// Gets or sets the URI that accepts <c>application/timestamp-query</c> requests.
+    /// Gets or sets the absolute HTTP or HTTPS URI that accepts <c>application/timestamp-query</c> requests.
     /// </summary>
     public required Uri Uri { get; set; }
 }
