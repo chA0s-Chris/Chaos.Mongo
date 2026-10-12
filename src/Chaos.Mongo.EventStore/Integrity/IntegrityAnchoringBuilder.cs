@@ -27,7 +27,8 @@ internal sealed class IntegrityAnchoringBuilder
     internal Func<IServiceProvider, CompletedAnchor, CancellationToken, Task>? CompletionHook { get; private set; }
 
     /// <summary>
-    /// Sets the hook that is notified of every completed anchor, in anchor order and at least once.
+    /// Sets the hook that is notified of every completed anchor, in anchor order and at least once. Anchors completed
+    /// before a hook was configured are notified first, in order.
     /// </summary>
     /// <param name="hook">The hook; it receives the service provider, the anchor and a cancellation token.</param>
     /// <returns>The builder for method chaining.</returns>
