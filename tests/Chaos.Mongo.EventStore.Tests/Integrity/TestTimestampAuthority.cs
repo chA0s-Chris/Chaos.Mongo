@@ -161,6 +161,17 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         return Task.FromResult(Respond(HttpStatusCode.NotFound));
     }
 
+    /// <summary>
+    /// Creates random bytes that encode as a minimal positive DER integer: the first byte is in <c>0x01..0x7F</c>,
+    /// so it is neither a redundant leading zero nor a sign bit.
+    /// </summary>
+    private static Byte[] CreateRandomInteger(Int32 length)
+    {
+        var value = RandomNumberGenerator.GetBytes(length);
+        value[0] = (Byte)(1 + (value[0] % 0x7F));
+        return value;
+    }
+
     private static X509Certificate2 CreateRoot(DateTimeOffset notBefore, DateTimeOffset notAfter)
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -225,9 +236,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             hash[0] ^= 0xFF;
         }
 
-        var nonce = Mode == TestTimestampAuthorityMode.WrongNonce ? RandomNumberGenerator.GetBytes(16) : request.GetNonce();
-        var serialNumber = RandomNumberGenerator.GetBytes(8);
-        serialNumber[0] &= 0x7F;
+        var nonce = Mode == TestTimestampAuthorityMode.WrongNonce ? CreateRandomInteger(16) : request.GetNonce();
+        var serialNumber = CreateRandomInteger(8);
         var timestamp = Mode switch
         {
             TestTimestampAuthorityMode.Backdated => DateTimeOffset.UtcNow.AddHours(-1),

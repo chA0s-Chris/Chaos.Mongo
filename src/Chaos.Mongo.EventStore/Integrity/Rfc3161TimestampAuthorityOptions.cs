@@ -12,11 +12,16 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
     {
         PooledConnectionLifetime = TimeSpan.FromMinutes(5)
-    });
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(30),
+        MaxResponseContentBufferSize = 16 * 1024 * 1024
+    };
 
     /// <summary>
     /// Gets or sets the factory for the HTTP client used for timestamp requests and CRL downloads. Defaults to a
-    /// client shared by all authorities without a factory.
+    /// client shared by all authorities without a factory, which times out after 30 seconds and reads at most 16 MB
+    /// per response, so a hung authority or CRL host does not stall an anchoring run for long.
     /// </summary>
     public Func<IServiceProvider, HttpClient> HttpClientFactory { get; set; } = _ => SharedHttpClient;
 
