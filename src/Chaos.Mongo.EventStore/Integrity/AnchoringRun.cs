@@ -31,8 +31,9 @@ using System.Security.Cryptography;
 ///         </item>
 ///     </list>
 ///     <para>
-///     Before that, every run discards prepared attempts and deletes their leaves; under the lock, a prepared attempt
-///     belongs to a crashed or superseded run. A run does not loop, so a backlog drains at one anchor per run.
+///     Before that, every run discards prepared attempts, deletes the leaves of discarded attempts and removes attempts
+///     discarded long ago; under the lock, a prepared attempt belongs to a crashed or superseded run. A run does not
+///     loop, so a backlog drains at one anchor per run.
 ///     </para>
 /// </remarks>
 internal sealed class AnchoringRun
@@ -101,7 +102,7 @@ internal sealed class AnchoringRun
         }
 
         await _store.DiscardPreparingAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
-        await _store.DeleteDiscardedLeavesAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        await _store.CleanUpDiscardedAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
 
         if (await _store.FindAwaitingTimestampAsync(cancellationToken) is { } pending)
         {

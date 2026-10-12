@@ -19,7 +19,8 @@ internal sealed class AnchorStore
     internal const String AnchorSequenceField = "AnchorSequence";
 
     /// <summary>
-    /// How long after discarding an attempt its leaves are still cleaned up; far beyond any lock lease.
+    /// How long after discarding an attempt its document is kept so its leaves are still cleaned up; far beyond any
+    /// lock lease.
     /// </summary>
     internal static readonly TimeSpan DiscardedLeafCleanupWindow = TimeSpan.FromHours(24);
 
@@ -74,6 +75,47 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Deletes the leaves of discarded attempts, including leaves a superseded run wrote after it was discarded, and
+    /// removes the documents of attempts discarded more than <see cref="DiscardedLeafCleanupWindow"/> ago. A superseded
+    /// run stops writing within its lock lease, so such an attempt cannot gain leaves any more, and removing it keeps
+    /// the discarded attempts from accumulating.
+    /// </summary>
+    /// <returns>The number of deleted leaves.</returns>
+    public async Task<Int64> CleanUpDiscardedAsync(DateTime utcNow, CancellationToken cancellationToken)
+    {
+        var discarded = await Anchors.Find(new BsonDocument(StatusField, nameof(AnchorStatus.Discarded)))
+                                     .Project(new BsonDocument
+                                     {
+                                         { "_id", 1 },
+                                         { DiscardedField, 1 }
+                                     })
+                                     .ToListAsync(cancellationToken);
+        if (discarded.Count == 0)
+        {
+            return 0;
+        }
+
+        var ids = new BsonArray(discarded.Select(document => document["_id"]));
+        var result = await Leaves.DeleteManyAsync(new BsonDocument(AnchorIdField, new BsonDocument("$in", ids)), cancellationToken);
+
+        var expiredBefore = utcNow - DiscardedLeafCleanupWindow;
+        var expired = new BsonArray(discarded.Where(document => document.TryGetValue(DiscardedField, out var discardedUtc) &&
+                                                                (discardedUtc.ToUniversalTime() < expiredBefore))
+                                             .Select(document => document["_id"]));
+        if (expired.Count > 0)
+        {
+            var expiredFilter = new BsonDocument
+            {
+                { "_id", new BsonDocument("$in", expired) },
+                { StatusField, nameof(AnchorStatus.Discarded) }
+            };
+            await Anchors.DeleteManyAsync(expiredFilter, cancellationToken);
+        }
+
+        return result.DeletedCount;
+    }
+
+    /// <summary>
     /// Moves a prepared anchor to <see cref="AnchorStatus.AwaitingTimestamp"/> with its sequence number, inside the
     /// transaction that acknowledges its candidates.
     /// </summary>
@@ -110,32 +152,6 @@ internal sealed class AnchorStore
         });
         var result = await Anchors.UpdateOneAsync(ById(anchorId, AnchorStatus.AwaitingTimestamp), update, cancellationToken: cancellationToken);
         return result.ModifiedCount == 1;
-    }
-
-    /// <summary>
-    /// Deletes the leaves of recently discarded attempts, including leaves a superseded run wrote after it was
-    /// discarded. A superseded run stops writing within its lock lease, so attempts discarded more than
-    /// <see cref="DiscardedLeafCleanupWindow"/> ago are not examined again.
-    /// </summary>
-    /// <returns>The number of deleted leaves.</returns>
-    public async Task<Int64> DeleteDiscardedLeavesAsync(DateTime utcNow, CancellationToken cancellationToken)
-    {
-        var filter = new BsonDocument
-        {
-            { StatusField, nameof(AnchorStatus.Discarded) },
-            { DiscardedField, new BsonDocument("$gte", utcNow - DiscardedLeafCleanupWindow) }
-        };
-        var discarded = await Anchors.Find(filter)
-                                     .Project(new BsonDocument("_id", 1))
-                                     .ToListAsync(cancellationToken);
-        if (discarded.Count == 0)
-        {
-            return 0;
-        }
-
-        var ids = new BsonArray(discarded.Select(document => document["_id"]));
-        var result = await Leaves.DeleteManyAsync(new BsonDocument(AnchorIdField, new BsonDocument("$in", ids)), cancellationToken);
-        return result.DeletedCount;
     }
 
     /// <summary>
