@@ -257,11 +257,14 @@ public class AnchorCandidateSourceTests
         var before = DateTime.UtcNow.AddSeconds(-5);
         var aggregateId = await context.AppendStreamAsync(1);
 
+        // Reading well after the commit tells the commit time apart from the time of the read.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        var readStart = DateTime.UtcNow;
         var batch = await ReadUntilAsync(context.CandidateSource, read => read.Candidates.Any(c => c.AggregateId == aggregateId));
 
         var committed = batch.Candidates.Single(candidate => candidate.AggregateId == aggregateId).CommittedUtc;
         committed.Kind.Should().Be(DateTimeKind.Utc);
-        committed.Should().BeOnOrAfter(before).And.BeOnOrBefore(DateTime.UtcNow.AddSeconds(5));
+        committed.Should().BeOnOrAfter(before).And.BeBefore(readStart.AddSeconds(-1));
     }
 
     [Test]

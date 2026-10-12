@@ -199,6 +199,25 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     [Test]
+    public async Task ReadBatchAsync_FailedReadAfterUnacknowledgedRead_DeliversTheEarlierCandidatesAgain()
+    {
+        var applicationName = $"interrupted-{Guid.NewGuid():N}";
+        var context = await CreateContextAsync(applicationName: applicationName);
+        await context.CreateConsumer().DrainAsync(10);
+        var aggregateId = await context.AppendStreamAsync(1);
+        await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Any(c => c.AggregateId == aggregateId));
+
+        // A non-resumable error on the open stream's next getMore, which the driver does not resume.
+        await ConfigureFailPointAsync(context, "getMore", 2, applicationName);
+        var failedRead = () => context.CandidateSource.ReadBatchAsync(10, CancellationToken.None);
+        await failedRead.Should().ThrowAsync<MongoCommandException>();
+
+        var again = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Any(c => c.AggregateId == aggregateId));
+
+        again.Candidates.Should().ContainSingle(candidate => candidate.AggregateId == aggregateId);
+    }
+
+    [Test]
     public async Task ReadBatchAsync_FailedRead_ReopensStreamAndDeliversCandidatesAgain()
     {
         var applicationName = $"interrupted-{Guid.NewGuid():N}";

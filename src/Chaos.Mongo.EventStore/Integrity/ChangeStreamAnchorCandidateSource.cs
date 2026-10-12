@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Diagnostics;
 
 /// <summary>
 /// Reads anchor candidates from one database-wide change stream over the protected events collections.
@@ -112,6 +113,12 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         _logger = logger;
     }
 
+    /// <summary>
+    /// Converts a cluster time to its UTC time. The seconds are unsigned, so times after 2038 do not wrap around.
+    /// </summary>
+    internal static DateTime ToCommittedUtc(BsonTimestamp clusterTime)
+        => DateTimeOffset.FromUnixTimeSeconds((UInt32)clusterTime.Timestamp).UtcDateTime;
+
     private static InvalidOperationException CreateConflictException(Exception? innerException = null)
         => new("Another consumer changed the anchor candidate state since this batch was read. " +
                "Only one consumer may read anchor candidates at a time.",
@@ -123,9 +130,6 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                recovery["Cursor"].IsBsonNull ? null : recovery["Cursor"].AsGuid,
                recovery[ScanStartedElement].ToUniversalTime(),
                null);
-
-    private static DateTime ToUtc(BsonTimestamp clusterTime)
-        => DateTimeOffset.FromUnixTimeSeconds(clusterTime.Timestamp).UtcDateTime;
 
     private static AnchorCandidate? TryCreateCandidate(BsonDocument change, Dictionary<String, ProtectedStreamType> types)
     {
@@ -143,7 +147,7 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                                    fullDocument[type.AggregateIdElement].AsGuid,
                                    fullDocument[type.VersionElement].ToInt64(),
                                    integrity.Hash,
-                                   ToUtc(change["clusterTime"].AsBsonTimestamp));
+                                   ToCommittedUtc(change["clusterTime"].AsBsonTimestamp));
     }
 
     /// <summary>
@@ -255,7 +259,7 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         {
             StreamPosition streamPosition => CreateStreamState(streamPosition),
             ScanPosition scanPosition => CreateScanState(scanPosition),
-            _ => throw new ArgumentException("The batch was not read from the change-stream source.", nameof(position))
+            _ => throw new UnreachableException("A batch of this source carries one of its own position types.")
         };
 
     private BsonDocument CreateStreamState(StreamPosition position)
@@ -449,7 +453,7 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                                                    aggregateId,
                                                    head[type.VersionElement].ToInt64(),
                                                    integrity.Hash,
-                                                   ToUtc(position.OperationTime)));
+                                                   ToCommittedUtc(position.OperationTime)));
             }
 
             cursor = aggregateId;

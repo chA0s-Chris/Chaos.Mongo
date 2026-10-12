@@ -61,8 +61,8 @@ The work is one story but four concerns with different reviewers in mind: the ti
 
 - The candidate source currently reopens at its persisted position when a batch is read before the previous one is acknowledged. It changes so that consecutive reads continue from the last read position and acknowledging the last batch persists the position for all of them, which is what allows one anchor, and one timestamp, per run regardless of event volume.
 - Because successive runs share the source, each run starts by discarding unacknowledged reads through a new `DiscardUnacknowledgedReads()`, after which the next read reopens at the persisted position. A read after a failed read, after an acknowledgement whose transaction did not commit, or with a different batch size still reopens at the persisted position as today.
-- Anchor candidates gain their commit time: the change's cluster time, or the start of the scan for candidates found by a recovery scan.
-- The benchmarks and the load test keep using `WithAnchorCandidates()` together with `AnchorCandidateConsumer`, which stays as their stand-in for the run and follows the changed read contract, so their measurements remain comparable with #157.
+- Anchor candidates gain their commit time: the change's cluster time, or the start of the scan for candidates found by a recovery scan. Candidates found by a recovery scan carry its starting cluster time, so a head committed during the scan can get an earlier commit time than its actual one; the delay alert errs towards reporting earlier, and the anchored period may start slightly early.
+- The benchmarks keep using `WithAnchorCandidates()` together with `AnchorCandidateConsumer`, which stays as their stand-in for the run, and the load test drains through the source directly; both follow the changed read contract, so their measurements remain comparable with #157.
 
 ### Anchoring run
 
