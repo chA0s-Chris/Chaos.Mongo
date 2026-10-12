@@ -169,9 +169,19 @@ internal sealed class AnchoringRun
 
     private async Task NotifyAsync(IMongoLock runLock, CancellationToken cancellationToken)
     {
-        if (_notifier is not null && await EnsureLockAsync(runLock, cancellationToken))
+        if (_notifier is null)
         {
-            await _notifier.NotifyAsync(cancellationToken);
+            return;
+        }
+
+        try
+        {
+            await _notifier.NotifyAsync(ct => EnsureLockAsync(runLock, ct), cancellationToken);
+        }
+        catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
+        {
+            // Notification is retried by the next run and must not keep this run from anchoring.
+            _logger.LogError(ex, "Notifying completed anchors failed; it is retried with the next run");
         }
     }
 

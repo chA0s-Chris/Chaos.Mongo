@@ -36,12 +36,13 @@ internal sealed class AnchorStore
     private const String HashField = "Hash";
     private const String IndexField = "Index";
     private const String LeavesByAnchorIndexName = "AnchorId_with_Index_Unique";
-    private const String LeavesByStreamIndexName = "AggregateType_with_AggregateId_with_AnchorSequence";
+    private const String LeavesByStreamIndexName = "AggregateType_with_AggregateId_with_AnchorSequence_with_Version";
     private const String NotifiedField = "Notified";
     private const String SequenceIndexName = "Sequence_Unique";
     private const String StatusIndexName = "Status";
     private const String TimestampsField = "Timestamps";
     private const String UnnotifiedIndexName = "Unnotified_Sequence";
+    private const String VersionField = "Version";
     private readonly IMongoHelper _mongoHelper;
     private readonly IntegrityAnchoringOptions _options;
 
@@ -213,7 +214,8 @@ internal sealed class AnchorStore
                                                {
                                                    { AggregateTypeField, 1 },
                                                    { AggregateIdField, 1 },
-                                                   { AnchorSequenceField, 1 }
+                                                   { AnchorSequenceField, 1 },
+                                                   { VersionField, 1 }
                                                },
                                                new CreateIndexOptions
                                                {
@@ -261,6 +263,22 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Finds the completed anchor with the lowest sequence number whose completion was not yet notified.
+    /// </summary>
+    public async Task<AnchorRecord?> FindFirstUnnotifiedAsync(CancellationToken cancellationToken)
+    {
+        var document = await Anchors.Find(new BsonDocument
+                                    {
+                                        { StatusField, nameof(AnchorStatus.Completed) },
+                                        { NotifiedField, false }
+                                    })
+                                    .Sort(new BsonDocument(SequenceField, 1))
+                                    .Limit(1)
+                                    .FirstOrDefaultAsync(cancellationToken);
+        return document is null ? null : ReadAnchor(document);
+    }
+
+    /// <summary>
     /// Finds the committed anchor with the highest sequence number.
     /// </summary>
     public async Task<AnchorRecord?> FindLatestCommittedAsync(CancellationToken cancellationToken)
@@ -281,7 +299,7 @@ internal sealed class AnchorStore
                               {
                                   { AggregateTypeField, aggregateType },
                                   { AggregateIdField, ToBson(aggregateId) },
-                                  { "Version", new BsonDocument("$gte", minimumVersion) }
+                                  { VersionField, new BsonDocument("$gte", minimumVersion) }
                               })
                               .Sort(new BsonDocument
                               {
@@ -290,19 +308,6 @@ internal sealed class AnchorStore
                                   { AnchorSequenceField, 1 }
                               }),
                         ReadLeaf,
-                        cancellationToken);
-
-    /// <summary>
-    /// Finds the completed anchors whose completion was not yet notified, in sequence order.
-    /// </summary>
-    public IAsyncEnumerable<AnchorRecord> FindUnnotifiedAsync(CancellationToken cancellationToken)
-        => ReadAllAsync(Anchors.Find(new BsonDocument
-                               {
-                                   { StatusField, nameof(AnchorStatus.Completed) },
-                                   { NotifiedField, false }
-                               })
-                               .Sort(new BsonDocument(SequenceField, 1)),
-                        ReadAnchor,
                         cancellationToken);
 
     /// <summary>
@@ -410,7 +415,7 @@ internal sealed class AnchorStore
                document[IndexField].ToInt32(),
                document[AggregateTypeField].AsString,
                document[AggregateIdField].AsGuid,
-               document["Version"].ToInt64(),
+               document[VersionField].ToInt64(),
                document[HashField].AsByteArray,
                ReadBinaries(document["Proof"]));
 
@@ -482,7 +487,7 @@ internal sealed class AnchorStore
             { IndexField, leaf.Index },
             { AggregateTypeField, leaf.AggregateType },
             { AggregateIdField, ToBson(leaf.AggregateId) },
-            { "Version", leaf.Version },
+            { VersionField, leaf.Version },
             { HashField, leaf.Hash },
             { "Proof", new BsonArray(leaf.Proof.Select(hash => new BsonBinaryData(hash))) }
         };

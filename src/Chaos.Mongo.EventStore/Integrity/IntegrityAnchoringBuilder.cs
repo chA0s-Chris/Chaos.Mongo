@@ -114,6 +114,10 @@ internal sealed class IntegrityAnchoringBuilder
     /// Adds a custom timestamp authority, for example for an API other than RFC 3161 over HTTP that still returns an
     /// RFC 3161 token.
     /// </summary>
+    /// <remarks>
+    /// Authority names must be unique. For custom authorities this is checked when the anchoring run is created,
+    /// because they only exist once the service provider is built.
+    /// </remarks>
     /// <param name="factory">Creates the authority.</param>
     /// <returns>The builder for method chaining.</returns>
     public IntegrityAnchoringBuilder WithTimestampAuthority(Func<IServiceProvider, ITimestampAuthority> factory)

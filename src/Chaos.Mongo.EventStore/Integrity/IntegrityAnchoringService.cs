@@ -8,16 +8,23 @@ using Microsoft.Extensions.Logging;
 /// Runs the anchoring run in the background, once at start and then once per
 /// <see cref="IntegrityAnchoringOptions.Interval"/>, and reports the anchor delay after every run.
 /// </summary>
+/// <remarks>
+/// After a run that failed or lost its lock, the delay of the anchor awaiting its timestamps, or else of the last known
+/// oldest unanchored candidate, is reported, so the alert does not go silent while anchoring fails.
+/// </remarks>
 internal sealed class IntegrityAnchoringService
 {
     private readonly ILogger _logger;
     private readonly IntegrityAnchoringOptions _options;
     private readonly AnchoringRun _run;
+    private readonly AnchorStore _store;
     private readonly TimeProvider _timeProvider;
     private CancellationTokenSource? _cancellationTokenSource;
     private Task _loop = Task.CompletedTask;
+    private DateTime? _unanchoredSinceUtc;
 
     public IntegrityAnchoringService(AnchoringRun run,
+                                     IMongoHelper mongoHelper,
                                      IntegrityAnchoringOptions options,
                                      TimeProvider timeProvider,
                                      ILogger<IntegrityAnchoringService> logger)
@@ -27,6 +34,7 @@ internal sealed class IntegrityAnchoringService
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _run = run;
+        _store = new AnchorStore(mongoHelper, options);
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -51,10 +59,22 @@ internal sealed class IntegrityAnchoringService
         catch (Exception ex)
         {
             _logger.LogError(ex, "The anchoring run failed and is retried with the next run");
+            await ReportDelayAfterFailureAsync(cancellationToken);
             return null;
         }
 
-        ReportDelay(result);
+        _unanchoredSinceUtc = result.Outcome is AnchoringRunOutcome.AwaitingTimestamps or AnchoringRunOutcome.LockLost
+            ? result.OldestCandidateUtc ?? _unanchoredSinceUtc
+            : null;
+        if (result.OldestCandidateUtc is { } oldest)
+        {
+            ReportDelay(oldest);
+        }
+        else if (result.Outcome == AnchoringRunOutcome.LockLost)
+        {
+            await ReportDelayAfterFailureAsync(cancellationToken);
+        }
+
         return result;
     }
 
@@ -103,13 +123,8 @@ internal sealed class IntegrityAnchoringService
         }
     }
 
-    private void ReportDelay(AnchoringRunResult result)
+    private void ReportDelay(DateTime oldest)
     {
-        if (result.OldestCandidateUtc is not { } oldest)
-        {
-            return;
-        }
-
         var delay = _timeProvider.GetUtcNow().UtcDateTime - oldest;
         var exceeded = delay > _options.DelayThreshold;
         IntegrityAnchoringDiagnostics.RecordAnchorDelay(delay, exceeded);
@@ -117,6 +132,28 @@ internal sealed class IntegrityAnchoringService
         {
             _logger.LogWarning("The oldest unanchored candidate is {AnchorDelay} old, above the anchor delay threshold of {DelayThreshold}",
                                delay, _options.DelayThreshold);
+        }
+    }
+
+    /// <summary>
+    /// Reports the delay of the anchor awaiting its timestamps, or else of the last known oldest unanchored candidate,
+    /// after a run that could not report one itself.
+    /// </summary>
+    private async Task ReportDelayAfterFailureAsync(CancellationToken cancellationToken)
+    {
+        var oldest = _unanchoredSinceUtc;
+        try
+        {
+            oldest = (await _store.FindAwaitingTimestampAsync(cancellationToken))?.OldestCandidateUtc ?? oldest;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "The anchor awaiting its timestamps could not be read to report the anchor delay");
+        }
+
+        if (oldest is { } value)
+        {
+            ReportDelay(value);
         }
     }
 

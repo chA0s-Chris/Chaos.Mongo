@@ -148,7 +148,7 @@ public static class MongoBuilderExtensions
             var notifier = anchoring.CompletionHook is { } hook
                 ? new AnchorCompletionNotifier(sp.GetRequiredService<IMongoHelper>(),
                                                options,
-                                               sp,
+                                               sp.GetRequiredService<IServiceScopeFactory>(),
                                                hook,
                                                timeProvider,
                                                sp.GetService<ILogger<AnchorCompletionNotifier>>() ?? NullLogger<AnchorCompletionNotifier>.Instance)
@@ -162,6 +162,7 @@ public static class MongoBuilderExtensions
                                     notifier);
         });
         builder.Services.AddSingleton(sp => new IntegrityAnchoringService(sp.GetRequiredService<AnchoringRun>(),
+                                                                          sp.GetRequiredService<IMongoHelper>(),
                                                                           options,
                                                                           sp.GetService<TimeProvider>() ?? TimeProvider.System,
                                                                           sp.GetService<ILogger<IntegrityAnchoringService>>() ??
