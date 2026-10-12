@@ -9,13 +9,22 @@ using System.Security.Cryptography.X509Certificates;
 /// </summary>
 internal sealed class Rfc3161TimestampAuthorityOptions
 {
-    private static readonly HttpClient SharedHttpClient = new();
+    private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    });
 
     /// <summary>
     /// Gets or sets the factory for the HTTP client used for timestamp requests and CRL downloads. Defaults to a
     /// client shared by all authorities without a factory.
     /// </summary>
     public Func<IServiceProvider, HttpClient> HttpClientFactory { get; set; } = _ => SharedHttpClient;
+
+    /// <summary>
+    /// Gets or sets the largest difference between the time a token asserts and the local time. A token outside it is
+    /// rejected, because its chain is validated at the asserted time. Defaults to 5 minutes.
+    /// </summary>
+    public TimeSpan MaximumClockSkew { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Gets or sets the name that identifies the authority in stored anchors.

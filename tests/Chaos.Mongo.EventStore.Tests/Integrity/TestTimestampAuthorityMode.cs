@@ -11,11 +11,15 @@ public enum TestTimestampAuthorityMode
     WrongImprint,
     WrongNonce,
     BrokenSignature,
+    WrongEssCertId,
+    Backdated,
+    FutureDated,
     Rejection,
     TrailingData,
     HttpFailure,
     Unreachable,
     Timeout,
     CrlPrimaryUnavailable,
-    CrlUnavailable
+    CrlUnavailable,
+    CrlEmpty
 }

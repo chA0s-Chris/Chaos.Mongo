@@ -31,9 +31,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Creates the authority. Its signing certificate names <paramref name="crlLocations"/> as one CRL distribution
     /// point, or carries <paramref name="rawCrlDistributionPoints"/> as the extension value when given.
     /// </summary>
-    public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null, Byte[]? rawCrlDistributionPoints = null)
+    public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
+                                  Byte[]? rawCrlDistributionPoints = null,
+                                  Boolean timestampingUsage = true,
+                                  Boolean expiredSigner = false)
     {
-        var notBefore = DateTimeOffset.UtcNow.AddDays(-1);
+        var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
         Root = CreateRoot(notBefore, notAfter);
 
@@ -41,7 +44,11 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         var request = new CertificateRequest("CN=Chaos.Mongo Test TSA", key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
-        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid(TimeStampingPurposeOid)], true));
+        if (timestampingUsage)
+        {
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid(TimeStampingPurposeOid)], true));
+        }
+
         request.CertificateExtensions.Add(X509AuthorityKeyIdentifierExtension.CreateFromCertificate(Root, true, false));
         var locations = crlLocations ?? [CrlUri, CrlMirrorUri];
         if (rawCrlDistributionPoints is not null)
@@ -50,10 +57,11 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
         else if (locations.Count > 0)
         {
-            request.CertificateExtensions.Add(new X509Extension(CrlDistributionPointsOid, EncodeDistributionPoint(locations), false));
+            request.CertificateExtensions.Add(new X509Extension(CrlDistributionPointsOid, EncodeDistributionPoints(locations.Select(uri => uri.AbsoluteUri).ToArray()), false));
         }
 
-        using var issued = request.Create(Root, notBefore, notAfter, RandomNumberGenerator.GetBytes(8));
+        var signerNotAfter = expiredSigner ? DateTimeOffset.UtcNow.AddDays(-1) : notAfter;
+        using var issued = request.Create(Root, notBefore, signerNotAfter, RandomNumberGenerator.GetBytes(8));
         SigningCertificate = issued.CopyWithPrivateKey(key);
         Crl = new CertificateRevocationListBuilder().Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
     }
@@ -82,6 +90,32 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Gets the authority's signing certificate, including its private key.
     /// </summary>
     public X509Certificate2 SigningCertificate { get; }
+
+    /// <summary>
+    /// Encodes a CRL distribution points extension value with one distribution point per argument, each naming its
+    /// locations as uniform resource identifiers in its full name.
+    /// </summary>
+    public static Byte[] EncodeDistributionPoints(params String[][] points)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            foreach (var locations in points)
+            {
+                using (writer.PushSequence())
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                {
+                    foreach (var location in locations)
+                    {
+                        writer.WriteCharacterString(UniversalTagNumber.IA5String, location, new Asn1Tag(TagClass.ContextSpecific, 6));
+                    }
+                }
+            }
+        }
+
+        return writer.Encode();
+    }
 
     /// <summary>
     /// Creates the production authority configured against this test authority, trusting its root unless another
@@ -135,24 +169,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
         return request.CreateSelfSigned(notBefore, notAfter);
-    }
-
-    private static Byte[] EncodeDistributionPoint(IEnumerable<Uri> locations)
-    {
-        // One distribution point whose full name lists alternative locations of the same CRL.
-        var writer = new AsnWriter(AsnEncodingRules.DER);
-        using (writer.PushSequence())
-        using (writer.PushSequence())
-        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
-        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
-        {
-            foreach (var location in locations)
-            {
-                writer.WriteCharacterString(UniversalTagNumber.IA5String, location.AbsoluteUri, new Asn1Tag(TagClass.ContextSpecific, 6));
-            }
-        }
-
-        return writer.Encode();
     }
 
     private static Byte[] EncodeSigningCertificateV2(X509Certificate2 certificate)
@@ -212,7 +228,13 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         var nonce = Mode == TestTimestampAuthorityMode.WrongNonce ? RandomNumberGenerator.GetBytes(16) : request.GetNonce();
         var serialNumber = RandomNumberGenerator.GetBytes(8);
         serialNumber[0] &= 0x7F;
-        var info = new Rfc3161TimestampTokenInfo(PolicyId, request.HashAlgorithmId, hash, serialNumber, DateTimeOffset.UtcNow, nonce: nonce);
+        var timestamp = Mode switch
+        {
+            TestTimestampAuthorityMode.Backdated => DateTimeOffset.UtcNow.AddHours(-1),
+            TestTimestampAuthorityMode.FutureDated => DateTimeOffset.UtcNow.AddHours(1),
+            _ => DateTimeOffset.UtcNow
+        };
+        var info = new Rfc3161TimestampTokenInfo(PolicyId, request.HashAlgorithmId, hash, serialNumber, timestamp, nonce: nonce);
 
         var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), info.Encode()));
         var signer = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, SigningCertificate)
@@ -220,7 +242,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             DigestAlgorithm = new Oid("2.16.840.1.101.3.4.2.1"),
             IncludeOption = X509IncludeOption.EndCertOnly
         };
-        signer.SignedAttributes.Add(new AsnEncodedData(SigningCertificateV2Oid, EncodeSigningCertificateV2(SigningCertificate)));
+        var attributeCertificate = Mode == TestTimestampAuthorityMode.WrongEssCertId ? Root : SigningCertificate;
+        signer.SignedAttributes.Add(new AsnEncodedData(SigningCertificateV2Oid, EncodeSigningCertificateV2(attributeCertificate)));
         signedCms.ComputeSignature(signer);
 
         // Without unsigned attributes the signature value is the last element, so this breaks only the signature.
@@ -239,7 +262,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                           ((Mode == TestTimestampAuthorityMode.CrlPrimaryUnavailable) && (uri == CrlUri));
         if (!unavailable)
         {
-            return Respond(HttpStatusCode.OK, Crl);
+            return Respond(HttpStatusCode.OK, Mode == TestTimestampAuthorityMode.CrlEmpty ? [] : Crl);
         }
 
         return uri == CrlMirrorUri ? throw new HttpRequestException("The CRL mirror is unreachable.") : Respond(HttpStatusCode.NotFound);

@@ -24,6 +24,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     private const String TimestampQueryMediaType = "application/timestamp-query";
     private readonly HttpClient _httpClient;
     private readonly Rfc3161TimestampAuthorityOptions _options;
+    private readonly TimeProvider _timeProvider;
 
     public Rfc3161TimestampAuthority(Rfc3161TimestampAuthorityOptions options, IServiceProvider serviceProvider)
     {
@@ -31,8 +32,17 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Name, nameof(options));
         ArgumentNullException.ThrowIfNull(options.Uri, nameof(options));
+        ArgumentNullException.ThrowIfNull(options.HttpClientFactory, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.MaximumClockSkew, TimeSpan.Zero, nameof(options));
+        if (!options.Uri.IsAbsoluteUri)
+        {
+            throw new ArgumentException("The timestamp authority URI must be absolute.", nameof(options));
+        }
+
         _options = options;
-        _httpClient = options.HttpClientFactory(serviceProvider);
+        _timeProvider = serviceProvider.GetService(typeof(TimeProvider)) as TimeProvider ?? TimeProvider.System;
+        _httpClient = options.HttpClientFactory(serviceProvider) ??
+                      throw new InvalidOperationException($"The HTTP client factory of timestamp authority '{options.Name}' returned null.");
     }
 
     /// <inheritdoc/>
@@ -55,25 +65,27 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         chain.ChainPolicy.RevocationMode = _options.RevocationMode;
         chain.ChainPolicy.ApplicationPolicy.Add(new Oid(TimeStampingPurposeOid));
         chain.ChainPolicy.VerificationTime = token.TokenInfo.Timestamp.UtcDateTime;
-        chain.ChainPolicy.ExtraStore.AddRange(token.AsSignedCms().Certificates);
+        var tokenCertificates = token.AsSignedCms().Certificates;
+        chain.ChainPolicy.ExtraStore.AddRange(tokenCertificates);
         if (_options.TrustedRoots.Count > 0)
         {
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             chain.ChainPolicy.CustomTrustStore.AddRange(_options.TrustedRoots);
         }
 
-        if (!chain.Build(signer))
-        {
-            var statuses = String.Join(", ", chain.ChainStatus.Select(status => status.Status));
-            throw Fail($"the token's certificate chain is not trusted ({statuses}).");
-        }
-
-        // The chain disposes its element certificates, so everything needed later is copied out here.
-        var elements = chain.ChainElements.Select(element => element.Certificate).ToList();
+        var elements = new List<X509Certificate2>();
         try
         {
+            if (!chain.Build(signer))
+            {
+                var statuses = String.Join(", ", chain.ChainStatus.Select(status => status.Status));
+                throw Fail($"the token's certificate chain is not trusted ({statuses}).");
+            }
+
+            // Everything needed later is copied out, so the certificates can be disposed here.
+            elements.AddRange(chain.ChainElements.Select(element => element.Certificate));
             var distributionPoints = elements.Take(elements.Count - 1)
-                                             .SelectMany(CrlDistributionPoints.GetHttpUris)
+                                             .SelectMany(GetDistributionPoints)
                                              .DistinctBy(locations => String.Join(" ", locations))
                                              .ToList();
             return new ValidatedChain(elements.Select(certificate => certificate.RawData).ToList(), distributionPoints);
@@ -81,6 +93,13 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         catch (AsnContentException ex)
         {
             throw Fail("a certificate of the token's chain has a malformed CRL distribution point.", ex);
+        }
+        finally
+        {
+            foreach (var certificate in elements.Concat(tokenCertificates))
+            {
+                certificate.Dispose();
+            }
         }
     }
 
@@ -92,12 +111,19 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             try
             {
                 using var response = await _httpClient.GetAsync(location, cancellationToken);
-                if (response.IsSuccessStatusCode)
+                if (!response.IsSuccessStatusCode)
                 {
-                    return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                    lastError = new HttpRequestException($"HTTP status {(Int32)response.StatusCode}.", null, response.StatusCode);
+                    continue;
                 }
 
-                lastError = new HttpRequestException($"HTTP status {(Int32)response.StatusCode}.", null, response.StatusCode);
+                var crl = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                if (crl.Length > 0)
+                {
+                    return crl;
+                }
+
+                lastError = new InvalidDataException($"The CRL at {location} is empty.");
             }
             catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
             {
@@ -110,6 +136,21 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 
     private TimestampAuthorityException Fail(String message, Exception? innerException = null)
         => new(_options.Name, message, innerException);
+
+    /// <summary>
+    /// Gets the HTTP locations of a certificate's distribution points. Points without one are skipped, but a
+    /// certificate that names distribution points must yield at least one CRL.
+    /// </summary>
+    private IReadOnlyList<IReadOnlyList<Uri>> GetDistributionPoints(X509Certificate2 certificate)
+    {
+        var points = CrlDistributionPoints.GetHttpUris(certificate);
+        if (points.Count == 0 && CrlDistributionPoints.NamesDistributionPoints(certificate))
+        {
+            throw Fail($"the certificate '{certificate.Subject}' names CRL distribution points, but none has an HTTP or HTTPS location.");
+        }
+
+        return points;
+    }
 
     private async Task<Byte[]> RequestAsync(Byte[] query, CancellationToken cancellationToken)
     {
@@ -170,6 +211,16 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         if (!token.VerifySignatureForHash(digest.Span, algorithm, out var signer))
         {
             throw Fail("the token's signature or signing-certificate attribute is invalid.");
+        }
+
+        // The chain is validated at the token's time; bounding that time keeps a backdated or future-dated token
+        // from a key whose certificate expired from passing.
+        var skew = (token.TokenInfo.Timestamp - _timeProvider.GetUtcNow()).Duration();
+        if (skew > _options.MaximumClockSkew)
+        {
+            signer.Dispose();
+            throw Fail($"the token's time {token.TokenInfo.Timestamp:O} differs from the local time by {skew}, " +
+                       $"more than the allowed {_options.MaximumClockSkew}.");
         }
 
         ValidatedChain chain;

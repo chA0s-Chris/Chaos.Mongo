@@ -46,6 +46,17 @@ internal static class CrlDistributionPoints
         return result;
     }
 
+    /// <summary>
+    /// Gets a value indicating whether a certificate names CRL distribution points at all.
+    /// </summary>
+    /// <param name="certificate">The certificate.</param>
+    /// <returns><c>true</c> when the certificate carries the extension.</returns>
+    public static Boolean NamesDistributionPoints(X509Certificate2 certificate)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+        return certificate.Extensions[ExtensionOid] is not null;
+    }
+
     private static IReadOnlyList<Uri> ReadFullNameUris(AsnReader fullName)
     {
         var uris = new List<Uri>();

@@ -30,6 +30,21 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public void Constructor_HttpClientFactoryReturnsNull_ThrowsInvalidOperationException()
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "null-client",
+            Uri = TestTimestampAuthority.TimestampUri,
+            HttpClientFactory = _ => null!
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*returned null*");
+    }
+
+    [Test]
     public void Constructor_HttpClientFactory_ReceivesServiceProvider()
     {
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
@@ -63,6 +78,35 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
         act.Should().Throw<ArgumentException>();
+    }
+
+    [Test]
+    public void Constructor_NonPositiveClockSkew_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "no-skew",
+            Uri = TestTimestampAuthority.TimestampUri,
+            MaximumClockSkew = TimeSpan.Zero
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public void Constructor_RelativeUri_ThrowsArgumentException()
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "relative",
+            Uri = new Uri("/timestamp", UriKind.Relative)
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentException>().WithMessage("*must be absolute*");
     }
 
     [TearDown]
@@ -106,6 +150,37 @@ public class Rfc3161TimestampAuthorityTests
         token.CertificateRevocationLists.Should().ContainSingle().Which.Should().Equal(testAuthority.Crl);
     }
 
+    [Test]
+    public async Task TimestampAsync_DistributionPointsWithoutHttpLocation_Throws()
+    {
+        var authority = CreateTestAuthority(rawCrlDistributionPoints: TestTimestampAuthority.EncodeDistributionPoints(["ldap://ldap.test/cn=ca"]))
+            .CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("none has an HTTP or HTTPS location");
+    }
+
+    [Test]
+    public async Task TimestampAsync_EmptyCrl_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.CrlEmpty);
+
+        exception.InnerException.Should().BeOfType<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task TimestampAsync_HttpAndLdapDistributionPoints_SkipsTheLdapPoint()
+    {
+        var testAuthority = CreateTestAuthority(rawCrlDistributionPoints: TestTimestampAuthority.EncodeDistributionPoints(
+                                                    ["ldap://ldap.test/cn=ca"],
+                                                    [TestTimestampAuthority.CrlUri.AbsoluteUri]));
+
+        var token = await testAuthority.CreateAuthority().TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateRevocationLists.Should().ContainSingle().Which.Should().Equal(testAuthority.Crl);
+    }
+
     [TestCase(TestTimestampAuthorityMode.HttpFailure)]
     [TestCase(TestTimestampAuthorityMode.Unreachable)]
     [TestCase(TestTimestampAuthorityMode.Timeout)]
@@ -120,6 +195,7 @@ public class Rfc3161TimestampAuthorityTests
     [TestCase(TestTimestampAuthorityMode.WrongImprint)]
     [TestCase(TestTimestampAuthorityMode.WrongNonce)]
     [TestCase(TestTimestampAuthorityMode.BrokenSignature)]
+    [TestCase(TestTimestampAuthorityMode.WrongEssCertId)]
     public async Task TimestampAsync_InvalidToken_Throws(TestTimestampAuthorityMode mode)
     {
         var exception = await TimestampExpectingFailureAsync(mode);
@@ -155,6 +231,17 @@ public class Rfc3161TimestampAuthorityTests
         var exception = await TimestampExpectingFailureAsync(mode);
 
         exception.AuthorityName.Should().Be("test-tsa");
+    }
+
+    [TestCase(false, false)]
+    [TestCase(true, true)]
+    public async Task TimestampAsync_SigningCertificateNotValidForTimestamping_Throws(Boolean timestampingUsage, Boolean expiredSigner)
+    {
+        var authority = CreateTestAuthority(timestampingUsage: timestampingUsage, expiredSigner: expiredSigner).CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.AuthorityName.Should().Be("test-tsa");
     }
 
     [Test]
@@ -198,6 +285,15 @@ public class Rfc3161TimestampAuthorityTests
         (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("not trusted");
     }
 
+    [TestCase(TestTimestampAuthorityMode.Backdated)]
+    [TestCase(TestTimestampAuthorityMode.FutureDated)]
+    public async Task TimestampAsync_TokenTimeOutsideClockSkew_Throws(TestTimestampAuthorityMode mode)
+    {
+        var exception = await TimestampExpectingFailureAsync(mode);
+
+        exception.Message.Should().Contain("differs from the local time");
+    }
+
     [Test]
     public async Task TimestampAsync_UntrustedChain_Throws()
     {
@@ -220,7 +316,8 @@ public class Rfc3161TimestampAuthorityTests
 
         Rfc3161TimestampToken.TryDecode(token.Token, out var decoded, out var bytesRead).Should().BeTrue();
         bytesRead.Should().Be(token.Token.Length);
-        decoded!.TokenInfo.GetMessageHash().ToArray().Should().Equal(digest);
+        decoded.Should().NotBeNull();
+        decoded.TokenInfo.GetMessageHash().ToArray().Should().Equal(digest);
         token.CertificateChain.Should().HaveCount(2);
         token.CertificateChain[0].Should().Equal(testAuthority.SigningCertificate.RawData);
         token.CertificateChain[1].Should().Equal(testAuthority.Root.RawData);
@@ -241,9 +338,12 @@ public class Rfc3161TimestampAuthorityTests
 
     private static Byte[] CreateDigest() => SHA256.HashData(Guid.NewGuid().ToByteArray());
 
-    private TestTimestampAuthority CreateTestAuthority(IReadOnlyList<Uri>? crlLocations = null, Byte[]? rawCrlDistributionPoints = null)
+    private TestTimestampAuthority CreateTestAuthority(IReadOnlyList<Uri>? crlLocations = null,
+                                                       Byte[]? rawCrlDistributionPoints = null,
+                                                       Boolean timestampingUsage = true,
+                                                       Boolean expiredSigner = false)
     {
-        var testAuthority = new TestTimestampAuthority(crlLocations, rawCrlDistributionPoints);
+        var testAuthority = new TestTimestampAuthority(crlLocations, rawCrlDistributionPoints, timestampingUsage, expiredSigner);
         _testAuthorities.Add(testAuthority);
         return testAuthority;
     }
