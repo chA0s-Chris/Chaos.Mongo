@@ -22,7 +22,7 @@ internal sealed class AnchorStore
     /// How long after discarding an attempt its document is kept so its leaves are still cleaned up; far beyond any
     /// lock lease.
     /// </summary>
-    internal static readonly TimeSpan DiscardedLeafCleanupWindow = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan DiscardedCleanupWindow = TimeSpan.FromHours(24);
 
     internal const String SequenceField = "Sequence";
     internal const String StatusField = "Status";
@@ -76,7 +76,7 @@ internal sealed class AnchorStore
 
     /// <summary>
     /// Deletes the leaves of discarded attempts, including leaves a superseded run wrote after it was discarded, and
-    /// removes the documents of attempts discarded more than <see cref="DiscardedLeafCleanupWindow"/> ago. A superseded
+    /// removes the documents of attempts discarded more than <see cref="DiscardedCleanupWindow"/> ago. A superseded
     /// run stops writing within its lock lease, so such an attempt cannot gain leaves any more, and removing it keeps
     /// the discarded attempts from accumulating.
     /// </summary>
@@ -98,7 +98,7 @@ internal sealed class AnchorStore
         var ids = new BsonArray(discarded.Select(document => document["_id"]));
         var result = await Leaves.DeleteManyAsync(new BsonDocument(AnchorIdField, new BsonDocument("$in", ids)), cancellationToken);
 
-        var expiredBefore = utcNow - DiscardedLeafCleanupWindow;
+        var expiredBefore = utcNow - DiscardedCleanupWindow;
         var expired = new BsonArray(discarded.Where(document => document.TryGetValue(DiscardedField, out var discardedUtc) &&
                                                                 (discardedUtc.ToUniversalTime() < expiredBefore))
                                              .Select(document => document["_id"]));

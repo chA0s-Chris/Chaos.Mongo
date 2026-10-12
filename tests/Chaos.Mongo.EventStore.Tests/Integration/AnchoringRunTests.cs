@@ -147,7 +147,7 @@ public class AnchoringRunTests
             {
                 { "_id", new BsonBinaryData(longDiscarded, GuidRepresentation.Standard) },
                 { AnchorStore.StatusField, nameof(AnchorStatus.Discarded) },
-                { "DiscardedUtc", DateTime.UtcNow - AnchorStore.DiscardedLeafCleanupWindow - TimeSpan.FromHours(1) }
+                { "DiscardedUtc", DateTime.UtcNow - AnchorStore.DiscardedCleanupWindow - TimeSpan.FromHours(1) }
             }
         ]);
 
