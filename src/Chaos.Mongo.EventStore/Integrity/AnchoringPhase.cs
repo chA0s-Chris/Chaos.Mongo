@@ -13,7 +13,7 @@ internal enum AnchoringPhase
     PendingAnchorStamped,
 
     /// <summary>
-    /// Phase 2: the candidates were read and reduced to one per stream.
+    /// Phase 2: candidates were read and reduced to one per stream. Not reported for a run without candidates.
     /// </summary>
     CandidatesRead,
 

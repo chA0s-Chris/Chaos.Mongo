@@ -17,6 +17,12 @@ internal sealed class AnchorStore
     internal const String AnchorDigestField = "AnchorDigest";
     internal const String AnchorIdField = "AnchorId";
     internal const String AnchorSequenceField = "AnchorSequence";
+
+    /// <summary>
+    /// How long after discarding an attempt its leaves are still cleaned up; far beyond any lock lease.
+    /// </summary>
+    internal static readonly TimeSpan DiscardedLeafCleanupWindow = TimeSpan.FromHours(24);
+
     internal const String SequenceField = "Sequence";
     internal const String StatusField = "Status";
     private const String AggregateIdField = "AggregateId";
@@ -31,6 +37,7 @@ internal sealed class AnchorStore
     private const String SequenceIndexName = "Sequence_Unique";
     private const String StatusIndexName = "Status";
     private const String TimestampsField = "Timestamps";
+
     private readonly IMongoHelper _mongoHelper;
     private readonly IntegrityAnchoringOptions _options;
 
@@ -106,12 +113,19 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
-    /// Deletes the leaves of discarded attempts, including leaves a superseded run wrote after it was discarded.
+    /// Deletes the leaves of recently discarded attempts, including leaves a superseded run wrote after it was
+    /// discarded. A superseded run stops writing within its lock lease, so attempts discarded more than
+    /// <see cref="DiscardedLeafCleanupWindow"/> ago are not examined again.
     /// </summary>
     /// <returns>The number of deleted leaves.</returns>
-    public async Task<Int64> DeleteDiscardedLeavesAsync(CancellationToken cancellationToken)
+    public async Task<Int64> DeleteDiscardedLeavesAsync(DateTime utcNow, CancellationToken cancellationToken)
     {
-        var discarded = await Anchors.Find(new BsonDocument(StatusField, nameof(AnchorStatus.Discarded)))
+        var filter = new BsonDocument
+        {
+            { StatusField, nameof(AnchorStatus.Discarded) },
+            { DiscardedField, new BsonDocument("$gte", utcNow - DiscardedLeafCleanupWindow) }
+        };
+        var discarded = await Anchors.Find(filter)
                                      .Project(new BsonDocument("_id", 1))
                                      .ToListAsync(cancellationToken);
         if (discarded.Count == 0)
@@ -197,6 +211,7 @@ internal sealed class AnchorStore
     public async Task<AnchorRecord?> FindAwaitingTimestampAsync(CancellationToken cancellationToken)
     {
         var document = await Anchors.Find(new BsonDocument(StatusField, nameof(AnchorStatus.AwaitingTimestamp)))
+                                    .Sort(new BsonDocument(SequenceField, 1))
                                     .FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ReadAnchor(document);
     }

@@ -82,7 +82,7 @@ The work is one story but four concerns with different reviewers in mind: the ti
 - Collections: anchors, and leaves referenced by anchor ID. Anchors hold the ID, status, sequence number, previous digest, anchor digest, Merkle root, leaf count, hash algorithm, period, the oldest candidate commit time, a format version, and a list of timestamp entries (authority name, raw token, certificate chain, CRLs, time obtained). RFC 4998 renewal can later append re-timestamping entries to that list.
 - Each leaf document holds its index, the stream identity, version, chain hash and its inclusion proof, so a single leaf suffices to verify one stream head against the anchor. An index on the anchor ID serves cleanup and per-anchor reads.
 - The collection names (new: `IntegrityAnchors`, `IntegrityAnchorLeaves`) and the run settings join the existing `IntegrityAnchoringOptions`, which the operations layer's builder fills.
-- Leaves also carry their anchor's sequence number. An index on `(aggregateType, aggregateId, anchor sequence)` over the leaves serves the sealing-anchor lookup, which only considers leaves whose anchor exists and is completed.
+- Leaves also carry their anchor's sequence number. An index on `(aggregateType, aggregateId, anchor sequence)` over the leaves serves the sealing-anchor lookup, which only considers leaves whose anchor exists and is completed. The operations layer creates this index together with the lookup.
 
 ### Operations
 

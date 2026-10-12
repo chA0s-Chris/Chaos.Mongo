@@ -189,19 +189,34 @@ public class AnchoringRunTests
         var context = await CreateContextAsync();
         var store = GetStore(context);
         var discarded = Guid.NewGuid();
-        await store.Anchors.InsertOneAsync(new BsonDocument
-        {
-            { "_id", new BsonBinaryData(discarded, GuidRepresentation.Standard) },
-            { AnchorStore.StatusField, nameof(AnchorStatus.Discarded) }
-        });
+        var longDiscarded = Guid.NewGuid();
+        await store.Anchors.InsertManyAsync([
+            new BsonDocument
+            {
+                { "_id", new BsonBinaryData(discarded, GuidRepresentation.Standard) },
+                { AnchorStore.StatusField, nameof(AnchorStatus.Discarded) },
+                { "DiscardedUtc", DateTime.UtcNow.AddMinutes(-10) }
+            },
+            new BsonDocument
+            {
+                { "_id", new BsonBinaryData(longDiscarded, GuidRepresentation.Standard) },
+                { AnchorStore.StatusField, nameof(AnchorStatus.Discarded) },
+                { "DiscardedUtc", DateTime.UtcNow - AnchorStore.DiscardedLeafCleanupWindow - TimeSpan.FromHours(1) }
+            }
+        ]);
 
         // A superseded run may still write leaves after its attempt was discarded.
-        await store.InsertLeavesAsync([new AnchorLeaf(discarded, 1, 0, nameof(LedgerAggregate), Guid.NewGuid(), 1, new Byte[32], [])], CancellationToken.None);
+        await store.InsertLeavesAsync([
+                                          new AnchorLeaf(discarded, 1, 0, nameof(LedgerAggregate), Guid.NewGuid(), 1, new Byte[32], []),
+                                          new AnchorLeaf(longDiscarded, 1, 0, nameof(LedgerAggregate), Guid.NewGuid(), 1, new Byte[32], [])
+                                      ],
+                                      CancellationToken.None);
 
         var result = await CreateRun(context, CreateTestAuthority().CreateAuthority()).RunAsync();
 
         result.Outcome.Should().Be(AnchoringRunOutcome.NoCandidates);
         (await store.ReadLeavesAsync(discarded, CancellationToken.None)).Should().BeEmpty();
+        (await store.ReadLeavesAsync(longDiscarded, CancellationToken.None)).Should().ContainSingle("attempts discarded long ago are not examined again");
     }
 
     [Test]
@@ -404,8 +419,10 @@ public class AnchoringRunTests
                 concurrent = await CreateRun(context, authority).RunAsync(ct);
             }
         };
+        await context.AppendStreamAsync(1);
 
-        await first.RunAsync();
+        // The callback reports only a run that read candidates.
+        await RunUntilAsync(first, _ => Task.FromResult(concurrent is not null));
 
         concurrent.Should().NotBeNull();
         concurrent!.Outcome.Should().Be(AnchoringRunOutcome.LockUnavailable);

@@ -101,7 +101,7 @@ internal sealed class AnchoringRun
         }
 
         await _store.DiscardPreparingAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
-        await _store.DeleteDiscardedLeavesAsync(cancellationToken);
+        await _store.DeleteDiscardedLeavesAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
 
         if (await _store.FindAwaitingTimestampAsync(cancellationToken) is { } pending)
         {
@@ -120,7 +120,6 @@ internal sealed class AnchoringRun
             return new AnchoringRunResult(AnchoringRunOutcome.LockLost);
         }
 
-        await OnPhaseCompletedAsync(AnchoringPhase.CandidatesRead, cancellationToken);
         if (read.Heads.Count == 0)
         {
             // Persists the progress of the source, such as a scan over unsealed streams or a fresh resume token.
@@ -128,6 +127,8 @@ internal sealed class AnchoringRun
                                                     cancellationToken: cancellationToken);
             return new AnchoringRunResult(AnchoringRunOutcome.NoCandidates);
         }
+
+        await OnPhaseCompletedAsync(AnchoringPhase.CandidatesRead, cancellationToken);
 
         var anchor = await PrepareAsync(read, runLock, cancellationToken);
         if (anchor is null)
@@ -316,24 +317,16 @@ internal sealed class AnchoringRun
         var failures = anchor.AuthorityFailures.ToDictionary(failure => failure.Authority);
         foreach (var authority in _authorities.Where(authority => anchor.Timestamps.All(timestamp => timestamp.Authority != authority.Name)))
         {
+            // An anchor that already holds the minimum is still completed below; the transition is status-filtered.
             if (!await EnsureLockAsync(runLock, cancellationToken))
             {
-                return false;
+                break;
             }
 
+            TimestampToken token;
             try
             {
-                var token = await authority.TimestampAsync(anchor.AnchorDigest, HashAlgorithmName.SHA256, cancellationToken);
-                var timestamp = new AnchorTimestamp(authority.Name,
-                                                    token.Token,
-                                                    token.CertificateChain,
-                                                    token.CertificateRevocationLists,
-                                                    token.Timestamp.UtcDateTime,
-                                                    _timeProvider.GetUtcNow().UtcDateTime);
-                if (await _store.AddTimestampAsync(anchor.Id, timestamp, cancellationToken))
-                {
-                    tokens++;
-                }
+                token = await authority.TimestampAsync(anchor.AnchorDigest, HashAlgorithmName.SHA256, cancellationToken);
             }
             catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
             {
@@ -341,6 +334,18 @@ internal sealed class AnchoringRun
                 failures.TryGetValue(authority.Name, out var previous);
                 failures[authority.Name] = new AnchorAuthorityFailure(authority.Name, (previous?.FailureCount ?? 0) + 1, ex.Message, _timeProvider.GetUtcNow().UtcDateTime);
                 await _store.SetAuthorityFailuresAsync(anchor.Id, failures.Values, cancellationToken);
+                continue;
+            }
+
+            var timestamp = new AnchorTimestamp(authority.Name,
+                                                token.Token,
+                                                token.CertificateChain,
+                                                token.CertificateRevocationLists,
+                                                token.Timestamp.UtcDateTime,
+                                                _timeProvider.GetUtcNow().UtcDateTime);
+            if (await _store.AddTimestampAsync(anchor.Id, timestamp, cancellationToken))
+            {
+                tokens++;
             }
         }
 
