@@ -130,7 +130,8 @@ internal sealed class IntegrityAnchoringService
         IntegrityAnchoringDiagnostics.RecordAnchorDelay(delay, exceeded);
         if (exceeded)
         {
-            _logger.LogWarning("The oldest unanchored candidate is {AnchorDelay} old, above the anchor delay threshold of {DelayThreshold}",
+            _logger.LogWarning("The anchor delay of {AnchorDelay} is above the anchor delay threshold of {DelayThreshold}; " +
+                               "the oldest candidate this run saw was committed that long ago",
                                delay, _options.DelayThreshold);
         }
     }
