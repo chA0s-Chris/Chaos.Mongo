@@ -545,16 +545,19 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCandidates);
 
         _lastBatch = null;
+
+        // Stays set when any part of the read fails, including the state query, so the next read reopens at the
+        // persisted position.
+        var previousReadFailed = _readFailed;
+        _readFailed = true;
         var persisted = await GetStateCollection().Find(new BsonDocument("_id", StateDocumentId)).FirstOrDefaultAsync(cancellationToken);
-        if (_readFailed || _readBatchSize != maxCandidates || !Equals(persisted, _expectedState))
+        if (previousReadFailed || _readBatchSize != maxCandidates || !Equals(persisted, _expectedState))
         {
             CloseCursor();
             _readState = null;
             _expectedState = persisted;
         }
 
-        // Stays set when the read fails, so the next read reopens at the persisted position.
-        _readFailed = true;
         _readBatchSize = maxCandidates;
         _readVersion = persisted?.GetValue(VersionElement, BsonNull.Value) is { IsBsonNull: false } version ? version.ToInt64() : null;
 
