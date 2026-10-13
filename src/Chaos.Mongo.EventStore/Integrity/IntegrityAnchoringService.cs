@@ -138,11 +138,11 @@ internal sealed class IntegrityAnchoringService
 
     /// <summary>
     /// Reports the delay of the anchor awaiting its timestamps, or else of the last known oldest unanchored candidate,
-    /// after a run that could not report one itself.
+    /// which the run remembers even when it fails before its commit point, after a run that could not report one itself.
     /// </summary>
     private async Task ReportDelayAfterFailureAsync(CancellationToken cancellationToken)
     {
-        var oldest = _unanchoredSinceUtc;
+        var oldest = _run.LastReadOldestCandidateUtc ?? _unanchoredSinceUtc;
         try
         {
             oldest = (await _store.FindAwaitingTimestampAsync(cancellationToken))?.OldestCandidateUtc ?? oldest;

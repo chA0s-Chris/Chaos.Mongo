@@ -81,6 +81,13 @@ internal sealed class AnchoringRun
     }
 
     /// <summary>
+    /// Gets the oldest commit time among the candidates the last run read but has not committed into an anchor, or
+    /// <c>null</c> when the last read found none or its candidates were committed. A run that fails before its commit
+    /// point leaves it set, so the anchor delay can still be reported.
+    /// </summary>
+    internal DateTime? LastReadOldestCandidateUtc { get; private set; }
+
+    /// <summary>
     /// Gets or sets a callback invoked after each phase. Tests use it to abort a run after any phase and resume
     /// from the stored state.
     /// </summary>
@@ -106,10 +113,15 @@ internal sealed class AnchoringRun
 
         await _store.DiscardPreparingAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         await _store.CleanUpDiscardedAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
-        await NotifyAsync(runLock, cancellationToken);
+        var notified = await NotifyAsync(runLock, cancellationToken);
 
         var result = await RunPhasesAsync(runLock, cancellationToken);
-        await NotifyAsync(runLock, cancellationToken);
+        if (notified)
+        {
+            // A hook that failed before the run is retried on the next run, not again in this one.
+            await NotifyAsync(runLock, cancellationToken);
+        }
+
         return result;
     }
 
@@ -167,21 +179,23 @@ internal sealed class AnchoringRun
                await runLock.TryExtendAsync(MongoDefaults.LockLeaseTime, cancellationToken);
     }
 
-    private async Task NotifyAsync(IMongoLock runLock, CancellationToken cancellationToken)
+    /// <returns><c>true</c> when every completed anchor is notified, or no hook is configured.</returns>
+    private async Task<Boolean> NotifyAsync(IMongoLock runLock, CancellationToken cancellationToken)
     {
         if (_notifier is null)
         {
-            return;
+            return true;
         }
 
         try
         {
-            await _notifier.NotifyAsync(ct => EnsureLockAsync(runLock, ct), cancellationToken);
+            return await _notifier.NotifyAsync(ct => EnsureLockAsync(runLock, ct), cancellationToken);
         }
         catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
         {
             // Notification is retried by the next run and must not keep this run from anchoring.
             _logger.LogError(ex, "Notifying completed anchors failed; it is retried with the next run");
+            return false;
         }
     }
 
@@ -284,6 +298,7 @@ internal sealed class AnchoringRun
             }
         } while (batch.HasMore && heads.Count < _options.MaxLeavesPerAnchor && batches < maxBatches);
 
+        LastReadOldestCandidateUtc = heads.Count > 0 ? oldest : null;
         return new CandidateRead(heads.Values.ToList(), batch, oldest, newest);
     }
 
@@ -329,6 +344,7 @@ internal sealed class AnchoringRun
         }
 
         await CommitAsync(anchor, read.LastBatch, cancellationToken);
+        LastReadOldestCandidateUtc = null;
         anchor = anchor with
         {
             Status = AnchorStatus.AwaitingTimestamp

@@ -16,7 +16,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="LeafCount">The number of leaves.</param>
 /// <param name="PeriodStartUtc">The start of the anchored period.</param>
 /// <param name="PeriodEndUtc">The end of the anchored period.</param>
+/// <param name="OldestCandidateUtc">The oldest commit time among the anchor's candidates.</param>
 /// <param name="Timestamps">The valid timestamp tokens with their evidence.</param>
+/// <param name="AuthorityFailures">The failed attempts per authority recorded while the anchor awaited its tokens.</param>
+/// <param name="CreatedUtc">The time the attempt created the anchor.</param>
 /// <param name="CompletedUtc">The time the anchor completed.</param>
 internal sealed record CompletedAnchor(
     Guid Id,
@@ -29,7 +32,10 @@ internal sealed record CompletedAnchor(
     Int32 LeafCount,
     DateTime PeriodStartUtc,
     DateTime PeriodEndUtc,
+    DateTime OldestCandidateUtc,
     IReadOnlyList<AnchorTimestamp> Timestamps,
+    IReadOnlyList<AnchorAuthorityFailure> AuthorityFailures,
+    DateTime CreatedUtc,
     DateTime CompletedUtc)
 {
     /// <summary>
@@ -56,7 +62,10 @@ internal sealed record CompletedAnchor(
                                    anchor.LeafCount,
                                    anchor.PeriodStartUtc,
                                    anchor.PeriodEndUtc,
+                                   anchor.OldestCandidateUtc,
                                    anchor.Timestamps,
+                                   anchor.AuthorityFailures,
+                                   anchor.CreatedUtc,
                                    completedUtc);
     }
 }

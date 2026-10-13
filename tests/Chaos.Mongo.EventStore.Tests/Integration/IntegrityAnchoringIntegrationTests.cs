@@ -112,6 +112,46 @@ public class IntegrityAnchoringIntegrationTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    public async Task NotifyAsync_LockLostDuringHook_CancelsTheHookAndKeepsTheAnchorUnnotified()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var stream = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, stream));
+        var hookCancelled = new TaskCompletionSource<Boolean>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notifier = new AnchorCompletionNotifier(context.MongoHelper,
+                                                    context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>(),
+                                                    context.ServiceProvider.GetRequiredService<IServiceScopeFactory>(),
+                                                    async (_, _, ct) =>
+                                                    {
+                                                        try
+                                                        {
+                                                            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                                                        }
+                                                        catch (OperationCanceledException)
+                                                        {
+                                                            hookCancelled.TrySetResult(ct.IsCancellationRequested);
+                                                            throw;
+                                                        }
+                                                    },
+                                                    TimeProvider.System,
+                                                    NullLogger<AnchorCompletionNotifier>.Instance)
+        {
+            LeaseCheckInterval = TimeSpan.FromMilliseconds(50)
+        };
+        var lockChecks = 0;
+
+        // The check before the hook succeeds; the first extension while the hook runs fails.
+        var completed = await notifier.NotifyAsync(_ => Task.FromResult(++lockChecks == 1), CancellationToken.None);
+
+        completed.Should().BeFalse();
+        (await hookCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None))!.Sequence.Should().Be(1);
+    }
+
+    [Test]
     public async Task NotifyAsync_LockLost_StopsBeforeTheNextAnchor()
     {
         var testAuthority = CreateTestAuthority();
@@ -135,8 +175,9 @@ public class IntegrityAnchoringIntegrationTests
                                                     NullLogger<AnchorCompletionNotifier>.Instance);
         var lockChecks = 0;
 
-        await notifier.NotifyAsync(_ => Task.FromResult(++lockChecks == 1), CancellationToken.None);
+        var completed = await notifier.NotifyAsync(_ => Task.FromResult(++lockChecks == 1), CancellationToken.None);
 
+        completed.Should().BeFalse();
         notified.Should().Equal(1);
         (await store.FindFirstUnnotifiedAsync(CancellationToken.None))!.Sequence.Should().Be(2);
     }
@@ -176,6 +217,9 @@ public class IntegrityAnchoringIntegrationTests
         blockSecond.Value = true;
         var second = await context.AppendStreamAsync(1);
         await RunUntilAsync(run, _ => IsAnchoredAsync(store, second));
+        var attemptsBeforeRun = attempts.Count(sequence => sequence == 2);
+        await run.RunAsync();
+        var attemptsPerRun = attempts.Count(sequence => sequence == 2) - attemptsBeforeRun;
         var third = await context.AppendStreamAsync(1);
         await RunUntilAsync(run, _ => IsAnchoredAsync(store, third));
         var notifiedWhileBlocked = notified.ToList();
@@ -186,6 +230,7 @@ public class IntegrityAnchoringIntegrationTests
         notifiedWhileBlocked.Should().Equal(1);
         notified.Should().Equal(1, 2, 3);
         attempts.Count(sequence => sequence == 2).Should().BeGreaterThan(1);
+        attemptsPerRun.Should().Be(1, "a failing hook is attempted once per run and retried on the next run");
         leafCounts.Should().OnlyContain(count => count.Streamed == count.Expected);
         (await store.Anchors.CountDocumentsAsync(new BsonDocument("Notified", false))).Should().Be(0);
     }
@@ -251,6 +296,28 @@ public class IntegrityAnchoringIntegrationTests
         await WaitUntilAsync(async () => await service.RunOnceAsync(CancellationToken.None) is null);
 
         logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Error && entry.Message.Contains("anchoring run failed"));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_FirstRunFailsAfterReadingCandidates_ReportsTheDelay()
+    {
+        using var metrics = new AnchoringMetricsCollector();
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())
+                                                                     .WithDelayThreshold(TimeSpan.FromMilliseconds(1)));
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+        context.ServiceProvider.GetRequiredService<AnchoringRun>().PhaseCompleted = (phase, _) =>
+            phase == AnchoringPhase.CandidatesRead ? throw new InvalidOperationException("The run failed.") : Task.CompletedTask;
+        await context.AppendStreamAsync(1);
+
+        // Runs before the change stream delivers the candidate read nothing and report nothing.
+        await WaitUntilAsync(async () =>
+        {
+            await service.RunOnceAsync(CancellationToken.None);
+            return metrics.Measurements.Any(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument);
+        });
+
+        (await GetStore(context).Anchors.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(0, "the run fails before its commit point");
     }
 
     [Test]

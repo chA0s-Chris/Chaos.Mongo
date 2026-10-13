@@ -25,7 +25,7 @@ public class CompletedAnchorTests
 
         var completed = CompletedAnchor.From(anchor);
 
-        completed.Should().BeEquivalentTo(anchor, options => options.ExcludingMissingMembers());
+        completed.Should().BeEquivalentTo(anchor, options => options.Excluding(stored => stored.Status));
         completed.CompletedUtc.Should().Be(DateTime.UnixEpoch.AddMinutes(6));
     }
 
