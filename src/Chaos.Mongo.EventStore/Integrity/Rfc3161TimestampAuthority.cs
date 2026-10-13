@@ -13,8 +13,11 @@ using System.Security.Cryptography.X509Certificates;
 /// </summary>
 /// <remarks>
 /// Imprint, nonce, signature and ESSCertID are validated by the <c>System.Security.Cryptography.Pkcs</c> types, the
-/// certificate chain by <see cref="X509Chain"/> against the configured trust. A token is returned only together with
-/// the CRLs of every distribution point its chain names; a CRL that cannot be downloaded fails the attempt.
+/// certificate chain by <see cref="X509Chain"/> against the configured trust. The signing certificate must be reserved
+/// for timestamping and permit signatures, and a <c>tsa</c> name in the token must correspond to one of its subject
+/// names. A token is returned only together with the CRLs of every distribution point its chain names; a CRL that
+/// cannot be downloaded fails the attempt, and the attempt's HTTP work as a whole is bounded by
+/// <see cref="Rfc3161TimestampAuthorityOptions.AttemptTimeout"/>.
 /// </remarks>
 internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 {
@@ -35,6 +38,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ArgumentNullException.ThrowIfNull(options.HttpClientFactory, nameof(options));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.MaximumClockSkew, TimeSpan.Zero, nameof(options));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.RevocationCheckTimeout, TimeSpan.Zero, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.AttemptTimeout, TimeSpan.Zero, nameof(options));
         if (!options.Uri.IsAbsoluteUri || ((options.Uri.Scheme != Uri.UriSchemeHttp) && (options.Uri.Scheme != Uri.UriSchemeHttps)))
         {
             throw new ArgumentException("The timestamp authority URI must be an absolute HTTP or HTTPS URI.", nameof(options));
@@ -174,6 +178,60 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
     }
 
+    private async Task<TimestampToken> TimestampCoreAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
+    {
+        var request = Rfc3161TimestampRequest.CreateFromHash(digest,
+                                                             algorithm,
+                                                             nonce: RandomNumberGenerator.GetBytes(NonceLength),
+                                                             requestSignerCertificates: true);
+        var (token, rawToken) = ValidateResponse(request, await RequestAsync(request.Encode(), cancellationToken));
+        if (!token.VerifySignatureForHash(digest.Span, algorithm, out var signer))
+        {
+            throw Fail("the token's signature or signing-certificate attribute is invalid.");
+        }
+
+        ValidatedChain chain;
+        using (signer)
+        {
+            ValidateTime(token);
+            ValidateSigner(signer);
+            ValidateAuthorityName(token, signer);
+            chain = BuildChain(token, signer);
+        }
+
+        var crls = new List<Byte[]>();
+        foreach (var locations in chain.DistributionPoints)
+        {
+            crls.Add(await DownloadCrlAsync(locations, cancellationToken));
+        }
+
+        return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp);
+    }
+
+    /// <summary>
+    /// Requires a <c>tsa</c> name in the token to correspond to a subject name of the signing certificate
+    /// (RFC 3161, section 2.4.2); a token without one is accepted.
+    /// </summary>
+    private void ValidateAuthorityName(Rfc3161TimestampToken token, X509Certificate2 signer)
+    {
+        if (token.TokenInfo.GetTimestampAuthorityName() is not { } authorityName)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!TimestampAuthorityName.Matches(authorityName, signer))
+            {
+                throw Fail("the token's TSA name does not correspond to a subject name of the signing certificate.");
+            }
+        }
+        catch (AsnContentException ex)
+        {
+            throw Fail("the token's TSA name is malformed.", ex);
+        }
+    }
+
     private (Rfc3161TimestampToken Token, Byte[] RawToken) ValidateResponse(Rfc3161TimestampRequest request, Byte[] response)
     {
         try
@@ -192,6 +250,42 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
     }
 
+    /// <summary>
+    /// Requires the signing certificate to be reserved for timestamping (RFC 3161, section 2.3) and, when it carries a
+    /// key usage extension, to permit signatures (RFC 5280, section 4.2.1.3).
+    /// </summary>
+    private void ValidateSigner(X509Certificate2 signer)
+    {
+        var purposes = signer.Extensions.OfType<X509EnhancedKeyUsageExtension>()
+                             .SelectMany(extension => extension.EnhancedKeyUsages.Cast<Oid>())
+                             .Select(purpose => purpose.Value)
+                             .ToList();
+        if (purposes.Count == 0 || purposes.Any(purpose => purpose != TimeStampingPurposeOid))
+        {
+            throw Fail("the signing certificate's extended key usage must contain only id-kp-timeStamping.");
+        }
+
+        var keyUsage = signer.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault();
+        if (keyUsage is not null && (keyUsage.KeyUsages & (X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation)) == 0)
+        {
+            throw Fail("the signing certificate's key usage permits neither digitalSignature nor nonRepudiation.");
+        }
+    }
+
+    /// <summary>
+    /// Bounds the token's time against the local time: the chain is validated at the token's time, so a backdated or
+    /// future-dated token from a key whose certificate expired must not pass.
+    /// </summary>
+    private void ValidateTime(Rfc3161TimestampToken token)
+    {
+        var skew = (token.TokenInfo.Timestamp - _timeProvider.GetUtcNow()).Duration();
+        if (skew > _options.MaximumClockSkew)
+        {
+            throw Fail($"the token's time {token.TokenInfo.Timestamp:O} differs from the local time by {skew}, " +
+                       $"more than the allowed {_options.MaximumClockSkew}.");
+        }
+    }
+
     /// <inheritdoc/>
     public async Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
     {
@@ -205,39 +299,16 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             throw new ArgumentException($"A SHA-256 digest has {DigestLength} bytes.", nameof(digest));
         }
 
-        var request = Rfc3161TimestampRequest.CreateFromHash(digest,
-                                                             algorithm,
-                                                             nonce: RandomNumberGenerator.GetBytes(NonceLength),
-                                                             requestSignerCertificates: true);
-        var (token, rawToken) = ValidateResponse(request, await RequestAsync(request.Encode(), cancellationToken));
-        if (!token.VerifySignatureForHash(digest.Span, algorithm, out var signer))
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        attempt.CancelAfter(_options.AttemptTimeout);
+        try
         {
-            throw Fail("the token's signature or signing-certificate attribute is invalid.");
+            return await TimestampCoreAsync(digest, algorithm, attempt.Token);
         }
-
-        // The chain is validated at the token's time; bounding that time keeps a backdated or future-dated token
-        // from a key whose certificate expired from passing.
-        var skew = (token.TokenInfo.Timestamp - _timeProvider.GetUtcNow()).Duration();
-        if (skew > _options.MaximumClockSkew)
+        catch (OperationCanceledException ex) when (attempt.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            signer.Dispose();
-            throw Fail($"the token's time {token.TokenInfo.Timestamp:O} differs from the local time by {skew}, " +
-                       $"more than the allowed {_options.MaximumClockSkew}.");
+            throw Fail($"the attempt exceeded the attempt timeout of {_options.AttemptTimeout}.", ex);
         }
-
-        ValidatedChain chain;
-        using (signer)
-        {
-            chain = BuildChain(token, signer);
-        }
-
-        var crls = new List<Byte[]>();
-        foreach (var locations in chain.DistributionPoints)
-        {
-            crls.Add(await DownloadCrlAsync(locations, cancellationToken));
-        }
-
-        return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp);
     }
 
     private sealed record ValidatedChain(IReadOnlyList<Byte[]> Certificates, IReadOnlyList<IReadOnlyList<Uri>> DistributionPoints);

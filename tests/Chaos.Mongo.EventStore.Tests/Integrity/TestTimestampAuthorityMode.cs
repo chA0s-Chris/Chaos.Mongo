@@ -21,5 +21,7 @@ public enum TestTimestampAuthorityMode
     Timeout,
     CrlPrimaryUnavailable,
     CrlUnavailable,
-    CrlEmpty
+    CrlEmpty,
+    CrlHangs,
+    WrongTsaName
 }

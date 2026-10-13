@@ -20,33 +20,58 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public static readonly Uri CrlMirrorUri = new("http://tsa.test/mirror/ca.crl");
     public static readonly Uri CrlUri = new("http://tsa.test/ca.crl");
     public static readonly Uri TimestampUri = new("http://tsa.test/timestamp");
+    private const String CodeSigningPurposeOid = "1.3.6.1.5.5.7.3.3";
     private const String CrlDistributionPointsOid = "2.5.29.31";
+    private const String DnsName = "tsa.test";
     private static readonly Oid PolicyId = new("1.3.6.1.4.1.99999.1");
     private const String SigningCertificateV2Oid = "1.2.840.113549.1.9.16.2.47";
     private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
     private const String TstInfoContentTypeOid = "1.2.840.113549.1.9.16.1.4";
+    private readonly Boolean _alternativeTsaName;
     private readonly List<Byte[]?> _nonces = [];
 
     /// <summary>
     /// Creates the authority. Its signing certificate names <paramref name="crlLocations"/> as one CRL distribution
-    /// point, or carries <paramref name="rawCrlDistributionPoints"/> as the extension value when given.
+    /// point, or carries <paramref name="rawCrlDistributionPoints"/> as the extension value when given. Tokens name
+    /// the signer's subject as their TSA name, or its DNS alternative name when <paramref name="alternativeTsaName"/>
+    /// is set.
     /// </summary>
     public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                   Byte[]? rawCrlDistributionPoints = null,
                                   Boolean timestampingUsage = true,
-                                  Boolean expiredSigner = false)
+                                  Boolean expiredSigner = false,
+                                  Boolean additionalPurpose = false,
+                                  X509KeyUsageFlags keyUsage = X509KeyUsageFlags.DigitalSignature,
+                                  Boolean alternativeTsaName = false)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
         Root = CreateRoot(notBefore, notAfter);
+        _alternativeTsaName = alternativeTsaName;
 
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var request = new CertificateRequest("CN=Chaos.Mongo Test TSA", key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(keyUsage, true));
         if (timestampingUsage)
         {
-            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid(TimeStampingPurposeOid)], true));
+            var purposes = new OidCollection
+            {
+                new Oid(TimeStampingPurposeOid)
+            };
+            if (additionalPurpose)
+            {
+                purposes.Add(new Oid(CodeSigningPurposeOid));
+            }
+
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(purposes, true));
+        }
+
+        if (alternativeTsaName)
+        {
+            var alternativeNames = new SubjectAlternativeNameBuilder();
+            alternativeNames.AddDnsName(DnsName);
+            request.CertificateExtensions.Add(alternativeNames.Build());
         }
 
         request.CertificateExtensions.Add(X509AuthorityKeyIdentifierExtension.CreateFromCertificate(Root, true, false));
@@ -121,7 +146,9 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Creates the production authority configured against this test authority, trusting its root unless another
     /// root is given, without revocation checks.
     /// </summary>
-    public Rfc3161TimestampAuthority CreateAuthority(X509Certificate2? trustedRoot = null, String name = "test-tsa")
+    public Rfc3161TimestampAuthority CreateAuthority(X509Certificate2? trustedRoot = null,
+                                                     String name = "test-tsa",
+                                                     Action<Rfc3161TimestampAuthorityOptions>? configure = null)
     {
         var options = new Rfc3161TimestampAuthorityOptions
         {
@@ -131,6 +158,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             RevocationMode = X509RevocationMode.NoCheck
         };
         options.TrustedRoots.Add(trustedRoot ?? Root);
+        configure?.Invoke(options);
         return new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
     }
 
@@ -155,7 +183,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 
         if ((request.Method == HttpMethod.Get) && request.RequestUri is { } uri && ((uri == CrlUri) || (uri == CrlMirrorUri)))
         {
-            return Task.FromResult(ServeCrl(uri));
+            return ServeCrlAsync(uri, cancellationToken);
         }
 
         return Task.FromResult(Respond(HttpStatusCode.NotFound));
@@ -180,6 +208,30 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
         return request.CreateSelfSigned(notBefore, notAfter);
+    }
+
+    /// <summary>
+    /// Encodes a certificate's subject as a <c>directoryName</c> general name.
+    /// </summary>
+    private static Byte[] EncodeDirectoryName(X509Certificate2 certificate)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 4)))
+        {
+            writer.WriteEncodedValue(certificate.SubjectName.RawData);
+        }
+
+        return writer.Encode();
+    }
+
+    /// <summary>
+    /// Encodes a <c>dNSName</c> general name.
+    /// </summary>
+    private static Byte[] EncodeDnsName(String name)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        writer.WriteCharacterString(UniversalTagNumber.IA5String, name, new Asn1Tag(TagClass.ContextSpecific, 2));
+        return writer.Encode();
     }
 
     private static Byte[] EncodeSigningCertificateV2(X509Certificate2 certificate)
@@ -244,7 +296,15 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             TestTimestampAuthorityMode.FutureDated => DateTimeOffset.UtcNow.AddHours(1),
             _ => DateTimeOffset.UtcNow
         };
-        var info = new Rfc3161TimestampTokenInfo(PolicyId, request.HashAlgorithmId, hash, serialNumber, timestamp, nonce: nonce);
+        var tsaName = Mode == TestTimestampAuthorityMode.WrongTsaName ? EncodeDirectoryName(Root) :
+            _alternativeTsaName ? EncodeDnsName(DnsName) : EncodeDirectoryName(SigningCertificate);
+        var info = new Rfc3161TimestampTokenInfo(PolicyId,
+                                                 request.HashAlgorithmId,
+                                                 hash,
+                                                 serialNumber,
+                                                 timestamp,
+                                                 nonce: nonce,
+                                                 timestampAuthorityName: tsaName);
 
         var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), info.Encode()));
         var signer = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, SigningCertificate)
@@ -266,8 +326,13 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         return token;
     }
 
-    private HttpResponseMessage ServeCrl(Uri uri)
+    private async Task<HttpResponseMessage> ServeCrlAsync(Uri uri, CancellationToken cancellationToken)
     {
+        if (Mode == TestTimestampAuthorityMode.CrlHangs)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+
         var unavailable = Mode == TestTimestampAuthorityMode.CrlUnavailable ||
                           ((Mode == TestTimestampAuthorityMode.CrlPrimaryUnavailable) && (uri == CrlUri));
         if (!unavailable)

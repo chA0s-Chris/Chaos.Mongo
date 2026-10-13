@@ -71,6 +71,25 @@ public class CrlDistributionPointsTests
     }
 
     [Test]
+    public void GetHttpUris_EmptyFullName_ThrowsAsnContentException()
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            WriteFullNamePoint(writer, _ => { });
+            WriteFullNamePoint(writer, names => WriteUris(names, "http://crl.test/a.crl"));
+        }
+
+        var act = () =>
+        {
+            using var certificate = CreateCertificate(writer.Encode());
+            return CrlDistributionPoints.GetHttpUris(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
     public void GetHttpUris_MalformedExtension_ThrowsAsnContentException()
     {
         var act = () =>

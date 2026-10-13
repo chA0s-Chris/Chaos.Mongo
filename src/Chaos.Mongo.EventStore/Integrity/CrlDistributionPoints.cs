@@ -62,6 +62,11 @@ internal static class CrlDistributionPoints
 
     private static IReadOnlyList<Uri> ReadFullNameUris(AsnReader fullName)
     {
+        if (!fullName.HasData)
+        {
+            throw new AsnContentException("A distribution point's full name must contain at least one general name.");
+        }
+
         var uris = new List<Uri>();
         while (fullName.HasData)
         {

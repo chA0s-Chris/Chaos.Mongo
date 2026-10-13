@@ -95,6 +95,21 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public void Constructor_NonPositiveAttemptTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "no-attempt-timeout",
+            Uri = TestTimestampAuthority.TimestampUri,
+            AttemptTimeout = TimeSpan.Zero
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public void Constructor_NonPositiveClockSkew_ThrowsArgumentOutOfRangeException()
     {
         var options = new Rfc3161TimestampAuthorityOptions
@@ -157,6 +172,18 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, new CancellationToken(true));
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Test]
+    public async Task TimestampAsync_CrlDownloadHangs_FailsAtTheAttemptTimeout()
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.CrlHangs;
+        var authority = testAuthority.CreateAuthority(configure: options => options.AttemptTimeout = TimeSpan.FromMilliseconds(200));
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("attempt timeout");
     }
 
     [Test]
@@ -274,6 +301,16 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public async Task TimestampAsync_SigningCertificateWithAdditionalPurpose_Throws()
+    {
+        var authority = CreateTestAuthority(additionalPurpose: true).CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("only id-kp-timeStamping");
+    }
+
+    [Test]
     public async Task TimestampAsync_SigningCertificateWithoutDistributionPoint_ReturnsNoCrl()
     {
         var authority = CreateTestAuthority([]).CreateAuthority();
@@ -281,6 +318,16 @@ public class Rfc3161TimestampAuthorityTests
         var token = await authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
 
         token.CertificateRevocationLists.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task TimestampAsync_SigningCertificateWithoutSignatureKeyUsage_Throws()
+    {
+        var authority = CreateTestAuthority(keyUsage: X509KeyUsageFlags.KeyEncipherment).CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("key usage");
     }
 
     [Test]
@@ -321,6 +368,24 @@ public class Rfc3161TimestampAuthorityTests
         var exception = await TimestampExpectingFailureAsync(mode);
 
         exception.Message.Should().Contain("differs from the local time");
+    }
+
+    [Test]
+    public async Task TimestampAsync_TsaNameInSubjectAlternativeName_ReturnsToken()
+    {
+        var authority = CreateTestAuthority(alternativeTsaName: true).CreateAuthority();
+
+        var token = await authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateChain.Should().HaveCount(2);
+    }
+
+    [Test]
+    public async Task TimestampAsync_TsaNameNotASubjectName_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.WrongTsaName);
+
+        exception.Message.Should().Contain("TSA name");
     }
 
     [Test]
@@ -370,9 +435,18 @@ public class Rfc3161TimestampAuthorityTests
     private TestTimestampAuthority CreateTestAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                                        Byte[]? rawCrlDistributionPoints = null,
                                                        Boolean timestampingUsage = true,
-                                                       Boolean expiredSigner = false)
+                                                       Boolean expiredSigner = false,
+                                                       Boolean additionalPurpose = false,
+                                                       X509KeyUsageFlags keyUsage = X509KeyUsageFlags.DigitalSignature,
+                                                       Boolean alternativeTsaName = false)
     {
-        var testAuthority = new TestTimestampAuthority(crlLocations, rawCrlDistributionPoints, timestampingUsage, expiredSigner);
+        var testAuthority = new TestTimestampAuthority(crlLocations,
+                                                       rawCrlDistributionPoints,
+                                                       timestampingUsage,
+                                                       expiredSigner,
+                                                       additionalPurpose,
+                                                       keyUsage,
+                                                       alternativeTsaName);
         _testAuthorities.Add(testAuthority);
         return testAuthority;
     }

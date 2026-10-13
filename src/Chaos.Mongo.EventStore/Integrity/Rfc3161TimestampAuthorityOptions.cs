@@ -19,6 +19,13 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     };
 
     /// <summary>
+    /// Gets or sets the longest time one timestamp attempt may spend on its HTTP work, the timestamp request and the
+    /// CRL downloads together. Each request is also bounded by the HTTP client, but a chain naming several dead
+    /// locations would otherwise stall an anchoring run for their sum. Defaults to 2 minutes.
+    /// </summary>
+    public TimeSpan AttemptTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// Gets or sets the factory for the HTTP client used for timestamp requests and CRL downloads. Defaults to a
     /// client shared by all authorities without a factory, which times out after 30 seconds and reads at most 16 MB
     /// per response, so a hung authority or CRL host does not stall an anchoring run for long.
