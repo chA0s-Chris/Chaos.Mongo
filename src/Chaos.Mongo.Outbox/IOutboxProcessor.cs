@@ -23,10 +23,12 @@ public interface IOutboxProcessor
     /// </summary>
     /// <remarks>
     /// Stopping the processor prevents it from polling for new messages. If a message is already being
-    /// processed, shutdown may cancel the in-flight publish or completion update if the processor
-    /// cancellation token is observed. In that case, the message remains pending and can be retried on
-    /// the next startup or by another processor instance. Any remaining unclaimed messages from the
-    /// current batch also remain pending for later processing.
+    /// processed, shutdown cancels only the in-flight publish, and only if the publisher observes the
+    /// processor cancellation token. A canceled publish leaves the message pending so it can be retried
+    /// on the next startup or by another processor instance. A message whose publish completed
+    /// successfully is still marked as processed; once a stop has been requested, that update gets a
+    /// short grace period, after which its lock is released and it remains pending for redelivery.
+    /// Any remaining unclaimed messages from the current batch also remain pending for later processing.
     /// </remarks>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>A task that completes when the processor has stopped.</returns>

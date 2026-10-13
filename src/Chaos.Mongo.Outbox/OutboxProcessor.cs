@@ -13,6 +13,7 @@ using MongoDB.Driver;
 /// </summary>
 public sealed class OutboxProcessor : IOutboxProcessor
 {
+    private static readonly TimeSpan FinalizationTimeout = TimeSpan.FromSeconds(3);
     private readonly ILogger<OutboxProcessor> _logger;
     private readonly IMongoHelper _mongoHelper;
     private readonly OutboxOptions _options;
@@ -144,6 +145,63 @@ public sealed class OutboxProcessor : IOutboxProcessor
             _logger.LogWarning(
                 "Outbox message {MessageId} failure update skipped — ownership was lost to another processor",
                 messageId);
+        }
+    }
+
+    private async Task MarkProcessedAsync(IMongoCollection<OutboxMessage> collection,
+                                          OutboxMessage claimed,
+                                          String lockId,
+                                          CancellationToken cancellationToken)
+    {
+        var successFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, claimed.Id) &
+                            Builders<OutboxMessage>.Filter.Eq(m => m.LockId, lockId);
+
+        var successUpdate = Builders<OutboxMessage>.Update
+                                                   .Set(m => m.State, OutboxMessageState.Processed)
+                                                   .Set(m => m.ProcessedUtc, _timeProvider.GetUtcNow().UtcDateTime)
+                                                   .Set(m => m.IsLocked, false)
+                                                   .Unset(m => m.NextAttemptUtc)
+                                                   .Unset(m => m.LockedUtc)
+                                                   .Unset(m => m.LockId);
+
+        // The message has been delivered, so finalizing it must not be canceled by shutdown outright.
+        // While the processor runs, only the driver bounds the update; once a stop is requested, a short
+        // grace period keeps the stopping processor from waiting indefinitely.
+        using var finalizationTimeout = new CancellationTokenSource(Timeout.InfiniteTimeSpan, _timeProvider);
+        await using var shutdownRegistration = cancellationToken.Register(static state =>
+        {
+            if (state is CancellationTokenSource gracePeriod)
+                gracePeriod.CancelAfter(FinalizationTimeout);
+        }, finalizationTimeout);
+
+        try
+        {
+            var successResult = await collection.UpdateOneAsync(successFilter, successUpdate, cancellationToken: finalizationTimeout.Token);
+
+            if (successResult.ModifiedCount == 0)
+            {
+                _logger.LogWarning(
+                    "Outbox message {MessageId} was published but ownership was lost before finalizing state; " +
+                    "another processor may have reclaimed it",
+                    claimed.Id);
+            }
+            else
+            {
+                _logger.LogDebug("Outbox message {MessageId} of type '{MessageType}' processed successfully", claimed.Id, claimed.Type);
+            }
+        }
+        catch (OperationCanceledException) when (finalizationTimeout.IsCancellationRequested)
+        {
+            // Not a publish failure: release the lock so the message is redelivered instead of retried with an error
+            _logger.LogWarning(
+                "Outbox message {MessageId} was published but finalizing its state timed out; attempting to release the lock so it can be redelivered",
+                claimed.Id);
+            await TryReleaseLockAsync(collection, claimed.Id, lockId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to finalize outbox message {MessageId} of type '{MessageType}' after publishing", claimed.Id, claimed.Type);
+            await HandleFailureAsync(collection, claimed.Id, lockId, claimed.RetryCount, ex);
         }
     }
 
@@ -304,32 +362,6 @@ public sealed class OutboxProcessor : IOutboxProcessor
         try
         {
             await publisher.PublishAsync(claimed, cancellationToken);
-
-            // Success: mark as processed
-            var successFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, message.Id) &
-                                Builders<OutboxMessage>.Filter.Eq(m => m.LockId, lockId);
-
-            var successUpdate = Builders<OutboxMessage>.Update
-                                                       .Set(m => m.State, OutboxMessageState.Processed)
-                                                       .Set(m => m.ProcessedUtc, _timeProvider.GetUtcNow().UtcDateTime)
-                                                       .Set(m => m.IsLocked, false)
-                                                       .Unset(m => m.NextAttemptUtc)
-                                                       .Unset(m => m.LockedUtc)
-                                                       .Unset(m => m.LockId);
-
-            var successResult = await collection.UpdateOneAsync(successFilter, successUpdate, cancellationToken: cancellationToken);
-
-            if (successResult.ModifiedCount == 0)
-            {
-                _logger.LogWarning(
-                    "Outbox message {MessageId} was published but ownership was lost before finalizing state; " +
-                    "another processor may have reclaimed it",
-                    message.Id);
-            }
-            else
-            {
-                _logger.LogDebug("Outbox message {MessageId} of type '{MessageType}' processed successfully", message.Id, claimed.Type);
-            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -341,7 +373,10 @@ public sealed class OutboxProcessor : IOutboxProcessor
         {
             _logger.LogError(ex, "Failed to publish outbox message {MessageId} of type '{MessageType}'", message.Id, claimed.Type);
             await HandleFailureAsync(collection, message.Id, lockId, claimed.RetryCount, ex);
+            return;
         }
+
+        await MarkProcessedAsync(collection, claimed, lockId, cancellationToken);
     }
 
     private async Task TryReleaseLockAsync(IMongoCollection<OutboxMessage> collection,
@@ -358,7 +393,7 @@ public sealed class OutboxProcessor : IOutboxProcessor
                                                        .Unset(m => m.LockedUtc)
                                                        .Unset(m => m.LockId);
 
-            using var releaseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            using var releaseTimeout = new CancellationTokenSource(FinalizationTimeout);
             await collection.UpdateOneAsync(releaseFilter, releaseUpdate, cancellationToken: releaseTimeout.Token);
         }
         catch (Exception ex)

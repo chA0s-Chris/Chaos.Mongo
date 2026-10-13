@@ -114,7 +114,9 @@ outboxes, call `IOutboxConfiguratorRunner.RunAsync()` to initialize **all** outb
 (or enable `MongoOptions.RunConfiguratorsOnStartup`), then control the destination
 with `IOutboxProcessor<AuditOutbox>.StartAsync()` and `StopAsync()`. Manual processors
 remain the caller's responsibility. Host shutdown signals all automatic processors
-before waiting, bounded by the shutdown token. Logs carry the marker type name (or
+before waiting, bounded by the shutdown token. Shutdown cancels only an in-flight
+publish; a message whose publish already succeeded is still marked as processed, with
+a short grace period once the stop was requested. Logs carry the marker type name (or
 `Default`) and collection.
 
 Pass the same compatible, active MongoDB transaction session to both writers:
