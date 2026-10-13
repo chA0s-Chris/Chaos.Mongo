@@ -282,6 +282,7 @@ internal sealed class AnchoringRun
         var heads = new Dictionary<(String AggregateType, Guid AggregateId), AnchorCandidate>();
         var oldest = DateTime.MaxValue;
         var newest = DateTime.MinValue;
+        var read = 0;
         AnchorCandidateBatch batch;
         do
         {
@@ -291,6 +292,7 @@ internal sealed class AnchoringRun
             }
 
             batch = await _source.ReadBatchAsync(_options.CandidateReadBatchSize, cancellationToken);
+            read += batch.Candidates.Count;
             foreach (var candidate in batch.Candidates)
             {
                 var key = (candidate.AggregateType, candidate.AggregateId);
@@ -302,7 +304,9 @@ internal sealed class AnchoringRun
                 oldest = candidate.CommittedUtc < oldest ? candidate.CommittedUtc : oldest;
                 newest = candidate.CommittedUtc > newest ? candidate.CommittedUtc : newest;
             }
-        } while (batch.HasMore && heads.Count < _options.MaxLeavesPerAnchor);
+            // The source reports more as long as changes keep arriving, so the candidates read bound the run as well as
+            // the distinct streams; continuous changes to few streams must not keep a run from committing.
+        } while (batch.HasMore && heads.Count < _options.MaxLeavesPerAnchor && read < _options.MaxLeavesPerAnchor);
 
         return new CandidateRead(heads.Values.ToList(), batch, oldest, newest);
     }

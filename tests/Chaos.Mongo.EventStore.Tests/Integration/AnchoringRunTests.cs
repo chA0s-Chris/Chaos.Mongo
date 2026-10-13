@@ -89,6 +89,33 @@ public class AnchoringRunTests
         }
     }
 
+    [Test]
+    public async Task RunAsync_ContinuousChangesToOneStream_CommitsAfterReadingMaxLeavesCandidates()
+    {
+        var context = await CreateContextAsync();
+        var options = GetOptions(context);
+        options.CandidateReadBatchSize = 2;
+        options.MaxLeavesPerAnchor = 3;
+        var stream = Guid.NewGuid();
+        var candidates = Enumerable.Range(1, 10)
+                                   .Select(version => new AnchorCandidate(nameof(LedgerAggregate), stream, version, new Byte[32], DateTime.UtcNow.AddMinutes(-1)))
+                                   .ToList();
+        var source = new InMemoryAnchorCandidateSource(candidates, context.MongoHelper.Database);
+        var run = CreateRun(context, source, CreateTestAuthority().CreateAuthority());
+
+        var first = await run.RunAsync();
+        var second = await run.RunAsync();
+        var third = await run.RunAsync();
+        var fourth = await run.RunAsync();
+
+        // One stream never reaches the leaf maximum, so the candidates read bound the run: two batches of two.
+        first.Outcome.Should().Be(AnchoringRunOutcome.Completed);
+        (await GetStore(context).ReadLeavesAsync(first.Anchor!.Id, CancellationToken.None)).Should().ContainSingle().Which.Version.Should().Be(4);
+        (await GetStore(context).ReadLeavesAsync(second.Anchor!.Id, CancellationToken.None)).Should().ContainSingle().Which.Version.Should().Be(8);
+        (await GetStore(context).ReadLeavesAsync(third.Anchor!.Id, CancellationToken.None)).Should().ContainSingle().Which.Version.Should().Be(10);
+        fourth.Outcome.Should().Be(AnchoringRunOutcome.NoCandidates);
+    }
+
     [TestCase(nameof(AnchoringPhase.PendingAnchorStamped))]
     [TestCase(nameof(AnchoringPhase.CandidatesRead))]
     [TestCase(nameof(AnchoringPhase.LeavesWritten))]

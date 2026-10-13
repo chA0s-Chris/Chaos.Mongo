@@ -33,8 +33,9 @@ internal sealed class IntegrityAnchoringOptions
 
     /// <summary>
     /// Gets or sets the number of leaves after which a run stops reading candidates; the remaining candidates go
-    /// into the next run's anchor. The run checks it between batches, so an anchor may exceed it by less than one
-    /// batch. Defaults to 100,000.
+    /// into the next run's anchor. A run also stops after reading that many candidates, so continuous changes to few
+    /// streams cannot keep it reading. The run checks both between batches, so an anchor may exceed the maximum by
+    /// less than one batch. Defaults to 100,000.
     /// </summary>
     public Int32 MaxLeavesPerAnchor { get; set; } = 100_000;
 
