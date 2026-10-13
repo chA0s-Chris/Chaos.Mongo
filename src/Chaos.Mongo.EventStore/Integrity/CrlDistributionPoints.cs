@@ -13,6 +13,7 @@ internal static class CrlDistributionPoints
     private static readonly Asn1Tag CrlIssuerTag = new(TagClass.ContextSpecific, 2, true);
     private const String ExtensionOid = "2.5.29.31";
     private static readonly Asn1Tag FullNameTag = new(TagClass.ContextSpecific, 0, true);
+    private const Int32 LastGeneralNameTag = 8;
     private static readonly Asn1Tag NameTag = new(TagClass.ContextSpecific, 0, true);
     private static readonly Asn1Tag ReasonsTag = new(TagClass.ContextSpecific, 1);
     private static readonly Asn1Tag RelativeNameTag = new(TagClass.ContextSpecific, 1, true);
@@ -70,8 +71,15 @@ internal static class CrlDistributionPoints
         var uris = new List<Uri>();
         while (fullName.HasData)
         {
-            if (!fullName.PeekTag().HasSameClassAndValue(UriTag))
+            var tag = fullName.PeekTag();
+            if (!tag.HasSameClassAndValue(UriTag))
             {
+                // GeneralName alternatives are the context-specific tags [0] to [8]; anything else is malformed.
+                if (tag.TagClass != TagClass.ContextSpecific || tag.TagValue > LastGeneralNameTag)
+                {
+                    throw new AsnContentException("A general name must be one of the RFC 5280 alternatives.");
+                }
+
                 fullName.ReadEncodedValue();
                 continue;
             }
