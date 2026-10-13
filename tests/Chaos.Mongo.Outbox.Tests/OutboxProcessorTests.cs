@@ -274,6 +274,71 @@ public class OutboxProcessorTests
     }
 
     [Test]
+    public async Task ProcessMessage_FinalizationTimesOut_ReleasesLockWithoutCountingFailure()
+    {
+        var message = CreatePendingMessage();
+        var finalizing = CreateSignal();
+        var lockReleased = CreateSignal();
+        var updates = new List<UpdateDefinition<OutboxMessage>>();
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+
+        _publisherMock
+            .Setup(p => p.PublishAsync(It.IsAny<OutboxMessage>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var resultMock = new Mock<UpdateResult>();
+        resultMock.Setup(r => r.ModifiedCount).Returns(1);
+
+        _collectionMock
+            .Setup(c => c.UpdateOneAsync(
+                       It.IsAny<FilterDefinition<OutboxMessage>>(),
+                       It.IsAny<UpdateDefinition<OutboxMessage>>(),
+                       It.IsAny<UpdateOptions>(),
+                       It.IsAny<CancellationToken>()))
+            .Returns(async (FilterDefinition<OutboxMessage> _, UpdateDefinition<OutboxMessage> update, UpdateOptions _, CancellationToken token) =>
+            {
+                updates.Add(update);
+                if (updates.Count == 1)
+                {
+                    // The completion update never answers; it has to give up when the finalization timeout expires.
+                    finalizing.TrySetResult(true);
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+
+                lockReleased.TrySetResult(true);
+                return resultMock.Object;
+            });
+
+        var sut = CreateSut();
+        await sut.StartAsync();
+        await WaitForSignalAsync(finalizing);
+
+        // While the processor runs, elapsed time alone must not abandon the completion update.
+        _timeProvider.Advance(TimeSpan.FromSeconds(4));
+        await Task.Delay(100);
+        lockReleased.Task.IsCompleted.Should().BeFalse("finalization is only bounded once a stop is requested");
+
+        // The grace period is armed by the stop request; advance in steps so the registration can run first.
+        var stopping = sut.StopAsync();
+        for (var i = 0; i < 20 && !lockReleased.Task.IsCompleted; i++)
+        {
+            await Task.Delay(10);
+            _timeProvider.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        await WaitForSignalAsync(lockReleased);
+        await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+
+        updates.Should().HaveCount(2);
+        var serializerRegistry = BsonSerializer.SerializerRegistry;
+        var renderedRelease = updates[1].Render(new RenderArgs<OutboxMessage>(serializerRegistry.GetSerializer<OutboxMessage>(), serializerRegistry));
+        renderedRelease["$set"].AsBsonDocument.Names.Should().BeEquivalentTo([nameof(OutboxMessage.IsLocked)]);
+        renderedRelease["$unset"].AsBsonDocument.Names.Should().Contain(nameof(OutboxMessage.LockId));
+        VerifyLoggedWarning("timed out");
+    }
+
+    [Test]
     public async Task ProcessMessage_PublishFails_MarksAsPermanentlyFailedWhenRetriesExhausted()
     {
         var message = CreatePendingMessage(_options.MaxRetries - 1);

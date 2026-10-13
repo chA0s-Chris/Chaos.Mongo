@@ -273,9 +273,18 @@ public class TypedOutboxIntegrationTests
         };
         hub.Handlers["Second"] = async token =>
         {
-            using var registration = token.Register(() => secondCanceled.TrySetResult());
             secondEntered.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Signal from the handler itself: a token registration disposed by the handler's own
+                // unwinding can be unregistered before it runs, which loses the signal.
+                secondCanceled.TrySetResult();
+                throw;
+            }
         };
         await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
         await EnqueueAsync(host.Services);
