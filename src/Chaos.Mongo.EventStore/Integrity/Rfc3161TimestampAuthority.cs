@@ -193,6 +193,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ValidatedChain chain;
         using (signer)
         {
+            ValidateContent(token);
             ValidateTime(token);
             ValidateSigner(signer);
             ValidateAuthorityName(token, signer);
@@ -229,6 +230,19 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         catch (AsnContentException ex)
         {
             throw Fail("the token's TSA name is malformed.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Requires the signed content to be exactly one DER <c>TSTInfo</c> (RFC 3161, section 2.4.2). The Pkcs decoder
+    /// does not reject data that follows it, although the signature covers that data.
+    /// </summary>
+    private void ValidateContent(Rfc3161TimestampToken token)
+    {
+        var content = token.AsSignedCms().ContentInfo.Content;
+        if (!Rfc3161TimestampTokenInfo.TryDecode(content, out _, out var bytesConsumed) || bytesConsumed != content.Length)
+        {
+            throw Fail("the token's signed content is not exactly one TSTInfo.");
         }
     }
 

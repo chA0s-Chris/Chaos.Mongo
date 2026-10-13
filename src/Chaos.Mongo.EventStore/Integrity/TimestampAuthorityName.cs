@@ -12,11 +12,14 @@ using System.Security.Cryptography.X509Certificates;
 internal static class TimestampAuthorityName
 {
     private static readonly Asn1Tag DirectoryNameTag = new(TagClass.ContextSpecific, 4, true);
+    private static readonly Asn1Tag DnsNameTag = new(TagClass.ContextSpecific, 2);
+    private static readonly Asn1Tag Rfc822NameTag = new(TagClass.ContextSpecific, 1);
     private const String SubjectAlternativeNameOid = "2.5.29.17";
 
     /// <summary>
     /// Gets a value indicating whether a <c>GeneralName</c> equals the certificate's subject, for a directory name, or
-    /// one of its subject alternative names, compared by their DER encoding.
+    /// one of its subject alternative names. DNS names compare case-insensitively and email addresses with a
+    /// case-insensitive domain (RFC 5280, sections 7.2 and 7.5); every other form compares by its DER encoding.
     /// </summary>
     /// <param name="generalName">The encoded <c>GeneralName</c>.</param>
     /// <param name="certificate">The signing certificate.</param>
@@ -41,7 +44,7 @@ internal static class TimestampAuthorityName
             }
         }
 
-        return EnumerateAlternativeNames(certificate).Any(alternative => alternative.Span.SequenceEqual(name.Span));
+        return EnumerateAlternativeNames(certificate).Any(alternative => NamesMatch(name, alternative));
     }
 
     private static IEnumerable<ReadOnlyMemory<Byte>> EnumerateAlternativeNames(X509Certificate2 certificate)
@@ -56,5 +59,53 @@ internal static class TimestampAuthorityName
         {
             yield return names.ReadEncodedValue();
         }
+    }
+
+    /// <summary>
+    /// Compares mailboxes as RFC 5280, section 7.5 prescribes: the local part is case-sensitive, the domain is not.
+    /// </summary>
+    private static Boolean MailboxesMatch(String left, String right)
+    {
+        var leftAt = left.LastIndexOf('@');
+        var rightAt = right.LastIndexOf('@');
+        if (leftAt < 0 || rightAt < 0)
+        {
+            return String.Equals(left, right, StringComparison.Ordinal);
+        }
+
+        return String.Equals(left[..leftAt], right[..rightAt], StringComparison.Ordinal) &&
+               String.Equals(left[(leftAt + 1)..], right[(rightAt + 1)..], StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Compares two encoded general names of the same form with the form's matching rule.
+    /// </summary>
+    private static Boolean NamesMatch(ReadOnlyMemory<Byte> name, ReadOnlyMemory<Byte> alternative)
+    {
+        var tag = new AsnReader(name, AsnEncodingRules.DER).PeekTag();
+        if (!tag.HasSameClassAndValue(new AsnReader(alternative, AsnEncodingRules.DER).PeekTag()))
+        {
+            return false;
+        }
+
+        if (tag.HasSameClassAndValue(DnsNameTag))
+        {
+            return String.Equals(ReadIa5String(name, DnsNameTag), ReadIa5String(alternative, DnsNameTag), StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (tag.HasSameClassAndValue(Rfc822NameTag))
+        {
+            return MailboxesMatch(ReadIa5String(name, Rfc822NameTag), ReadIa5String(alternative, Rfc822NameTag));
+        }
+
+        return name.Span.SequenceEqual(alternative.Span);
+    }
+
+    private static String ReadIa5String(ReadOnlyMemory<Byte> encoded, Asn1Tag tag)
+    {
+        var reader = new AsnReader(encoded, AsnEncodingRules.DER);
+        var value = reader.ReadCharacterString(UniversalTagNumber.IA5String, tag);
+        reader.ThrowIfNotEmpty();
+        return value;
     }
 }

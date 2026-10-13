@@ -371,6 +371,38 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public async Task TimestampAsync_TrailingDataInsideTstInfo_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.TrailingTstInfoData);
+
+        exception.Message.Should().Contain("not exactly one TSTInfo");
+    }
+
+    [Test]
+    public async Task TimestampAsync_TsaDnsNameDiffersFromAlternativeName_Throws()
+    {
+        var testAuthority = CreateTestAuthority(alternativeTsaName: true);
+        testAuthority.TokenDnsName = "other.test";
+        var authority = testAuthority.CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("TSA name");
+    }
+
+    [Test]
+    public async Task TimestampAsync_TsaDnsNameInDifferentCase_ReturnsToken()
+    {
+        var testAuthority = CreateTestAuthority(alternativeTsaName: true);
+        testAuthority.TokenDnsName = "TSA.TEST";
+        var authority = testAuthority.CreateAuthority();
+
+        var token = await authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateChain.Should().HaveCount(2);
+    }
+
+    [Test]
     public async Task TimestampAsync_TsaNameInSubjectAlternativeName_ReturnsToken()
     {
         var authority = CreateTestAuthority(alternativeTsaName: true).CreateAuthority();

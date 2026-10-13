@@ -71,6 +71,34 @@ public class CrlDistributionPointsTests
     }
 
     [Test]
+    public void GetHttpUris_EmptyCrlIssuer_ThrowsAsnContentException()
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/a.crl");
+            }
+
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 2)))
+            {
+                // A CRL issuer must name at least one general name.
+            }
+        }
+
+        var act = () =>
+        {
+            using var certificate = CreateCertificate(writer.Encode());
+            return CrlDistributionPoints.GetHttpUris(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
     public void GetHttpUris_EmptyFullName_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
@@ -117,6 +145,32 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate([0x30, 0x03, 0x02, 0x01, 0x00]);
+            return CrlDistributionPoints.GetHttpUris(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
+    public void GetHttpUris_MalformedReasons_ThrowsAsnContentException()
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/a.crl");
+            }
+
+            // An empty [1] value is not a BIT STRING.
+            writer.WriteEncodedValue([0x81, 0x00]);
+        }
+
+        var act = () =>
+        {
+            using var certificate = CreateCertificate(writer.Encode());
             return CrlDistributionPoints.GetHttpUris(certificate);
         };
 

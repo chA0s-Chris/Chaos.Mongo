@@ -71,16 +71,9 @@ internal static class CrlDistributionPoints
         var uris = new List<Uri>();
         while (fullName.HasData)
         {
-            var tag = fullName.PeekTag();
-            if (!tag.HasSameClassAndValue(UriTag))
+            if (!fullName.PeekTag().HasSameClassAndValue(UriTag))
             {
-                // GeneralName alternatives are the context-specific tags [0] to [8]; anything else is malformed.
-                if (tag.TagClass != TagClass.ContextSpecific || tag.TagValue > LastGeneralNameTag)
-                {
-                    throw new AsnContentException("A general name must be one of the RFC 5280 alternatives.");
-                }
-
-                fullName.ReadEncodedValue();
+                SkipGeneralName(fullName);
                 continue;
             }
 
@@ -92,6 +85,23 @@ internal static class CrlDistributionPoints
         }
 
         return uris;
+    }
+
+    /// <summary>
+    /// Reads a <c>GeneralNames</c> whose locations are not needed, such as the CRL issuer: it must contain at least one
+    /// general name, and every element must be one of the RFC 5280 alternatives.
+    /// </summary>
+    private static void ReadGeneralNames(AsnReader names)
+    {
+        if (!names.HasData)
+        {
+            throw new AsnContentException("A general names sequence must contain at least one general name.");
+        }
+
+        while (names.HasData)
+        {
+            SkipGeneralName(names);
+        }
     }
 
     /// <summary>
@@ -135,12 +145,13 @@ internal static class CrlDistributionPoints
 
         if (point.HasData && point.PeekTag().HasSameClassAndValue(ReasonsTag))
         {
-            point.ReadEncodedValue();
+            // ReasonFlags is an implicitly tagged BIT STRING; decoding it rejects a malformed value.
+            point.ReadBitString(out _, ReasonsTag);
         }
 
         if (point.HasData && point.PeekTag().HasSameClassAndValue(CrlIssuerTag))
         {
-            point.ReadEncodedValue();
+            ReadGeneralNames(point.ReadSequence(CrlIssuerTag));
             named = true;
         }
 
@@ -151,5 +162,19 @@ internal static class CrlDistributionPoints
         }
 
         return uris;
+    }
+
+    /// <summary>
+    /// Skips one general name, which must be one of the context-specific alternatives [0] to [8] of RFC 5280.
+    /// </summary>
+    private static void SkipGeneralName(AsnReader names)
+    {
+        var tag = names.PeekTag();
+        if (tag.TagClass != TagClass.ContextSpecific || tag.TagValue > LastGeneralNameTag)
+        {
+            throw new AsnContentException("A general name must be one of the RFC 5280 alternatives.");
+        }
+
+        names.ReadEncodedValue();
     }
 }

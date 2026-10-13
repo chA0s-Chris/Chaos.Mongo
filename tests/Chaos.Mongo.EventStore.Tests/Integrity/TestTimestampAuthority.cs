@@ -117,6 +117,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public X509Certificate2 SigningCertificate { get; }
 
     /// <summary>
+    /// Gets or sets the DNS name tokens carry as their TSA name when the authority uses an alternative TSA name;
+    /// defaults to the signer's alternative name.
+    /// </summary>
+    public String? TokenDnsName { get; set; }
+
+    /// <summary>
     /// Encodes a CRL distribution points extension value with one distribution point per argument, each naming its
     /// locations as uniform resource identifiers in its full name.
     /// </summary>
@@ -297,7 +303,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             _ => DateTimeOffset.UtcNow
         };
         var tsaName = Mode == TestTimestampAuthorityMode.WrongTsaName ? EncodeDirectoryName(Root) :
-            _alternativeTsaName ? EncodeDnsName(DnsName) : EncodeDirectoryName(SigningCertificate);
+            _alternativeTsaName ? EncodeDnsName(TokenDnsName ?? DnsName) : EncodeDirectoryName(SigningCertificate);
         var info = new Rfc3161TimestampTokenInfo(PolicyId,
                                                  request.HashAlgorithmId,
                                                  hash,
@@ -306,7 +312,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                                  nonce: nonce,
                                                  timestampAuthorityName: tsaName);
 
-        var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), info.Encode()));
+        var content = Mode == TestTimestampAuthorityMode.TrailingTstInfoData ? [.. info.Encode(), 0x05, 0x00] : info.Encode();
+        var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), content));
         var signer = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, SigningCertificate)
         {
             DigestAlgorithm = new Oid("2.16.840.1.101.3.4.2.1"),
