@@ -37,6 +37,13 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     public required String Name { get; set; }
 
     /// <summary>
+    /// Gets or sets the longest time the chain validation may spend on one online revocation check or CRL download.
+    /// The chain engine performs these outside the HTTP client, so a hung revocation host would otherwise block the
+    /// timestamp attempt without limit. Defaults to 30 seconds.
+    /// </summary>
+    public TimeSpan RevocationCheckTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Gets or sets how certificate revocation is checked when the token's chain is validated. Defaults to
     /// <see cref="X509RevocationMode.Online"/>.
     /// </summary>

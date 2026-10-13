@@ -34,6 +34,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ArgumentNullException.ThrowIfNull(options.Uri, nameof(options));
         ArgumentNullException.ThrowIfNull(options.HttpClientFactory, nameof(options));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.MaximumClockSkew, TimeSpan.Zero, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.RevocationCheckTimeout, TimeSpan.Zero, nameof(options));
         if (!options.Uri.IsAbsoluteUri || ((options.Uri.Scheme != Uri.UriSchemeHttp) && (options.Uri.Scheme != Uri.UriSchemeHttps)))
         {
             throw new ArgumentException("The timestamp authority URI must be an absolute HTTP or HTTPS URI.", nameof(options));
@@ -63,6 +64,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     {
         using var chain = new X509Chain();
         chain.ChainPolicy.RevocationMode = _options.RevocationMode;
+        chain.ChainPolicy.UrlRetrievalTimeout = _options.RevocationCheckTimeout;
         chain.ChainPolicy.ApplicationPolicy.Add(new Oid(TimeStampingPurposeOid));
         chain.ChainPolicy.VerificationTime = token.TokenInfo.Timestamp.UtcDateTime;
         var tokenCertificates = token.AsSignedCms().Certificates;

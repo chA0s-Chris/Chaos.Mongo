@@ -110,6 +110,21 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public void Constructor_NonPositiveRevocationCheckTimeout_ThrowsArgumentOutOfRangeException()
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "no-revocation-timeout",
+            Uri = TestTimestampAuthority.TimestampUri,
+            RevocationCheckTimeout = TimeSpan.Zero
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public void Constructor_RelativeUri_ThrowsArgumentException()
     {
         var options = new Rfc3161TimestampAuthorityOptions

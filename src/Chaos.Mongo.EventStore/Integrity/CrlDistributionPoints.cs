@@ -108,14 +108,16 @@ internal static class CrlDistributionPoints
 
     /// <summary>
     /// Reads one distribution point: an optional name [0], optional reasons [1] and an optional CRL issuer [2], in this
-    /// order and each at most once. Only the name contributes locations.
+    /// order and each at most once. A point must carry a name or a CRL issuer; only the name contributes locations.
     /// </summary>
     private static IReadOnlyList<Uri> ReadPointUris(AsnReader point)
     {
         IReadOnlyList<Uri> uris = [];
+        var named = false;
         if (point.HasData && point.PeekTag().HasSameClassAndValue(NameTag))
         {
             uris = ReadNameUris(point.ReadSequence(NameTag));
+            named = true;
         }
 
         if (point.HasData && point.PeekTag().HasSameClassAndValue(ReasonsTag))
@@ -126,9 +128,15 @@ internal static class CrlDistributionPoints
         if (point.HasData && point.PeekTag().HasSameClassAndValue(CrlIssuerTag))
         {
             point.ReadEncodedValue();
+            named = true;
         }
 
         point.ThrowIfNotEmpty();
+        if (!named)
+        {
+            throw new AsnContentException("A distribution point must name a distribution point or a CRL issuer.");
+        }
+
         return uris;
     }
 }
