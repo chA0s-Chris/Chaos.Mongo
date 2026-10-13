@@ -282,7 +282,11 @@ internal sealed class AnchoringRun
         var heads = new Dictionary<(String AggregateType, Guid AggregateId), AnchorCandidate>();
         var oldest = DateTime.MaxValue;
         var newest = DateTime.MinValue;
-        var read = 0;
+        // The source reports more as long as changes keep arriving, whether or not they yield candidates, so the
+        // batches read bound the run as well as the distinct streams; continuous changes must not keep a run from
+        // committing or from acknowledging its progress.
+        var maxBatches = Math.Max(1, (_options.MaxLeavesPerAnchor + _options.CandidateReadBatchSize - 1) / _options.CandidateReadBatchSize);
+        var batches = 0;
         AnchorCandidateBatch batch;
         do
         {
@@ -292,7 +296,7 @@ internal sealed class AnchoringRun
             }
 
             batch = await _source.ReadBatchAsync(_options.CandidateReadBatchSize, cancellationToken);
-            read += batch.Candidates.Count;
+            batches++;
             foreach (var candidate in batch.Candidates)
             {
                 var key = (candidate.AggregateType, candidate.AggregateId);
@@ -304,9 +308,7 @@ internal sealed class AnchoringRun
                 oldest = candidate.CommittedUtc < oldest ? candidate.CommittedUtc : oldest;
                 newest = candidate.CommittedUtc > newest ? candidate.CommittedUtc : newest;
             }
-            // The source reports more as long as changes keep arriving, so the candidates read bound the run as well as
-            // the distinct streams; continuous changes to few streams must not keep a run from committing.
-        } while (batch.HasMore && heads.Count < _options.MaxLeavesPerAnchor && read < _options.MaxLeavesPerAnchor);
+        } while (batch.HasMore && heads.Count < _options.MaxLeavesPerAnchor && batches < maxBatches);
 
         return new CandidateRead(heads.Values.ToList(), batch, oldest, newest);
     }

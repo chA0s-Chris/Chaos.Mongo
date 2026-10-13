@@ -67,6 +67,28 @@ public class AnchoringRunTests
     }
 
     [Test]
+    public async Task RunAsync_ChangesWithoutCandidates_StopsAfterTheBatchBoundAndPersistsProgress()
+    {
+        var context = await CreateContextAsync();
+        var options = GetOptions(context);
+        options.CandidateReadBatchSize = 2;
+        options.MaxLeavesPerAnchor = 3;
+        var source = new InMemoryAnchorCandidateSource(InMemoryAnchorCandidateSource.CreateCandidates(1), context.MongoHelper.Database, 5);
+        var run = CreateRun(context, source, CreateTestAuthority().CreateAuthority());
+
+        // Two batches per run: two runs drain four candidate-less batches, the third reads the last one and the
+        // candidate, and the fourth finds nothing.
+        var outcomes = new List<AnchoringRunOutcome>();
+        for (var runs = 0; runs < 4; runs++)
+        {
+            outcomes.Add((await run.RunAsync()).Outcome);
+        }
+
+        outcomes.Should().Equal(AnchoringRunOutcome.NoCandidates, AnchoringRunOutcome.NoCandidates, AnchoringRunOutcome.Completed, AnchoringRunOutcome.NoCandidates);
+        source.BatchesRead.Should().Be(7, "each run reads at most two batches and acknowledges them");
+    }
+
+    [Test]
     public async Task RunAsync_ConsecutiveAnchors_AreChainedThroughTheirDigests()
     {
         var context = await CreateContextAsync();

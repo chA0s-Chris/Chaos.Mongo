@@ -8,21 +8,30 @@ using MongoDB.Driver;
 
 /// <summary>
 /// A fake candidate source over a fixed list of candidates, for anchors larger than appending real events allows in a
-/// test. It follows the read contract and writes its position in the acknowledging transaction.
+/// test. It follows the read contract and writes its position in the acknowledging transaction. It can first serve a
+/// number of batches that report more but carry no candidate, like changes that yield none.
 /// </summary>
 internal sealed class InMemoryAnchorCandidateSource : IAnchorCandidateSource
 {
     private readonly IReadOnlyList<AnchorCandidate> _candidates;
+    private readonly Int32 _emptyBatches;
     private readonly IMongoCollection<BsonDocument> _state;
-    private Int32 _acknowledged;
+    private Position _acknowledged = new(0, 0);
+    private Int32 _emptyRead;
     private AnchorCandidateBatch? _lastBatch;
     private Int32 _read;
 
-    public InMemoryAnchorCandidateSource(IReadOnlyList<AnchorCandidate> candidates, IMongoDatabase database)
+    public InMemoryAnchorCandidateSource(IReadOnlyList<AnchorCandidate> candidates, IMongoDatabase database, Int32 emptyBatches = 0)
     {
         _candidates = candidates;
+        _emptyBatches = emptyBatches;
         _state = database.GetCollection<BsonDocument>("InMemoryCandidateState");
     }
+
+    /// <summary>
+    /// Gets the number of batches read so far.
+    /// </summary>
+    public Int32 BatchesRead { get; private set; }
 
     public static IReadOnlyList<AnchorCandidate> CreateCandidates(Int32 count)
     {
@@ -43,13 +52,14 @@ internal sealed class InMemoryAnchorCandidateSource : IAnchorCandidateSource
             throw new ArgumentException("Only the last batch can be acknowledged.", nameof(batch));
         }
 
-        var position = (Int32)batch.Position;
+        var position = (Position)batch.Position;
         await _state.ReplaceOneAsync(session,
                                      new BsonDocument("_id", "position"),
                                      new BsonDocument
                                      {
                                          { "_id", "position" },
-                                         { "Position", position }
+                                         { "EmptyBatchesRead", position.EmptyBatchesRead },
+                                         { "CandidatesRead", position.CandidatesRead }
                                      },
                                      new ReplaceOptions
                                      {
@@ -62,16 +72,27 @@ internal sealed class InMemoryAnchorCandidateSource : IAnchorCandidateSource
     public void DiscardUnacknowledgedReads()
     {
         _lastBatch = null;
-        _read = _acknowledged;
+        _emptyRead = _acknowledged.EmptyBatchesRead;
+        _read = _acknowledged.CandidatesRead;
     }
 
     public Task<AnchorCandidateBatch> ReadBatchAsync(Int32 maxCandidates, CancellationToken cancellationToken)
     {
+        BatchesRead++;
+        if (_emptyRead < _emptyBatches)
+        {
+            _emptyRead++;
+            _lastBatch = new AnchorCandidateBatch([], new Position(_emptyRead, _read), true);
+            return Task.FromResult(_lastBatch);
+        }
+
         var candidates = _candidates.Skip(_read).Take(maxCandidates).ToList();
         _read += candidates.Count;
-        _lastBatch = new AnchorCandidateBatch(candidates, _read, _read < _candidates.Count);
+        _lastBatch = new AnchorCandidateBatch(candidates, new Position(_emptyRead, _read), _read < _candidates.Count);
         return Task.FromResult(_lastBatch);
     }
 
     public void Dispose() { }
+
+    private sealed record Position(Int32 EmptyBatchesRead, Int32 CandidatesRead);
 }
