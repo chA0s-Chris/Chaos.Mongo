@@ -14,6 +14,35 @@ public class CrlDistributionPointsTests
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
     [Test]
+    public void GetHttpUris_DuplicateNameFieldInDistributionPoint_ThrowsAsnContentException()
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/a.crl");
+            }
+
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/b.crl");
+            }
+        }
+
+        var act = () =>
+        {
+            using var certificate = CreateCertificate(writer.Encode());
+            return CrlDistributionPoints.GetHttpUris(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
     public void GetHttpUris_DuplicateNameInDistributionPoint_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
@@ -91,15 +120,56 @@ public class CrlDistributionPointsTests
             }
 
             WriteFullNamePoint(writer, names => WriteUris(names, "http://crl.test/b.crl"));
+            using (writer.PushSequence())
+            {
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                {
+                    WriteUris(writer, "http://crl.test/c.crl");
+                }
+
+                // Reasons and the CRL issuer may follow the name; the issuer's locations are not distribution points.
+                writer.WriteBitString([0x80], 0, new Asn1Tag(TagClass.ContextSpecific, 1));
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 2)))
+                {
+                    WriteUris(writer, "http://issuer.test/ca");
+                }
+            }
         }
 
         using var certificate = CreateCertificate(writer.Encode());
 
         var points = CrlDistributionPoints.GetHttpUris(certificate);
 
-        points.Should().HaveCount(2);
+        points.Should().HaveCount(3);
         points[0].Should().Equal(new Uri("http://crl.test/a.crl"), new Uri("https://crl.test/a.crl"));
         points[1].Should().Equal(new Uri("http://crl.test/b.crl"));
+        points[2].Should().Equal(new Uri("http://crl.test/c.crl"));
+    }
+
+    [Test]
+    public void GetHttpUris_UnknownFieldInDistributionPoint_ThrowsAsnContentException()
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/a.crl");
+            }
+
+            writer.WriteNull(new Asn1Tag(TagClass.ContextSpecific, 3));
+        }
+
+        var act = () =>
+        {
+            using var certificate = CreateCertificate(writer.Encode());
+            return CrlDistributionPoints.GetHttpUris(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
     }
 
     [Test]

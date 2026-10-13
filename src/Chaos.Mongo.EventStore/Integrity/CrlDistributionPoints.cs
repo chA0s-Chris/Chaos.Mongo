@@ -10,9 +10,11 @@ using System.Security.Cryptography.X509Certificates;
 /// </summary>
 internal static class CrlDistributionPoints
 {
+    private static readonly Asn1Tag CrlIssuerTag = new(TagClass.ContextSpecific, 2, true);
     private const String ExtensionOid = "2.5.29.31";
     private static readonly Asn1Tag FullNameTag = new(TagClass.ContextSpecific, 0, true);
     private static readonly Asn1Tag NameTag = new(TagClass.ContextSpecific, 0, true);
+    private static readonly Asn1Tag ReasonsTag = new(TagClass.ContextSpecific, 1);
     private static readonly Asn1Tag RelativeNameTag = new(TagClass.ContextSpecific, 1, true);
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
@@ -79,16 +81,12 @@ internal static class CrlDistributionPoints
         return uris;
     }
 
-    private static IReadOnlyList<Uri> ReadPointUris(AsnReader point)
+    /// <summary>
+    /// Reads the name of a distribution point. The CHOICE is exactly one of a full name [0] or a name relative to the
+    /// CRL issuer [1], which has no URI.
+    /// </summary>
+    private static IReadOnlyList<Uri> ReadNameUris(AsnReader name)
     {
-        if (!point.HasData || !point.PeekTag().HasSameClassAndValue(NameTag))
-        {
-            return [];
-        }
-
-        // The CHOICE inside [0] is exactly one of a full name [0] or a name relative to the CRL issuer [1], which has
-        // no URI.
-        var name = point.ReadSequence(NameTag);
         IReadOnlyList<Uri> uris;
         if (name.PeekTag().HasSameClassAndValue(FullNameTag))
         {
@@ -105,6 +103,32 @@ internal static class CrlDistributionPoints
         }
 
         name.ThrowIfNotEmpty();
+        return uris;
+    }
+
+    /// <summary>
+    /// Reads one distribution point: an optional name [0], optional reasons [1] and an optional CRL issuer [2], in this
+    /// order and each at most once. Only the name contributes locations.
+    /// </summary>
+    private static IReadOnlyList<Uri> ReadPointUris(AsnReader point)
+    {
+        IReadOnlyList<Uri> uris = [];
+        if (point.HasData && point.PeekTag().HasSameClassAndValue(NameTag))
+        {
+            uris = ReadNameUris(point.ReadSequence(NameTag));
+        }
+
+        if (point.HasData && point.PeekTag().HasSameClassAndValue(ReasonsTag))
+        {
+            point.ReadEncodedValue();
+        }
+
+        if (point.HasData && point.PeekTag().HasSameClassAndValue(CrlIssuerTag))
+        {
+            point.ReadEncodedValue();
+        }
+
+        point.ThrowIfNotEmpty();
         return uris;
     }
 }
