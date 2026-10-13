@@ -97,13 +97,19 @@ internal sealed class AnchorCompletionNotifier
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             await _hook(scope.ServiceProvider, CompletedAnchor.From(anchor), hookCancellation.Token);
+
+            // A hook that observes the cancellation and returns normally may have abandoned its work as well.
+            if (hookCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                LogLockLost(anchor);
+                return false;
+            }
+
             return true;
         }
         catch (OperationCanceledException) when (hookCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("The completion hook for anchor {AnchorSequence} was cancelled because the anchoring lock could not be extended; " +
-                               "the anchor is notified on a later run",
-                               anchor.Sequence);
+            LogLockLost(anchor);
             return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -150,4 +156,9 @@ internal sealed class AnchorCompletionNotifier
             await hookCancellation.CancelAsync();
         }
     }
+
+    private void LogLockLost(AnchorRecord anchor)
+        => _logger.LogWarning("The completion hook for anchor {AnchorSequence} was cancelled because the anchoring lock could not be extended; " +
+                              "the anchor is notified on a later run",
+                              anchor.Sequence);
 }

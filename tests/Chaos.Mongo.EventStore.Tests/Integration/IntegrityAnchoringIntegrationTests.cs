@@ -111,8 +111,9 @@ public class IntegrityAnchoringIntegrationTests
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
-    [Test]
-    public async Task NotifyAsync_LockLostDuringHook_CancelsTheHookAndKeepsTheAnchorUnnotified()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task NotifyAsync_LockLostDuringHook_CancelsTheHookAndKeepsTheAnchorUnnotified(Boolean hookSwallowsCancellation)
     {
         var testAuthority = CreateTestAuthority();
         var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
@@ -133,7 +134,10 @@ public class IntegrityAnchoringIntegrationTests
                                                         catch (OperationCanceledException)
                                                         {
                                                             hookCancelled.TrySetResult(ct.IsCancellationRequested);
-                                                            throw;
+                                                            if (!hookSwallowsCancellation)
+                                                            {
+                                                                throw;
+                                                            }
                                                         }
                                                     },
                                                     TimeProvider.System,
