@@ -30,6 +30,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     private const Int32 MinimumRsaKeySize = 2048;
     private const Int32 NonceLength = 16;
     private const Int32 ReadChunkSize = 81920;
+    private const String RsaPssPublicKeyOid = "1.2.840.113549.1.1.10";
     private const String RsaPublicKeyOid = "1.2.840.113549.1.1.1";
     private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
     private const String TimestampQueryMediaType = "application/timestamp-query";
@@ -105,42 +106,15 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     public String Name => _options.Name;
 
     /// <summary>
-    /// Checks that a download is usable evidence: an HTTP location must point to a single DER-encoded CRL (RFC 5280,
-    /// section 4.2.1.13), issued by the certificate's issuer unless the point names another CRL issuer, whose CRLs
-    /// are not checked here, and not expired before the token's time (RFC 5280, section 6.3.3).
-    /// </summary>
-    /// <returns><c>null</c> when the CRL is usable; otherwise the reason it is not.</returns>
-    private static InvalidDataException? CheckCrl(Byte[] crl, Uri location, Byte[]? issuer, DateTimeOffset tokenTime)
-    {
-        CertificateRevocationListHeader header;
-        try
-        {
-            header = CertificateRevocationListHeader.Decode(crl);
-        }
-        catch (AsnContentException ex)
-        {
-            return new InvalidDataException($"The data at {location} is not a single DER-encoded CRL.", ex);
-        }
-
-        if (issuer is not null && !header.Issuer.Span.SequenceEqual(issuer))
-        {
-            return new InvalidDataException($"The CRL at {location} is not issued by the issuer of the certificate that names it.");
-        }
-
-        return header.NextUpdate < tokenTime
-            ? new InvalidDataException($"The CRL at {location} expired at {header.NextUpdate:O}, before the token's time {tokenTime:O}.")
-            : null;
-    }
-
-    /// <summary>
     /// Gets the size of an RSA or ECDSA key and the minimum this authority requires for it; other key types are not
-    /// size-checked.
+    /// size-checked. The size is <c>null</c> when the platform cannot read the key, as for RSASSA-PSS keys today.
     /// </summary>
     private static (Int32? KeySize, Int32 Minimum) GetKeySize(X509Certificate2 certificate)
     {
         switch (certificate.PublicKey.Oid.Value)
         {
             case RsaPublicKeyOid:
+            case RsaPssPublicKeyOid:
                 using (var key = certificate.GetRSAPublicKey())
                 {
                     return (key?.KeySize, MinimumRsaKeySize);
@@ -214,6 +188,47 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
                 certificate.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Checks that a download is usable evidence: an HTTP location must point to a single DER-encoded CRL (RFC 5280,
+    /// section 4.2.1.13), issued by the certificate's issuer unless the point names another CRL issuer, whose CRLs
+    /// are not checked here. It must state its next update (RFC 5280, section 5.1.2.5), which must not lie before the
+    /// token's time, and must not claim to be issued later than the local time allows. A CRL issued after the token's
+    /// time is accepted: it lists every revocation up to its issue, so it is stronger evidence for the token's time.
+    /// </summary>
+    /// <returns><c>null</c> when the CRL is usable; otherwise the reason it is not.</returns>
+    private InvalidDataException? CheckCrl(Byte[] crl, Uri location, Byte[]? issuer, DateTimeOffset tokenTime)
+    {
+        CertificateRevocationListHeader header;
+        try
+        {
+            header = CertificateRevocationListHeader.Decode(crl);
+        }
+        catch (AsnContentException ex)
+        {
+            return new InvalidDataException($"The data at {location} is not a single DER-encoded CRL.", ex);
+        }
+
+        if (issuer is not null && !header.Issuer.Span.SequenceEqual(issuer))
+        {
+            return new InvalidDataException($"The CRL at {location} is not issued by the issuer of the certificate that names it.");
+        }
+
+        if (header.NextUpdate is not { } nextUpdate)
+        {
+            return new InvalidDataException($"The CRL at {location} states no next update.");
+        }
+
+        var latestIssue = _timeProvider.GetUtcNow() + _options.MaximumClockSkew;
+        if (header.ThisUpdate > latestIssue)
+        {
+            return new InvalidDataException($"The CRL at {location} was issued at {header.ThisUpdate:O}, after the local time allows.");
+        }
+
+        return nextUpdate < tokenTime
+            ? new InvalidDataException($"The CRL at {location} expired at {nextUpdate:O}, before the token's time {tokenTime:O}.")
+            : null;
     }
 
     /// <summary>
@@ -379,6 +394,11 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
 
         var (keySize, minimum) = GetKeySize(signer);
+        if (keySize is null && minimum > 0)
+        {
+            throw Fail("the signing key's size could not be determined.");
+        }
+
         if (keySize < minimum)
         {
             throw Fail($"the signing key has {keySize} bits, fewer than the required {minimum}.");

@@ -34,5 +34,8 @@ public enum TestTimestampAuthorityMode
     CrlExpired,
     CounterSigned,
     IgnoresRequestedPolicy,
-    Sha1Digest
+    Sha1Digest,
+    CrlWithoutNextUpdate,
+    CrlIssuedInFuture,
+    CrlIssuedAfterToken
 }

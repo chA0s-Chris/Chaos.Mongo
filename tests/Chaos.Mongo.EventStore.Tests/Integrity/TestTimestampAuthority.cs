@@ -283,6 +283,37 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Encodes an unsigned CRL of a CA without a next update; the authority does not verify CRL signatures.
+    /// </summary>
+    private static Byte[] EncodeCrlWithoutNextUpdate(X509Certificate2 issuer)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteInteger(1);
+                WriteEcdsaWithSha256(writer);
+                writer.WriteEncodedValue(issuer.SubjectName.RawData);
+                writer.WriteUtcTime(DateTimeOffset.UtcNow.AddHours(-1));
+            }
+
+            WriteEcdsaWithSha256(writer);
+            writer.WriteBitString([0x00]);
+        }
+
+        return writer.Encode();
+
+        static void WriteEcdsaWithSha256(AsnWriter writer)
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
+            }
+        }
+    }
+
+    /// <summary>
     /// Encodes a certificate's subject as a <c>directoryName</c> general name.
     /// </summary>
     private static Byte[] EncodeDirectoryName(X509Certificate2 certificate)
@@ -325,6 +356,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         {
             Content = new ByteArrayContent(content ?? [])
         };
+
+    /// <summary>
+    /// Builds a CRL of the authority's CA issued at <paramref name="thisUpdate"/> and valid for a week.
+    /// </summary>
+    private Byte[] BuildCrl(DateTimeOffset thisUpdate)
+        => new CertificateRevocationListBuilder().Build(Root, BigInteger.One, thisUpdate.AddDays(7), HashAlgorithmName.SHA256, thisUpdate: thisUpdate);
 
     private Byte[] CreateResponse(Byte[] query)
     {
@@ -425,6 +462,13 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                 return Respond(HttpStatusCode.OK, OtherIssuerCrl);
             case TestTimestampAuthorityMode.CrlExpired:
                 return Respond(HttpStatusCode.OK, ExpiredCrl);
+            case TestTimestampAuthorityMode.CrlWithoutNextUpdate:
+                return Respond(HttpStatusCode.OK, EncodeCrlWithoutNextUpdate(Root));
+            case TestTimestampAuthorityMode.CrlIssuedInFuture:
+                return Respond(HttpStatusCode.OK, BuildCrl(DateTimeOffset.UtcNow.AddDays(1)));
+            case TestTimestampAuthorityMode.CrlIssuedAfterToken:
+                // Built when served, so its issue lies after the token's time but within the allowed clock skew.
+                return Respond(HttpStatusCode.OK, BuildCrl(DateTimeOffset.UtcNow.AddMinutes(1)));
             case TestTimestampAuthorityMode.CrlConnectionLost:
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {

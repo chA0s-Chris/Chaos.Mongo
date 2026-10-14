@@ -281,9 +281,23 @@ public class Rfc3161TimestampAuthorityTests
         token.CertificateRevocationLists.Should().ContainSingle().Which.Should().Equal(testAuthority.OtherIssuerCrl);
     }
 
+    [Test]
+    public async Task TimestampAsync_CrlIssuedAfterToken_CapturesIt()
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.CrlIssuedAfterToken;
+
+        var token = await testAuthority.CreateAuthority().TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateRevocationLists.Should().HaveCount(1);
+        CertificateRevocationListHeader.Decode(token.CertificateRevocationLists[0]).ThisUpdate.Should().BeAfter(token.Timestamp);
+    }
+
     [TestCase(TestTimestampAuthorityMode.CrlNotACrl, "not a single DER-encoded CRL")]
     [TestCase(TestTimestampAuthorityMode.CrlFromOtherIssuer, "not issued by the issuer")]
     [TestCase(TestTimestampAuthorityMode.CrlExpired, "before the token's time")]
+    [TestCase(TestTimestampAuthorityMode.CrlWithoutNextUpdate, "states no next update")]
+    [TestCase(TestTimestampAuthorityMode.CrlIssuedInFuture, "after the local time allows")]
     public async Task TimestampAsync_CrlNotUsable_Throws(TestTimestampAuthorityMode mode, String reason)
     {
         var exception = await TimestampExpectingFailureAsync(mode);
