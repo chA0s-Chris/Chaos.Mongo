@@ -23,6 +23,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     private const String CodeSigningPurposeOid = "1.3.6.1.5.5.7.3.3";
     private const String CrlDistributionPointsOid = "2.5.29.31";
     private const String DnsName = "tsa.test";
+    private const String KeyUsageOid = "2.5.29.15";
     private static readonly Oid PolicyId = new("1.3.6.1.4.1.99999.1");
     private const String SigningCertificateV2Oid = "1.2.840.113549.1.9.16.2.47";
     private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
@@ -34,7 +35,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Creates the authority. Its signing certificate names <paramref name="crlLocations"/> as one CRL distribution
     /// point, or carries <paramref name="rawCrlDistributionPoints"/> as the extension value when given. Tokens name
     /// the signer's subject as their TSA name, or its DNS alternative name when <paramref name="alternativeTsaName"/>
-    /// is set.
+    /// is set. The signer's key usage extension carries <paramref name="rawKeyUsage"/> as its value when given; the
+    /// signer then has an RSA key, because the ECDSA key accessors decode the key usage themselves.
     /// </summary>
     public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                   Byte[]? rawCrlDistributionPoints = null,
@@ -42,17 +44,21 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   Boolean expiredSigner = false,
                                   Boolean additionalPurpose = false,
                                   X509KeyUsageFlags keyUsage = X509KeyUsageFlags.DigitalSignature,
-                                  Boolean alternativeTsaName = false)
+                                  Boolean alternativeTsaName = false,
+                                  Byte[]? rawKeyUsage = null)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
         Root = CreateRoot(notBefore, notAfter);
         _alternativeTsaName = alternativeTsaName;
 
-        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var request = new CertificateRequest("CN=Chaos.Mongo Test TSA", key, HashAlgorithmName.SHA256);
+        using var ecdsaKey = rawKeyUsage is null ? ECDsa.Create(ECCurve.NamedCurves.nistP256) : null;
+        using var rsaKey = rawKeyUsage is null ? null : RSA.Create(2048);
+        var request = ecdsaKey is not null
+            ? new CertificateRequest("CN=Chaos.Mongo Test TSA", ecdsaKey, HashAlgorithmName.SHA256)
+            : new CertificateRequest("CN=Chaos.Mongo Test TSA", rsaKey!, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-        request.CertificateExtensions.Add(new X509KeyUsageExtension(keyUsage, true));
+        request.CertificateExtensions.Add(rawKeyUsage is null ? new X509KeyUsageExtension(keyUsage, true) : new X509Extension(KeyUsageOid, rawKeyUsage, true));
         if (timestampingUsage)
         {
             var purposes = new OidCollection
@@ -86,8 +92,9 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
 
         var signerNotAfter = expiredSigner ? DateTimeOffset.UtcNow.AddDays(-1) : notAfter;
-        using var issued = request.Create(Root, notBefore, signerNotAfter, RandomNumberGenerator.GetBytes(8));
-        SigningCertificate = issued.CopyWithPrivateKey(key);
+        using var rootKey = Root.GetECDsaPrivateKey()!;
+        using var issued = request.Create(Root.SubjectName, X509SignatureGenerator.CreateForECDsa(rootKey), notBefore, signerNotAfter, RandomNumberGenerator.GetBytes(8));
+        SigningCertificate = ecdsaKey is not null ? issued.CopyWithPrivateKey(ecdsaKey) : issued.CopyWithPrivateKey(rsaKey!);
         Crl = new CertificateRevocationListBuilder().Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
     }
 

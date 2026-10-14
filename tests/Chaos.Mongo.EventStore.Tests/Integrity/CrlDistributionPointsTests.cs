@@ -11,10 +11,39 @@ using System.Security.Cryptography.X509Certificates;
 
 public class CrlDistributionPointsTests
 {
+    private const String DistributionPointsOid = "2.5.29.31";
+    private const String PlaceholderOid = "2.5.29.99";
+    private static readonly Byte[] PlaceholderOidEncoding = [0x06, 0x03, 0x55, 0x1D, 0x63];
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
     [Test]
-    public void GetHttpUris_DuplicateNameFieldInDistributionPoint_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_DuplicateExtension_ThrowsAsnContentException()
+    {
+        var distributionPoints = TestTimestampAuthority.EncodeDistributionPoints(["http://crl.test/a.crl"]);
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest("CN=Distribution Points", key, HashAlgorithmName.SHA256);
+        request.CertificateExtensions.Add(new X509Extension(DistributionPointsOid, distributionPoints, false));
+
+        // CertificateRequest refuses duplicate extensions, so the second one is added under a placeholder OID of the
+        // same encoded length and renamed in the encoded certificate. Loading does not verify the signature.
+        request.CertificateExtensions.Add(new X509Extension(PlaceholderOid, distributionPoints, false));
+        using var created = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        var encoded = created.RawData;
+        var placeholder = encoded.AsSpan().IndexOf(PlaceholderOidEncoding);
+        placeholder.Should().BePositive();
+        encoded[placeholder + 4] = 0x1F;
+
+        var act = () =>
+        {
+            using var certificate = X509CertificateLoader.LoadCertificate(encoded);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
+        };
+
+        act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
+    public void GetHttpDistributionPoints_DuplicateNameFieldInDistributionPoint_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -36,14 +65,14 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_DuplicateNameInDistributionPoint_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_DuplicateNameInDistributionPoint_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -64,14 +93,14 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_EmptyCrlIssuer_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_EmptyCrlIssuer_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -92,14 +121,14 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_EmptyFullName_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_EmptyFullName_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -111,14 +140,14 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_InvalidGeneralNameInFullName_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_InvalidGeneralNameInFullName_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -133,26 +162,26 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_MalformedExtension_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_MalformedExtension_ThrowsAsnContentException()
     {
         var act = () =>
         {
             using var certificate = CreateCertificate([0x30, 0x03, 0x02, 0x01, 0x00]);
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_MalformedReasons_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_MalformedReasons_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -171,14 +200,14 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_MixedDistributionPoints_ReturnsHttpLocationsPerPoint()
+    public void GetHttpDistributionPoints_MixedDistributionPoints_ReturnsHttpLocationsPerPoint()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -234,16 +263,45 @@ public class CrlDistributionPointsTests
 
         using var certificate = CreateCertificate(writer.Encode());
 
-        var points = CrlDistributionPoints.GetHttpUris(certificate);
+        var points = CrlDistributionPoints.GetHttpDistributionPoints(certificate);
 
         points.Should().HaveCount(3);
-        points[0].Should().Equal(new Uri("http://crl.test/a.crl"), new Uri("https://crl.test/a.crl"));
-        points[1].Should().Equal(new Uri("http://crl.test/b.crl"));
-        points[2].Should().Equal(new Uri("http://crl.test/c.crl"));
+        points[0].Locations.Should().Equal(new Uri("http://crl.test/a.crl"), new Uri("https://crl.test/a.crl"));
+        points[0].CoversAllReasons.Should().BeTrue();
+        points[1].Locations.Should().Equal(new Uri("http://crl.test/b.crl"));
+        points[1].CoversAllReasons.Should().BeTrue();
+        points[2].Locations.Should().Equal(new Uri("http://crl.test/c.crl"));
+        points[2].CoversAllReasons.Should().BeFalse();
+    }
+
+    [TestCase("40", 6, false)]
+    [TestCase("7F", 0, false)]
+    [TestCase("7F80", 7, true)]
+    [TestCase("FF80", 7, true)]
+    public void GetHttpDistributionPoints_PointWithReasons_ReportsWhetherItCoversAllReasons(String reasons, Int32 unusedBitCount, Boolean coversAllReasons)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                WriteUris(writer, "http://crl.test/a.crl");
+            }
+
+            writer.WriteBitString(Convert.FromHexString(reasons), unusedBitCount, new Asn1Tag(TagClass.ContextSpecific, 1));
+        }
+
+        using var certificate = CreateCertificate(writer.Encode());
+
+        var points = CrlDistributionPoints.GetHttpDistributionPoints(certificate);
+
+        points.Should().ContainSingle().Which.CoversAllReasons.Should().Be(coversAllReasons);
     }
 
     [Test]
-    public void GetHttpUris_ReasonsOnlyDistributionPoint_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_ReasonsOnlyDistributionPoint_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -258,14 +316,14 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_UnknownFieldInDistributionPoint_ThrowsAsnContentException()
+    public void GetHttpDistributionPoints_UnknownFieldInDistributionPoint_ThrowsAsnContentException()
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
@@ -283,18 +341,18 @@ public class CrlDistributionPointsTests
         var act = () =>
         {
             using var certificate = CreateCertificate(writer.Encode());
-            return CrlDistributionPoints.GetHttpUris(certificate);
+            return CrlDistributionPoints.GetHttpDistributionPoints(certificate);
         };
 
         act.Should().Throw<AsnContentException>();
     }
 
     [Test]
-    public void GetHttpUris_WithoutExtension_ReturnsEmpty()
+    public void GetHttpDistributionPoints_WithoutExtension_ReturnsEmpty()
     {
         using var certificate = CreateCertificate(null);
 
-        CrlDistributionPoints.GetHttpUris(certificate).Should().BeEmpty();
+        CrlDistributionPoints.GetHttpDistributionPoints(certificate).Should().BeEmpty();
     }
 
     private static X509Certificate2 CreateCertificate(Byte[]? distributionPoints)
@@ -303,7 +361,7 @@ public class CrlDistributionPointsTests
         var request = new CertificateRequest("CN=Distribution Points", key, HashAlgorithmName.SHA256);
         if (distributionPoints is not null)
         {
-            request.CertificateExtensions.Add(new X509Extension("2.5.29.31", distributionPoints, false));
+            request.CertificateExtensions.Add(new X509Extension(DistributionPointsOid, distributionPoints, false));
         }
 
         return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));

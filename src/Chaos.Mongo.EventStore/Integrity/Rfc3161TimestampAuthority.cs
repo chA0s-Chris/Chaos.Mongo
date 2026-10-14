@@ -145,17 +145,19 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 
     /// <summary>
     /// Gets the HTTP locations of a certificate's distribution points. Points without one are skipped, but a
-    /// certificate that names distribution points must yield at least one CRL.
+    /// certificate that names distribution points must yield at least one CRL that covers all revocation reasons
+    /// (RFC 5280, section 4.2.1.13); points limited to some reasons are captured beside it.
     /// </summary>
     private IReadOnlyList<IReadOnlyList<Uri>> GetDistributionPoints(X509Certificate2 certificate)
     {
-        var points = CrlDistributionPoints.GetHttpUris(certificate);
-        if (points.Count == 0 && CrlDistributionPoints.NamesDistributionPoints(certificate))
+        var points = CrlDistributionPoints.GetHttpDistributionPoints(certificate);
+        if (!points.Any(point => point.CoversAllReasons) && CrlDistributionPoints.NamesDistributionPoints(certificate))
         {
-            throw Fail($"the certificate '{certificate.Subject}' names CRL distribution points, but none has an HTTP or HTTPS location.");
+            throw Fail($"the certificate '{certificate.Subject}' names CRL distribution points, but none with an HTTP or HTTPS location " +
+                       "covers all revocation reasons.");
         }
 
-        return points;
+        return points.Select(point => point.Locations).ToList();
     }
 
     private async Task<Byte[]> RequestAsync(Byte[] query, CancellationToken cancellationToken)
@@ -266,21 +268,32 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 
     /// <summary>
     /// Requires the signing certificate to be reserved for timestamping (RFC 3161, section 2.3) and, when it carries a
-    /// key usage extension, to permit signatures (RFC 5280, section 4.2.1.3).
+    /// key usage extension, to permit signatures (RFC 5280, section 4.2.1.3). Both extensions are decoded on first
+    /// access, so an undecodable one fails the attempt here.
     /// </summary>
     private void ValidateSigner(X509Certificate2 signer)
     {
-        var purposes = signer.Extensions.OfType<X509EnhancedKeyUsageExtension>()
+        List<String?> purposes;
+        X509KeyUsageFlags? keyUsages;
+        try
+        {
+            purposes = signer.Extensions.OfType<X509EnhancedKeyUsageExtension>()
                              .SelectMany(extension => extension.EnhancedKeyUsages.Cast<Oid>())
                              .Select(purpose => purpose.Value)
                              .ToList();
+            keyUsages = signer.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault()?.KeyUsages;
+        }
+        catch (CryptographicException ex)
+        {
+            throw Fail("the signing certificate's usage extensions are malformed.", ex);
+        }
+
         if (purposes.Count == 0 || purposes.Any(purpose => purpose != TimeStampingPurposeOid))
         {
             throw Fail("the signing certificate's extended key usage must contain only id-kp-timeStamping.");
         }
 
-        var keyUsage = signer.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault();
-        if (keyUsage is not null && (keyUsage.KeyUsages & (X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation)) == 0)
+        if (keyUsages is { } usages && (usages & (X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation)) == 0)
         {
             throw Fail("the signing certificate's key usage permits neither digitalSignature nor nonRepudiation.");
         }

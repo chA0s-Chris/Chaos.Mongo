@@ -20,15 +20,15 @@ internal static class CrlDistributionPoints
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
     /// <summary>
-    /// Gets the HTTP and HTTPS locations of every distribution point that names at least one.
+    /// Gets every distribution point that names at least one HTTP or HTTPS location.
     /// </summary>
     /// <param name="certificate">The certificate.</param>
-    /// <returns>One list of alternative locations per distribution point; empty without the extension.</returns>
-    /// <exception cref="AsnContentException">Thrown when the extension is malformed.</exception>
-    public static IReadOnlyList<IReadOnlyList<Uri>> GetHttpUris(X509Certificate2 certificate)
+    /// <returns>The points with their alternative locations; empty without the extension.</returns>
+    /// <exception cref="AsnContentException">Thrown when the extension is malformed or present more than once.</exception>
+    public static IReadOnlyList<HttpDistributionPoint> GetHttpDistributionPoints(X509Certificate2 certificate)
     {
         ArgumentNullException.ThrowIfNull(certificate);
-        if (certificate.Extensions[ExtensionOid] is not { } extension)
+        if (FindExtension(certificate) is not { } extension)
         {
             return [];
         }
@@ -37,13 +37,13 @@ internal static class CrlDistributionPoints
         var points = reader.ReadSequence();
         reader.ThrowIfNotEmpty();
 
-        var result = new List<IReadOnlyList<Uri>>();
+        var result = new List<HttpDistributionPoint>();
         while (points.HasData)
         {
-            var uris = ReadPointUris(points.ReadSequence());
-            if (uris.Count > 0)
+            var point = ReadPoint(points.ReadSequence());
+            if (point.Locations.Count > 0)
             {
-                result.Add(uris);
+                result.Add(point);
             }
         }
 
@@ -55,10 +55,43 @@ internal static class CrlDistributionPoints
     /// </summary>
     /// <param name="certificate">The certificate.</param>
     /// <returns><c>true</c> when the certificate carries the extension.</returns>
+    /// <exception cref="AsnContentException">Thrown when the extension is present more than once.</exception>
     public static Boolean NamesDistributionPoints(X509Certificate2 certificate)
     {
         ArgumentNullException.ThrowIfNull(certificate);
-        return certificate.Extensions[ExtensionOid] is not null;
+        return FindExtension(certificate) is not null;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether <c>ReasonFlags</c> name every revocation reason, bits 1 to 8; bit 0 is unused
+    /// (RFC 5280, section 4.2.1.13).
+    /// </summary>
+    private static Boolean CoversAllReasons(Byte[] reasons)
+        => reasons.Length >= 2 && (reasons[0] & 0x7F) == 0x7F && (reasons[1] & 0x80) == 0x80;
+
+    /// <summary>
+    /// Finds the extension, which a certificate must not carry more than once (RFC 5280, section 4.2). The extension
+    /// indexer would silently pick one instance.
+    /// </summary>
+    private static X509Extension? FindExtension(X509Certificate2 certificate)
+    {
+        X509Extension? found = null;
+        foreach (var extension in certificate.Extensions)
+        {
+            if (extension.Oid?.Value != ExtensionOid)
+            {
+                continue;
+            }
+
+            if (found is not null)
+            {
+                throw new AsnContentException("A certificate must not carry the CRL distribution points extension more than once.");
+            }
+
+            found = extension;
+        }
+
+        return found;
     }
 
     private static IReadOnlyList<Uri> ReadFullNameUris(AsnReader fullName)
@@ -131,12 +164,14 @@ internal static class CrlDistributionPoints
 
     /// <summary>
     /// Reads one distribution point: an optional name [0], optional reasons [1] and an optional CRL issuer [2], in this
-    /// order and each at most once. A point must carry a name or a CRL issuer; only the name contributes locations.
+    /// order and each at most once. A point must carry a name or a CRL issuer; only the name contributes locations,
+    /// and a point without reasons covers all of them.
     /// </summary>
-    private static IReadOnlyList<Uri> ReadPointUris(AsnReader point)
+    private static HttpDistributionPoint ReadPoint(AsnReader point)
     {
         IReadOnlyList<Uri> uris = [];
         var named = false;
+        var coversAllReasons = true;
         if (point.HasData && point.PeekTag().HasSameClassAndValue(NameTag))
         {
             uris = ReadNameUris(point.ReadSequence(NameTag));
@@ -146,7 +181,7 @@ internal static class CrlDistributionPoints
         if (point.HasData && point.PeekTag().HasSameClassAndValue(ReasonsTag))
         {
             // ReasonFlags is an implicitly tagged BIT STRING; decoding it rejects a malformed value.
-            point.ReadBitString(out _, ReasonsTag);
+            coversAllReasons = CoversAllReasons(point.ReadBitString(out _, ReasonsTag));
         }
 
         if (point.HasData && point.PeekTag().HasSameClassAndValue(CrlIssuerTag))
@@ -161,7 +196,7 @@ internal static class CrlDistributionPoints
             throw new AsnContentException("A distribution point must name a distribution point or a CRL issuer.");
         }
 
-        return uris;
+        return new HttpDistributionPoint(uris, coversAllReasons);
     }
 
     /// <summary>

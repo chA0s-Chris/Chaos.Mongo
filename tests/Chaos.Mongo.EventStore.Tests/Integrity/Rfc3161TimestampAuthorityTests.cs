@@ -6,6 +6,7 @@ using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
+using System.Formats.Asn1;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
@@ -214,7 +215,7 @@ public class Rfc3161TimestampAuthorityTests
 
         var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
 
-        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("none has an HTTP or HTTPS location");
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("none with an HTTP or HTTPS location covers all revocation reasons");
     }
 
     [Test]
@@ -271,6 +272,19 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public async Task TimestampAsync_MalformedKeyUsage_Throws()
+    {
+        // A NULL instead of the key usage BIT STRING.
+        var authority = CreateTestAuthority(rawKeyUsage: [0x05, 0x00]).CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        var exception = (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which;
+        exception.Message.Should().Contain("usage extensions are malformed");
+        exception.InnerException.Should().BeAssignableTo<CryptographicException>();
+    }
+
+    [Test]
     public async Task TimestampAsync_NotSha256_ThrowsArgumentException()
     {
         var authority = CreateTestAuthority().CreateAuthority();
@@ -278,6 +292,28 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => authority.TimestampAsync(SHA512.HashData([1]), HashAlgorithmName.SHA512, CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>().WithParameterName("algorithm");
+    }
+
+    [Test]
+    public async Task TimestampAsync_OnlyReasonLimitedHttpDistributionPoint_Throws()
+    {
+        var authority = CreateTestAuthority(rawCrlDistributionPoints: EncodeReasonLimitedDistributionPoints(TestTimestampAuthority.CrlUri))
+            .CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("covers all revocation reasons");
+    }
+
+    [Test]
+    public async Task TimestampAsync_ReasonLimitedBesideFullHttpDistributionPoint_CapturesBothCrls()
+    {
+        var testAuthority = CreateTestAuthority(rawCrlDistributionPoints: EncodeReasonLimitedDistributionPoints(TestTimestampAuthority.CrlMirrorUri,
+                                                                                                                TestTimestampAuthority.CrlUri));
+
+        var token = await testAuthority.CreateAuthority().TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateRevocationLists.Should().HaveCount(2).And.AllSatisfy(crl => crl.Should().Equal(testAuthority.Crl));
     }
 
     [TestCase(TestTimestampAuthorityMode.Rejection)]
@@ -464,13 +500,50 @@ public class Rfc3161TimestampAuthorityTests
 
     private static Byte[] CreateDigest() => SHA256.HashData(Guid.NewGuid().ToByteArray());
 
+    /// <summary>
+    /// Encodes a distribution point at <paramref name="reasonLimitedLocation"/> limited to key compromise, followed by
+    /// one at <paramref name="fullLocation"/> for all reasons when given.
+    /// </summary>
+    private static Byte[] EncodeReasonLimitedDistributionPoints(Uri reasonLimitedLocation, Uri? fullLocation = null)
+    {
+        var uriTag = new Asn1Tag(TagClass.ContextSpecific, 6);
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence())
+            {
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                {
+                    writer.WriteCharacterString(UniversalTagNumber.IA5String, reasonLimitedLocation.AbsoluteUri, uriTag);
+                }
+
+                // keyCompromise is bit 1 of ReasonFlags.
+                writer.WriteBitString([0x40], 6, new Asn1Tag(TagClass.ContextSpecific, 1));
+            }
+
+            if (fullLocation is not null)
+            {
+                using (writer.PushSequence())
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+                {
+                    writer.WriteCharacterString(UniversalTagNumber.IA5String, fullLocation.AbsoluteUri, uriTag);
+                }
+            }
+        }
+
+        return writer.Encode();
+    }
+
     private TestTimestampAuthority CreateTestAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                                        Byte[]? rawCrlDistributionPoints = null,
                                                        Boolean timestampingUsage = true,
                                                        Boolean expiredSigner = false,
                                                        Boolean additionalPurpose = false,
                                                        X509KeyUsageFlags keyUsage = X509KeyUsageFlags.DigitalSignature,
-                                                       Boolean alternativeTsaName = false)
+                                                       Boolean alternativeTsaName = false,
+                                                       Byte[]? rawKeyUsage = null)
     {
         var testAuthority = new TestTimestampAuthority(crlLocations,
                                                        rawCrlDistributionPoints,
@@ -478,7 +551,8 @@ public class Rfc3161TimestampAuthorityTests
                                                        expiredSigner,
                                                        additionalPurpose,
                                                        keyUsage,
-                                                       alternativeTsaName);
+                                                       alternativeTsaName,
+                                                       rawKeyUsage);
         _testAuthorities.Add(testAuthority);
         return testAuthority;
     }
