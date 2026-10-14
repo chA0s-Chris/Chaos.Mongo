@@ -75,11 +75,11 @@ public class AnchorCandidateRegistrationTests
 
         var reduced = AnchorCandidateConsumer.Reduce(
         [
-            new AnchorCandidate("A", first, 1, [1]),
-            new AnchorCandidate("A", first, 3, [3]),
-            new AnchorCandidate("A", first, 2, [2]),
-            new AnchorCandidate("A", second, 1, [4]),
-            new AnchorCandidate("B", first, 5, [5])
+            new AnchorCandidate("A", first, 1, [1], DateTime.UnixEpoch),
+            new AnchorCandidate("A", first, 3, [3], DateTime.UnixEpoch),
+            new AnchorCandidate("A", first, 2, [2], DateTime.UnixEpoch),
+            new AnchorCandidate("A", second, 1, [4], DateTime.UnixEpoch),
+            new AnchorCandidate("B", first, 5, [5], DateTime.UnixEpoch)
         ]);
 
         reduced.Select(candidate => (candidate.AggregateType, candidate.AggregateId, candidate.Version))

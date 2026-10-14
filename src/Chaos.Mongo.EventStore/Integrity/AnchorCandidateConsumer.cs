@@ -30,13 +30,15 @@ internal sealed class AnchorCandidateConsumer
                      .ToList();
 
     /// <summary>
-    /// Reads one batch, acknowledges it in a transaction and returns its reduced candidates.
+    /// Reads one batch, acknowledges it in a transaction and returns its reduced candidates. Reads of an earlier
+    /// attempt that were not acknowledged are discarded first, so their candidates are read again.
     /// </summary>
     /// <param name="maxCandidates">The maximum number of candidates to read.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The candidates of the batch, one per stream, and whether more are available right away.</returns>
     public async Task<ConsumedAnchorCandidates> ConsumeBatchAsync(Int32 maxCandidates, CancellationToken cancellationToken = default)
     {
+        _source.DiscardUnacknowledgedReads();
         var batch = await _source.ReadBatchAsync(maxCandidates, cancellationToken);
         await _mongoHelper.ExecuteInTransaction((_, session, ct) => _source.AcknowledgeAsync(session, batch, ct),
                                                 cancellationToken: cancellationToken);

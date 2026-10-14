@@ -19,6 +19,18 @@ public class AnchorCandidateSourceTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
 
+    [Test]
+    public async Task AcknowledgeAsync_EarlierBatch_ThrowsArgumentException()
+    {
+        var context = await CreateInitializedContextAsync();
+        var earlier = await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
+        await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
+
+        var act = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, earlier, ct));
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
 
     [Test]
     public async Task AcknowledgeAsync_TransactionAborts_ReturnsCandidatesAgain()
@@ -158,6 +170,23 @@ public class AnchorCandidateSourceTests
                   .Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindShipmentEventAsync(shipment, 2)).Hash);
     }
 
+    [Test]
+    public async Task DiscardUnacknowledgedReads_AfterConsecutiveReads_NextReadsDeliverThemAgain()
+    {
+        var context = await CreateInitializedContextAsync();
+        var first = await context.AppendStreamAsync(1);
+        var second = await context.AppendStreamAsync(1);
+        Func<IReadOnlyCollection<AnchorCandidate>, Boolean> hasBoth = read => read.Any(c => c.AggregateId == first) && read.Any(c => c.AggregateId == second);
+        var (_, discarded) = await ReadConsecutivelyUntilAsync(context.CandidateSource, 1, hasBoth);
+
+        context.CandidateSource.DiscardUnacknowledgedReads();
+        var (again, _) = await ReadConsecutivelyUntilAsync(context.CandidateSource, 1, hasBoth);
+
+        again.Should().Contain(candidate => candidate.AggregateId == first).And.Contain(candidate => candidate.AggregateId == second);
+        var acknowledgeDiscarded = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, discarded, ct));
+        await acknowledgeDiscarded.Should().ThrowAsync<ArgumentException>();
+    }
+
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
@@ -181,16 +210,61 @@ public class AnchorCandidateSourceTests
     }
 
     [Test]
-    public async Task ReadBatchAsync_WithoutAcknowledging_ReturnsSameCandidatesAgain()
+    public async Task ReadBatchAsync_ConsecutiveReads_ContinueAndLastAcknowledgementCoversAll()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var context = await CreateInitializedContextAsync(databaseName);
+        var first = await context.AppendStreamAsync(2);
+        var second = await context.AppendStreamAsync(1);
+
+        var (candidates, last) = await ReadConsecutivelyUntilAsync(context.CandidateSource,
+                                                                   1,
+                                                                   read => read.Count(c => (c.AggregateId == first) || (c.AggregateId == second)) == 3);
+        await context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, last, ct));
+
+        await context.DisposeAsync();
+        _contexts.Remove(context);
+        var restarted = await CreateContextAsync(databaseName);
+        var afterRestart = await restarted.CreateConsumer().DrainAsync(BatchSize);
+
+        candidates.Select(candidate => (candidate.AggregateId, candidate.Version))
+                  .Should().BeEquivalentTo([(first, 1L), (first, 2L), (second, 1L)]);
+        afterRestart.Should().NotContain(candidate => (candidate.AggregateId == first) || (candidate.AggregateId == second));
+    }
+
+    [Test]
+    public async Task ReadBatchAsync_RestartAfterConsecutiveUnacknowledgedReads_DeliversThemAgain()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var context = await CreateInitializedContextAsync(databaseName);
+        var first = await context.AppendStreamAsync(1);
+        var second = await context.AppendStreamAsync(1);
+        await ReadConsecutivelyUntilAsync(context.CandidateSource, 1, read => read.Any(c => c.AggregateId == first) && read.Any(c => c.AggregateId == second));
+
+        await context.DisposeAsync();
+        _contexts.Remove(context);
+        var restarted = await CreateContextAsync(databaseName);
+        var candidates = await ConsumeUntilAsync(restarted.CreateConsumer(),
+                                                 consumed => consumed.Any(c => c.AggregateId == first) && consumed.Any(c => c.AggregateId == second));
+
+        candidates.Should().Contain(candidate => candidate.AggregateId == first).And.Contain(candidate => candidate.AggregateId == second);
+    }
+
+    [Test]
+    public async Task ReadBatchAsync_StreamChange_CarriesClusterTimeAsCommitTime()
     {
         var context = await CreateInitializedContextAsync();
-        await context.AppendStreamAsync(2);
-        await context.AppendStreamAsync(1);
-        var first = await ReadUntilAsync(context.CandidateSource, batch => batch.Candidates.Count >= 2);
+        var before = DateTime.UtcNow.AddSeconds(-5);
+        var aggregateId = await context.AppendStreamAsync(1);
 
-        var second = await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
+        // Reading well after the commit tells the commit time apart from the time of the read.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        var readStart = DateTime.UtcNow;
+        var batch = await ReadUntilAsync(context.CandidateSource, read => read.Candidates.Any(c => c.AggregateId == aggregateId));
 
-        second.Candidates.Should().BeEquivalentTo(first.Candidates);
+        var committed = batch.Candidates.Single(candidate => candidate.AggregateId == aggregateId).CommittedUtc;
+        committed.Kind.Should().Be(DateTimeKind.Utc);
+        committed.Should().BeOnOrAfter(before).And.BeBefore(readStart.AddSeconds(-1));
     }
 
     [Test]
@@ -236,6 +310,34 @@ public class AnchorCandidateSourceTests
         }
 
         return consumed;
+    }
+
+    private static async Task<(List<AnchorCandidate> Candidates, AnchorCandidateBatch Last)> ReadConsecutivelyUntilAsync(
+        IAnchorCandidateSource source,
+        Int32 batchSize,
+        Func<IReadOnlyCollection<AnchorCandidate>, Boolean> isComplete)
+    {
+        var candidates = new List<AnchorCandidate>();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            var batch = await source.ReadBatchAsync(batchSize, CancellationToken.None);
+            candidates.AddRange(batch.Candidates);
+            if (isComplete(candidates))
+            {
+                return (candidates, batch);
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail("The expected candidates were not read within the timeout.");
+            }
+
+            if (batch.Candidates.Count == 0)
+            {
+                await Task.Delay(20);
+            }
+        }
     }
 
     private static async Task<AnchorCandidateBatch> ReadUntilAsync(IAnchorCandidateSource source, Func<AnchorCandidateBatch, Boolean> isComplete)

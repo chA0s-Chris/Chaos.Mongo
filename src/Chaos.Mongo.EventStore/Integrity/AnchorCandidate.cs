@@ -9,4 +9,8 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="AggregateId">The aggregate identifier.</param>
 /// <param name="Version">The sealed version.</param>
 /// <param name="Hash">The hash of <paramref name="Version"/>.</param>
-internal sealed record AnchorCandidate(String AggregateType, Guid AggregateId, Int64 Version, Byte[] Hash);
+/// <param name="CommittedUtc">
+/// The commit time of the change: its cluster time, or the cluster time at the start of the recovery scan that found
+/// the head. Cluster times have a resolution of one second.
+/// </param>
+internal sealed record AnchorCandidate(String AggregateType, Guid AggregateId, Int64 Version, Byte[] Hash, DateTime CommittedUtc);
