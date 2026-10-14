@@ -17,12 +17,14 @@ using System.Security.Cryptography.X509Certificates;
 /// for timestamping and permit signatures, and a <c>tsa</c> name in the token must correspond to one of its subject
 /// names. A token is returned only together with the CRLs of every distribution point its chain names; a CRL that
 /// cannot be downloaded fails the attempt, and the attempt's HTTP work as a whole is bounded by
-/// <see cref="Rfc3161TimestampAuthorityOptions.AttemptTimeout"/>.
+/// <see cref="Rfc3161TimestampAuthorityOptions.AttemptTimeout"/> and every response body by
+/// <see cref="Rfc3161TimestampAuthorityOptions.MaximumResponseSize"/>.
 /// </remarks>
 internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 {
     private const Int32 DigestLength = 32;
     private const Int32 NonceLength = 16;
+    private const Int32 ReadChunkSize = 81920;
     private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
     private const String TimestampQueryMediaType = "application/timestamp-query";
     private readonly HttpClient _httpClient;
@@ -39,6 +41,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.MaximumClockSkew, TimeSpan.Zero, nameof(options));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.RevocationCheckTimeout, TimeSpan.Zero, nameof(options));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.AttemptTimeout, TimeSpan.Zero, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaximumResponseSize, nameof(options));
         if (!options.Uri.IsAbsoluteUri || ((options.Uri.Scheme != Uri.UriSchemeHttp) && (options.Uri.Scheme != Uri.UriSchemeHttps)))
         {
             throw new ArgumentException("The timestamp authority URI must be an absolute HTTP or HTTPS URI.", nameof(options));
@@ -53,8 +56,12 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     /// <inheritdoc/>
     public String Name => _options.Name;
 
+    /// <summary>
+    /// Gets a value indicating whether an exception is a failed or timed-out HTTP exchange. Bodies are read after the
+    /// headers arrive, so a connection lost while reading one surfaces as an <see cref="IOException"/>.
+    /// </summary>
     private static Boolean IsTransportFailure(Exception exception, CancellationToken cancellationToken)
-        => exception is HttpRequestException || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested);
+        => exception is HttpRequestException or IOException || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested);
 
     private static Byte[] ReadToken(Byte[] response)
     {
@@ -116,14 +123,20 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         {
             try
             {
-                using var response = await _httpClient.GetAsync(location, cancellationToken);
+                using var response = await _httpClient.GetAsync(location, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 if (!response.IsSuccessStatusCode)
                 {
                     lastError = new HttpRequestException($"HTTP status {(Int32)response.StatusCode}.", null, response.StatusCode);
                     continue;
                 }
 
-                var crl = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                var crl = await ReadContentAsync(response.Content, cancellationToken);
+                if (crl is null)
+                {
+                    lastError = new InvalidDataException($"The CRL at {location} exceeds the maximum response size of {_options.MaximumResponseSize} bytes.");
+                    continue;
+                }
+
                 if (crl.Length > 0)
                 {
                     return crl;
@@ -160,19 +173,51 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         return points.Select(point => point.Locations).ToList();
     }
 
+    /// <summary>
+    /// Reads a response body of at most <see cref="Rfc3161TimestampAuthorityOptions.MaximumResponseSize"/> bytes, so
+    /// the bound holds whatever buffer limit the HTTP client has.
+    /// </summary>
+    /// <returns>The body, or <c>null</c> when it is larger.</returns>
+    private async Task<Byte[]?> ReadContentAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        var limit = _options.MaximumResponseSize;
+        if (content.Headers.ContentLength > limit)
+        {
+            return null;
+        }
+
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+        using var body = new MemoryStream();
+        var chunk = new Byte[ReadChunkSize];
+        Int32 read;
+        while ((read = await stream.ReadAsync(chunk, cancellationToken)) > 0)
+        {
+            if (body.Length + read > limit)
+            {
+                return null;
+            }
+
+            body.Write(chunk, 0, read);
+        }
+
+        return body.ToArray();
+    }
+
     private async Task<Byte[]> RequestAsync(Byte[] query, CancellationToken cancellationToken)
     {
-        using var content = new ByteArrayContent(query);
-        content.Headers.ContentType = new MediaTypeHeaderValue(TimestampQueryMediaType);
+        using var request = new HttpRequestMessage(HttpMethod.Post, _options.Uri);
+        request.Content = new ByteArrayContent(query);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(TimestampQueryMediaType);
         try
         {
-            using var response = await _httpClient.PostAsync(_options.Uri, content, cancellationToken);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 throw Fail($"the timestamp request failed with HTTP status {(Int32)response.StatusCode}.");
             }
 
-            return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            return await ReadContentAsync(response.Content, cancellationToken) ??
+                   throw Fail($"the timestamp response exceeds the maximum response size of {_options.MaximumResponseSize} bytes.");
         }
         catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
         {

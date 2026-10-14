@@ -14,8 +14,7 @@ internal sealed class Rfc3161TimestampAuthorityOptions
         PooledConnectionLifetime = TimeSpan.FromMinutes(5)
     })
     {
-        Timeout = TimeSpan.FromSeconds(30),
-        MaxResponseContentBufferSize = 16 * 1024 * 1024
+        Timeout = TimeSpan.FromSeconds(30)
     };
 
     /// <summary>
@@ -27,8 +26,9 @@ internal sealed class Rfc3161TimestampAuthorityOptions
 
     /// <summary>
     /// Gets or sets the factory for the HTTP client used for timestamp requests and CRL downloads. Defaults to a
-    /// client shared by all authorities without a factory, which times out after 30 seconds and reads at most 16 MB
-    /// per response, so a hung authority or CRL host does not stall an anchoring run for long.
+    /// client shared by all authorities without a factory, which times out after 30 seconds when a host does not
+    /// answer, so a hung authority or CRL host does not stall an anchoring run for long. Response bodies are bounded
+    /// by <see cref="MaximumResponseSize"/> and the attempt by <see cref="AttemptTimeout"/>, whatever client is used.
     /// </summary>
     public Func<IServiceProvider, HttpClient> HttpClientFactory { get; set; } = _ => SharedHttpClient;
 
@@ -37,6 +37,13 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     /// rejected, because its chain is validated at the asserted time. Defaults to 5 minutes.
     /// </summary>
     public TimeSpan MaximumClockSkew { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Gets or sets the largest timestamp response or CRL, in bytes, that an attempt reads. The authority enforces it
+    /// itself, because a client from <see cref="HttpClientFactory"/> may buffer up to 2 GB per response. A CRL above it
+    /// counts as unavailable at that location. Defaults to 16 MB; raise it for a CA that publishes larger CRLs.
+    /// </summary>
+    public Int32 MaximumResponseSize { get; set; } = 16 * 1024 * 1024;
 
     /// <summary>
     /// Gets or sets the name that identifies the authority in stored anchors.

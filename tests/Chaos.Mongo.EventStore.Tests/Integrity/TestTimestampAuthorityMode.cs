@@ -24,5 +24,9 @@ public enum TestTimestampAuthorityMode
     CrlEmpty,
     CrlHangs,
     WrongTsaName,
-    TrailingTstInfoData
+    TrailingTstInfoData,
+    CrlOversized,
+    CrlOversizedWithoutLength,
+    CrlConnectionLost,
+    ResponseOversized
 }

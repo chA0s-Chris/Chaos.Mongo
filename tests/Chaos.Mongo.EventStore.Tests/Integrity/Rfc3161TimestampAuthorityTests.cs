@@ -125,6 +125,22 @@ public class Rfc3161TimestampAuthorityTests
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Constructor_NonPositiveMaximumResponseSize_ThrowsArgumentOutOfRangeException(Int32 maximumResponseSize)
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "no-response-size",
+            Uri = TestTimestampAuthority.TimestampUri,
+            MaximumResponseSize = maximumResponseSize
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
     [Test]
     public void Constructor_NonPositiveRevocationCheckTimeout_ThrowsArgumentOutOfRangeException()
     {
@@ -173,6 +189,30 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, new CancellationToken(true));
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [TestCase(TestTimestampAuthorityMode.CrlOversized)]
+    [TestCase(TestTimestampAuthorityMode.CrlOversizedWithoutLength)]
+    public async Task TimestampAsync_CrlAboveMaximumResponseSize_Throws(TestTimestampAuthorityMode mode)
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = mode;
+        var authority = testAuthority.CreateAuthority(configure: options => options.MaximumResponseSize = TestTimestampAuthority.OversizedLength - 1);
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        var exception = (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which;
+        exception.Message.Should().Contain("could not be downloaded");
+        exception.InnerException.Should().BeOfType<InvalidDataException>().Which.Message.Should().Contain("maximum response size");
+    }
+
+    [Test]
+    public async Task TimestampAsync_CrlConnectionLostWhileReading_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.CrlConnectionLost);
+
+        exception.Message.Should().Contain("could not be downloaded");
+        exception.InnerException.Should().BeAssignableTo<IOException>();
     }
 
     [Test]
@@ -395,6 +435,18 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
 
         (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("not trusted");
+    }
+
+    [Test]
+    public async Task TimestampAsync_TimestampResponseAboveMaximumResponseSize_Throws()
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.ResponseOversized;
+        var authority = testAuthority.CreateAuthority(configure: options => options.MaximumResponseSize = TestTimestampAuthority.OversizedLength);
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("timestamp response exceeds the maximum response size");
     }
 
     [TestCase(TestTimestampAuthorityMode.Backdated)]

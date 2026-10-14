@@ -19,6 +19,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 {
     public static readonly Uri CrlMirrorUri = new("http://tsa.test/mirror/ca.crl");
     public static readonly Uri CrlUri = new("http://tsa.test/ca.crl");
+
+    /// <summary>
+    /// The size of the bodies the authority sends in its oversized modes.
+    /// </summary>
+    public const Int32 OversizedLength = 64 * 1024;
+
     public static readonly Uri TimestampUri = new("http://tsa.test/timestamp");
     private const String CodeSigningPurposeOid = "1.3.6.1.5.5.7.3.3";
     private const String CrlDistributionPointsOid = "2.5.29.31";
@@ -347,6 +353,21 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
 
+        switch (Mode)
+        {
+            case TestTimestampAuthorityMode.CrlOversized:
+                return Respond(HttpStatusCode.OK, new Byte[OversizedLength]);
+            case TestTimestampAuthorityMode.CrlOversizedWithoutLength:
+                var response = Respond(HttpStatusCode.OK, new Byte[OversizedLength]);
+                response.Content.Headers.ContentLength = null;
+                return response;
+            case TestTimestampAuthorityMode.CrlConnectionLost:
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ConnectionLostContent()
+                };
+        }
+
         var unavailable = Mode == TestTimestampAuthorityMode.CrlUnavailable ||
                           ((Mode == TestTimestampAuthorityMode.CrlPrimaryUnavailable) && (uri == CrlUri));
         if (!unavailable)
@@ -375,6 +396,52 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
 
         var query = await request.Content.ReadAsByteArrayAsync(cancellationToken);
-        return Respond(HttpStatusCode.OK, CreateResponse(query));
+        var response = CreateResponse(query);
+        return Respond(HttpStatusCode.OK, Mode == TestTimestampAuthorityMode.ResponseOversized ? [.. response, .. new Byte[OversizedLength]] : response);
+    }
+
+    /// <summary>
+    /// A body whose connection is lost after the headers arrived. Like a socket handler's content, it hands out its
+    /// read stream directly, so the loss surfaces from reading that stream.
+    /// </summary>
+    private sealed class ConnectionLostContent : HttpContent
+    {
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(new ConnectionLostStream());
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => throw new NotSupportedException("The body is only read as a stream.");
+
+        protected override Boolean TryComputeLength(out Int64 length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class ConnectionLostStream : Stream
+    {
+        public override Boolean CanRead => true;
+
+        public override Boolean CanSeek => false;
+
+        public override Boolean CanWrite => false;
+
+        public override Int64 Length => throw new NotSupportedException();
+
+        public override Int64 Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+
+        public override Int32 Read(Byte[] buffer, Int32 offset, Int32 count) => throw new IOException("The connection to the CRL host was lost.");
+
+        public override Int64 Seek(Int64 offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(Int64 value) => throw new NotSupportedException();
+
+        public override void Write(Byte[] buffer, Int32 offset, Int32 count) => throw new NotSupportedException();
     }
 }
