@@ -58,7 +58,8 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                                              TimeProvider? timeProvider = null,
                                                              Boolean anchorCandidates = false,
                                                              String? applicationName = null,
-                                                             Action<MongoBuilder>? configureMongo = null)
+                                                             Action<MongoBuilder>? configureMongo = null,
+                                                             Boolean personalData = false)
     {
         var services = new ServiceCollection();
         if (timeProvider is not null)
@@ -77,8 +78,18 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                    })
                                    .WithEventStore<LedgerAggregate>(es =>
                                    {
-                                       es.WithEvent<LedgerEntryRecordedEvent>("LedgerEntryRecorded")
-                                         .WithEvent<LedgerAuditedEvent>("LedgerAudited")
+                                       if (personalData)
+                                       {
+                                           es.WithEvent<LedgerEntryRecordedEvent>(
+                                               "LedgerEntryRecorded",
+                                               e => e.WithPersonalData(x => x.Memo).WithPersonalData(x => x.Counterparty.Name));
+                                       }
+                                       else
+                                       {
+                                           es.WithEvent<LedgerEntryRecordedEvent>("LedgerEntryRecorded");
+                                       }
+
+                                       es.WithEvent<LedgerAuditedEvent>("LedgerAudited")
                                          .WithCollectionPrefix("Ledgers");
 
                                        if (integrityProtection)
@@ -127,7 +138,8 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
     public static LedgerEntryRecordedEvent CreateEntry(Guid aggregateId,
                                                        Int64 version,
                                                        Guid? id = null,
-                                                       DateTime createdUtc = default)
+                                                       DateTime createdUtc = default,
+                                                       String? memo = "monthly fee")
         => new()
         {
             Id = id ?? Guid.NewGuid(),
@@ -136,6 +148,12 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
             CreatedUtc = createdUtc,
             Amount = 12.34m + version,
             Counter = 42,
+            Counterparty = new LedgerCounterparty
+            {
+                Name = "Alice Example",
+                Account = "DE00 1234 5678"
+            },
+            Memo = memo,
             Reference = FixedReference,
             Details = new LedgerEntryDetails
             {
@@ -199,6 +217,18 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
         => Events.UpdateOneAsync(
             EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),
             Builders<BsonDocument>.Update.Set("Version", newVersion));
+
+    /// <summary>
+    /// Removes the salt of one recorded personal data path, as an erasure does.
+    /// </summary>
+    public Task UnsetSaltAsync(Guid aggregateId, Int64 version, String path)
+        => Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),
+            Builders<BsonDocument>.Update.Unset($"{EventIntegrityChain.ElementName}.PersonalData.$[entry].Salt"),
+            new UpdateOptions
+            {
+                ArrayFilters = [new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument("entry.Path", path))]
+            });
 
     public ValueTask DisposeAsync() => ServiceProvider.DisposeAsync();
 }

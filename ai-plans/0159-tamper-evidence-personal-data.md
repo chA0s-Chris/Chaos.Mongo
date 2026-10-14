@@ -17,23 +17,23 @@ Everything stays internal until #160 makes the feature public.
 
 ### Layer 1: Commitments
 
-- [ ] Personal data is marked through a new internal overload `WithEvent<TEvent>(discriminator, e => e.WithPersonalData(x => …))`. Nested member chains are supported, and nothing new is publicly reachable; the existing visibility test covers the new types and members.
-- [ ] Registration fails with a clear error when a marked member:
+- [x] Personal data is marked through a new internal overload `WithEvent<TEvent>(discriminator, e => e.WithPersonalData(x => …))`. Nested member chains are supported, and nothing new is publicly reachable; the existing visibility test covers the new types and members.
+- [x] Registration fails with a clear error when a marked member:
   - is unmapped
   - is non-nullable
   - traverses an array, or a segment whose serializer cannot resolve member element names
   - is not a plain member-access chain
   - overlaps another marked path of the same event type, that is, one path is a prefix of the other
-- [ ] Marked element paths are resolved through the class maps, so renamed elements are respected.
-- [ ] Append sealing and retroactive sealing both record `{ Path, Salt, Commitment }` in `_integrity` for every marked path present in the stored document. `Salt` is 32 random bytes.
-- [ ] Events without recorded paths keep the existing `_integrity` format.
-- [ ] The chain hash covers the canonical form, in which the value of every recorded path is replaced in place by its commitment.
-- [ ] Both append paths persist byte-identical documents for events without recorded paths. For events with recorded paths, the documents are identical outside `_integrity`, and both verify.
-- [ ] Stream verification reports a failure at the first version whose marked value no longer matches its commitment while its salt is present.
-- [ ] A recorded path without a salt verifies only when its value is `null`; otherwise stream verification reports a failure.
-- [ ] Stream verification reports a recorded path that does not resolve in the stored document as malformed integrity data.
-- [ ] Verification and canonicalization use only the paths recorded in `_integrity`. Changing or removing marks does not break verification of previously sealed events.
-- [ ] Automated tests cover the behavior above.
+- [x] Marked element paths are resolved through the class maps, so renamed elements are respected.
+- [x] Append sealing and retroactive sealing both record `{ Path, Salt, Commitment }` in `_integrity` for every marked path present in the stored document. `Salt` is 32 random bytes.
+- [x] Events without recorded paths keep the existing `_integrity` format.
+- [x] The chain hash covers the canonical form, in which the value of every recorded path is replaced in place by its commitment.
+- [x] Both append paths persist byte-identical documents for events without recorded paths. For events with recorded paths, the documents are identical outside `_integrity`, and both verify.
+- [x] Stream verification reports a failure at the first version whose marked value no longer matches its commitment while its salt is present.
+- [x] A recorded path without a salt verifies only when its value is `null`; otherwise stream verification reports a failure.
+- [x] Stream verification reports a recorded path that does not resolve in the stored document as malformed integrity data.
+- [x] Verification and canonicalization use only the paths recorded in `_integrity`. Changing or removing marks does not break verification of previously sealed events.
+- [x] Automated tests cover the behavior above.
 
 ### Layer 2: Erasure
 

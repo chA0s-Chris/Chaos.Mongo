@@ -131,12 +131,45 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             return StreamVerificationFailure.PreviousHashMismatch;
         }
 
-        var canonicalDocument = RawBsonElements.RemoveTopLevelElement(document, EventIntegrityChain.ElementName);
-        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, expectedPreviousHash);
+        var storedDocument = RawBsonElements.RemoveTopLevelElement(document, EventIntegrityChain.ElementName);
+        var canonicalDocument = storedDocument;
+        StreamVerificationFailure? personalDataFailure = null;
 
+        // Only the recorded paths take part, so changing or removing marks later does not affect sealed events.
+        if (integrity.PersonalData is { } personalData)
+        {
+            if (!PersonalDataCommitments.IsWellFormed(personalData))
+            {
+                return StreamVerificationFailure.MalformedIntegrity;
+            }
+
+            foreach (var commitment in personalData)
+            {
+                switch (PersonalDataCommitments.Verify(storedDocument, commitment))
+                {
+                    case PersonalDataVerification.Unresolved:
+                        return StreamVerificationFailure.MalformedIntegrity;
+                    case PersonalDataVerification.Mismatch:
+                        personalDataFailure ??= StreamVerificationFailure.PersonalDataMismatch;
+                        break;
+                    case PersonalDataVerification.NotErased:
+                        personalDataFailure ??= StreamVerificationFailure.ErasedPersonalDataPresent;
+                        break;
+                }
+            }
+
+            canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, personalData);
+        }
+
+        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, expectedPreviousHash);
         if (!recomputedHash.AsSpan().SequenceEqual(integrity.Hash))
         {
             return StreamVerificationFailure.HashMismatch;
+        }
+
+        if (personalDataFailure is { } failure)
+        {
+            return failure;
         }
 
         hash = integrity.Hash;

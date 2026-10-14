@@ -35,5 +35,15 @@ internal enum StreamVerificationFailure
     /// <summary>
     /// The hash recomputed from the stored event does not match its stored hash.
     /// </summary>
-    HashMismatch
+    HashMismatch,
+
+    /// <summary>
+    /// A personal data value whose salt is present does not match its commitment.
+    /// </summary>
+    PersonalDataMismatch,
+
+    /// <summary>
+    /// A personal data value whose salt is absent is not <c>null</c>, so the value was kept while its salt was removed.
+    /// </summary>
+    ErasedPersonalDataPresent
 }

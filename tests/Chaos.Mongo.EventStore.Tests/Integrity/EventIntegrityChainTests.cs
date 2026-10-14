@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integrity;
 
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using NUnit.Framework;
 
@@ -51,6 +52,10 @@ public class EventIntegrityChainTests
         first.Should().NotEqual(second);
     }
 
+    [OneTimeSetUp]
+    public void RegisterClassMaps()
+        => new MongoBuilder(new ServiceCollection()).WithEventStore<ChainFormatAggregate>(es => es.WithEvent<ChainFormatEvent>());
+
     [Test]
     public void Seal_ReturnsCurrentFormatChainedFromPreviousHash()
     {
@@ -64,6 +69,60 @@ public class EventIntegrityChainTests
         integrity.PreviousHash.Should().Equal(previousHash);
         integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash));
         integrity.SealMode.Should().Be(IntegritySealMode.Retroactive);
+    }
+
+    [Test]
+    public void Seal_UnresolvedPersonalDataPaths_RecordsNoPersonalData()
+    {
+        var document = new BsonDocument("Name", "Alice").ToBson();
+        var previousHash = EventIntegrityChain.ComputeGenesis("Ledger", Guid.NewGuid());
+
+        var integrity = EventIntegrityChain.Seal(document, ["Missing"], previousHash, IntegritySealMode.Append);
+
+        integrity.PersonalData.Should().BeNull();
+        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash));
+        integrity.ToBsonDocument().Names.Should().BeEquivalentTo("FormatVersion", "Algorithm", "PreviousHash", "Hash", "SealMode");
+    }
+
+    [Test]
+    public void Seal_WithPersonalDataPaths_RecordsCommitmentsAndHashesCanonicalForm()
+    {
+        var document = new BsonDocument
+        {
+            { "Name", "Alice" },
+            { "Address", new BsonDocument("City", "Berlin") }
+        }.ToBson();
+        var previousHash = EventIntegrityChain.ComputeGenesis("Ledger", Guid.NewGuid());
+
+        var integrity = EventIntegrityChain.Seal(document, ["Name", "Address.City", "Missing"], previousHash, IntegritySealMode.Retroactive);
+
+        integrity.PersonalData.Should().HaveCount(2);
+        integrity.PersonalData!.Select(commitment => commitment.Path).Should().Equal("Name", "Address.City");
+        integrity.SealMode.Should().Be(IntegritySealMode.Retroactive);
+        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(PersonalDataCommitments.Canonicalize(document, integrity.PersonalData), previousHash));
+        integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(document, previousHash));
+    }
+
+    [Test]
+    public void TryRead_ErasedCommitment_ReadsEntryWithoutSalt()
+    {
+        var document = EventIntegrityChain.Seal([1, 2, 3], new Byte[32], IntegritySealMode.Append).ToBsonDocument();
+        document["PersonalData"] = new BsonArray
+        {
+            new BsonDocument
+            {
+                { "Path", "Name" },
+                { "Commitment", new BsonBinaryData(new Byte[32]) }
+            }
+        };
+
+        var result = EventIntegrityChain.TryRead(document, out var integrity);
+
+        result.Should().BeTrue();
+        integrity!.PersonalData.Should().ContainSingle();
+        integrity.PersonalData![0].Path.Should().Be("Name");
+        integrity.PersonalData[0].Salt.Should().BeNull();
+        integrity.PersonalData[0].Commitment.Should().Equal(new Byte[32]);
     }
 
     [Test]
@@ -100,4 +159,11 @@ public class EventIntegrityChainTests
         result.Should().BeTrue();
         integrity.Should().BeEquivalentTo(sealedIntegrity);
     }
+}
+
+public sealed class ChainFormatAggregate : Aggregate;
+
+public sealed class ChainFormatEvent : Event<ChainFormatAggregate>
+{
+    public override void Execute(ChainFormatAggregate aggregate) { }
 }

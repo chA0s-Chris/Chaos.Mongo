@@ -19,6 +19,17 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     public static String AggregateId => ElementNameOf(nameof(Event<TAggregate>.AggregateId));
 
     /// <summary>
+    /// Gets the element name of the discriminator. It is resolved through the event serializer rather than
+    /// <see cref="BsonSerializer.LookupDiscriminatorConvention"/>, which lets the class map register the
+    /// hierarchical convention of its root class first; looking the convention up directly before the first
+    /// event is serialized would cache the scalar convention and change how every event is stored.
+    /// </summary>
+    public static String Discriminator
+        => BsonSerializer.LookupSerializer<Event<TAggregate>>() is IHasDiscriminatorConvention { DiscriminatorConvention: { } convention }
+            ? convention.ElementName
+            : BsonSerializer.LookupDiscriminatorConvention(typeof(Event<TAggregate>)).ElementName;
+
+    /// <summary>
     /// Gets the element name of <see cref="Event{TAggregate}.Revision"/>.
     /// </summary>
     public static String Revision => ElementNameOf(nameof(Event<TAggregate>.Revision));
@@ -52,6 +63,33 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
                 { AggregateId, new BsonBinaryData(aggregateId, GuidRepresentation.Standard) },
                 { Version, version }
             });
+
+    /// <summary>
+    /// Resolves the event type stored with a discriminator through the driver's discriminator lookup. A
+    /// hierarchical discriminator resolves to its concrete type, its last element.
+    /// </summary>
+    /// <param name="discriminator">The stored discriminator value.</param>
+    /// <returns>The event type, or <c>null</c> when the discriminator is unknown.</returns>
+    public static Type? ResolveEventType(BsonValue discriminator)
+    {
+        ArgumentNullException.ThrowIfNull(discriminator);
+
+        var concreteDiscriminator = discriminator is BsonArray hierarchical ? hierarchical.LastOrDefault() : discriminator;
+        if (concreteDiscriminator is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var eventType = BsonSerializer.LookupActualType(typeof(Event<TAggregate>), concreteDiscriminator);
+            return typeof(Event<TAggregate>).IsAssignableFrom(eventType) ? eventType : null;
+        }
+        catch (BsonSerializationException)
+        {
+            return null;
+        }
+    }
 
     private static String ElementNameOf(String memberName)
         => BsonClassMap.LookupClassMap(typeof(Event<TAggregate>)).GetMemberMap(memberName).ElementName;

@@ -12,7 +12,9 @@ public class LedgerEntryRecordedEvent : Event<LedgerAggregate>
 {
     public Decimal Amount { get; set; }
     public Int64 Counter { get; set; }
+    public LedgerCounterparty Counterparty { get; set; } = new();
     public LedgerEntryDetails Details { get; set; } = new();
+    public String? Memo { get; set; }
     public Guid Reference { get; set; }
 
     public override void Execute(LedgerAggregate aggregate)
@@ -25,6 +27,12 @@ public class LedgerEntryRecordedEvent : Event<LedgerAggregate>
 public class LedgerAuditedEvent : ObservationalEvent<LedgerAggregate>
 {
     public String Auditor { get; set; } = String.Empty;
+}
+
+public class LedgerCounterparty
+{
+    public String? Account { get; set; }
+    public String? Name { get; set; }
 }
 
 public class LedgerEntryDetails

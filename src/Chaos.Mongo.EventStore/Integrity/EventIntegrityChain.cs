@@ -66,7 +66,7 @@ internal static class EventIntegrityChain
     }
 
     /// <summary>
-    /// Creates the integrity data that seals an event into its stream.
+    /// Creates the integrity data that seals an event without personal data into its stream.
     /// </summary>
     /// <param name="canonicalDocument">The event's BSON without the <c>_integrity</c> element.</param>
     /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
@@ -81,6 +81,28 @@ internal static class EventIntegrityChain
             PreviousHash = previousHash,
             SealMode = sealMode
         };
+
+    /// <summary>
+    /// Creates the integrity data that seals an event into its stream, committing to the values of the given
+    /// personal data paths. The hash covers the canonical form, in which every recorded value is replaced by its
+    /// commitment. Paths that do not resolve in the document are not recorded.
+    /// </summary>
+    /// <param name="document">The event's BSON without the <c>_integrity</c> element.</param>
+    /// <param name="personalDataPaths">The dotted element paths marked as personal data for the event's type.</param>
+    /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
+    /// <param name="sealMode">How the event is sealed.</param>
+    /// <returns>The integrity data.</returns>
+    public static EventIntegrity Seal(Byte[] document, IReadOnlyList<String> personalDataPaths, Byte[] previousHash, IntegritySealMode sealMode)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(personalDataPaths);
+
+        var commitments = personalDataPaths.Count == 0 ? null : PersonalDataCommitments.Commit(document, personalDataPaths);
+        var canonicalDocument = commitments is null ? document : PersonalDataCommitments.Canonicalize(document, commitments);
+        var integrity = Seal(canonicalDocument, previousHash, sealMode);
+        integrity.PersonalData = commitments;
+        return integrity;
+    }
 
     /// <summary>
     /// Reads stored integrity data. Malformed data, for example after tampering, yields <c>false</c>

@@ -254,6 +254,22 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
                  .FirstOrDefaultAsync(cancellationToken);
 
     /// <summary>
+    /// Resolves the personal data paths of a stored event from its discriminator. The current marks of the
+    /// resolved type apply; an unknown discriminator seals without commitments.
+    /// </summary>
+    private IReadOnlyList<String> ResolvePersonalDataPaths(RawBsonDocument document)
+    {
+        if (_options.PersonalDataPaths.Count == 0 ||
+            !document.TryGetValue(EventDocumentFields<TAggregate>.Discriminator, out var discriminator) ||
+            EventDocumentFields<TAggregate>.ResolveEventType(discriminator) is not { } eventType)
+        {
+            return [];
+        }
+
+        return _options.PersonalDataPaths.GetValueOrDefault(eventType) ?? [];
+    }
+
+    /// <summary>
     /// Seals the given events, which must directly follow the sealed prefix, and returns the last hash.
     /// </summary>
     private async Task<Byte[]> SealAsync(
@@ -282,7 +298,7 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
                     $"Version {expectedVersion} of aggregate '{aggregateId}' was sealed concurrently.");
             }
 
-            var integrity = EventIntegrityChain.Seal(document.ToBson(), previousHash, IntegritySealMode.Retroactive);
+            var integrity = EventIntegrityChain.Seal(document.ToBson(), ResolvePersonalDataPaths(document), previousHash, IntegritySealMode.Retroactive);
             var filter = new BsonDocument
             {
                 { "_id", document["_id"] },

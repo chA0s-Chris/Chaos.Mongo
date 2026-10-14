@@ -4,7 +4,6 @@ namespace Chaos.Mongo.EventStore;
 
 using Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 /// <summary>
@@ -69,7 +68,7 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
             return Builders<Event<TAggregate>>.Filter.Empty;
         }
 
-        var discriminatorElement = $"${GetDiscriminatorElementName()}";
+        var discriminatorElement = $"${EventDocumentFields<TAggregate>.Discriminator}";
         var concreteDiscriminator = new BsonDocument(
             "$cond",
             new BsonArray
@@ -97,17 +96,6 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
                         })
                     })));
     }
-
-    /// <summary>
-    /// Resolves the discriminator element name through the event serializer. Unlike
-    /// <see cref="BsonSerializer.LookupDiscriminatorConvention"/>, this lets the class map register the
-    /// hierarchical convention of its root class first; looking the convention up directly before the first
-    /// event is serialized would cache the scalar convention and change how every event is stored.
-    /// </summary>
-    private static String GetDiscriminatorElementName()
-        => BsonSerializer.LookupSerializer<Event<TAggregate>>() is IHasDiscriminatorConvention { DiscriminatorConvention: { } convention }
-            ? convention.ElementName
-            : BsonSerializer.LookupDiscriminatorConvention(typeof(Event<TAggregate>)).ElementName;
 
     /// <summary>
     /// Creates the replay filter of <see cref="GetAtRevisionAsync"/>. Only the <c>(AggregateId, Version)</c> index
