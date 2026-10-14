@@ -18,9 +18,10 @@ using MongoDB.Driver;
 ///     </para>
 ///     <para>
 ///     Only the <c>PersonalData</c> subfield of the integrity data is rewritten, so the change-stream candidate source,
-///     which matches updates of the <c>_integrity</c> element as a whole, ignores the update. A long stream without a
-///     checkpoint below the first erased version is replayed within one transaction, which is bounded by the server's
-///     transaction lifetime limit.
+///     which matches updates of the <c>_integrity</c> element as a whole, ignores the update. The server could report
+///     the update as a replacement only if the delta exceeded the document, which a sealed document's hashes and
+///     commitments rule out. A long stream without a checkpoint below the first erased version is replayed within one
+///     transaction, which is bounded by the server's transaction lifetime limit.
 ///     </para>
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
@@ -49,14 +50,12 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     /// <param name="request">The selection and the reference to record.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The erased paths per event version, empty when nothing was left to erase.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="aggregateId"/> is empty.</exception>
     /// <exception cref="InvalidOperationException">Thrown when integrity protection is disabled.</exception>
-    /// <exception cref="ArgumentException">
-    /// Thrown when a requested version does not exist or has no recorded personal data, or when a requested path is
-    /// recorded in none of the selected events.
-    /// </exception>
     /// <exception cref="MongoEventStoreException">
-    /// Thrown when a selected event is not sealed or its integrity data is malformed, or when the read model cannot be
-    /// rebuilt consistently.
+    /// Thrown when the stream has no events, when a requested version does not exist or has no recorded personal data,
+    /// when a requested path is recorded in none of the selected events, when a selected event is not sealed or its
+    /// integrity data is malformed, or when the read model cannot be rebuilt consistently.
     /// </exception>
     /// <exception cref="MongoConcurrencyException">Thrown when the stream or a selected salt changed concurrently.</exception>
     public async Task<IReadOnlyList<PersonalDataErasureEntry>> ErasePersonalDataAsync(Guid aggregateId,
@@ -64,6 +63,11 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                                                                                       CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (aggregateId == Guid.Empty)
+        {
+            throw new ArgumentException("The aggregate identifier must not be empty.", nameof(aggregateId));
+        }
+
         if (!_options.IntegrityProtectionEnabled)
         {
             throw new InvalidOperationException(
@@ -132,6 +136,85 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     }
 
     /// <summary>
+    /// Checks that every requested version exists and that every requested path is recorded, with or without its
+    /// salt, in at least one selected event.
+    /// </summary>
+    private static void EnsureRequestSatisfied(Guid aggregateId, ErasureRequest request, HashSet<Int64> foundVersions, HashSet<String> recordedPaths)
+    {
+        foreach (var version in request.Versions ?? [])
+        {
+            if (!foundVersions.Contains(version))
+            {
+                throw new MongoEventStoreException($"Version {version} of aggregate '{aggregateId}' does not exist.");
+            }
+        }
+
+        foreach (var path in request.Paths ?? [])
+        {
+            if (!recordedPaths.Contains(path))
+            {
+                throw new MongoEventStoreException(
+                    $"The path '{path}' is not recorded as personal data in any selected event of aggregate '{aggregateId}'.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the recorded commitments of a stored event. Every selected event must be sealed with well-formed
+    /// integrity data.
+    /// </summary>
+    private static IReadOnlyList<PersonalDataCommitment> ReadCommitments(BsonDocument document, Guid aggregateId, Int64 version)
+    {
+        if (!document.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue))
+        {
+            throw new MongoEventStoreException(
+                $"Version {version} of aggregate '{aggregateId}' is not sealed, so its personal data cannot be erased.");
+        }
+
+        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity) ||
+            (integrity.PersonalData is { } commitments && !PersonalDataCommitments.IsWellFormed(commitments)))
+        {
+            throw new MongoEventStoreException(
+                $"The integrity data of version {version} of aggregate '{aggregateId}' is malformed, so its personal data cannot be erased.");
+        }
+
+        return integrity.PersonalData ?? [];
+    }
+
+    /// <summary>
+    /// Selects the paths of one event that match the request and still have their salt, recording every matching
+    /// path whether or not it has one.
+    /// </summary>
+    private static PersonalDataErasureEntry? SelectEntry(Int64 version,
+                                                         IReadOnlyList<PersonalDataCommitment> commitments,
+                                                         HashSet<String>? requestedPaths,
+                                                         HashSet<String> recordedPaths)
+    {
+        var paths = new List<String>();
+        foreach (var commitment in commitments)
+        {
+            if (requestedPaths is not null && !requestedPaths.Contains(commitment.Path))
+            {
+                continue;
+            }
+
+            recordedPaths.Add(commitment.Path);
+            if (commitment.Salt is not null)
+            {
+                paths.Add(commitment.Path);
+            }
+        }
+
+        return paths.Count == 0
+            ? null
+            : new PersonalDataErasureEntry
+            {
+                Version = version,
+                Paths = paths
+            };
+    }
+
+    /// <summary>
     /// Runs inside the append transaction of the erasure event, after the event was inserted.
     /// </summary>
     private async Task EraseAsync(IClientSessionHandle session,
@@ -165,9 +248,60 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
         => _mongoHelper.Database.GetCollection<TAggregate>(_options.ReadModelCollectionName);
 
     /// <summary>
-    /// Replays the state-changing events from the newest checkpoint below the first erased version, or from the
-    /// stream start, rewriting the state of every checkpoint at or above that version in the same pass, and then
-    /// replaces the read model. Checkpoints below the first erased version cannot contain erased values.
+    /// Loads the state the replay starts from: the newest checkpoint below the first erased version when
+    /// checkpoints are enabled, or a new aggregate for a replay from the stream start. Checkpoints below the first
+    /// erased version cannot contain erased values.
+    /// </summary>
+    private async Task<(TAggregate Aggregate, Int64 FromVersion)> LoadStartStateAsync(IClientSessionHandle session,
+                                                                                      TAggregate readModel,
+                                                                                      Int64 firstErasedVersion,
+                                                                                      CancellationToken cancellationToken)
+    {
+        var checkpointFilter = Builders<CheckpointDocument<TAggregate>>.Filter;
+        var start = _options.CheckpointsEnabled
+            ? await GetCheckpointCollection().Find(session,
+                                                   checkpointFilter.Eq(c => c.Id.AggregateId, readModel.Id) &
+                                                   checkpointFilter.Lt(c => c.Id.Version, firstErasedVersion))
+                                             .SortByDescending(c => c.Id.Version)
+                                             .FirstOrDefaultAsync(cancellationToken)
+            : null;
+
+        if (start is null)
+        {
+            return (new TAggregate
+            {
+                Id = readModel.Id,
+                CreatedUtc = readModel.CreatedUtc
+            }, 1);
+        }
+
+        LegacyRevision.Normalize(start);
+        return (start.State, start.Id.Version + 1);
+    }
+
+    /// <summary>
+    /// Reads the selected events: the requested versions, or every event of the stream.
+    /// </summary>
+    private async Task<List<BsonDocument>> ReadSelectedDocumentsAsync(Guid aggregateId, ErasureRequest request, CancellationToken cancellationToken)
+    {
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var filter = EventDocumentFields<TAggregate>.ForAggregate<BsonDocument>(aggregateId);
+        if (request.Versions is { } versions)
+        {
+            filter &= new BsonDocumentFilterDefinition<BsonDocument>(
+                new BsonDocument(versionElement, new BsonDocument("$in", new BsonArray(versions.Distinct()))));
+        }
+
+        return await GetEventDocumentsCollection()
+                     .Find(filter)
+                     .Sort(Builders<BsonDocument>.Sort.Ascending(versionElement))
+                     .Project(Builders<BsonDocument>.Projection.Include(versionElement).Include(EventIntegrityChain.ElementName))
+                     .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Replays the state-changing events from the start state, rewriting the state of every checkpoint at or above
+    /// the first erased version in the same pass, and then replaces the read model.
     /// </summary>
     private async Task RebuildAsync(IClientSessionHandle session,
                                     TAggregate readModel,
@@ -175,45 +309,51 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                                     CancellationToken cancellationToken)
     {
         var aggregateId = readModel.Id;
-        var checkpointCollection = GetCheckpointCollection();
-        var checkpointFilter = Builders<CheckpointDocument<TAggregate>>.Filter;
-        var ofAggregate = checkpointFilter.Eq(c => c.Id.AggregateId, aggregateId);
-
-        var start = _options.CheckpointsEnabled
-            ? await checkpointCollection.Find(session, ofAggregate & checkpointFilter.Lt(c => c.Id.Version, firstErasedVersion))
-                                        .SortByDescending(c => c.Id.Version)
-                                        .FirstOrDefaultAsync(cancellationToken)
-            : null;
-
-        TAggregate aggregate;
-        var fromVersion = 1L;
-        if (start is not null)
-        {
-            LegacyRevision.Normalize(start);
-            aggregate = start.State;
-            fromVersion = start.Id.Version + 1;
-        }
-        else
-        {
-            aggregate = new TAggregate
-            {
-                Id = aggregateId,
-                CreatedUtc = readModel.CreatedUtc
-            };
-        }
+        var (aggregate, fromVersion) = await LoadStartStateAsync(session, readModel, firstErasedVersion, cancellationToken);
 
         // Existing checkpoints are rewritten even when checkpoints are disabled now, so none keeps an erased value.
-        var affectedCheckpoints = await checkpointCollection.Find(session, ofAggregate & checkpointFilter.Gte(c => c.Id.Version, firstErasedVersion))
-                                                            .SortBy(c => c.Id.Version)
-                                                            .Project(c => c.Id.Version)
-                                                            .ToListAsync(cancellationToken);
+        var checkpointFilter = Builders<CheckpointDocument<TAggregate>>.Filter;
+        var affectedCheckpoints = await GetCheckpointCollection().Find(session,
+                                                                       checkpointFilter.Eq(c => c.Id.AggregateId, aggregateId) &
+                                                                       checkpointFilter.Gte(c => c.Id.Version, firstErasedVersion))
+                                                                 .SortBy(c => c.Id.Version)
+                                                                 .Project(c => c.Id.Version)
+                                                                 .ToListAsync(cancellationToken);
 
+        await ReplayAsync(session, aggregate, fromVersion, readModel.Version, affectedCheckpoints, cancellationToken);
+
+        if (aggregate.Version != readModel.Version || aggregate.Revision != readModel.Revision)
+        {
+            throw new MongoEventStoreException(
+                $"Rebuilding the read model of aggregate '{aggregateId}' reached version {aggregate.Version} at revision " +
+                $"{aggregate.Revision}, but the stored read model is at version {readModel.Version} and revision {readModel.Revision}.");
+        }
+
+        aggregate.CreatedUtc = readModel.CreatedUtc;
+        await GetReadModelCollection().ReplaceOneAsync(
+            session,
+            Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
+            aggregate,
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Applies the state-changing events in the version range to the aggregate and rewrites the state of each
+    /// affected checkpoint when the replay reaches its version.
+    /// </summary>
+    private async Task ReplayAsync(IClientSessionHandle session,
+                                   TAggregate aggregate,
+                                   Int64 fromVersion,
+                                   Int64 toVersion,
+                                   List<Int64> affectedCheckpoints,
+                                   CancellationToken cancellationToken)
+    {
         var eventFilter = Builders<Event<TAggregate>>.Filter;
         var events = await GetEventsCollection()
                            .Find(session,
-                                 eventFilter.Eq(e => e.AggregateId, aggregateId) &
+                                 eventFilter.Eq(e => e.AggregateId, aggregate.Id) &
                                  eventFilter.Gte(e => e.Version, fromVersion) &
-                                 eventFilter.Lte(e => e.Version, readModel.Version) &
+                                 eventFilter.Lte(e => e.Version, toVersion) &
                                  EventDocumentFields<TAggregate>.ExcludeObservationalEvents(_options.ObservationalEventDiscriminators))
                            .SortBy(e => e.Version)
                            .ToListAsync(cancellationToken);
@@ -233,14 +373,14 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
 
             if (nextCheckpoint < affectedCheckpoints.Count && affectedCheckpoints[nextCheckpoint] < @event.Version)
             {
-                throw CreateCheckpointException(aggregateId, affectedCheckpoints[nextCheckpoint]);
+                throw CreateCheckpointException(aggregate.Id, affectedCheckpoints[nextCheckpoint]);
             }
 
             if (nextCheckpoint < affectedCheckpoints.Count && affectedCheckpoints[nextCheckpoint] == @event.Version)
             {
-                await checkpointCollection.UpdateOneAsync(
+                await GetCheckpointCollection().UpdateOneAsync(
                     session,
-                    checkpointFilter.Eq(c => c.Id, new CheckpointId(aggregateId, @event.Version)),
+                    Builders<CheckpointDocument<TAggregate>>.Filter.Eq(c => c.Id, new CheckpointId(aggregate.Id, @event.Version)),
                     Builders<CheckpointDocument<TAggregate>>.Update.Set(c => c.State, aggregate),
                     cancellationToken: cancellationToken);
                 nextCheckpoint++;
@@ -249,22 +389,8 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
 
         if (nextCheckpoint < affectedCheckpoints.Count)
         {
-            throw CreateCheckpointException(aggregateId, affectedCheckpoints[nextCheckpoint]);
+            throw CreateCheckpointException(aggregate.Id, affectedCheckpoints[nextCheckpoint]);
         }
-
-        if (aggregate.Version != readModel.Version || aggregate.Revision != readModel.Revision)
-        {
-            throw new MongoEventStoreException(
-                $"Rebuilding the read model of aggregate '{aggregateId}' reached version {aggregate.Version} at revision " +
-                $"{aggregate.Revision}, but the stored read model is at version {readModel.Version} and revision {readModel.Revision}.");
-        }
-
-        aggregate.CreatedUtc = readModel.CreatedUtc;
-        await GetReadModelCollection().ReplaceOneAsync(
-            session,
-            Builders<TAggregate>.Filter.Eq(a => a.Id, aggregateId),
-            aggregate,
-            cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -272,94 +398,36 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     /// </summary>
     private async Task<List<PersonalDataErasureEntry>> SelectAsync(Guid aggregateId, ErasureRequest request, CancellationToken cancellationToken)
     {
-        var versionElement = EventDocumentFields<TAggregate>.Version;
-        var requestedVersions = request.Versions is null ? null : new HashSet<Int64>(request.Versions);
-        var requestedPaths = request.Paths is null ? null : new HashSet<String>(request.Paths, StringComparer.Ordinal);
-
-        var filter = EventDocumentFields<TAggregate>.ForAggregate<BsonDocument>(aggregateId);
-        if (requestedVersions is not null)
+        var documents = await ReadSelectedDocumentsAsync(aggregateId, request, cancellationToken);
+        if (documents.Count == 0 && request.Versions is null)
         {
-            filter &= new BsonDocumentFilterDefinition<BsonDocument>(
-                new BsonDocument(versionElement, new BsonDocument("$in", new BsonArray(requestedVersions))));
+            throw new MongoEventStoreException($"Aggregate '{aggregateId}' has no events, so there is no personal data to erase.");
         }
 
-        var documents = await GetEventDocumentsCollection()
-                              .Find(filter)
-                              .Sort(Builders<BsonDocument>.Sort.Ascending(versionElement))
-                              .Project(Builders<BsonDocument>.Projection.Include(versionElement).Include(EventIntegrityChain.ElementName))
-                              .ToListAsync(cancellationToken);
-
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var requestedPaths = request.Paths is null ? null : new HashSet<String>(request.Paths, StringComparer.Ordinal);
         var entries = new List<PersonalDataErasureEntry>();
         var foundVersions = new HashSet<Int64>();
         var recordedPaths = new HashSet<String>(StringComparer.Ordinal);
+
         foreach (var document in documents)
         {
             var version = document[versionElement].ToInt64();
             foundVersions.Add(version);
 
-            if (!document.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue))
+            var commitments = ReadCommitments(document, aggregateId, version);
+            if (request.Versions is not null && commitments.Count == 0)
             {
-                throw new MongoEventStoreException(
-                    $"Version {version} of aggregate '{aggregateId}' is not sealed, so its personal data cannot be erased.");
+                throw new MongoEventStoreException($"Version {version} of aggregate '{aggregateId}' has no recorded personal data.");
             }
 
-            if (!EventIntegrityChain.TryRead(integrityValue, out var integrity))
+            if (SelectEntry(version, commitments, requestedPaths, recordedPaths) is { } entry)
             {
-                throw new MongoEventStoreException(
-                    $"The integrity data of version {version} of aggregate '{aggregateId}' is malformed, so its personal data cannot be erased.");
-            }
-
-            var commitments = integrity.PersonalData ?? [];
-            if (requestedVersions is not null && commitments.Count == 0)
-            {
-                throw new ArgumentException(
-                    $"Version {version} of aggregate '{aggregateId}' has no recorded personal data.",
-                    nameof(request));
-            }
-
-            var paths = new List<String>();
-            foreach (var commitment in commitments)
-            {
-                if (requestedPaths is not null && !requestedPaths.Contains(commitment.Path))
-                {
-                    continue;
-                }
-
-                recordedPaths.Add(commitment.Path);
-                if (commitment.Salt is not null)
-                {
-                    paths.Add(commitment.Path);
-                }
-            }
-
-            if (paths.Count > 0)
-            {
-                entries.Add(new PersonalDataErasureEntry
-                {
-                    Version = version,
-                    Paths = paths
-                });
+                entries.Add(entry);
             }
         }
 
-        foreach (var version in requestedVersions ?? [])
-        {
-            if (!foundVersions.Contains(version))
-            {
-                throw new ArgumentException($"Version {version} of aggregate '{aggregateId}' does not exist.", nameof(request));
-            }
-        }
-
-        foreach (var path in requestedPaths ?? [])
-        {
-            if (!recordedPaths.Contains(path))
-            {
-                throw new ArgumentException(
-                    $"The path '{path}' is not recorded as personal data in any selected event of aggregate '{aggregateId}'.",
-                    nameof(request));
-            }
-        }
-
+        EnsureRequestSatisfied(aggregateId, request, foundVersions, recordedPaths);
         return entries;
     }
 }

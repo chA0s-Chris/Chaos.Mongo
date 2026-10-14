@@ -16,6 +16,16 @@ using NUnit.Framework;
 public class PersonalDataErasureRegistrationTests
 {
     [Test]
+    public void ErasureRequest_EmptyCollections_ThrowArgumentException()
+    {
+        var actVersions = () => new ErasureRequest("ticket", []);
+        var actPaths = () => new ErasureRequest("ticket", paths: []);
+
+        actVersions.Should().Throw<ArgumentException>().WithParameterName("versions");
+        actPaths.Should().Throw<ArgumentException>().WithParameterName("paths");
+    }
+
+    [Test]
     public void ErasureRequest_PathWithWhitespace_ThrowsArgumentException()
     {
         var act = () => new ErasureRequest("ticket", paths: ["Memo", " "]);
@@ -59,6 +69,23 @@ public class PersonalDataErasureRegistrationTests
         StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch)
                                 .Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch));
         StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch).UnrecordedErasures.Should().BeEmpty();
+    }
+
+    [Test]
+    public void WithEventStore_PreRegisteredClassMapWithReservedDiscriminator_ThrowsInvalidOperationException()
+    {
+        BsonClassMap.RegisterClassMap<ErasurePreRegisteredEvent>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetDiscriminator(PersonalDataErased<ErasurePreRegisteredAggregate>.Discriminator);
+        });
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<ErasurePreRegisteredAggregate>(es => es.WithEvent<ErasurePreRegisteredEvent>("Harmless"));
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage($"*ErasurePreRegisteredEvent*registered before the event store*" +
+                        $"'{PersonalDataErased<ErasurePreRegisteredAggregate>.Discriminator}'*reserved*");
     }
 
     [Test]
@@ -138,6 +165,13 @@ public sealed class ErasureProtectedAggregate : Aggregate;
 public sealed class ErasureProtectedEvent : Event<ErasureProtectedAggregate>
 {
     public override void Execute(ErasureProtectedAggregate aggregate) { }
+}
+
+public sealed class ErasurePreRegisteredAggregate : Aggregate;
+
+public sealed class ErasurePreRegisteredEvent : Event<ErasurePreRegisteredAggregate>
+{
+    public override void Execute(ErasurePreRegisteredAggregate aggregate) { }
 }
 
 public sealed class ErasureReservedAggregate : Aggregate;

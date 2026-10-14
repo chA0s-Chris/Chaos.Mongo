@@ -15,6 +15,16 @@ internal sealed class ErasureRequest
     public ErasureRequest(String reference, IReadOnlyCollection<Int64>? versions = null, IReadOnlyCollection<String>? paths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reference);
+        if (versions is { Count: 0 })
+        {
+            throw new ArgumentException("The requested versions must not be empty; pass null to select every event.", nameof(versions));
+        }
+
+        if (paths is { Count: 0 })
+        {
+            throw new ArgumentException("The requested paths must not be empty; pass null to select every recorded path.", nameof(paths));
+        }
+
         if (paths is not null && paths.Any(String.IsNullOrWhiteSpace))
         {
             throw new ArgumentException("Every requested path must be a non-empty element path.", nameof(paths));

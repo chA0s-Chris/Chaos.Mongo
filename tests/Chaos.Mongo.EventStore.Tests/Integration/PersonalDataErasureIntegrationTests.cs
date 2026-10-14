@@ -86,15 +86,68 @@ public class PersonalDataErasureIntegrationTests
     }
 
     [Test]
-    public async Task ErasePersonalDataAsync_PathNotRecorded_ThrowsArgumentExceptionAndPersistsNothing()
+    public async Task ErasePersonalDataAsync_EmptyAggregateId_ThrowsArgumentException()
+    {
+        var context = await CreateContextAsync();
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(Guid.Empty, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<ArgumentException>().WithParameterName("aggregateId");
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_MalformedCommitments_ThrowsMongoEventStoreExceptionAndPersistsNothing()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        var duplicate = (await context.FindEventAsync(aggregateId, 2))[EventIntegrityChain.ElementName]["PersonalData"].AsBsonArray[0].AsBsonDocument;
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update.Push($"{EventIntegrityChain.ElementName}.PersonalData", duplicate));
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*version 2*malformed*");
+        (await context.CountEventsAsync(aggregateId)).Should().Be(2);
+        (await context.FindEventAsync(aggregateId, 1))[MemoPath].AsString.Should().Be(DefaultMemo);
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_NonexistentStream_ThrowsMongoEventStoreException()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = Guid.NewGuid();
+
+        var actAll = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+        var actPaths = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", paths: [MemoPath]));
+
+        await actAll.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*no events*");
+        await actPaths.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*no events*");
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_PathNotRecorded_ThrowsMongoEventStoreExceptionAndPersistsNothing()
     {
         var context = await CreateContextAsync();
         var aggregateId = await context.AppendStreamAsync(2);
 
         var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", paths: [MemoPath, AccountPath]));
 
-        await act.Should().ThrowAsync<ArgumentException>().WithMessage($"*'{AccountPath}'*not recorded*");
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage($"*'{AccountPath}'*not recorded*");
         await AssertUntouchedAsync(context, aggregateId, 2);
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_PathRecordedOnlyWithoutSalt_SucceedsWithoutAppending()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("first", paths: [MemoPath]));
+
+        var erased = await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("second", paths: [MemoPath]));
+
+        erased.Should().BeEmpty();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(3, "the second request appends no event");
     }
 
     [Test]
@@ -124,23 +177,23 @@ public class PersonalDataErasureIntegrationTests
 
         await act.Should().ThrowAsync<MongoEventValidationException>().WithMessage("*requires a memo*");
         await AssertUntouchedAsync(context, aggregateId, 2);
-        (await context.Repository.GetAsync(aggregateId))!.Memos.Should().Equal(DefaultMemo, DefaultMemo);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(DefaultMemo, DefaultMemo);
     }
 
     [Test]
-    public async Task ErasePersonalDataAsync_RequestedVersionMissing_ThrowsArgumentExceptionAndPersistsNothing()
+    public async Task ErasePersonalDataAsync_RequestedVersionMissing_ThrowsMongoEventStoreExceptionAndPersistsNothing()
     {
         var context = await CreateContextAsync();
         var aggregateId = await context.AppendStreamAsync(2);
 
         var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [2, 9]));
 
-        await act.Should().ThrowAsync<ArgumentException>().WithMessage("*Version 9*does not exist*");
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*Version 9*does not exist*");
         await AssertUntouchedAsync(context, aggregateId, 2);
     }
 
     [Test]
-    public async Task ErasePersonalDataAsync_RequestedVersionWithoutCommitments_ThrowsArgumentExceptionAndPersistsNothing()
+    public async Task ErasePersonalDataAsync_RequestedVersionWithoutCommitments_ThrowsMongoEventStoreExceptionAndPersistsNothing()
     {
         var context = await CreateContextAsync();
         var aggregateId = await context.AppendStreamAsync(2);
@@ -148,7 +201,7 @@ public class PersonalDataErasureIntegrationTests
 
         var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [3]));
 
-        await act.Should().ThrowAsync<ArgumentException>().WithMessage("*Version 3*no recorded personal data*");
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*Version 3*no recorded personal data*");
         await AssertUntouchedAsync(context, aggregateId, 3);
     }
 
@@ -177,7 +230,7 @@ public class PersonalDataErasureIntegrationTests
             (await context.FindEventAsync(aggregateId, version))[MemoPath].AsString.Should().Be(DefaultMemo);
         }
 
-        (await context.Repository.GetAsync(aggregateId))!.Memos.Should().Equal(DefaultMemo, null, DefaultMemo);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(DefaultMemo, null, DefaultMemo);
         (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
     }
 
@@ -221,9 +274,11 @@ public class PersonalDataErasureIntegrationTests
     }
 
     [Test]
-    public async Task ErasePersonalDataAsync_WholeStream_NullsValuesRemovesSaltsAndRecordsErasure()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ErasePersonalDataAsync_WholeStream_NullsValuesRemovesSaltsAndRecordsErasure(Boolean bulkWrite)
     {
-        var context = await CreateContextAsync();
+        var context = await CreateContextAsync(bulkWrite: bulkWrite);
         var aggregateId = await context.AppendStreamAsync(2);
         await context.Store.AppendEventsAsync([LedgerStoreContext.CreateAudit(aggregateId, 3)]);
 
@@ -301,11 +356,11 @@ public class PersonalDataErasureIntegrationTests
 
         var readModel = await context.Repository.GetAsync(aggregateId);
         readModel!.Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo, DefaultMemo);
-        (await context.Repository.GetAtVersionAsync(aggregateId, 3))!.Memos.Should().Equal(DefaultMemo, DefaultMemo, null);
-        (await context.Repository.GetAtRevisionAsync(aggregateId, 4))!.Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
+        Proven(await context.Repository.GetAtVersionAsync(aggregateId, 3)).Memos.Should().Equal(DefaultMemo, DefaultMemo, null);
+        Proven(await context.Repository.GetAtRevisionAsync(aggregateId, 4)).Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
 
         await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 7)]);
-        (await context.Repository.GetAsync(aggregateId))!.Memos.Should().HaveCount(6);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().HaveCount(6);
         (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
     }
 
@@ -384,6 +439,12 @@ public class PersonalDataErasureIntegrationTests
         return false;
     }
 
+    private static LedgerAggregate Proven(LedgerAggregate? aggregate)
+    {
+        aggregate.Should().NotBeNull();
+        return aggregate;
+    }
+
     private static async Task RunUntilAsync(AnchoringRun run, Func<AnchoringRunResult, Task<Boolean>> isDone)
     {
         var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -403,12 +464,14 @@ public class PersonalDataErasureIntegrationTests
                                                               String? databaseName = null,
                                                               Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
                                                               Boolean anchorCandidates = false,
-                                                              Action<MongoBuilder>? configureMongo = null)
+                                                              Action<MongoBuilder>? configureMongo = null,
+                                                              Boolean bulkWrite = false)
     {
         var context = await LedgerStoreContext.CreateAsync(_container,
                                                            integrityProtection,
-                                                           databaseName: databaseName,
-                                                           configureOptions: configureOptions,
+                                                           bulkWrite,
+                                                           databaseName,
+                                                           configureOptions,
                                                            anchorCandidates: anchorCandidates,
                                                            configureMongo: configureMongo,
                                                            personalData: personalData);

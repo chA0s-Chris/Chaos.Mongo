@@ -114,7 +114,15 @@ public static class MongoEventStoreSerializationSetup
 
             if (BsonClassMap.IsClassMapRegistered(eventType))
             {
-                EnsureNoReservedElementCollision<TAggregate>(GetRegisteredClassMap(eventType));
+                var registeredClassMap = GetRegisteredClassMap(eventType);
+                if (String.Equals(registeredClassMap.Discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"The class map of event type {eventType.Name} was registered before the event store with the discriminator " +
+                        $"'{registeredClassMap.Discriminator}', which is reserved by the event store for its personal data erasure event.");
+                }
+
+                EnsureNoReservedElementCollision<TAggregate>(registeredClassMap);
                 continue;
             }
 
