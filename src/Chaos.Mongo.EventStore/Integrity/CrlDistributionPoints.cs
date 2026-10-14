@@ -8,6 +8,15 @@ using System.Security.Cryptography.X509Certificates;
 /// <summary>
 /// Reads the HTTP locations of a certificate's CRL distribution points (RFC 5280, section 4.2.1.13).
 /// </summary>
+/// <remarks>
+/// The reader locates the CRLs that a timestamp token's evidence must capture; validating the certificate is the job of
+/// the <see cref="X509Chain"/> that the timestamp authority builds. A distribution point is therefore decoded only as
+/// far as it decides which CRLs are captured: the structure of the extension and of each point, the HTTP and HTTPS
+/// locations of a full name, and whether the point covers all revocation reasons. Fields that never yield a location,
+/// such as a name relative to the CRL issuer, the CRL issuer itself and general names other than a URI, are checked
+/// only for the tags and non-empty sequences RFC 5280 requires; their contents are not validated. Locations other
+/// than HTTP and HTTPS, delta CRLs and the certificates of indirect CRL issuers are not captured.
+/// </remarks>
 internal static class CrlDistributionPoints
 {
     private static readonly Asn1Tag CrlIssuerTag = new(TagClass.ContextSpecific, 2, true);
