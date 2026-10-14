@@ -60,7 +60,8 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     /// <exception cref="MongoEventStoreException">
     /// Thrown when the stream has no events, when a requested version does not exist or has no recorded personal data,
     /// when a requested path is recorded in none of the selected events, when a selected event is not sealed or its
-    /// integrity data is malformed, or when the read model cannot be rebuilt consistently.
+    /// integrity data is malformed or of an unsupported format, when a selected value does not match its commitment, or
+    /// when the read model cannot be rebuilt consistently.
     /// </exception>
     /// <exception cref="MongoConcurrencyException">
     /// Thrown when the stream or a selected salt changed concurrently, or when a request without explicit versions
@@ -155,6 +156,9 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
         };
     }
 
+    private static MongoEventStoreException CreateMalformedIntegrityException(Guid aggregateId, Int64 version)
+        => new($"The integrity data of version {version} of aggregate '{aggregateId}' is malformed, so its personal data cannot be erased.");
+
     /// <summary>
     /// Checks that every requested version exists and that every requested path is recorded, with or without its
     /// salt, in at least one selected event.
@@ -191,11 +195,22 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                 $"Version {version} of aggregate '{aggregateId}' is not sealed, so its personal data cannot be erased.");
         }
 
-        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity) ||
-            (integrity.PersonalData is { } commitments && !PersonalDataCommitments.IsWellFormed(commitments)))
+        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity))
+        {
+            throw CreateMalformedIntegrityException(aggregateId, version);
+        }
+
+        // Salts of a format this version does not understand must not be destroyed.
+        if (integrity.FormatVersion != EventIntegrityChain.FormatVersion ||
+            !String.Equals(integrity.Algorithm, EventIntegrityChain.Algorithm, StringComparison.Ordinal))
         {
             throw new MongoEventStoreException(
-                $"The integrity data of version {version} of aggregate '{aggregateId}' is malformed, so its personal data cannot be erased.");
+                $"Version {version} of aggregate '{aggregateId}' uses an unsupported integrity format, so its personal data cannot be erased.");
+        }
+
+        if (integrity.PersonalData is { } commitments && !PersonalDataCommitments.IsWellFormed(commitments))
+        {
+            throw CreateMalformedIntegrityException(aggregateId, version);
         }
 
         return integrity.PersonalData ?? [];
@@ -235,6 +250,53 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     }
 
     /// <summary>
+    /// Verifies every selected value that still has its salt against its commitment, inside the transaction. Erasing
+    /// a value that no longer matches would destroy the evidence of its tampering. A salt removed concurrently is left
+    /// to the update, whose filter reports it as a concurrent erasure.
+    /// </summary>
+    private async Task EnsureSelectedValuesCommittedAsync(IClientSessionHandle session,
+                                                          Guid aggregateId,
+                                                          List<PersonalDataErasureEntry> entries,
+                                                          CancellationToken cancellationToken)
+    {
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var pathsByVersion = entries.ToDictionary(entry => entry.Version, entry => entry.Paths);
+        var filter = EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId) &
+                     new BsonDocumentFilterDefinition<RawBsonDocument>(
+                         new BsonDocument(versionElement, new BsonDocument("$in", new BsonArray(pathsByVersion.Keys))));
+        var documents = await _mongoHelper.Database.GetCollection<RawBsonDocument>(_options.EventsCollectionName)
+                                          .Find(session, filter)
+                                          .ToListAsync(cancellationToken);
+
+        try
+        {
+            foreach (var document in documents)
+            {
+                var version = document[versionElement].ToInt64();
+                var storedDocument = RawBsonElements.RemoveTopLevelElement(document.ToBson(), EventIntegrityChain.ElementName);
+                foreach (var commitment in ReadCommitments(document, aggregateId, version))
+                {
+                    if (commitment.Salt is not null &&
+                        pathsByVersion[version].Contains(commitment.Path) &&
+                        PersonalDataCommitments.Verify(storedDocument, commitment) != PersonalDataVerification.Committed)
+                    {
+                        throw new MongoEventStoreException(
+                            $"The value of '{commitment.Path}' at version {version} of aggregate '{aggregateId}' does not match its " +
+                            "commitment, so it cannot be erased without destroying the evidence of tampering.");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            foreach (var document in documents)
+            {
+                document.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
     /// Runs inside the append transaction of the erasure event, after the event was inserted.
     /// </summary>
     private async Task EraseAsync(IClientSessionHandle session,
@@ -243,6 +305,7 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                                   CancellationToken cancellationToken)
     {
         var aggregateId = readModel.Id;
+        await EnsureSelectedValuesCommittedAsync(session, aggregateId, entries, cancellationToken);
         var updates = entries.Select(entry => CreateErasureUpdate(aggregateId, entry)).ToList();
         var result = await GetEventDocumentsCollection().BulkWriteAsync(session, updates, cancellationToken: cancellationToken);
 

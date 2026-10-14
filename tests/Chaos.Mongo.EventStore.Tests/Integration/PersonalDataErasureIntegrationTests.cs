@@ -357,6 +357,26 @@ public class PersonalDataErasureIntegrationTests
     }
 
     [Test]
+    public async Task ErasePersonalDataAsync_TamperedValueWithSalt_ThrowsMongoEventStoreExceptionAndKeepsTheEvidence()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1),
+            Builders<BsonDocument>.Update.Set(MemoPath, "forged"));
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*'Memo' at version 1*does not match its commitment*");
+        (await context.CountEventsAsync(aggregateId)).Should().Be(2);
+        var tampered = await context.FindEventAsync(aggregateId, 1);
+        tampered[MemoPath].AsString.Should().Be("forged");
+        LedgerStoreContext.ReadIntegrity(tampered).PersonalData.Should().AllSatisfy(commitment => commitment.Salt.Should().NotBeNull());
+        (await context.CreateVerifier().VerifyStreamAsync(aggregateId))
+            .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.PersonalDataMismatch));
+    }
+
+    [Test]
     public async Task ErasePersonalDataAsync_UnsealedSelectedEvent_ThrowsMongoEventStoreExceptionAndPersistsNothing()
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
@@ -369,6 +389,23 @@ public class PersonalDataErasureIntegrationTests
         await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*Version 1*not sealed*");
         (await context.CountEventsAsync(aggregateId)).Should().Be(2);
         (await context.FindEventAsync(aggregateId, 1)).Contains(EventIntegrityChain.ElementName).Should().BeFalse("selection fails before the append");
+    }
+
+    [Test]
+    [TestCase("FormatVersion", 2)]
+    [TestCase("Algorithm", "SHA-512")]
+    public async Task ErasePersonalDataAsync_UnsupportedIntegrityFormat_ThrowsMongoEventStoreExceptionAndPersistsNothing(String field, Object value)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update.Set($"{EventIntegrityChain.ElementName}.{field}", BsonValue.Create(value)));
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*Version 2*unsupported integrity format*");
+        await AssertUntouchedAsync(context, aggregateId, 2);
     }
 
     [Test]
