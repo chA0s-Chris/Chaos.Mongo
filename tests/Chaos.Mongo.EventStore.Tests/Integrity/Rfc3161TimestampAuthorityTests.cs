@@ -457,6 +457,34 @@ public class Rfc3161TimestampAuthorityTests
         exception.AuthorityName.Should().Be("test-tsa");
     }
 
+    [Test]
+    public async Task TimestampAsync_RsaSignerWithMinimumKeySize_ReturnsToken()
+    {
+        var authority = CreateTestAuthority(rsaKeySize: 2048).CreateAuthority();
+
+        var token = await authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateChain.Should().HaveCount(2);
+    }
+
+    [Test]
+    public async Task TimestampAsync_RsaSignerWithShortKey_Throws()
+    {
+        var authority = CreateTestAuthority(rsaKeySize: 1024).CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("1024 bits, fewer than the required 2048");
+    }
+
+    [Test]
+    public async Task TimestampAsync_Sha1SignatureDigest_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.Sha1Digest);
+
+        exception.Message.Should().Contain("weak algorithm");
+    }
+
     [TestCase(false, false)]
     [TestCase(true, true)]
     public async Task TimestampAsync_SigningCertificateNotValidForTimestamping_Throws(Boolean timestampingUsage, Boolean expiredSigner)
@@ -725,7 +753,8 @@ public class Rfc3161TimestampAuthorityTests
                                                        Boolean alternativeTsaName = false,
                                                        Byte[]? rawKeyUsage = null,
                                                        Boolean duplicateKeyUsage = false,
-                                                       Byte[]? rawAlternativeNames = null)
+                                                       Byte[]? rawAlternativeNames = null,
+                                                       Int32? rsaKeySize = null)
     {
         var testAuthority = new TestTimestampAuthority(crlLocations,
                                                        rawCrlDistributionPoints,
@@ -736,7 +765,8 @@ public class Rfc3161TimestampAuthorityTests
                                                        alternativeTsaName,
                                                        rawKeyUsage,
                                                        duplicateKeyUsage,
-                                                       rawAlternativeNames);
+                                                       rawAlternativeNames,
+                                                       rsaKeySize);
         _testAuthorities.Add(testAuthority);
         return testAuthority;
     }

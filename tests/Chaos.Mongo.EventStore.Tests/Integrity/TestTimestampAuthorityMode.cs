@@ -33,5 +33,6 @@ public enum TestTimestampAuthorityMode
     CrlFromOtherIssuer,
     CrlExpired,
     CounterSigned,
-    IgnoresRequestedPolicy
+    IgnoresRequestedPolicy,
+    Sha1Digest
 }

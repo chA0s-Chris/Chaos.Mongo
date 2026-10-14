@@ -53,7 +53,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// point, or carries <paramref name="rawCrlDistributionPoints"/> as the extension value when given. Tokens name
     /// the signer's subject as their TSA name, or its DNS alternative name when <paramref name="alternativeTsaName"/>
     /// is set. The signer's key usage extension carries <paramref name="rawKeyUsage"/> as its value when given; the
-    /// signer then has an RSA key, because the ECDSA key accessors decode the key usage themselves. With
+    /// signer then has an RSA key, because the ECDSA key accessors decode the key usage themselves, and it has one
+    /// of <paramref name="rsaKeySize"/> bits when given. With
     /// <paramref name="duplicateKeyUsage"/> the signer carries its key usage extension twice, and with an alternative
     /// TSA name its subject alternative names extension carries <paramref name="rawAlternativeNames"/> when given.
     /// </summary>
@@ -66,15 +67,17 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   Boolean alternativeTsaName = false,
                                   Byte[]? rawKeyUsage = null,
                                   Boolean duplicateKeyUsage = false,
-                                  Byte[]? rawAlternativeNames = null)
+                                  Byte[]? rawAlternativeNames = null,
+                                  Int32? rsaKeySize = null)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
         Root = CreateRoot("CN=Chaos.Mongo Test TSA Root", notBefore, notAfter);
         _alternativeTsaName = alternativeTsaName;
 
-        using var ecdsaKey = rawKeyUsage is null ? ECDsa.Create(ECCurve.NamedCurves.nistP256) : null;
-        using var rsaKey = rawKeyUsage is null ? null : RSA.Create(2048);
+        var rsaSigner = rawKeyUsage is not null || rsaKeySize is not null;
+        using var ecdsaKey = rsaSigner ? null : ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var rsaKey = rsaSigner ? RSA.Create(rsaKeySize ?? 2048) : null;
         var request = ecdsaKey is not null
             ? new CertificateRequest("CN=Chaos.Mongo Test TSA", ecdsaKey, HashAlgorithmName.SHA256)
             : new CertificateRequest("CN=Chaos.Mongo Test TSA", rsaKey!, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -380,7 +383,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), content));
         var signer = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, SigningCertificate)
         {
-            DigestAlgorithm = new Oid("2.16.840.1.101.3.4.2.1"),
+            DigestAlgorithm = new Oid(Mode == TestTimestampAuthorityMode.Sha1Digest ? "1.3.14.3.2.26" : "2.16.840.1.101.3.4.2.1"),
             IncludeOption = X509IncludeOption.EndCertOnly
         };
         var attributeCertificate = Mode == TestTimestampAuthorityMode.WrongEssCertId ? Root : SigningCertificate;

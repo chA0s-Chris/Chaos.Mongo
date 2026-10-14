@@ -15,7 +15,8 @@ using System.Security.Cryptography.X509Certificates;
 /// Imprint, nonce, signature and ESSCertID are validated by the <c>System.Security.Cryptography.Pkcs</c> types, the
 /// certificate chain by <see cref="X509Chain"/> against the configured trust. The signing certificate must be reserved
 /// for timestamping and permit signatures, a <c>tsa</c> name in the token must correspond to one of its subject names,
-/// and the token must carry no signature besides the authority's and be issued under the configured policy. A token is
+/// and the token must carry no signature besides the authority's, be signed with a collision-resistant digest and a key
+/// of adequate size, and be issued under the configured policy. A token is
 /// returned only together with the CRLs of every distribution point its chain names; a CRL that cannot be downloaded
 /// or is not a current CRL of the expected issuer fails the attempt, and the attempt's HTTP work as a whole is bounded by
 /// <see cref="Rfc3161TimestampAuthorityOptions.AttemptTimeout"/> and every response body by
@@ -24,10 +25,41 @@ using System.Security.Cryptography.X509Certificates;
 internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 {
     private const Int32 DigestLength = 32;
+    private const String EcPublicKeyOid = "1.2.840.10045.2.1";
+    private const Int32 MinimumEcKeySize = 256;
+    private const Int32 MinimumRsaKeySize = 2048;
     private const Int32 NonceLength = 16;
     private const Int32 ReadChunkSize = 81920;
+    private const String RsaPublicKeyOid = "1.2.840.113549.1.1.1";
     private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
     private const String TimestampQueryMediaType = "application/timestamp-query";
+
+    /// <summary>
+    /// MD2, MD4, MD5 and SHA-1, which are not collision resistant.
+    /// </summary>
+    private static readonly HashSet<String> WeakDigestAlgorithmOids =
+    [
+        "1.2.840.113549.2.2",
+        "1.2.840.113549.2.4",
+        "1.2.840.113549.2.5",
+        "1.3.14.3.2.26"
+    ];
+
+    /// <summary>
+    /// Signature algorithms that name one of <see cref="WeakDigestAlgorithmOids"/>: RSA with MD2, MD4, MD5 and SHA-1,
+    /// ECDSA with SHA-1 and DSA with SHA-1.
+    /// </summary>
+    private static readonly HashSet<String> WeakSignatureAlgorithmOids =
+    [
+        "1.2.840.113549.1.1.2",
+        "1.2.840.113549.1.1.3",
+        "1.2.840.113549.1.1.4",
+        "1.2.840.113549.1.1.5",
+        "1.3.14.3.2.29",
+        "1.2.840.10045.4.1",
+        "1.2.840.10040.4.3"
+    ];
+
     private readonly HttpClient _httpClient;
     private readonly Rfc3161TimestampAuthorityOptions _options;
     private readonly Oid? _policyId;
@@ -98,6 +130,29 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         return header.NextUpdate < tokenTime
             ? new InvalidDataException($"The CRL at {location} expired at {header.NextUpdate:O}, before the token's time {tokenTime:O}.")
             : null;
+    }
+
+    /// <summary>
+    /// Gets the size of an RSA or ECDSA key and the minimum this authority requires for it; other key types are not
+    /// size-checked.
+    /// </summary>
+    private static (Int32? KeySize, Int32 Minimum) GetKeySize(X509Certificate2 certificate)
+    {
+        switch (certificate.PublicKey.Oid.Value)
+        {
+            case RsaPublicKeyOid:
+                using (var key = certificate.GetRSAPublicKey())
+                {
+                    return (key?.KeySize, MinimumRsaKeySize);
+                }
+            case EcPublicKeyOid:
+                using (var key = certificate.GetECDsaPublicKey())
+                {
+                    return (key?.KeySize, MinimumEcKeySize);
+                }
+            default:
+                return (null, 0);
+        }
     }
 
     /// <summary>
@@ -293,6 +348,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             ValidatePolicy(token);
             ValidateTime(token);
             ValidateSigner(signer);
+            ValidateAlgorithms(token, signer);
             ValidateAuthorityName(token, signer);
             chain = BuildChain(token, signer);
         }
@@ -304,6 +360,29 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
 
         return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp);
+    }
+
+    /// <summary>
+    /// Requires the token to be signed with a collision-resistant digest and the signing key to have at least 2048 bits
+    /// for RSA or 256 bits for ECDSA, so a token is not weak evidence from the day it is issued (ETSI TS 119 312).
+    /// The Pkcs types accept any algorithm. The signing-certificate identifier may still use SHA-1 (ESSCertID), which
+    /// only names the certificate.
+    /// </summary>
+    private void ValidateAlgorithms(Rfc3161TimestampToken token, X509Certificate2 signer)
+    {
+        var signerInfo = token.AsSignedCms().SignerInfos[0];
+        if (WeakDigestAlgorithmOids.Contains(signerInfo.DigestAlgorithm.Value!) ||
+            WeakSignatureAlgorithmOids.Contains(signerInfo.SignatureAlgorithm.Value!))
+        {
+            throw Fail($"the token is signed with a weak algorithm (digest {signerInfo.DigestAlgorithm.Value}, signature " +
+                       $"{signerInfo.SignatureAlgorithm.Value}); MD5 and SHA-1 are not accepted.");
+        }
+
+        var (keySize, minimum) = GetKeySize(signer);
+        if (keySize < minimum)
+        {
+            throw Fail($"the signing key has {keySize} bits, fewer than the required {minimum}.");
+        }
     }
 
     /// <summary>
