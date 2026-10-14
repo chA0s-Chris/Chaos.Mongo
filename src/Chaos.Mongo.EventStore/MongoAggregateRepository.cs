@@ -3,7 +3,6 @@
 namespace Chaos.Mongo.EventStore;
 
 using Chaos.Mongo.EventStore.Integrity;
-using MongoDB.Bson;
 using MongoDB.Driver;
 
 /// <summary>
@@ -23,7 +22,7 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
         ArgumentNullException.ThrowIfNull(options);
         _mongoHelper = mongoHelper;
         _options = options;
-        _observationalEventExclusion = CreateObservationalEventExclusion(options.ObservationalEventDiscriminators);
+        _observationalEventExclusion = EventDocumentFields<TAggregate>.ExcludeObservationalEvents(options.ObservationalEventDiscriminators);
     }
 
     /// <inheritdoc/>
@@ -53,48 +52,6 @@ public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<
         var filter = Builders<Event<TAggregate>>.Filter;
         return filter.Lte(e => e.Revision, revision) |
                (filter.Exists(e => e.Revision, false) & filter.Lte(e => e.Version, revision));
-    }
-
-    /// <summary>
-    /// Creates a filter that excludes events whose concrete type is a registered observational event type.
-    /// The concrete discriminator is the last element of a hierarchical discriminator array, or the scalar
-    /// discriminator itself. Matching only the concrete discriminator keeps unknown descendants of
-    /// observational types in the results, so they still fail during deserialization.
-    /// </summary>
-    private static FilterDefinition<Event<TAggregate>> CreateObservationalEventExclusion(IReadOnlyList<String> discriminators)
-    {
-        if (discriminators.Count == 0)
-        {
-            return Builders<Event<TAggregate>>.Filter.Empty;
-        }
-
-        var discriminatorElement = $"${EventDocumentFields<TAggregate>.Discriminator}";
-        var concreteDiscriminator = new BsonDocument(
-            "$cond",
-            new BsonArray
-            {
-                new BsonDocument("$isArray", discriminatorElement),
-                new BsonDocument("$arrayElemAt", new BsonArray
-                {
-                    discriminatorElement,
-                    -1
-                }),
-                discriminatorElement
-            });
-
-        return new BsonDocumentFilterDefinition<Event<TAggregate>>(
-            new BsonDocument(
-                "$expr",
-                new BsonDocument(
-                    "$not",
-                    new BsonArray
-                    {
-                        new BsonDocument("$in", new BsonArray
-                        {
-                            concreteDiscriminator,
-                            new BsonDocument("$literal", new BsonArray(discriminators))
-                        })
-                    })));
     }
 
     /// <summary>

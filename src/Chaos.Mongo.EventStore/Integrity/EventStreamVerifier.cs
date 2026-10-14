@@ -25,7 +25,8 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
-    /// Recomputes the hash chain of a stream and reports the first broken version.
+    /// Recomputes the hash chain of a stream and reports the first broken version. For an intact stream it also
+    /// reports erased values that no later erasure event of the stream records.
     /// </summary>
     /// <remarks>
     /// A consistent chain does not reveal deleted newest events or a deleted stream, because the
@@ -39,6 +40,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     {
         var collection = _mongoHelper.Database.GetCollection<RawBsonDocument>(_options.EventsCollectionName);
         var versionElement = EventDocumentFields<TAggregate>.Version;
+        var discriminatorElement = EventDocumentFields<TAggregate>.Discriminator;
 
         using var cursor = await collection.Find(EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId))
                                            .Sort(new BsonDocument(versionElement, 1))
@@ -46,6 +48,8 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
 
         var expectedVersion = 1L;
         var previousHash = EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId);
+        var erasures = new List<UnrecordedErasure>();
+        var recordedErasures = new HashSet<UnrecordedErasure>();
 
         while (await cursor.MoveNextAsync(cancellationToken))
         {
@@ -61,10 +65,22 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                     }
 
                     rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue);
-                    var failure = VerifyEvent(rawDocument.ToBson(), integrityValue, previousHash, out var hash);
+                    var failure = VerifyEvent(rawDocument.ToBson(), integrityValue, previousHash, out var hash, out var erasedPaths);
                     if (failure is { } verificationFailure)
                     {
                         return StreamVerificationResult.Broken(expectedVersion, verificationFailure);
+                    }
+
+                    foreach (var path in erasedPaths)
+                    {
+                        erasures.Add(new UnrecordedErasure(expectedVersion, path));
+                    }
+
+                    // The erasure event is identified by its discriminator; its records are trusted once its own hash verified.
+                    if (rawDocument.TryGetValue(discriminatorElement, out var discriminator) &&
+                        EventDocumentFields<TAggregate>.ResolveEventType(discriminator) == typeof(PersonalDataErased<TAggregate>))
+                    {
+                        CollectErasureRecords(rawDocument, expectedVersion, recordedErasures);
                     }
 
                     previousHash = hash;
@@ -73,7 +89,42 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             }
         }
 
-        return StreamVerificationResult.Intact;
+        erasures.RemoveAll(recordedErasures.Contains);
+        return StreamVerificationResult.IntactWith(erasures);
+    }
+
+    /// <summary>
+    /// Reads the <c>(Version, Path)</c> records of an erasure event from its raw document. Only records of earlier
+    /// versions document an erasure. Entries that do not have the pinned shape are ignored.
+    /// </summary>
+    private static void CollectErasureRecords(RawBsonDocument erasureEvent, Int64 erasureVersion, HashSet<UnrecordedErasure> recordedErasures)
+    {
+        if (!erasureEvent.TryGetValue(PersonalDataErased<TAggregate>.EntriesElement, out var entriesValue) ||
+            entriesValue is not BsonArray entries)
+        {
+            return;
+        }
+
+        foreach (var entryValue in entries)
+        {
+            if (entryValue is not BsonDocument entry ||
+                !entry.TryGetValue(PersonalDataErasureEntry.VersionElement, out var versionValue) ||
+                !TryReadVersion(versionValue, out var version) ||
+                version >= erasureVersion ||
+                !entry.TryGetValue(PersonalDataErasureEntry.PathsElement, out var pathsValue) ||
+                pathsValue is not BsonArray paths)
+            {
+                continue;
+            }
+
+            foreach (var path in paths)
+            {
+                if (path is BsonString { Value: var erasedPath })
+                {
+                    recordedErasures.Add(new UnrecordedErasure(version, erasedPath));
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -104,12 +155,17 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         }
     }
 
+    /// <summary>
+    /// Verifies one event and reports the recorded paths whose values are erased.
+    /// </summary>
     private static StreamVerificationFailure? VerifyEvent(Byte[] document,
                                                           BsonValue? integrityValue,
                                                           Byte[] expectedPreviousHash,
-                                                          out Byte[] hash)
+                                                          out Byte[] hash,
+                                                          out List<String> erasedPaths)
     {
         hash = [];
+        erasedPaths = [];
         if (integrityValue is null)
         {
             return StreamVerificationFailure.NotSealed;
@@ -154,6 +210,9 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                         break;
                     case PersonalDataVerification.NotErased:
                         personalDataFailure ??= StreamVerificationFailure.ErasedPersonalDataPresent;
+                        break;
+                    case PersonalDataVerification.Erased:
+                        erasedPaths.Add(commitment.Path);
                         break;
                 }
             }

@@ -37,22 +37,22 @@ Everything stays internal until #160 makes the feature public.
 
 ### Layer 2: Erasure
 
-- [ ] A new internal `ErasePersonalDataAsync(Guid aggregateId, ErasureRequest request, CancellationToken)` performs the following in one transaction. On failure, nothing is persisted.
+- [x] A new internal `ErasePersonalDataAsync(Guid aggregateId, ErasureRequest request, CancellationToken)` performs the following in one transaction. On failure, nothing is persisted.
   1. Sets the selected values to BSON `null` in place and removes their salts; commitments stay.
   2. Appends a chained erasure event.
   3. Rebuilds the read model.
   4. Rebuilds the affected checkpoints.
-- [ ] After erasure, the stream verification succeeds. A stream head anchored before erasure still matches its stored hash, and its Merkle inclusion proof still verifies.
-- [ ] `GetAtVersionAsync` and `GetAtRevisionAsync` replay events with erased personal data, and a later `AppendEventsAsync` validates against the rebuilt read model.
-- [ ] Stream verification reports a value that is `null` and has no salt, and that no later erasure event in the stream records, as "erased without an erasure record". This finding does not make the chain broken.
-- [ ] Erasure fails without persisting anything when:
+- [x] After erasure, the stream verification succeeds. A stream head anchored before erasure still matches its stored hash, and its Merkle inclusion proof still verifies.
+- [x] `GetAtVersionAsync` and `GetAtRevisionAsync` replay events with erased personal data, and a later `AppendEventsAsync` validates against the rebuilt read model.
+- [x] Stream verification reports a value that is `null` and has no salt, and that no later erasure event in the stream records, as "erased without an erasure record". This finding does not make the chain broken.
+- [x] Erasure fails without persisting anything when:
   - an explicitly requested version does not exist or has no recorded commitments
   - a requested path is recorded, with or without its salt, in none of the selected events
   - a selected event is not sealed
   - protection is disabled
-- [ ] Erasure is idempotent: values already erased are skipped, and a request whose selected commitments are all erased appends no event and succeeds.
-- [ ] Erasure updates are not reported as anchor candidates by the change-stream candidate source.
-- [ ] Automated tests cover the behavior above.
+- [x] Erasure is idempotent: values already erased are skipped, and a request whose selected commitments are all erased appends no event and succeeds.
+- [x] Erasure updates are not reported as anchor candidates by the change-stream candidate source.
+- [x] Automated tests cover the behavior above.
 
 ## Technical Details
 

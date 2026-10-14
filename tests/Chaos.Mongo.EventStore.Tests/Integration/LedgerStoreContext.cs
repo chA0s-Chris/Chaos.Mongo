@@ -28,12 +28,18 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
     public IAnchorCandidateSource CandidateSource
         => ServiceProvider.GetRequiredService<IAnchorCandidateSource>();
 
+    public PersonalDataEraser<LedgerAggregate> Eraser
+        => ServiceProvider.GetRequiredService<PersonalDataEraser<LedgerAggregate>>();
+
     public IMongoCollection<BsonDocument> Events
         => MongoHelper.Database.GetCollection<BsonDocument>(Options.EventsCollectionName);
 
     public IMongoHelper MongoHelper { get; }
 
     public MongoEventStoreOptions<LedgerAggregate> Options { get; }
+
+    public IAggregateRepository<LedgerAggregate> Repository
+        => ServiceProvider.GetRequiredService<IAggregateRepository<LedgerAggregate>>();
 
     public ServiceProvider ServiceProvider { get; }
 

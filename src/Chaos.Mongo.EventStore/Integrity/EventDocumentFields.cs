@@ -40,6 +40,51 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     public static String Version => ElementNameOf(nameof(Event<TAggregate>.Version));
 
     /// <summary>
+    /// Creates a filter that excludes events whose concrete type is a registered observational event type.
+    /// The concrete discriminator is the last element of a hierarchical discriminator array, or the scalar
+    /// discriminator itself. Matching only the concrete discriminator keeps unknown descendants of
+    /// observational types in the results, so they still fail during deserialization.
+    /// </summary>
+    /// <param name="discriminators">The discriminators of the observational event types.</param>
+    /// <returns>The filter, empty when there is no observational event type.</returns>
+    public static FilterDefinition<Event<TAggregate>> ExcludeObservationalEvents(IReadOnlyList<String> discriminators)
+    {
+        ArgumentNullException.ThrowIfNull(discriminators);
+        if (discriminators.Count == 0)
+        {
+            return Builders<Event<TAggregate>>.Filter.Empty;
+        }
+
+        var discriminatorElement = $"${Discriminator}";
+        var concreteDiscriminator = new BsonDocument(
+            "$cond",
+            new BsonArray
+            {
+                new BsonDocument("$isArray", discriminatorElement),
+                new BsonDocument("$arrayElemAt", new BsonArray
+                {
+                    discriminatorElement,
+                    -1
+                }),
+                discriminatorElement
+            });
+
+        return new BsonDocumentFilterDefinition<Event<TAggregate>>(
+            new BsonDocument(
+                "$expr",
+                new BsonDocument(
+                    "$not",
+                    new BsonArray
+                    {
+                        new BsonDocument("$in", new BsonArray
+                        {
+                            concreteDiscriminator,
+                            new BsonDocument("$literal", new BsonArray(discriminators))
+                        })
+                    })));
+    }
+
+    /// <summary>
     /// Creates a filter matching all events of an aggregate.
     /// </summary>
     /// <typeparam name="TDocument">The untyped document type of the collection.</typeparam>
