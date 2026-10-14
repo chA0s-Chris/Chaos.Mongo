@@ -433,6 +433,60 @@ public class PersonalDataErasureIntegrationTests
     }
 
     [Test]
+    public async Task ErasePersonalDataAsync_ValueRestoredWithoutSalt_ThrowsMongoEventStoreExceptionAndPersistsNothing()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [1], [MemoPath]));
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1),
+            Builders<BsonDocument>.Update.Set(MemoPath, "restored"));
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*'Memo' at version 1*without its salt but is not erased*");
+        (await context.CountEventsAsync(aggregateId)).Should().Be(3);
+        (await context.FindEventAsync(aggregateId, 1))[MemoPath].AsString.Should().Be("restored");
+        var second = await context.FindEventAsync(aggregateId, 2);
+        second[MemoPath].AsString.Should().Be(DefaultMemo);
+        LedgerStoreContext.ReadIntegrity(second).PersonalData.Should().AllSatisfy(commitment => commitment.Salt.Should().NotBeNull());
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_ValuesErasedOutsideTheEraser_RebuildsFromTheirVersion()
+    {
+        var context = await CreateContextAsync(configureOptions: options => options.CheckpointInterval = 2);
+        var aggregateId = Guid.NewGuid();
+        for (var version = 1; version <= 6; version++)
+        {
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, version)]);
+        }
+
+        for (var version = 1; version <= 3; version++)
+        {
+            await context.Events.UpdateOneAsync(
+                EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),
+                Builders<BsonDocument>.Update.Set(MemoPath, BsonNull.Value));
+            await context.UnsetSaltAsync(aggregateId, version, MemoPath);
+        }
+
+        var erased = await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", paths: [MemoPath]));
+
+        Describe(erased).Should().Equal((4, MemoPath), (5, MemoPath), (6, MemoPath));
+        var checkpoints = await context.ReadRawCheckpointsAsync(aggregateId);
+        checkpoints.Select(checkpoint => checkpoint["_id"]["Version"].ToInt64()).Should().Equal(2, 4, 6);
+        Memos(checkpoints[0]).Should().Equal(null, null);
+        Memos(checkpoints[1]).Should().Equal(null, null, null, null);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(null, null, null, null, null, null);
+        (await context.CreateVerifier().VerifyStreamAsync(aggregateId))
+            .Should().Be(StreamVerificationResult.IntactWith([
+                new UnrecordedErasure(1, MemoPath),
+                new UnrecordedErasure(2, MemoPath),
+                new UnrecordedErasure(3, MemoPath)
+            ]));
+    }
+
+    [Test]
     [TestCase(false)]
     [TestCase(true)]
     public async Task ErasePersonalDataAsync_WholeStream_NullsValuesRemovesSaltsAndRecordsErasure(Boolean bulkWrite)

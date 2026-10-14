@@ -135,12 +135,14 @@ _integrity: { …, PersonalData: [ { Path: "Recipient.Name", Salt: BinData(32), 
   - The selection is computed from stored `_integrity` data before the append. A selected event without `_integrity` fails with `MongoEventStoreException` before anything is written.
   - A whole-stream request fails with `MongoConcurrencyException` when the stream grew after the selection, so no later event escapes it.
 - **Rebuild:**
-  - Replays the state-changing events inside the transaction, starting from the newest checkpoint below the first erased version, or from the stream start.
-  - In the same pass, it rewrites the `State` of every existing checkpoint at or above the first erased version; `Id` and `Revision` stay unchanged.
+  - The first affected version is the earliest selected event that holds a value erased by this request or a requested value that is already erased, so values erased outside the eraser are removed from later checkpoints and the read model too. The erasure event still records only the values this request erases.
+  - Replays the state-changing events inside the transaction, starting from the newest checkpoint below the first affected version, or from the stream start.
+  - In the same pass, it rewrites the `State` of every existing checkpoint at or above the first affected version; `Id` and `Revision` stay unchanged.
   - It then replaces the read model and keeps its `CreatedUtc`.
   - No new checkpoints are created.
-  - Checkpoints below the first erased version cannot contain the erased values and stay untouched.
-- **Known limit:** a long stream without a checkpoint below the first erased version is replayed within one transaction, bounded by `transactionLifetimeLimitSeconds`.
+  - Checkpoints below the first affected version cannot contain the erased values and stay untouched.
+  - A request with nothing left to erase does not rebuild.
+- **Known limit:** a long stream without a checkpoint below the first affected version is replayed within one transaction, bounded by `transactionLifetimeLimitSeconds`.
 - **Replay contract:** event `Execute` implementations must handle `null` in marked members. An `Execute` that throws aborts the erasure, and nothing is persisted. The rebuilt read model and checkpoints hold only what replaying the events produces; read-model fields written outside `Execute` are reset.
 
 ### Out of scope

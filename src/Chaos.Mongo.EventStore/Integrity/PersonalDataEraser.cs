@@ -14,7 +14,7 @@ using MongoDB.Driver;
 ///     An erasure appends a <see cref="PersonalDataErased{TAggregate}"/> event through the ordinary append path, so
 ///     sealing, concurrency retries and both write paths apply unchanged. Inside the append transaction it sets the
 ///     selected values to <c>null</c> in place, removes their salts while their commitments stay, and rebuilds the read
-///     model and the checkpoints at or above the first erased version. On failure, nothing is persisted.
+///     model and the checkpoints at or above the first affected version. On failure, nothing is persisted.
 ///     </para>
 ///     <para>
 ///     Only the <c>PersonalData</c> subfield of the integrity data is rewritten, so the change-stream candidate source,
@@ -25,8 +25,14 @@ using MongoDB.Driver;
 ///     </para>
 ///     <para>
 ///     The rebuilt read model and checkpoints hold only what replaying the events produces; read-model fields written
-///     outside <c>Execute</c> are reset. A request without explicit versions fails when events were appended after its
-///     selection, so no later event escapes it.
+///     outside <c>Execute</c> are reset. The first affected version is the earliest one holding a selected value or a
+///     requested value that is already erased, so values erased outside the eraser are removed from the checkpoints and
+///     the read model too.
+///     </para>
+///     <para>
+///     An erasure that appends its event fails when a request without explicit versions finds events appended after
+///     its selection, so no later event precedes the erasure record without being covered by it. A request with
+///     nothing left to erase writes nothing, rebuilds nothing and reports the stream as it was read.
 ///     </para>
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
@@ -83,7 +89,7 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                 $"Personal data of aggregate type {typeof(TAggregate).Name} cannot be erased, because integrity protection is disabled.");
         }
 
-        var (entries, lastSelectedVersion) = await SelectAsync(aggregateId, request, cancellationToken);
+        var (entries, lastSelectedVersion, firstAffectedVersion) = await SelectAsync(aggregateId, request, cancellationToken);
         if (entries.Count == 0)
         {
             return entries;
@@ -109,7 +115,7 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                         $"Aggregate '{aggregateId}' received events after the personal data to erase was selected.");
                 }
 
-                return EraseAsync(session, aggregate, entries, ct);
+                return EraseAsync(session, aggregate, entries, firstAffectedVersion, ct);
             },
             cancellationToken: cancellationToken);
 
@@ -217,14 +223,71 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     }
 
     /// <summary>
-    /// Selects the paths of one event that match the request and still have their salt, recording every matching
-    /// path whether or not it has one.
+    /// Computes the selection from the stored documents. The first affected version is the earliest one holding a
+    /// selected value or a requested value that is already erased, so the rebuild also removes values erased outside
+    /// the eraser from later checkpoints.
     /// </summary>
-    private static PersonalDataErasureEntry? SelectEntry(Int64 version,
+    private static (List<PersonalDataErasureEntry> Entries, Int64 LastSelectedVersion, Int64 FirstAffectedVersion) Select(
+        Guid aggregateId,
+        ErasureRequest request,
+        List<RawBsonDocument> documents)
+    {
+        if (documents.Count == 0 && request.Versions is null)
+        {
+            throw new MongoEventStoreException($"Aggregate '{aggregateId}' has no events, so there is no personal data to erase.");
+        }
+
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var requestedPaths = request.Paths is null ? null : new HashSet<String>(request.Paths, StringComparer.Ordinal);
+        var entries = new List<PersonalDataErasureEntry>();
+        var foundVersions = new HashSet<Int64>();
+        var recordedPaths = new HashSet<String>(StringComparer.Ordinal);
+        var lastSelectedVersion = 0L;
+        Int64? firstAffectedVersion = null;
+
+        foreach (var document in documents)
+        {
+            var version = document[versionElement].ToInt64();
+            foundVersions.Add(version);
+            lastSelectedVersion = version;
+
+            var commitments = ReadCommitments(document, aggregateId, version);
+            if (request.Versions is not null && commitments.Count == 0)
+            {
+                throw new MongoEventStoreException($"Version {version} of aggregate '{aggregateId}' has no recorded personal data.");
+            }
+
+            var storedDocument = RawBsonElements.RemoveTopLevelElement(document.ToBson(), EventIntegrityChain.ElementName);
+            var entry = SelectEntry(aggregateId, version, storedDocument, commitments, requestedPaths, recordedPaths, out var hasErasedPath);
+            if (entry is not null)
+            {
+                entries.Add(entry);
+            }
+
+            if (entry is not null || hasErasedPath)
+            {
+                firstAffectedVersion ??= version;
+            }
+        }
+
+        EnsureRequestSatisfied(aggregateId, request, foundVersions, recordedPaths);
+        return (entries, lastSelectedVersion, firstAffectedVersion ?? lastSelectedVersion);
+    }
+
+    /// <summary>
+    /// Selects the paths of one event that match the request and still have their salt, recording every matching
+    /// path whether or not it has one. A matching path without its salt must hold an erased value: counting a value
+    /// restored without its salt as erased would let the request succeed while the value stays stored.
+    /// </summary>
+    private static PersonalDataErasureEntry? SelectEntry(Guid aggregateId,
+                                                         Int64 version,
+                                                         Byte[] storedDocument,
                                                          IReadOnlyList<PersonalDataCommitment> commitments,
                                                          HashSet<String>? requestedPaths,
-                                                         HashSet<String> recordedPaths)
+                                                         HashSet<String> recordedPaths,
+                                                         out Boolean hasErasedPath)
     {
+        hasErasedPath = false;
         var paths = new List<String>();
         foreach (var commitment in commitments)
         {
@@ -237,7 +300,17 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
             if (commitment.Salt is not null)
             {
                 paths.Add(commitment.Path);
+                continue;
             }
+
+            if (PersonalDataCommitments.Verify(storedDocument, commitment) != PersonalDataVerification.Erased)
+            {
+                throw new MongoEventStoreException(
+                    $"The value of '{commitment.Path}' at version {version} of aggregate '{aggregateId}' is stored without its salt but " +
+                    "is not erased, so it cannot be erased without destroying the evidence of tampering.");
+            }
+
+            hasErasedPath = true;
         }
 
         return paths.Count == 0
@@ -302,6 +375,7 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     private async Task EraseAsync(IClientSessionHandle session,
                                   TAggregate readModel,
                                   List<PersonalDataErasureEntry> entries,
+                                  Int64 firstAffectedVersion,
                                   CancellationToken cancellationToken)
     {
         var aggregateId = readModel.Id;
@@ -315,7 +389,7 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                 $"Personal data of aggregate '{aggregateId}' was erased concurrently.");
         }
 
-        await RebuildAsync(session, readModel, entries[0].Version, cancellationToken);
+        await RebuildAsync(session, readModel, firstAffectedVersion, cancellationToken);
     }
 
     private IMongoCollection<CheckpointDocument<TAggregate>> GetCheckpointCollection()
@@ -363,23 +437,23 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     }
 
     /// <summary>
-    /// Reads the selected events: the requested versions, or every event of the stream.
+    /// Reads the selected events as stored: the requested versions, or every event of the stream. The stored bytes are
+    /// needed to check that values without their salt are erased.
     /// </summary>
-    private async Task<List<BsonDocument>> ReadSelectedDocumentsAsync(Guid aggregateId, ErasureRequest request, CancellationToken cancellationToken)
+    private async Task<List<RawBsonDocument>> ReadSelectedDocumentsAsync(Guid aggregateId, ErasureRequest request, CancellationToken cancellationToken)
     {
         var versionElement = EventDocumentFields<TAggregate>.Version;
-        var filter = EventDocumentFields<TAggregate>.ForAggregate<BsonDocument>(aggregateId);
+        var filter = EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId);
         if (request.Versions is { } versions)
         {
-            filter &= new BsonDocumentFilterDefinition<BsonDocument>(
+            filter &= new BsonDocumentFilterDefinition<RawBsonDocument>(
                 new BsonDocument(versionElement, new BsonDocument("$in", new BsonArray(versions.Distinct()))));
         }
 
-        return await GetEventDocumentsCollection()
-                     .Find(filter)
-                     .Sort(Builders<BsonDocument>.Sort.Ascending(versionElement))
-                     .Project(Builders<BsonDocument>.Projection.Include(versionElement).Include(EventIntegrityChain.ElementName))
-                     .ToListAsync(cancellationToken);
+        return await _mongoHelper.Database.GetCollection<RawBsonDocument>(_options.EventsCollectionName)
+                                 .Find(filter)
+                                 .Sort(Builders<RawBsonDocument>.Sort.Ascending(versionElement))
+                                 .ToListAsync(cancellationToken);
     }
 
     /// <summary>
@@ -477,44 +551,24 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     }
 
     /// <summary>
-    /// Computes the selection from the stored integrity data, before the append.
+    /// Reads the selected events and computes the selection, before the append.
     /// </summary>
-    private async Task<(List<PersonalDataErasureEntry> Entries, Int64 LastSelectedVersion)> SelectAsync(Guid aggregateId,
-                                                                                                        ErasureRequest request,
-                                                                                                        CancellationToken cancellationToken)
+    private async Task<(List<PersonalDataErasureEntry> Entries, Int64 LastSelectedVersion, Int64 FirstAffectedVersion)> SelectAsync(
+        Guid aggregateId,
+        ErasureRequest request,
+        CancellationToken cancellationToken)
     {
         var documents = await ReadSelectedDocumentsAsync(aggregateId, request, cancellationToken);
-        if (documents.Count == 0 && request.Versions is null)
+        try
         {
-            throw new MongoEventStoreException($"Aggregate '{aggregateId}' has no events, so there is no personal data to erase.");
+            return Select(aggregateId, request, documents);
         }
-
-        var versionElement = EventDocumentFields<TAggregate>.Version;
-        var requestedPaths = request.Paths is null ? null : new HashSet<String>(request.Paths, StringComparer.Ordinal);
-        var entries = new List<PersonalDataErasureEntry>();
-        var foundVersions = new HashSet<Int64>();
-        var recordedPaths = new HashSet<String>(StringComparer.Ordinal);
-        var lastSelectedVersion = 0L;
-
-        foreach (var document in documents)
+        finally
         {
-            var version = document[versionElement].ToInt64();
-            foundVersions.Add(version);
-            lastSelectedVersion = version;
-
-            var commitments = ReadCommitments(document, aggregateId, version);
-            if (request.Versions is not null && commitments.Count == 0)
+            foreach (var document in documents)
             {
-                throw new MongoEventStoreException($"Version {version} of aggregate '{aggregateId}' has no recorded personal data.");
-            }
-
-            if (SelectEntry(version, commitments, requestedPaths, recordedPaths) is { } entry)
-            {
-                entries.Add(entry);
+                document.Dispose();
             }
         }
-
-        EnsureRequestSatisfied(aggregateId, request, foundVersions, recordedPaths);
-        return (entries, lastSelectedVersion);
     }
 }
