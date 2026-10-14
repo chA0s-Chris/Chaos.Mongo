@@ -73,6 +73,12 @@ public static class MongoBuilderExtensions
         {
             GetOrAddSingleton<ProtectedStreamRegistry>(builder.Services).Add(new ProtectedStreamType<TAggregate>(options));
 
+            // Erasure appends through the scoped event store, so it is scoped too.
+            builder.Services.AddScoped(sp => new PersonalDataEraser<TAggregate>(
+                                           sp.GetRequiredService<IMongoHelper>(),
+                                           options,
+                                           sp.GetRequiredService<IEventStore<TAggregate>>()));
+
             // Retroactively seal events stored without integrity data
             builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
                                               sp.GetRequiredService<IMongoHelper>(),

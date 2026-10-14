@@ -24,6 +24,12 @@ internal sealed class EventIntegrity
     public Byte[] Hash { get; set; } = [];
 
     /// <summary>
+    /// Gets or sets the commitments to the event's personal data values, or <c>null</c> when none is recorded.
+    /// The chain hash covers each commitment in place of its value.
+    /// </summary>
+    public List<PersonalDataCommitment>? PersonalData { get; set; }
+
+    /// <summary>
     /// Gets or sets the chain hash of the predecessor event, or the stream's genesis value for version 1.
     /// </summary>
     public Byte[] PreviousHash { get; set; } = [];

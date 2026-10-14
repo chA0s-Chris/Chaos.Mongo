@@ -100,13 +100,29 @@ public static class MongoEventStoreSerializationSetup
 
         EnsureEventBaseMapsIntegrity(options);
         EnsureEventBaseMapsRevision<TAggregate>();
+        RegisterPersonalDataErasedClassMap<TAggregate>();
 
         // Register each concrete event type with its discriminator
         foreach (var (eventType, discriminator) in options.EventTypes)
         {
+            if (String.Equals(discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Event type {eventType.Name} uses the discriminator '{discriminator}', which is reserved by the event store " +
+                    "for its personal data erasure event.");
+            }
+
             if (BsonClassMap.IsClassMapRegistered(eventType))
             {
-                EnsureNoReservedElementCollision<TAggregate>(GetRegisteredClassMap(eventType));
+                var registeredClassMap = GetRegisteredClassMap(eventType);
+                if (String.Equals(registeredClassMap.Discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"The class map of event type {eventType.Name} was registered before the event store with the discriminator " +
+                        $"'{registeredClassMap.Discriminator}', which is reserved by the event store for its personal data erasure event.");
+                }
+
+                EnsureNoReservedElementCollision<TAggregate>(registeredClassMap);
                 continue;
             }
 
@@ -118,11 +134,16 @@ public static class MongoEventStoreSerializationSetup
         }
 
         // Derive the replay filter from the registered class maps rather than from EventTypes, because class
-        // maps registered by consumers keep their own discriminators.
+        // maps registered by consumers keep their own discriminators. The erasure event is observational too.
         options.ObservationalEventDiscriminators = options.EventTypes.Keys
                                                           .Where(t => typeof(ObservationalEvent<TAggregate>).IsAssignableFrom(t))
                                                           .Select(t => GetRegisteredClassMap(t).Discriminator)
+                                                          .Append(PersonalDataErased<TAggregate>.Discriminator)
                                                           .ToList();
+
+        // Marks are validated whether or not protection is enabled, so a misconfigured mark surfaces before the
+        // feature is switched on.
+        options.PersonalDataPaths = PersonalDataPathResolver.Resolve(options);
 
         // Register CheckpointId
         if (!BsonClassMap.IsClassMapRegistered(typeof(CheckpointId)))
@@ -243,6 +264,7 @@ public static class MongoEventStoreSerializationSetup
 
     private static void RegisterEventIntegrityClassMap()
     {
+        RegisterPersonalDataCommitmentClassMap();
         if (BsonClassMap.IsClassMapRegistered(typeof(EventIntegrity)))
         {
             return;
@@ -251,7 +273,9 @@ public static class MongoEventStoreSerializationSetup
         // Element names are pinned so convention packs cannot change the stored format, and extra
         // elements are ignored so fields added by later format versions do not break typed reads.
         // Every member is required, so a removed member is malformed instead of silently defaulting,
-        // which would, for example, turn a missing seal mode into Append.
+        // which would, for example, turn a missing seal mode into Append. The personal data commitments
+        // are the only optional member: they are omitted when no path is recorded, so events without
+        // personal data keep the original format.
         BsonClassMap.RegisterClassMap<EventIntegrity>(cm =>
         {
             cm.AutoMap();
@@ -264,6 +288,7 @@ public static class MongoEventStoreSerializationSetup
               .SetElementName(nameof(EventIntegrity.SealMode))
               .SetIsRequired(true)
               .SetSerializer(new EnumSerializer<IntegritySealMode>(BsonType.String));
+            cm.GetMemberMap(i => i.PersonalData).SetElementName(nameof(EventIntegrity.PersonalData)).SetIgnoreIfNull(true);
         });
     }
 
@@ -292,6 +317,62 @@ public static class MongoEventStoreSerializationSetup
             cm.GetMemberMap(s => s.StreamsChecked).SetElementName(nameof(IntegritySealingState.StreamsChecked));
             cm.GetMemberMap(s => s.StreamsSealed).SetElementName(nameof(IntegritySealingState.StreamsSealed));
             cm.GetMemberMap(s => s.EventsSealed).SetElementName(nameof(IntegritySealingState.EventsSealed));
+        });
+    }
+
+    private static void RegisterPersonalDataCommitmentClassMap()
+    {
+        if (BsonClassMap.IsClassMapRegistered(typeof(PersonalDataCommitment)))
+        {
+            return;
+        }
+
+        // The salt is the only optional member: its absence records that the value was erased.
+        BsonClassMap.RegisterClassMap<PersonalDataCommitment>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
+            cm.GetMemberMap(c => c.Path).SetElementName(nameof(PersonalDataCommitment.Path)).SetIsRequired(true);
+            cm.GetMemberMap(c => c.Salt).SetElementName(nameof(PersonalDataCommitment.Salt)).SetIgnoreIfNull(true);
+            cm.GetMemberMap(c => c.Commitment).SetElementName(nameof(PersonalDataCommitment.Commitment)).SetIsRequired(true);
+        });
+    }
+
+    /// <summary>
+    /// Registers the erasure event for the aggregate type, whether or not protection is enabled, so streams
+    /// containing it still deserialize. Element names are pinned because the verifier reads the event raw.
+    /// </summary>
+    private static void RegisterPersonalDataErasedClassMap<TAggregate>()
+        where TAggregate : class, IAggregate, new()
+    {
+        RegisterPersonalDataErasureEntryClassMap();
+        var eventType = typeof(PersonalDataErased<TAggregate>);
+        if (BsonClassMap.IsClassMapRegistered(eventType))
+        {
+            return;
+        }
+
+        var classMap = new BsonClassMap(eventType, BsonClassMap.LookupClassMap(typeof(Event<TAggregate>)));
+        classMap.AutoMap();
+        classMap.SetDiscriminator(PersonalDataErased<TAggregate>.Discriminator);
+        classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.Reference)).SetElementName(PersonalDataErased<TAggregate>.ReferenceElement);
+        classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.Entries)).SetElementName(PersonalDataErased<TAggregate>.EntriesElement);
+        BsonClassMap.RegisterClassMap(classMap);
+    }
+
+    private static void RegisterPersonalDataErasureEntryClassMap()
+    {
+        if (BsonClassMap.IsClassMapRegistered(typeof(PersonalDataErasureEntry)))
+        {
+            return;
+        }
+
+        BsonClassMap.RegisterClassMap<PersonalDataErasureEntry>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
+            cm.GetMemberMap(e => e.Version).SetElementName(PersonalDataErasureEntry.VersionElement);
+            cm.GetMemberMap(e => e.Paths).SetElementName(PersonalDataErasureEntry.PathsElement);
         });
     }
 }
