@@ -58,15 +58,37 @@ internal static class EventIntegrityChain
     /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
     /// <returns>The chain hash.</returns>
     public static Byte[] ComputeHash(ReadOnlySpan<Byte> canonicalDocument, ReadOnlySpan<Byte> previousHash)
+        => ComputeHash(canonicalDocument, null, previousHash);
+
+    /// <summary>
+    /// Computes the chain hash of an event with recorded personal data. The hash covers the canonical form, then
+    /// the binding of the recorded paths, then the predecessor's hash. Binding the paths distinguishes the canonical
+    /// form from a document that genuinely stores a commitment's bytes in place of a value without recording the
+    /// path, which would otherwise verify after the value was destroyed.
+    /// </summary>
+    /// <param name="canonicalDocument">
+    /// The event's BSON without the <c>_integrity</c> element, with every recorded value replaced by its commitment.
+    /// </param>
+    /// <param name="personalData">The recorded commitments, or <c>null</c> when none is recorded.</param>
+    /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
+    /// <returns>The chain hash.</returns>
+    public static Byte[] ComputeHash(ReadOnlySpan<Byte> canonicalDocument,
+                                     IReadOnlyList<PersonalDataCommitment>? personalData,
+                                     ReadOnlySpan<Byte> previousHash)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(canonicalDocument);
+        if (personalData is not null)
+        {
+            hash.AppendData(PersonalDataCommitments.ComputeBinding(personalData));
+        }
+
         hash.AppendData(previousHash);
         return hash.GetHashAndReset();
     }
 
     /// <summary>
-    /// Creates the integrity data that seals an event into its stream.
+    /// Creates the integrity data that seals an event without personal data into its stream.
     /// </summary>
     /// <param name="canonicalDocument">The event's BSON without the <c>_integrity</c> element.</param>
     /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
@@ -81,6 +103,35 @@ internal static class EventIntegrityChain
             PreviousHash = previousHash,
             SealMode = sealMode
         };
+
+    /// <summary>
+    /// Creates the integrity data that seals an event into its stream, committing to the values of the given
+    /// personal data paths. The hash covers the canonical form, in which every recorded value is replaced by its
+    /// commitment, followed by the binding of the recorded paths. Paths that do not resolve in the document are not
+    /// recorded.
+    /// </summary>
+    /// <param name="document">The event's BSON without the <c>_integrity</c> element.</param>
+    /// <param name="personalDataPaths">The dotted element paths marked as personal data for the event's type.</param>
+    /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
+    /// <param name="sealMode">How the event is sealed.</param>
+    /// <returns>The integrity data.</returns>
+    public static EventIntegrity Seal(Byte[] document, IReadOnlyList<String> personalDataPaths, Byte[] previousHash, IntegritySealMode sealMode)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(personalDataPaths);
+
+        var commitments = personalDataPaths.Count == 0 ? null : PersonalDataCommitments.Commit(document, personalDataPaths);
+        var canonicalDocument = commitments is null ? document : PersonalDataCommitments.Canonicalize(document, commitments);
+        return new EventIntegrity
+        {
+            Algorithm = Algorithm,
+            FormatVersion = FormatVersion,
+            Hash = ComputeHash(canonicalDocument, commitments, previousHash),
+            PersonalData = commitments,
+            PreviousHash = previousHash,
+            SealMode = sealMode
+        };
+    }
 
     /// <summary>
     /// Reads stored integrity data. Malformed data, for example after tampering, yields <c>false</c>

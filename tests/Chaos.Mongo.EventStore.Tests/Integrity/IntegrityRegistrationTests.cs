@@ -28,6 +28,8 @@ public class IntegrityRegistrationTests
 
         classMap.IgnoreExtraElements.Should().BeTrue();
         classMap.AllMemberMaps.Select(m => m.ElementName)
+                .Should().BeEquivalentTo("FormatVersion", "Algorithm", "PreviousHash", "Hash", "SealMode", "PersonalData");
+        classMap.AllMemberMaps.Where(m => m.IsRequired).Select(m => m.ElementName)
                 .Should().BeEquivalentTo("FormatVersion", "Algorithm", "PreviousHash", "Hash", "SealMode");
     }
 
@@ -74,6 +76,23 @@ public class IntegrityRegistrationTests
             .GetMethod(nameof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>.WithIntegrityProtection),
                        BindingFlags.Instance | BindingFlags.NonPublic)
             .Should().NotBeNull();
+
+        typeof(EventRegistrationBuilder<,>).IsVisible.Should().BeFalse();
+        typeof(MongoEventStoreOptions<RegistrationVisibilityAggregate>)
+            .GetProperty(nameof(MongoEventStoreOptions<RegistrationVisibilityAggregate>.PersonalDataMarks),
+                         BindingFlags.Instance | BindingFlags.NonPublic)
+            .Should().NotBeNull();
+        typeof(MongoEventStoreOptions<RegistrationVisibilityAggregate>)
+            .GetProperty(nameof(MongoEventStoreOptions<RegistrationVisibilityAggregate>.PersonalDataPaths),
+                         BindingFlags.Instance | BindingFlags.NonPublic)
+            .Should().NotBeNull();
+        var withEventOverloads = typeof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>)
+                                 .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                                 .Where(m => m.Name == nameof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>.WithEvent))
+                                 .ToList();
+        withEventOverloads.Should().HaveCount(2);
+        withEventOverloads.Single(m => m.GetParameters().Length == 2).IsPublic.Should().BeFalse();
+        withEventOverloads.Single(m => m.GetParameters().Length == 1).IsPublic.Should().BeTrue();
     }
 
     [Test]

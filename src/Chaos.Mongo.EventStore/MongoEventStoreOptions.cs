@@ -2,6 +2,8 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore;
 
+using Chaos.Mongo.EventStore.Integrity;
+
 /// <summary>
 /// Configuration options for an event store for a specific aggregate type.
 /// </summary>
@@ -92,6 +94,18 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// excludes from replay. Set when the class maps are registered.
     /// </summary>
     internal IReadOnlyList<String> ObservationalEventDiscriminators { get; set; } = [];
+
+    /// <summary>
+    /// Gets the personal data marks of each event type, as given at registration.
+    /// </summary>
+    internal Dictionary<Type, List<PersonalDataMark>> PersonalDataMarks { get; } = new();
+
+    /// <summary>
+    /// Gets or sets the resolved element paths of the personal data of each event type. Set when the class maps
+    /// are registered. Stored here rather than in the process-global class maps, so stores configured differently
+    /// can verify the same events.
+    /// </summary>
+    internal IReadOnlyDictionary<Type, IReadOnlyList<String>> PersonalDataPaths { get; set; } = new Dictionary<Type, IReadOnlyList<String>>();
 
     /// <summary>
     /// Gets or sets the maximum number of events sealed retroactively in one transaction. The append

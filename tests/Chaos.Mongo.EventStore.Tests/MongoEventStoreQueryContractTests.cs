@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests;
 
+using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integration;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -16,35 +17,11 @@ public class MongoEventStoreQueryContractTests
 {
     /// <summary>
     /// Gets the expected exclusion of observational events: the concrete discriminator is the last element of a
-    /// hierarchical discriminator array, or the scalar discriminator itself.
+    /// hierarchical discriminator array, or the scalar discriminator itself. The erasure event of the event store
+    /// is always excluded.
     /// </summary>
     private static BsonDocument ObservationalEventExclusion
-        => new(
-            "$not",
-            new BsonArray
-            {
-                new BsonDocument(
-                    "$in",
-                    new BsonArray
-                    {
-                        new BsonDocument(
-                            "$cond",
-                            new BsonArray
-                            {
-                                new BsonDocument("$isArray", "$_t"),
-                                new BsonDocument("$arrayElemAt", new BsonArray
-                                {
-                                    "$_t",
-                                    -1
-                                }),
-                                "$_t"
-                            }),
-                        new BsonDocument("$literal", new BsonArray
-                        {
-                            "OrderViewed"
-                        })
-                    })
-            });
+        => CreateObservationalEventExclusion("OrderViewed", PersonalDataErased<OrderAggregate>.Discriminator);
 
     [Test]
     [TestCase(true)]
@@ -225,7 +202,7 @@ public class MongoEventStoreQueryContractTests
     }
 
     [Test]
-    public async Task GetAtVersionAsync_WithoutObservationalEventTypes_DoesNotFilterDiscriminators()
+    public async Task GetAtVersionAsync_WithoutObservationalEventTypes_ExcludesOnlyTheErasureEvent()
     {
         // Arrange
         var options = new MongoEventStoreOptions<OrderAggregate>
@@ -244,7 +221,10 @@ public class MongoEventStoreQueryContractTests
 
         // Assert
         aggregate.Should().BeNull();
-        ContainsField(Render(eventQueryCapture.CapturedFilter!), "$expr").Should().BeFalse();
+        ContainsEquality(Render(eventQueryCapture.CapturedFilter!),
+                         "$expr",
+                         CreateObservationalEventExclusion(PersonalDataErased<OrderAggregate>.Discriminator))
+            .Should().BeTrue();
     }
 
     [Test]
@@ -337,14 +317,6 @@ public class MongoEventStoreQueryContractTests
             _ => false
         };
 
-    private static Boolean ContainsField(BsonValue value, String field)
-        => value switch
-        {
-            BsonDocument document => document.Contains(field) || document.Elements.Any(element => ContainsField(element.Value, field)),
-            BsonArray array => array.Any(item => ContainsField(item, field)),
-            _ => false
-        };
-
     private static Boolean ContainsOperator(BsonValue value, String field, String comparisonOperator)
         => value switch
         {
@@ -423,6 +395,31 @@ public class MongoEventStoreQueryContractTests
 
     private static BsonBinaryData CreateGuidValue(Guid value)
         => new(value, GuidRepresentation.Standard);
+
+    private static BsonDocument CreateObservationalEventExclusion(params String[] discriminators)
+        => new(
+            "$not",
+            new BsonArray
+            {
+                new BsonDocument(
+                    "$in",
+                    new BsonArray
+                    {
+                        new BsonDocument(
+                            "$cond",
+                            new BsonArray
+                            {
+                                new BsonDocument("$isArray", "$_t"),
+                                new BsonDocument("$arrayElemAt", new BsonArray
+                                {
+                                    "$_t",
+                                    -1
+                                }),
+                                "$_t"
+                            }),
+                        new BsonDocument("$literal", new BsonArray(discriminators))
+                    })
+            });
 
     private static MongoEventStoreOptions<OrderAggregate> CreateOptionsWithObservationalEvent()
     {

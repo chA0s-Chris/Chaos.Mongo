@@ -576,7 +576,9 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         var sealedDocuments = new List<BsonDocument>(eventDocuments.Count);
         for (var index = 0; index < eventDocuments.Count; index++)
         {
-            var integrity = EventIntegrityChain.Seal(eventDocuments[index].ToBson(), previousHash, IntegritySealMode.Append);
+            // The marks of the event's runtime type decide which values are committed to instead of hashed.
+            var personalDataPaths = _options.PersonalDataPaths.GetValueOrDefault(eventList[index].GetType()) ?? [];
+            var integrity = EventIntegrityChain.Seal(eventDocuments[index].ToBson(), personalDataPaths, previousHash, IntegritySealMode.Append);
             sealedDocuments.Add(new BsonDocument(eventDocuments[index].Elements)
             {
                 { EventIntegrityChain.ElementName, integrity.ToBsonDocument() }

@@ -136,6 +136,33 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     }
 
     /// <summary>
+    /// Registers an event type for this aggregate and configures its registration, for example to mark members
+    /// as personal data.
+    /// </summary>
+    /// <typeparam name="TEvent">The event type.</typeparam>
+    /// <param name="discriminator">
+    /// Optional discriminator name for MongoDB serialization. Defaults to the class name (not the full name).
+    /// </param>
+    /// <param name="configure">Configures the registration of the event type.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    internal MongoEventStoreBuilder<TAggregate> WithEvent<TEvent>(String? discriminator,
+                                                                  Action<EventRegistrationBuilder<TAggregate, TEvent>> configure)
+        where TEvent : Event<TAggregate>
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        WithEvent<TEvent>(discriminator);
+
+        if (!Options.PersonalDataMarks.TryGetValue(typeof(TEvent), out var marks))
+        {
+            marks = [];
+            Options.PersonalDataMarks[typeof(TEvent)] = marks;
+        }
+
+        configure(new EventRegistrationBuilder<TAggregate, TEvent>(marks));
+        return this;
+    }
+
+    /// <summary>
     /// Enables tamper evidence: appended events are sealed into a per-stream hash chain.
     /// </summary>
     /// <returns>This builder instance for method chaining.</returns>
