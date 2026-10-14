@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using System.Security.Cryptography;
+using System.Text;
 
 /// <summary>
 /// Computes, substitutes and verifies the commitments that stand in for personal data values in the chain hash.
@@ -25,6 +26,8 @@ internal static class PersonalDataCommitments
     /// The length of a salt in bytes.
     /// </summary>
     public const Int32 SaltLength = 32;
+
+    private static readonly Byte[] BindingTag = "Chaos.Mongo.EventStore/integrity/personal-data/v1"u8.ToArray();
 
     /// <summary>
     /// Replaces every committed value in the document by its commitment.
@@ -80,6 +83,27 @@ internal static class PersonalDataCommitments
     }
 
     /// <summary>
+    /// Encodes which paths are recorded, for the chain hash: a domain tag, then every recorded path in recorded
+    /// order, each terminated by a zero byte.
+    /// </summary>
+    /// <param name="commitments">The recorded commitments.</param>
+    /// <returns>The binding bytes.</returns>
+    public static Byte[] ComputeBinding(IReadOnlyList<PersonalDataCommitment> commitments)
+    {
+        ArgumentNullException.ThrowIfNull(commitments);
+
+        using var binding = new MemoryStream();
+        binding.Write(BindingTag);
+        foreach (var commitment in commitments)
+        {
+            binding.Write(Encoding.UTF8.GetBytes(commitment.Path));
+            binding.WriteByte(0);
+        }
+
+        return binding.ToArray();
+    }
+
+    /// <summary>
     /// Computes the commitment to a stored value.
     /// </summary>
     /// <param name="salt">The salt.</param>
@@ -96,7 +120,8 @@ internal static class PersonalDataCommitments
     }
 
     /// <summary>
-    /// Checks that the recorded commitments have the expected lengths and distinct paths.
+    /// Checks that the recorded commitments have the expected lengths and distinct paths, none of which is a
+    /// prefix of another. Overlapping paths cannot be substituted independently, so they are malformed.
     /// </summary>
     /// <param name="commitments">The recorded commitments.</param>
     /// <returns><c>true</c> when every commitment is well-formed; otherwise <c>false</c>.</returns>
@@ -111,6 +136,14 @@ internal static class PersonalDataCommitments
                 commitment.Salt is { Length: not SaltLength } ||
                 String.IsNullOrEmpty(commitment.Path) ||
                 !paths.Add(commitment.Path))
+            {
+                return false;
+            }
+        }
+
+        foreach (var path in paths)
+        {
+            if (paths.Any(other => other.Length > path.Length && other[path.Length] == '.' && other.StartsWith(path, StringComparison.Ordinal)))
             {
                 return false;
             }

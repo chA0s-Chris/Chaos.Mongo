@@ -105,7 +105,20 @@ public class PersonalDataRegistrationTests
                                                                                         null,
                                                                                         e => e.WithPersonalData(x => x.People.Count)));
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*PersonalDataDictionaryEvent*'People.Count'*People*");
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*PersonalDataDictionaryEvent*'People.Count'*People*serialized as a dictionary*");
+    }
+
+    [Test]
+    public void WithEventStore_DottedElementName_ThrowsInvalidOperationException()
+    {
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<PersonalDataDottedAggregate>(es => es
+                                                                                .WithEvent<PersonalDataDottedEvent>(null, e => e.WithPersonalData(x => x.Email)));
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*PersonalDataDottedEvent*'Email'*Email*'contact.email'*contains a dot*");
     }
 
     [Test]
@@ -389,6 +402,16 @@ public sealed class PersonalDataPrimitiveEvent : Event<PersonalDataPrimitiveAggr
     public String? Name { get; set; }
 
     public override void Execute(PersonalDataPrimitiveAggregate aggregate) { }
+}
+
+public sealed class PersonalDataDottedAggregate : Aggregate;
+
+public sealed class PersonalDataDottedEvent : Event<PersonalDataDottedAggregate>
+{
+    [BsonElement("contact.email")]
+    public String? Email { get; set; }
+
+    public override void Execute(PersonalDataDottedAggregate aggregate) { }
 }
 
 public sealed class PersonalDataUnmappedAggregate : Aggregate;

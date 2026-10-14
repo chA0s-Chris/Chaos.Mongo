@@ -52,6 +52,34 @@ public class EventIntegrityChainTests
         first.Should().NotEqual(second);
     }
 
+    [Test]
+    public void ComputeHash_WithPersonalData_DependsOnRecordedPathsAndTheirOrder()
+    {
+        Byte[] canonical = [1, 2, 3];
+        var previousHash = new Byte[32];
+        var name = new PersonalDataCommitment
+        {
+            Path = "Name",
+            Commitment = new Byte[32]
+        };
+        var city = new PersonalDataCommitment
+        {
+            Path = "Address.City",
+            Commitment = new Byte[32]
+        };
+
+        var plain = EventIntegrityChain.ComputeHash(canonical, previousHash);
+        var withName = EventIntegrityChain.ComputeHash(canonical, [name], previousHash);
+        var withBoth = EventIntegrityChain.ComputeHash(canonical, [name, city], previousHash);
+        var reordered = EventIntegrityChain.ComputeHash(canonical, [city, name], previousHash);
+
+        EventIntegrityChain.ComputeHash(canonical, null, previousHash).Should().Equal(plain);
+        withName.Should().NotEqual(plain);
+        withBoth.Should().NotEqual(withName);
+        reordered.Should().NotEqual(withBoth);
+        EventIntegrityChain.ComputeHash(canonical, [name, city], previousHash).Should().Equal(withBoth);
+    }
+
     [OneTimeSetUp]
     public void RegisterClassMaps()
         => new MongoBuilder(new ServiceCollection()).WithEventStore<ChainFormatAggregate>(es => es.WithEvent<ChainFormatEvent>());
@@ -99,7 +127,9 @@ public class EventIntegrityChainTests
         integrity.PersonalData.Should().HaveCount(2);
         integrity.PersonalData!.Select(commitment => commitment.Path).Should().Equal("Name", "Address.City");
         integrity.SealMode.Should().Be(IntegritySealMode.Retroactive);
-        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(PersonalDataCommitments.Canonicalize(document, integrity.PersonalData), previousHash));
+        var canonical = PersonalDataCommitments.Canonicalize(document, integrity.PersonalData);
+        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(canonical, integrity.PersonalData, previousHash));
+        integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(canonical, previousHash), "the recorded paths are bound into the hash");
         integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(document, previousHash));
     }
 

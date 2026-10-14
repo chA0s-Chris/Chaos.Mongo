@@ -59,7 +59,8 @@ public class PersonalDataCommitmentIntegrationTests
 
         integrity.PersonalData.Should().NotBeNull();
         var canonical = PersonalDataCommitments.Canonicalize(storedDocument, integrity.PersonalData);
-        EventIntegrityChain.ComputeHash(canonical, genesis).Should().Equal(integrity.Hash);
+        EventIntegrityChain.ComputeHash(canonical, integrity.PersonalData, genesis).Should().Equal(integrity.Hash);
+        EventIntegrityChain.ComputeHash(canonical, genesis).Should().NotEqual(integrity.Hash, "the recorded paths are bound into the hash");
         EventIntegrityChain.ComputeHash(storedDocument, genesis).Should().NotEqual(integrity.Hash);
     }
 
@@ -203,6 +204,30 @@ public class PersonalDataCommitmentIntegrationTests
     }
 
     [Test]
+    public async Task VerifyStreamAsync_ChangedValueWithRecomputedCommitment_ReportsHashMismatch()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(3);
+        var salt = new Byte[PersonalDataCommitments.SaltLength];
+        var newValue = new BsonDocument("x", "Mallory").ToBson()[7..^1];
+        var commitment = PersonalDataCommitments.ComputeCommitment(salt, BsonType.String, newValue);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update
+                                  .Set(NamePath, "Mallory")
+                                  .Set($"{EventIntegrityChain.ElementName}.PersonalData.$[entry].Salt", new BsonBinaryData(salt))
+                                  .Set($"{EventIntegrityChain.ElementName}.PersonalData.$[entry].Commitment", new BsonBinaryData(commitment)),
+            new UpdateOptions
+            {
+                ArrayFilters = [new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument("entry.Path", NamePath))]
+            });
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch));
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_ChangedValueWithSaltPresent_ReportsPersonalDataMismatch()
     {
         var context = await CreateContextAsync();
@@ -214,6 +239,28 @@ public class PersonalDataCommitmentIntegrationTests
         var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
 
         result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.PersonalDataMismatch));
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_CommitmentStoredAsValueWithoutRecord_ReportsHashMismatch()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        var commitments = ReadCommitments(await context.ReadRawEventAsync(aggregateId, 2));
+
+        // Destroying the values by storing the commitments in their place and dropping the records would leave the
+        // canonical form byte-identical; only the path binding in the hash exposes it.
+        var update = Builders<BsonDocument>.Update.Unset($"{EventIntegrityChain.ElementName}.PersonalData");
+        foreach (var commitment in commitments)
+        {
+            update = update.Set(commitment.Path, new BsonBinaryData(commitment.Commitment));
+        }
+
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2), update);
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch));
     }
 
     [Test]
@@ -282,6 +329,26 @@ public class PersonalDataCommitmentIntegrationTests
 
         beforeChange.Should().Be(StreamVerificationResult.Intact);
         afterChange.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch));
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_OverlappingRecordedPaths_ReportsMalformedIntegrity()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        var overlapping = new BsonDocument
+        {
+            { "Path", "Counterparty" },
+            { "Salt", new BsonBinaryData(new Byte[PersonalDataCommitments.SaltLength]) },
+            { "Commitment", new BsonBinaryData(new Byte[PersonalDataCommitments.CommitmentLength]) }
+        };
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1),
+            Builders<BsonDocument>.Update.Push($"{EventIntegrityChain.ElementName}.PersonalData", overlapping));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.MalformedIntegrity));
     }
 
     [Test]

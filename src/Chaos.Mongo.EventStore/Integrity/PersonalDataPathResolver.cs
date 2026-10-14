@@ -116,8 +116,25 @@ internal static class PersonalDataPathResolver
                 throw CreateError(eventType, mark, $"the member {member.Name} of '{segment}' is not mapped.");
             }
 
+            // A dotted element name would be read as a nested path, so the value could never be committed or erased.
+            if (serializationInfo.ElementName.Contains('.'))
+            {
+                throw CreateError(eventType, mark, $"the member {member.Name} of '{segment}' is mapped to the element name " +
+                                                   $"'{serializationInfo.ElementName}', which contains a dot. Marked paths cannot address " +
+                                                   "elements whose names contain dots.");
+            }
+
             elementNames.Add(serializationInfo.ElementName);
             var isLast = index == mark.Members.Count - 1;
+
+            // A dictionary serializer resolves every name as a key rather than a mapped member, so it is rejected
+            // explicitly instead of relying on the array interface it also implements.
+            if (!isLast && serializationInfo.Serializer is IBsonDictionarySerializer)
+            {
+                throw CreateError(eventType, mark, $"the member {member.Name} of '{segment}' is serialized as a dictionary, whose " +
+                                                   "keys are not mapped members. Only the last segment of a marked path may be a dictionary.");
+            }
+
             if (!isLast && serializationInfo.Serializer is IBsonArraySerializer)
             {
                 throw CreateError(eventType, mark, $"the member {member.Name} of '{segment}' is serialized as an array. " +

@@ -65,6 +65,19 @@ public class PersonalDataCommitmentsTests
     }
 
     [Test]
+    public void ComputeBinding_RecordedPaths_EncodesTagAndNulTerminatedPathsInOrder()
+    {
+        var binding = PersonalDataCommitments.ComputeBinding([CreateCommitment("Name"), CreateCommitment("Address.City")]);
+
+        var expected = "Chaos.Mongo.EventStore/integrity/personal-data/v1"u8.ToArray()
+                                                                            .Concat("Name"u8.ToArray()).Append((Byte)0)
+                                                                            .Concat("Address.City"u8.ToArray()).Append((Byte)0)
+                                                                            .ToArray();
+        binding.Should().Equal(expected);
+        PersonalDataCommitments.ComputeBinding([CreateCommitment("Address.City"), CreateCommitment("Name")]).Should().NotEqual(binding);
+    }
+
+    [Test]
     public void ComputeCommitment_DifferentInputs_ReturnDifferentValues()
     {
         Byte[] value = [1, 2, 3];
@@ -105,6 +118,16 @@ public class PersonalDataCommitmentsTests
     [Test]
     public void IsWellFormed_ErasedCommitment_ReturnsTrue()
         => PersonalDataCommitments.IsWellFormed([CreateCommitment("Name", null)]).Should().BeTrue();
+
+    [Test]
+    [TestCase("Address", "Address.City")]
+    [TestCase("Address.City", "Address")]
+    public void IsWellFormed_OverlappingPaths_ReturnsFalse(String first, String second)
+        => PersonalDataCommitments.IsWellFormed([CreateCommitment(first), CreateCommitment(second)]).Should().BeFalse();
+
+    [Test]
+    public void IsWellFormed_SharedPrefixWithoutSeparator_ReturnsTrue()
+        => PersonalDataCommitments.IsWellFormed([CreateCommitment("Address"), CreateCommitment("AddressLine")]).Should().BeTrue();
 
     [Test]
     public void IsWellFormed_ValidCommitments_ReturnsTrue()

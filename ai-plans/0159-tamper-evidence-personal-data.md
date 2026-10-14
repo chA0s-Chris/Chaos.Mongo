@@ -27,7 +27,7 @@ Everything stays internal until #160 makes the feature public.
 - [x] Marked element paths are resolved through the class maps, so renamed elements are respected.
 - [x] Append sealing and retroactive sealing both record `{ Path, Salt, Commitment }` in `_integrity` for every marked path present in the stored document. `Salt` is 32 random bytes.
 - [x] Events without recorded paths keep the existing `_integrity` format.
-- [x] The chain hash covers the canonical form, in which the value of every recorded path is replaced in place by its commitment.
+- [x] The chain hash covers the canonical form, in which the value of every recorded path is replaced in place by its commitment, followed by a binding of the recorded paths.
 - [x] Both append paths persist byte-identical documents for events without recorded paths. For events with recorded paths, the documents are identical outside `_integrity`, and both verify.
 - [x] Stream verification reports a failure at the first version whose marked value no longer matches its commitment while its salt is present.
 - [x] A recorded path without a salt verifies only when its value is `null`; otherwise stream verification reports a failure.
@@ -74,7 +74,7 @@ Everything stays internal until #160 makes the feature public.
 - Validation runs in `MongoEventStoreSerializationSetup.RegisterClassMaps`, after the event class maps are registered.
 - **Nullability:** `Nullable<T>`, or a reference type that is not annotated as non-nullable (`NullabilityInfoContext`; oblivious counts as nullable).
 - **Arrays:** any segment before the last whose type serializes as an array is rejected. The last segment may be an array or a complex object; either is committed and erased as a whole.
-- **Element-name resolution:** each segment before the last must be serialized by a document serializer that resolves member element names (`IBsonDocumentSerializer.TryGetMemberSerializationInfo`), for example a class-map serializer. Otherwise, for example with a custom serializer, a dictionary or a primitive, registration fails.
+- **Element-name resolution:** each segment before the last must be serialized by a document serializer that resolves member element names (`IBsonDocumentSerializer.TryGetMemberSerializationInfo`), for example a class-map serializer. Otherwise, for example with a custom serializer or a primitive, registration fails. A dictionary segment is rejected explicitly, because the driver's dictionary serializer resolves every name as a key rather than a mapped member. An element name containing a dot is rejected, because the path could not address it.
 - **Storage of marks:** the resolved element paths per event type are stored in internal `MongoEventStoreOptions<TAggregate>` state, not in the process-global class maps. Stores configured differently can therefore verify the same events. Duplicate marks of one path are deduplicated.
 - **Without protection:** marks are validated but have no effect.
 - Registration tests, both for errors and for resolved element paths such as renamed elements and nested chains, use dedicated aggregate and event types, because class-map registration is process-global and irreversible.
@@ -92,6 +92,7 @@ _integrity: { …, PersonalData: [ { Path: "Recipient.Name", Salt: BinData(32), 
 - `Commitment = SHA-256(Salt ‖ element type byte ‖ value bytes)`. The value is taken from the serialized document bytes, not re-encoded. Including the type byte binds the BSON type, so a value whose type is changed while its bytes stay the same is detected. This strengthens the issue text and was agreed during planning.
 - A marked path is recorded only when it resolves to an element through embedded documents in the stored document; a stored `null` value is recorded too. A missing path, for example in a legacy document or under a `null` parent, is not recorded and cannot be erased later.
 - **Canonical form:** remove `_integrity` (existing `RawBsonElements` helper), then replace every recorded path's element by an element of the same name and position: Binary, subtype `0x00`, holding the 32-byte commitment. The length prefixes of all enclosing documents are corrected. This is a new byte-level operation in `RawBsonElements` that never decodes and re-encodes. It needs focused tests for top-level and nested paths, first, middle and last positions, and changes in value size.
+- **Path binding:** the chain hash is `SHA-256(canonical form ‖ binding ‖ previous hash)`, where the binding is present only when paths are recorded: a domain tag, then every recorded path in recorded order, each terminated by a zero byte. Without it, the canonical form would equal a document that genuinely stores a commitment's bytes in place of a value, so a value could be destroyed and the recorded path removed without a verification finding. Events without recorded paths keep the original hash input.
 - **Salt reuse on retry:** salts come from `RandomNumberGenerator`. A transaction retry draws new salts. This is harmless, because a failed attempt persists nothing.
 
 ### Sealing

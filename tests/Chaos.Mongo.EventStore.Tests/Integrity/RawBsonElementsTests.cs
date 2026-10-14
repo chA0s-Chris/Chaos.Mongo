@@ -83,6 +83,22 @@ public class RawBsonElementsTests
     }
 
     [Test]
+    public void ReplaceValuesWithBinary_DepthThreePath_ReplacesValueAndCorrectsEveryEnclosingLength()
+    {
+        var document = CreateDeepDocument();
+        var expected = document.DeepClone().AsBsonDocument;
+        SetPath(expected, "outer.middle.inner", new BsonBinaryData(Payload));
+
+        var result = RawBsonElements.ReplaceValuesWithBinary(document.ToBson(), new Dictionary<String, Byte[]>
+        {
+            { "outer.middle.inner", Payload }
+        });
+
+        result.Should().Equal(expected.ToBson());
+        BsonSerializer.Deserialize<BsonDocument>(result).Equals(expected).Should().BeTrue();
+    }
+
+    [Test]
     public void ReplaceValuesWithBinary_MultiplePaths_ReplacesEveryValue()
     {
         var document = CreateNestedDocument();
@@ -191,6 +207,28 @@ public class RawBsonElementsTests
         result.Length.Should().Be(document.ToBson().Length - 8 + 5 + payloadLength);
     }
 
+    [Test]
+    public void TryLocate_DepthThreePath_ReturnsValueBytes()
+    {
+        var document = CreateDeepDocument();
+        var bytes = document.ToBson();
+
+        var result = RawBsonElements.TryLocate(bytes, "outer.middle.inner", out var type, out var value);
+
+        result.Should().BeTrue();
+        type.Should().Be(BsonType.String);
+        bytes[value].Should().Equal(ValueBytes("deep"));
+    }
+
+    [TestCase("any")]
+    [TestCase("a.b")]
+    public void TryLocate_EmptyDocument_ReturnsFalse(String path)
+    {
+        var result = RawBsonElements.TryLocate(new BsonDocument().ToBson(), path, out _, out _);
+
+        result.Should().BeFalse();
+    }
+
     [TestCase("missing")]
     [TestCase("first.inner")]
     [TestCase("middle.missing")]
@@ -261,6 +299,25 @@ public class RawBsonElementsTests
         type.Should().Be(BsonType.String);
         bytes[value].Should().Equal(ValueBytes("one"));
     }
+
+    private static BsonDocument CreateDeepDocument()
+        => new()
+        {
+            {
+                "outer", new BsonDocument
+                {
+                    {
+                        "middle", new BsonDocument
+                        {
+                            { "inner", "deep" },
+                            { "after", 1 }
+                        }
+                    },
+                    { "sibling", 2 }
+                }
+            },
+            { "last", 3 }
+        };
 
     private static BsonDocument CreateDocument(params String[] elementNames)
     {

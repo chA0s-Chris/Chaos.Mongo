@@ -161,7 +161,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, personalData);
         }
 
-        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, expectedPreviousHash);
+        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, integrity.PersonalData, expectedPreviousHash);
         if (!recomputedHash.AsSpan().SequenceEqual(integrity.Hash))
         {
             return StreamVerificationFailure.HashMismatch;
