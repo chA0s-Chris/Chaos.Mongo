@@ -76,9 +76,9 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                         erasures.Add(new UnrecordedErasure(expectedVersion, path));
                     }
 
-                    // The erasure event is identified by its discriminator; its records are trusted once its own hash verified.
+                    // The erasure event is identified by its reserved discriminator; its records are trusted once its own hash verified.
                     if (rawDocument.TryGetValue(discriminatorElement, out var discriminator) &&
-                        EventDocumentFields<TAggregate>.ResolveEventType(discriminator) == typeof(PersonalDataErased<TAggregate>))
+                        EventDocumentFields<TAggregate>.IsErasureEvent(discriminator))
                     {
                         CollectErasureRecords(rawDocument, expectedVersion, recordedErasures);
                     }

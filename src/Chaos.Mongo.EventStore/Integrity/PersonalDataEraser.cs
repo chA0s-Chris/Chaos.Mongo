@@ -23,6 +23,11 @@ using MongoDB.Driver;
 ///     commitments rule out. A long stream without a checkpoint below the first erased version is replayed within one
 ///     transaction, which is bounded by the server's transaction lifetime limit.
 ///     </para>
+///     <para>
+///     The rebuilt read model and checkpoints hold only what replaying the events produces; read-model fields written
+///     outside <c>Execute</c> are reset. A request without explicit versions fails when events were appended after its
+///     selection, so no later event escapes it.
+///     </para>
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, IAggregate, new()
@@ -57,7 +62,10 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     /// when a requested path is recorded in none of the selected events, when a selected event is not sealed or its
     /// integrity data is malformed, or when the read model cannot be rebuilt consistently.
     /// </exception>
-    /// <exception cref="MongoConcurrencyException">Thrown when the stream or a selected salt changed concurrently.</exception>
+    /// <exception cref="MongoConcurrencyException">
+    /// Thrown when the stream or a selected salt changed concurrently, or when a request without explicit versions
+    /// finds events appended after its selection.
+    /// </exception>
     public async Task<IReadOnlyList<PersonalDataErasureEntry>> ErasePersonalDataAsync(Guid aggregateId,
                                                                                       ErasureRequest request,
                                                                                       CancellationToken cancellationToken = default)
@@ -74,11 +82,14 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                 $"Personal data of aggregate type {typeof(TAggregate).Name} cannot be erased, because integrity protection is disabled.");
         }
 
-        var entries = await SelectAsync(aggregateId, request, cancellationToken);
+        var (entries, lastSelectedVersion) = await SelectAsync(aggregateId, request, cancellationToken);
         if (entries.Count == 0)
         {
             return entries;
         }
+
+        // A whole-stream request covers the stream as selected; an event appended since would escape it.
+        var expectedErasureVersion = request.Versions is null ? lastSelectedVersion + 1 : (Int64?)null;
 
         var erasure = new PersonalDataErased<TAggregate>
         {
@@ -89,7 +100,16 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
 
         await _store.AppendEventsAsync(
             [erasure],
-            onBeforeCommit: (session, aggregate, _, ct) => EraseAsync(session, aggregate, entries, ct),
+            onBeforeCommit: (session, aggregate, _, ct) =>
+            {
+                if (expectedErasureVersion is { } expectedVersion && erasure.Version != expectedVersion)
+                {
+                    throw new MongoConcurrencyException(
+                        $"Aggregate '{aggregateId}' received events after the personal data to erase was selected.");
+                }
+
+                return EraseAsync(session, aggregate, entries, ct);
+            },
             cancellationToken: cancellationToken);
 
         return entries;
@@ -396,7 +416,9 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
     /// <summary>
     /// Computes the selection from the stored integrity data, before the append.
     /// </summary>
-    private async Task<List<PersonalDataErasureEntry>> SelectAsync(Guid aggregateId, ErasureRequest request, CancellationToken cancellationToken)
+    private async Task<(List<PersonalDataErasureEntry> Entries, Int64 LastSelectedVersion)> SelectAsync(Guid aggregateId,
+                                                                                                        ErasureRequest request,
+                                                                                                        CancellationToken cancellationToken)
     {
         var documents = await ReadSelectedDocumentsAsync(aggregateId, request, cancellationToken);
         if (documents.Count == 0 && request.Versions is null)
@@ -409,11 +431,13 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
         var entries = new List<PersonalDataErasureEntry>();
         var foundVersions = new HashSet<Int64>();
         var recordedPaths = new HashSet<String>(StringComparer.Ordinal);
+        var lastSelectedVersion = 0L;
 
         foreach (var document in documents)
         {
             var version = document[versionElement].ToInt64();
             foundVersions.Add(version);
+            lastSelectedVersion = version;
 
             var commitments = ReadCommitments(document, aggregateId, version);
             if (request.Versions is not null && commitments.Count == 0)
@@ -428,6 +452,6 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
         }
 
         EnsureRequestSatisfied(aggregateId, request, foundVersions, recordedPaths);
-        return entries;
+        return (entries, lastSelectedVersion);
     }
 }

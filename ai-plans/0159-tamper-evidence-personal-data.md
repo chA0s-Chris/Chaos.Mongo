@@ -110,7 +110,7 @@ _integrity: { …, PersonalData: [ { Path: "Recipient.Name", Salt: BinData(32), 
 
   All three cases belong to Layer 1, so no intermediate layer accepts a changed value whose salt was removed.
 - A malformed entry is reported as `MalformedIntegrity`: wrong salt or commitment length, a duplicate path, or a path that does not resolve.
-- Layer 2 adds a separate collection of "erased without an erasure record" findings `(Version, Path)` to `StreamVerificationResult`. `IsIntact` keeps describing the chain only. An erasure is documented when a later erasure event in the same stream lists its version and path. The verifier reads erasure events from the raw documents by their discriminator; hierarchical discriminators resolve to their concrete type, as in retroactive sealing.
+- Layer 2 adds a separate collection of "erased without an erasure record" findings `(Version, Path)` to `StreamVerificationResult`. `IsIntact` keeps describing the chain only. An erasure is documented when a later erasure event in the same stream lists its version and path. The verifier reads erasure events from the raw documents and identifies them by their reserved concrete discriminator (the last element of a hierarchical discriminator).
 
 ### Erasure
 
@@ -133,6 +133,7 @@ _integrity: { …, PersonalData: [ { Path: "Recipient.Name", Salt: BinData(32), 
   - Rewrites only the `_integrity.PersonalData` subfield, so the change-stream filter, which matches updates of the `_integrity` element as a whole, ignores the update.
   - Checks that every selected salt is still present. A concurrent erasure surfaces as `MongoConcurrencyException`.
   - The selection is computed from stored `_integrity` data before the append. A selected event without `_integrity` fails with `MongoEventStoreException` before anything is written.
+  - A whole-stream request fails with `MongoConcurrencyException` when the stream grew after the selection, so no later event escapes it.
 - **Rebuild:**
   - Replays the state-changing events inside the transaction, starting from the newest checkpoint below the first erased version, or from the stream start.
   - In the same pass, it rewrites the `State` of every existing checkpoint at or above the first erased version; `Id` and `Revision` stay unchanged.
@@ -140,7 +141,7 @@ _integrity: { …, PersonalData: [ { Path: "Recipient.Name", Salt: BinData(32), 
   - No new checkpoints are created.
   - Checkpoints below the first erased version cannot contain the erased values and stay untouched.
 - **Known limit:** a long stream without a checkpoint below the first erased version is replayed within one transaction, bounded by `transactionLifetimeLimitSeconds`.
-- **Replay contract:** event `Execute` implementations must handle `null` in marked members. An `Execute` that throws aborts the erasure, and nothing is persisted.
+- **Replay contract:** event `Execute` implementations must handle `null` in marked members. An `Execute` that throws aborts the erasure, and nothing is persisted. The rebuilt read model and checkpoints hold only what replaying the events produces; read-model fields written outside `Execute` are reset.
 
 ### Out of scope
 

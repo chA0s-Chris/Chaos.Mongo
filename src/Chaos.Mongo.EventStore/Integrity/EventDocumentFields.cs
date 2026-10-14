@@ -110,6 +110,21 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
             });
 
     /// <summary>
+    /// Gets a value indicating whether a stored discriminator names the erasure event. Its discriminator is reserved,
+    /// so comparing the concrete discriminator, the last element of a hierarchical discriminator, is equivalent to
+    /// resolving the type and avoids a driver lookup for every event.
+    /// </summary>
+    /// <param name="discriminator">The stored discriminator value.</param>
+    /// <returns><c>true</c> when the discriminator names the erasure event; otherwise <c>false</c>.</returns>
+    public static Boolean IsErasureEvent(BsonValue discriminator)
+    {
+        ArgumentNullException.ThrowIfNull(discriminator);
+
+        var concreteDiscriminator = discriminator is BsonArray hierarchical ? hierarchical.LastOrDefault() : discriminator;
+        return concreteDiscriminator is BsonString { Value: PersonalDataErased<TAggregate>.Discriminator };
+    }
+
+    /// <summary>
     /// Resolves the event type stored with a discriminator through the driver's discriminator lookup. A
     /// hierarchical discriminator resolves to its concrete type, its last element.
     /// </summary>

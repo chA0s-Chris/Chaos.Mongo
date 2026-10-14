@@ -72,6 +72,94 @@ public class PersonalDataErasureIntegrationTests
     }
 
     [Test]
+    public async Task ErasePersonalDataAsync_CheckpointAtObservationalVersion_ThrowsMongoEventStoreExceptionAndPersistsNothing()
+    {
+        var context = await CreateContextAsync(configureOptions: options => options.CheckpointInterval = 1);
+        var aggregateId = Guid.NewGuid();
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1)]);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateAudit(aggregateId, 2)]);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
+        var bogus = (await context.ReadRawCheckpointsAsync(aggregateId))[0].DeepClone().AsBsonDocument;
+        bogus["_id"]["Version"] = new BsonInt64(2);
+        await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.CheckpointCollectionName).InsertOneAsync(bogus);
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [1]));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*checkpoint at version 2*no state-changing event*");
+        await AssertUntouchedAsync(context, aggregateId, 3);
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_CheckpointsDisabledWithStoredCheckpoints_RewritesAffectedCheckpoints()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var writer = await CreateContextAsync(databaseName: databaseName, configureOptions: options => options.CheckpointInterval = 2);
+        var aggregateId = Guid.NewGuid();
+        for (var version = 1; version <= 4; version++)
+        {
+            await writer.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, version)]);
+        }
+
+        var checkpointsBefore = await writer.ReadRawCheckpointsAsync(aggregateId);
+        var context = await CreateContextAsync(databaseName: databaseName);
+
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [3], [MemoPath]));
+
+        var checkpoints = await context.ReadRawCheckpointsAsync(aggregateId);
+        checkpoints.Select(checkpoint => checkpoint["_id"]["Version"].ToInt64()).Should().Equal(2, 4);
+        checkpoints[0].Equals(checkpointsBefore[0]).Should().BeTrue("the checkpoint below the erased version is untouched");
+        Memos(checkpoints[1]).Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
+        (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_CheckpointsWithDivergingRevisions_RebuildsFromCheckpointBelowFirstErasedVersion()
+    {
+        var context = await CreateContextAsync(configureOptions: options => options.CheckpointInterval = 2);
+        var aggregateId = Guid.NewGuid();
+        Event<LedgerAggregate>[] stream =
+        [
+            LedgerStoreContext.CreateEntry(aggregateId, 1),
+            LedgerStoreContext.CreateEntry(aggregateId, 2),
+            LedgerStoreContext.CreateAudit(aggregateId, 3),
+            LedgerStoreContext.CreateEntry(aggregateId, 4),
+            LedgerStoreContext.CreateAudit(aggregateId, 5),
+            LedgerStoreContext.CreateEntry(aggregateId, 6),
+            LedgerStoreContext.CreateEntry(aggregateId, 7),
+            LedgerStoreContext.CreateEntry(aggregateId, 8)
+        ];
+        foreach (var @event in stream)
+        {
+            await context.Store.AppendEventsAsync([@event]);
+        }
+
+        var checkpointsBefore = await context.ReadRawCheckpointsAsync(aggregateId);
+
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [6], [MemoPath]));
+
+        // The checkpoint at version 6 has revision 4, so only a boundary by version leaves it out of the start state.
+        var checkpoints = await context.ReadRawCheckpointsAsync(aggregateId);
+        checkpointsBefore.Select(checkpoint => checkpoint["_id"]["Version"].ToInt64()).Should().Equal(2, 6, 8);
+        checkpointsBefore.Select(checkpoint => checkpoint["Revision"].ToInt64()).Should().Equal(2, 4, 6);
+        checkpoints.Select(checkpoint => checkpoint["_id"]["Version"].ToInt64()).Should().Equal(2, 6, 8);
+        checkpoints.Select(checkpoint => checkpoint["Revision"].ToInt64()).Should().Equal(2, 4, 6);
+        checkpoints[0].Equals(checkpointsBefore[0]).Should().BeTrue("the checkpoint below the erased version is untouched");
+        Memos(checkpoints[1]).Should().Equal(DefaultMemo, DefaultMemo, DefaultMemo, null);
+        Memos(checkpoints[2]).Should().Equal(DefaultMemo, DefaultMemo, DefaultMemo, null, DefaultMemo, DefaultMemo);
+
+        var readModel = Proven(await context.Repository.GetAsync(aggregateId));
+        readModel.Memos.Should().Equal(DefaultMemo, DefaultMemo, DefaultMemo, null, DefaultMemo, DefaultMemo);
+        readModel.Version.Should().Be(8);
+        readModel.Revision.Should().Be(6);
+
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 10)]);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos
+                                                              .Should().Equal(DefaultMemo, DefaultMemo, DefaultMemo, null, DefaultMemo, DefaultMemo, DefaultMemo);
+        (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
+    }
+
+    [Test]
     public async Task ErasePersonalDataAsync_ConcurrentErasure_ThrowsMongoConcurrencyExceptionAndPersistsNothing()
     {
         var context = await CreateContextAsync();
@@ -93,6 +181,25 @@ public class PersonalDataErasureIntegrationTests
         var act = () => context.Eraser.ErasePersonalDataAsync(Guid.Empty, new ErasureRequest("ticket"));
 
         await act.Should().ThrowAsync<ArgumentException>().WithParameterName("aggregateId");
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_EventAppendedAfterWholeStreamSelection_ThrowsMongoConcurrencyExceptionAndPersistsNothing()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        var store = (MongoEventStore<LedgerAggregate>)context.Store;
+        store.AfterStreamHeadRead = async ct =>
+        {
+            store.AfterStreamHeadRead = null;
+            await store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)], cancellationToken: ct);
+        };
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<MongoConcurrencyException>().WithMessage("*after the personal data to erase was selected*");
+        await AssertUntouchedAsync(context, aggregateId, 3);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(DefaultMemo, DefaultMemo, DefaultMemo);
     }
 
     [Test]
@@ -162,6 +269,21 @@ public class PersonalDataErasureIntegrationTests
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*integrity protection is disabled*");
         context.ServiceProvider.GetService<PersonalDataEraser<LedgerAggregate>>().Should().BeNull();
         (await context.CountEventsAsync(aggregateId)).Should().Be(1);
+    }
+
+    [Test]
+    public async Task ErasePersonalDataAsync_ReadModelAtOtherVersion_ThrowsMongoEventStoreExceptionAndPersistsNothing()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+                     .UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)),
+                                     Builders<BsonDocument>.Update.Set("Version", 99L));
+
+        var act = () => context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*reached version 2*stored read model is at version 99*");
+        await AssertUntouchedAsync(context, aggregateId, 2);
     }
 
     [Test]
@@ -350,8 +472,7 @@ public class PersonalDataErasureIntegrationTests
         checkpoints[0].Equals(checkpointsBefore[0]).Should().BeTrue("the checkpoint below the erased version is untouched");
         checkpoints[1]["_id"]["Version"].AsInt64.Should().Be(4);
         checkpoints[1]["Revision"].AsInt64.Should().Be(4);
-        checkpoints[1]["State"]["Memos"].AsBsonArray.Select(memo => memo.IsBsonNull ? null : memo.AsString)
-                                        .Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
+        Memos(checkpoints[1]).Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
         checkpoints[1]["State"]["CreatedUtc"].Should().Be(checkpointsBefore[1]["State"]["CreatedUtc"]);
 
         var readModel = await context.Repository.GetAsync(aggregateId);
@@ -360,7 +481,7 @@ public class PersonalDataErasureIntegrationTests
         Proven(await context.Repository.GetAtRevisionAsync(aggregateId, 4)).Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo);
 
         await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 7)]);
-        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().HaveCount(6);
+        Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo, DefaultMemo, DefaultMemo);
         (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
     }
 
@@ -404,6 +525,112 @@ public class PersonalDataErasureIntegrationTests
                                  "the erasure event records only the values it erased");
     }
 
+    [Test]
+    public async Task VerifyStreamAsync_ErasureRecordsOfMalformedOrLaterEntries_AreIgnored()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await CreateContextAsync(false, false, databaseName);
+        var sealing = await CreateContextAsync(databaseName: databaseName);
+        var aggregateId = Guid.NewGuid();
+        await unprotected.Store.AppendEventsAsync([
+            LedgerStoreContext.CreateEntry(aggregateId, 1, memo: null),
+            new PersonalDataErased<LedgerAggregate>
+            {
+                AggregateId = aggregateId,
+                Version = 2,
+                Reference = "ticket"
+            },
+            LedgerStoreContext.CreateEntry(aggregateId, 3, memo: null)
+        ]);
+        var entries = new BsonArray
+        {
+            new BsonDocument
+            {
+                { "Version", 1L },
+                {
+                    "Paths", new BsonArray
+                    {
+                        MemoPath
+                    }
+                }
+            },
+            "not an entry",
+            new BsonDocument("Paths", new BsonArray
+            {
+                MemoPath
+            }),
+            new BsonDocument
+            {
+                { "Version", "3" },
+                {
+                    "Paths", new BsonArray
+                    {
+                        MemoPath
+                    }
+                }
+            },
+            new BsonDocument
+            {
+                { "Version", 3L },
+                { "Paths", MemoPath }
+            },
+            new BsonDocument
+            {
+                { "Version", 3L },
+                {
+                    "Paths", new BsonArray
+                    {
+                        3
+                    }
+                }
+            },
+            new BsonDocument
+            {
+                { "Version", 3L },
+                {
+                    "Paths", new BsonArray
+                    {
+                        MemoPath
+                    }
+                }
+            }
+        };
+        await unprotected.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+                                                Builders<BsonDocument>.Update.Set("Entries", entries));
+        await sealing.Sweep.RunPassAsync();
+        await sealing.UnsetSaltAsync(aggregateId, 1, MemoPath);
+        await sealing.UnsetSaltAsync(aggregateId, 3, MemoPath);
+
+        var result = await sealing.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.IntactWith([new UnrecordedErasure(3, MemoPath)]),
+                           "only a well-formed record of an earlier version documents an erasure");
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_TamperedErasureEvent_ReportsHashMismatch()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [1]));
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3),
+            Builders<BsonDocument>.Update.Push("Entries", new BsonDocument
+            {
+                { "Version", 2L },
+                {
+                    "Paths", new BsonArray
+                    {
+                        MemoPath
+                    }
+                }
+            }));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.HashMismatch));
+    }
+
     private static async Task AssertUntouchedAsync(LedgerStoreContext context, Guid aggregateId, Int64 expectedCount)
     {
         (await context.CountEventsAsync(aggregateId)).Should().Be(expectedCount);
@@ -438,6 +665,9 @@ public class PersonalDataErasureIntegrationTests
 
         return false;
     }
+
+    private static IEnumerable<String?> Memos(BsonDocument checkpoint)
+        => checkpoint["State"]["Memos"].AsBsonArray.Select(memo => memo.IsBsonNull ? null : memo.AsString);
 
     private static LedgerAggregate Proven(LedgerAggregate? aggregate)
     {

@@ -57,6 +57,27 @@ public class PersonalDataErasureRegistrationTests
     }
 
     [Test]
+    public void IsErasureEvent_StoredDiscriminators_MatchesOnlyTheReservedConcreteDiscriminator()
+    {
+        const String reserved = PersonalDataErased<ErasureRegistrationAggregate>.Discriminator;
+
+        EventDocumentFields<ErasureRegistrationAggregate>.IsErasureEvent(reserved).Should().BeTrue();
+        EventDocumentFields<ErasureRegistrationAggregate>.IsErasureEvent(new BsonArray
+        {
+            "Event",
+            reserved
+        }).Should().BeTrue();
+        EventDocumentFields<ErasureRegistrationAggregate>.IsErasureEvent(new BsonArray
+        {
+            reserved,
+            "Other"
+        }).Should().BeFalse();
+        EventDocumentFields<ErasureRegistrationAggregate>.IsErasureEvent("Other").Should().BeFalse();
+        EventDocumentFields<ErasureRegistrationAggregate>.IsErasureEvent(new BsonArray()).Should().BeFalse();
+        EventDocumentFields<ErasureRegistrationAggregate>.IsErasureEvent(BsonNull.Value).Should().BeFalse();
+    }
+
+    [Test]
     public void StreamVerificationResult_Equality_ComparesUnrecordedErasuresByValue()
     {
         var erasure = new UnrecordedErasure(2, "Memo");
