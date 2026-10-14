@@ -110,6 +110,20 @@ public class PersonalDataRegistrationTests
     }
 
     [Test]
+    public void WithEventStore_DollarPrefixedElementName_ThrowsInvalidOperationException()
+    {
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<PersonalDataDollarAggregate>(es => es
+                                                                                .WithEvent<PersonalDataDollarEvent>(
+                                                                                    null,
+                                                                                    e => e.WithPersonalData(x => x.Contact.Email)));
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*PersonalDataDollarEvent*'Contact.Email'*Email*'$email'*starts with a dollar sign*");
+    }
+
+    [Test]
     public void WithEventStore_DottedElementName_ThrowsInvalidOperationException()
     {
         var builder = new MongoBuilder(new ServiceCollection());
@@ -502,6 +516,21 @@ public sealed class PersonalDataPrimitiveEvent : Event<PersonalDataPrimitiveAggr
     public String? Name { get; set; }
 
     public override void Execute(PersonalDataPrimitiveAggregate aggregate) { }
+}
+
+public sealed class PersonalDataDollarAggregate : Aggregate;
+
+public sealed class PersonalDataDollarContact
+{
+    [BsonElement("$email")]
+    public String? Email { get; set; }
+}
+
+public sealed class PersonalDataDollarEvent : Event<PersonalDataDollarAggregate>
+{
+    public PersonalDataDollarContact Contact { get; set; } = new();
+
+    public override void Execute(PersonalDataDollarAggregate aggregate) { }
 }
 
 public sealed class PersonalDataDottedAggregate : Aggregate;

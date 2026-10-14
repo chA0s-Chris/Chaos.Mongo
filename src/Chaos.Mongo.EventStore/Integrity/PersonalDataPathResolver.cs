@@ -166,6 +166,14 @@ internal static class PersonalDataPathResolver
                                                    "elements whose names contain dots.");
             }
 
+            // Update paths cannot address a dollar-prefixed element, so the value could be committed but never erased.
+            if (serializationInfo.ElementName.StartsWith('$'))
+            {
+                throw CreateError(eventType, mark, $"the member {member.Name} of '{segment}' is mapped to the element name " +
+                                                   $"'{serializationInfo.ElementName}', which starts with a dollar sign. Marked paths cannot " +
+                                                   "address elements whose names start with a dollar sign, because erasure cannot update them.");
+            }
+
             elementNames.Add(serializationInfo.ElementName);
             var isLast = index == mark.Members.Count - 1;
 
