@@ -12,8 +12,6 @@ using System.Security.Cryptography.X509Certificates;
 public class CrlDistributionPointsTests
 {
     private const String DistributionPointsOid = "2.5.29.31";
-    private const String PlaceholderOid = "2.5.29.99";
-    private static readonly Byte[] PlaceholderOidEncoding = [0x06, 0x03, 0x55, 0x1D, 0x63];
     private static readonly Asn1Tag UriTag = new(TagClass.ContextSpecific, 6);
 
     [Test]
@@ -24,14 +22,9 @@ public class CrlDistributionPointsTests
         var request = new CertificateRequest("CN=Distribution Points", key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509Extension(DistributionPointsOid, distributionPoints, false));
 
-        // CertificateRequest refuses duplicate extensions, so the second one is added under a placeholder OID of the
-        // same encoded length and renamed in the encoded certificate. Loading does not verify the signature.
-        request.CertificateExtensions.Add(new X509Extension(PlaceholderOid, distributionPoints, false));
+        request.CertificateExtensions.Add(new X509Extension(DuplicateExtensions.PlaceholderOid, distributionPoints, false));
         using var created = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
-        var encoded = created.RawData;
-        var placeholder = encoded.AsSpan().IndexOf(PlaceholderOidEncoding);
-        placeholder.Should().BePositive();
-        encoded[placeholder + 4] = 0x1F;
+        var encoded = DuplicateExtensions.RenamePlaceholder(created.RawData, DistributionPointsOid);
 
         var act = () =>
         {

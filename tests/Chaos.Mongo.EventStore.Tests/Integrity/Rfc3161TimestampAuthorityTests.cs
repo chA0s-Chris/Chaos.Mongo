@@ -346,6 +346,21 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [Test]
+    public async Task TimestampAsync_PointsWhoseLocationsReadAlike_CapturesEach()
+    {
+        // Uri.ToString() unescapes, so both points read "http://tsa.test/ca.crl http://tsa.test/mirror/ca.crl".
+        var readAlike = new Uri($"{TestTimestampAuthority.CrlUri.AbsoluteUri}%20{TestTimestampAuthority.CrlMirrorUri.AbsoluteUri}");
+        var testAuthority = CreateTestAuthority(rawCrlDistributionPoints: TestTimestampAuthority.EncodeDistributionPoints(
+                                                    [TestTimestampAuthority.CrlUri.AbsoluteUri, TestTimestampAuthority.CrlMirrorUri.AbsoluteUri],
+                                                    [readAlike.AbsoluteUri]));
+        testAuthority.AdditionalCrlUris.Add(readAlike);
+
+        var token = await testAuthority.CreateAuthority().TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateRevocationLists.Should().HaveCount(2);
+    }
+
+    [Test]
     public async Task TimestampAsync_ReasonLimitedBesideFullHttpDistributionPoint_CapturesBothCrls()
     {
         var testAuthority = CreateTestAuthority(rawCrlDistributionPoints: EncodeReasonLimitedDistributionPoints(TestTimestampAuthority.CrlMirrorUri,
@@ -384,6 +399,16 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
 
         (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("only id-kp-timeStamping");
+    }
+
+    [Test]
+    public async Task TimestampAsync_SigningCertificateWithDuplicateExtension_Throws()
+    {
+        var authority = CreateTestAuthority(duplicateKeyUsage: true).CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("extension 2.5.29.15 more than once");
     }
 
     [Test]
@@ -456,6 +481,19 @@ public class Rfc3161TimestampAuthorityTests
         var exception = await TimestampExpectingFailureAsync(mode);
 
         exception.Message.Should().Contain("differs from the local time");
+    }
+
+    [Test]
+    public async Task TimestampAsync_TrailingDataAfterAlternativeNames_Throws()
+    {
+        var alternativeNames = new SubjectAlternativeNameBuilder();
+        alternativeNames.AddDnsName(TestTimestampAuthority.DnsName);
+        var authority = CreateTestAuthority(alternativeTsaName: true, rawAlternativeNames: [.. alternativeNames.Build().RawData, 0x05, 0x00])
+            .CreateAuthority();
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("TSA name is malformed");
     }
 
     [Test]
@@ -595,7 +633,9 @@ public class Rfc3161TimestampAuthorityTests
                                                        Boolean additionalPurpose = false,
                                                        X509KeyUsageFlags keyUsage = X509KeyUsageFlags.DigitalSignature,
                                                        Boolean alternativeTsaName = false,
-                                                       Byte[]? rawKeyUsage = null)
+                                                       Byte[]? rawKeyUsage = null,
+                                                       Boolean duplicateKeyUsage = false,
+                                                       Byte[]? rawAlternativeNames = null)
     {
         var testAuthority = new TestTimestampAuthority(crlLocations,
                                                        rawCrlDistributionPoints,
@@ -604,7 +644,9 @@ public class Rfc3161TimestampAuthorityTests
                                                        additionalPurpose,
                                                        keyUsage,
                                                        alternativeTsaName,
-                                                       rawKeyUsage);
+                                                       rawKeyUsage,
+                                                       duplicateKeyUsage,
+                                                       rawAlternativeNames);
         _testAuthorities.Add(testAuthority);
         return testAuthority;
     }

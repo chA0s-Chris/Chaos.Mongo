@@ -54,7 +54,9 @@ internal static class TimestampAuthorityName
             yield break;
         }
 
-        var names = new AsnReader(extension.RawData, AsnEncodingRules.DER).ReadSequence();
+        var reader = new AsnReader(extension.RawData, AsnEncodingRules.DER);
+        var names = reader.ReadSequence();
+        reader.ThrowIfNotEmpty();
         while (names.HasData)
         {
             yield return names.ReadEncodedValue();

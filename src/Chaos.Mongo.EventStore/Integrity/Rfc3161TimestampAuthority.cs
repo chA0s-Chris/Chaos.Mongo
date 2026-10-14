@@ -99,7 +99,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             elements.AddRange(chain.ChainElements.Select(element => element.Certificate));
             var distributionPoints = elements.Take(elements.Count - 1)
                                              .SelectMany(GetDistributionPoints)
-                                             .DistinctBy(locations => String.Join(" ", locations))
+                                             .DistinctBy(locations => String.Join(" ", locations.Select(uri => uri.AbsoluteUri)))
                                              .ToList();
             return new ValidatedChain(elements.Select(certificate => certificate.RawData).ToList(), distributionPoints);
         }
@@ -314,10 +314,18 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     /// <summary>
     /// Requires the signing certificate to be reserved for timestamping (RFC 3161, section 2.3) and, when it carries a
     /// key usage extension, to permit signatures (RFC 5280, section 4.2.1.3). Both extensions are decoded on first
-    /// access, so an undecodable one fails the attempt here.
+    /// access, so an undecodable one fails the attempt here. A certificate must not carry an extension more than once
+    /// (RFC 5280, section 4.2); the extension accessors would read only one instance.
     /// </summary>
     private void ValidateSigner(X509Certificate2 signer)
     {
+        var duplicate = signer.Extensions.GroupBy(extension => extension.Oid?.Value)
+                              .FirstOrDefault(extensions => extensions.Count() > 1);
+        if (duplicate is not null)
+        {
+            throw Fail($"the signing certificate carries the extension {duplicate.Key} more than once.");
+        }
+
         List<String?> purposes;
         X509KeyUsageFlags? keyUsages;
         try
