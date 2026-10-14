@@ -577,7 +577,9 @@ by registering the intermediate type with a distinct discriminator, such as `Wit
 > event's discriminator, such as `OrderPlacedV2 : OrderPlaced` registered as `"OrderPlaced"`. Such configurations
 > previously started; register the intermediate type with a distinct discriminator. Events and read models stored with
 > inherited members contain elements that earlier versions do not map, so earlier versions fail to read them unless
-> extra elements are ignored. Do not run earlier versions against the same collections after upgrading.
+> extra elements are ignored. Do not run earlier versions against the same collections after upgrading. An inherited
+> member marked `[BsonRequired]` makes events, read models and checkpoints stored before the upgrade unreadable, because
+> they lack its element. Remove the attribute, or rewrite or migrate the affected documents, before upgrading.
 
 ### Appending Events
 

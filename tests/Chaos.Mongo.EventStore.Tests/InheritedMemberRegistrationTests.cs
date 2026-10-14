@@ -15,6 +15,20 @@ using NUnit.Framework;
 public class InheritedMemberRegistrationTests
 {
     [Test]
+    public void RegisterClassMaps_ObservationalEventBaseInEventTypes_ThrowsArgumentException()
+    {
+        var options = new MongoEventStoreOptions<InheritanceObservationalBaseRegistrationAggregate>();
+        options.EventTypes[typeof(ObservationalEvent<InheritanceObservationalBaseRegistrationAggregate>)] = "Observational";
+
+        var act = () => MongoEventStoreSerializationSetup.RegisterClassMaps(options);
+
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("*observational event base class*InheritanceObservationalBaseRegistrationAggregate*")
+           .Which.ParamName.Should().Be("options");
+        BsonClassMap.IsClassMapRegistered(typeof(InheritanceObservationalBaseRegistrationAggregate)).Should().BeFalse();
+    }
+
+    [Test]
     public void WithEventStore_DerivedEventRegisteredBeforeIntermediate_MatchesReverseOrder()
     {
         new MongoBuilder(new ServiceCollection())
@@ -361,6 +375,8 @@ public sealed class InheritanceLaterEvent : InheritanceEarlierBaseEvent
 }
 
 public sealed class InheritanceObservationalAggregate : Aggregate;
+
+public sealed class InheritanceObservationalBaseRegistrationAggregate : Aggregate;
 
 public sealed class InheritanceObservedEvent : ObservationalEvent<InheritanceObservationalAggregate>;
 

@@ -45,9 +45,21 @@ public static class MongoEventStoreSerializationSetup
     /// the event base class map or the class map declaring <see cref="IAggregate.Revision"/> was registered without
     /// the revision member.
     /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when the event types contain <see cref="ObservationalEvent{TAggregate}"/> itself.
+    /// </exception>
     public static void RegisterClassMaps<TAggregate>(MongoEventStoreOptions<TAggregate> options)
         where TAggregate : class, IAggregate, new()
     {
+        // The observational base class is left out of the class map hierarchy, so it has no class map to register.
+        if (options.EventTypes.ContainsKey(typeof(ObservationalEvent<TAggregate>)))
+        {
+            throw new ArgumentException(
+                $"The observational event base class of aggregate type {typeof(TAggregate).Name} cannot be registered " +
+                "itself. Register the concrete or intermediate observational event types instead.",
+                nameof(options));
+        }
+
         // Register the concrete aggregate type
         var aggregateType = typeof(TAggregate);
         if (!BsonClassMap.IsClassMapRegistered(aggregateType))
