@@ -93,7 +93,22 @@ public class InheritedMemberRegistrationTests
         var act = () => builder.WithEventStore<InheritanceCollisionAggregate>(es => es.WithEvent<InheritanceCollisionV2Event>(nameof(InheritanceCollisionV1Event)));
 
         act.Should().Throw<InvalidOperationException>()
-           .WithMessage("*InheritanceCollisionV2Event*InheritanceCollisionV1Event*InheritanceCollisionAggregate*'InheritanceCollisionV1Event'*");
+           .WithMessage("*InheritanceCollisionAggregate*'InheritanceCollisionV1Event'*")
+           .Which.Message.Should().Contain(nameof(InheritanceCollisionV2Event));
+    }
+
+    [Test]
+    public void WithEventStore_IntermediateSharesDiscriminatorWithEarlierRegistration_ThrowsInvalidOperationException()
+    {
+        new MongoBuilder(new ServiceCollection())
+            .WithEventStore<InheritanceEarlierAggregate>(es => es.WithEvent<InheritanceEarlierEvent>(nameof(InheritanceEarlierBaseEvent)));
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<InheritanceEarlierAggregate>(es => es.WithEvent<InheritanceLaterEvent>());
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage($"*'{nameof(InheritanceEarlierBaseEvent)}'*")
+           .Which.Message.Should().Contain(nameof(InheritanceEarlierEvent));
     }
 
     [Test]
@@ -205,7 +220,8 @@ public class InheritedMemberRegistrationTests
         var act = () => builder.WithEventStore<InheritancePreRegisteredCollisionAggregate>(es => es.WithEvent<InheritancePreRegisteredCollisionEvent>("Shared"));
 
         act.Should().Throw<InvalidOperationException>()
-           .WithMessage("*InheritancePreRegisteredCollisionEvent*InheritancePreRegisteredCollisionBaseEvent*'Shared'*");
+           .WithMessage("*InheritancePreRegisteredCollisionBaseEvent*'Shared'*")
+           .Which.Message.Should().Contain(nameof(InheritancePreRegisteredCollisionEvent));
     }
 
     [Test]
@@ -329,6 +345,20 @@ public class InheritanceCollisionV1Event : Event<InheritanceCollisionAggregate>
 }
 
 public sealed class InheritanceCollisionV2Event : InheritanceCollisionV1Event;
+
+public sealed class InheritanceEarlierAggregate : Aggregate;
+
+public sealed class InheritanceEarlierEvent : Event<InheritanceEarlierAggregate>
+{
+    public override void Execute(InheritanceEarlierAggregate aggregate) { }
+}
+
+public abstract class InheritanceEarlierBaseEvent : Event<InheritanceEarlierAggregate>;
+
+public sealed class InheritanceLaterEvent : InheritanceEarlierBaseEvent
+{
+    public override void Execute(InheritanceEarlierAggregate aggregate) { }
+}
 
 public sealed class InheritanceObservationalAggregate : Aggregate;
 

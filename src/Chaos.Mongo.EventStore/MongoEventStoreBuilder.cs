@@ -81,10 +81,24 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     /// when refactoring class names or namespaces.
     /// </param>
     /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="discriminator"/> is empty or whitespace, or when <typeparamref name="TEvent"/> is
+    /// <see cref="ObservationalEvent{TAggregate}"/> itself.
+    /// </exception>
     public MongoEventStoreBuilder<TAggregate> WithEvent<TEvent>(String? discriminator = null)
         where TEvent : Event<TAggregate>
     {
         var eventType = typeof(TEvent);
+
+        // The observational base class has no stored members and is left out of the class map hierarchy.
+        if (eventType == typeof(ObservationalEvent<TAggregate>))
+        {
+            throw new ArgumentException(
+                $"The observational event base class of aggregate type {typeof(TAggregate).Name} cannot be registered " +
+                "itself. Register the concrete or intermediate observational event types instead.",
+                nameof(TEvent));
+        }
+
         if (discriminator is not null)
             ArgumentException.ThrowIfNullOrWhiteSpace(discriminator);
         else

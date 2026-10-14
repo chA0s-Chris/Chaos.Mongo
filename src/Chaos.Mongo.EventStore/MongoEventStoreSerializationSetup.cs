@@ -39,8 +39,8 @@ public static class MongoEventStoreSerializationSetup
     /// <typeparam name="TAggregate">The aggregate type.</typeparam>
     /// <param name="options">The event store options containing event type registrations.</param>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when two types in the class
-    /// hierarchies of the event types share a discriminator, when integrity
+    /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when two registered event
+    /// class maps of the aggregate share a discriminator, when integrity
     /// protection is enabled but the event base class map was registered without the integrity member, or when
     /// the event base class map or the class map declaring <see cref="IAggregate.Revision"/> was registered without
     /// the revision member.
@@ -122,7 +122,7 @@ public static class MongoEventStoreSerializationSetup
             }
         }
 
-        EnsureUniqueEventDiscriminators(options);
+        EnsureUniqueEventDiscriminators<TAggregate>();
 
         // Derive the replay filter from the registered class maps rather than from EventTypes, because class
         // maps registered by consumers keep their own discriminators.
@@ -248,29 +248,27 @@ public static class MongoEventStoreSerializationSetup
     /// <summary>
     /// Registering class maps for intermediate types adds their discriminators to the driver's registry. The driver
     /// accepts a discriminator shared by two types of one hierarchy, but then fails every read of it as ambiguous.
+    /// Class maps are process-global, so every registered event class map of the aggregate is checked, including those
+    /// of earlier registrations of the same aggregate and those registered by consumers.
     /// </summary>
-    private static void EnsureUniqueEventDiscriminators<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+    private static void EnsureUniqueEventDiscriminators<TAggregate>()
         where TAggregate : class, IAggregate, new()
     {
-        var registeredClassMaps = BsonClassMap.GetRegisteredClassMaps().ToDictionary(classMap => classMap.ClassType);
         var typesByDiscriminator = new Dictionary<String, Type>();
-        foreach (var eventType in options.EventTypes.Keys)
+        foreach (var classMap in BsonClassMap.GetRegisteredClassMaps())
         {
-            for (var type = eventType; type is not null; type = type == typeof(Event<TAggregate>) ? null : type.BaseType)
+            if (!typeof(Event<TAggregate>).IsAssignableFrom(classMap.ClassType) || classMap.Discriminator is not { } discriminator)
             {
-                if (!registeredClassMaps.TryGetValue(type, out var classMap) || classMap.Discriminator is not { } discriminator)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                if (!typesByDiscriminator.TryAdd(discriminator, type) && typesByDiscriminator[discriminator] != type)
-                {
-                    throw new InvalidOperationException(
-                        $"Event types {typesByDiscriminator[discriminator].Name} and {type.Name} of aggregate type " +
-                        $"{typeof(TAggregate).Name} share the discriminator '{discriminator}', so events stored with it could " +
-                        "not be read. Register one of them with a distinct discriminator, for example with " +
-                        "WithEvent<TEvent>(discriminator).");
-                }
+            if (!typesByDiscriminator.TryAdd(discriminator, classMap.ClassType))
+            {
+                throw new InvalidOperationException(
+                    $"Event types {typesByDiscriminator[discriminator].Name} and {classMap.ClassType.Name} of aggregate type " +
+                    $"{typeof(TAggregate).Name} share the discriminator '{discriminator}', so events stored with it could " +
+                    "not be read. Register one of them with a distinct discriminator, for example with " +
+                    "WithEvent<TEvent>(discriminator).");
             }
         }
     }

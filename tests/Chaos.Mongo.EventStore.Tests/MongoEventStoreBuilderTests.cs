@@ -135,6 +135,17 @@ public class MongoEventStoreBuilderTests
     }
 
     [Test]
+    public void WithEvent_ObservationalEventBase_ThrowsArgumentException()
+    {
+        var builder = new MongoEventStoreBuilder<TestAggregate>();
+
+        var act = () => builder.WithEvent<ObservationalEvent<TestAggregate>>();
+
+        act.Should().Throw<ArgumentException>().WithMessage("*observational event base class*TestAggregate*");
+        builder.Options.EventTypes.Should().BeEmpty();
+    }
+
+    [Test]
     public void WithEvent_WithDiscriminator_UsesProvidedDiscriminator()
     {
         var builder = new MongoEventStoreBuilder<TestAggregate>();
