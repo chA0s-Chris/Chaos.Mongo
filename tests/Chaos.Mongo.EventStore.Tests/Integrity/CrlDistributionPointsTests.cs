@@ -265,6 +265,7 @@ public class CrlDistributionPointsTests
         points[1].CoversAllReasons.Should().BeTrue();
         points[2].Locations.Should().Equal(new Uri("http://crl.test/c.crl"));
         points[2].CoversAllReasons.Should().BeFalse();
+        points.Select(point => point.NamesCrlIssuer).Should().Equal(false, false, true);
     }
 
     [TestCase("40", 6, false)]

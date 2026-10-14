@@ -19,7 +19,18 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 {
     public static readonly Uri CrlMirrorUri = new("http://tsa.test/mirror/ca.crl");
     public static readonly Uri CrlUri = new("http://tsa.test/ca.crl");
+
+    /// <summary>
+    /// The policy the authority issues tokens under unless another one is requested.
+    /// </summary>
+    public const String DefaultPolicyId = "1.3.6.1.4.1.99999.1";
+
     public const String DnsName = "tsa.test";
+
+    /// <summary>
+    /// The subject of the CA that issues <see cref="OtherIssuerCrl"/>.
+    /// </summary>
+    public const String OtherIssuerName = "CN=Chaos.Mongo Other CA";
 
     /// <summary>
     /// The size of the bodies the authority sends in its oversized modes.
@@ -30,7 +41,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     private const String CodeSigningPurposeOid = "1.3.6.1.5.5.7.3.3";
     private const String CrlDistributionPointsOid = "2.5.29.31";
     private const String KeyUsageOid = "2.5.29.15";
-    private static readonly Oid PolicyId = new("1.3.6.1.4.1.99999.1");
     private const String SigningCertificateV2Oid = "1.2.840.113549.1.9.16.2.47";
     private const String SubjectAlternativeNameOid = "2.5.29.17";
     private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
@@ -60,7 +70,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
-        Root = CreateRoot(notBefore, notAfter);
+        Root = CreateRoot("CN=Chaos.Mongo Test TSA Root", notBefore, notAfter);
         _alternativeTsaName = alternativeTsaName;
 
         using var ecdsaKey = rawKeyUsage is null ? ECDsa.Create(ECCurve.NamedCurves.nistP256) : null;
@@ -119,6 +129,13 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         var certificate = patched ?? issued;
         SigningCertificate = ecdsaKey is not null ? certificate.CopyWithPrivateKey(ecdsaKey) : certificate.CopyWithPrivateKey(rsaKey!);
         Crl = new CertificateRevocationListBuilder().Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
+        ExpiredCrl = new CertificateRevocationListBuilder().Build(Root,
+                                                                  BigInteger.One,
+                                                                  DateTimeOffset.UtcNow.AddDays(-1),
+                                                                  HashAlgorithmName.SHA256,
+                                                                  thisUpdate: DateTimeOffset.UtcNow.AddDays(-2));
+        using var otherRoot = CreateRoot(OtherIssuerName, notBefore, notAfter);
+        OtherIssuerCrl = new CertificateRevocationListBuilder().Build(otherRoot, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
     }
 
     /// <summary>
@@ -133,6 +150,11 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public Byte[] Crl { get; }
 
     /// <summary>
+    /// Gets a CRL of the authority's CA that expired before any token the authority issues.
+    /// </summary>
+    public Byte[] ExpiredCrl { get; }
+
+    /// <summary>
     /// Gets or sets how the authority answers.
     /// </summary>
     public TestTimestampAuthorityMode Mode { get; set; } = TestTimestampAuthorityMode.Valid;
@@ -141,6 +163,11 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Gets the nonces of the timestamp requests received so far.
     /// </summary>
     public IReadOnlyList<Byte[]?> Nonces => _nonces;
+
+    /// <summary>
+    /// Gets a CRL issued by another CA, named <see cref="OtherIssuerName"/>.
+    /// </summary>
+    public Byte[] OtherIssuerCrl { get; }
 
     /// <summary>
     /// Gets the self-signed root of the test CA.
@@ -242,10 +269,10 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         return value;
     }
 
-    private static X509Certificate2 CreateRoot(DateTimeOffset notBefore, DateTimeOffset notAfter)
+    private static X509Certificate2 CreateRoot(String subject, DateTimeOffset notBefore, DateTimeOffset notAfter)
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var request = new CertificateRequest("CN=Chaos.Mongo Test TSA Root", key, HashAlgorithmName.SHA256);
+        var request = new CertificateRequest(subject, key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
@@ -340,7 +367,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         };
         var tsaName = Mode == TestTimestampAuthorityMode.WrongTsaName ? EncodeDirectoryName(Root) :
             _alternativeTsaName ? EncodeDnsName(TokenDnsName ?? DnsName) : EncodeDirectoryName(SigningCertificate);
-        var info = new Rfc3161TimestampTokenInfo(PolicyId,
+        var policyId = Mode == TestTimestampAuthorityMode.IgnoresRequestedPolicy ? null : request.RequestedPolicyId?.Value;
+        var info = new Rfc3161TimestampTokenInfo(new Oid(policyId ?? DefaultPolicyId),
                                                  request.HashAlgorithmId,
                                                  hash,
                                                  serialNumber,
@@ -358,6 +386,10 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         var attributeCertificate = Mode == TestTimestampAuthorityMode.WrongEssCertId ? Root : SigningCertificate;
         signer.SignedAttributes.Add(new AsnEncodedData(SigningCertificateV2Oid, EncodeSigningCertificateV2(attributeCertificate)));
         signedCms.ComputeSignature(signer);
+        if (Mode == TestTimestampAuthorityMode.CounterSigned)
+        {
+            signedCms.SignerInfos[0].ComputeCounterSignature(new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, SigningCertificate));
+        }
 
         // Without unsigned attributes the signature value is the last element, so this breaks only the signature.
         var token = signedCms.Encode();
@@ -384,6 +416,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                 var response = Respond(HttpStatusCode.OK, new Byte[OversizedLength]);
                 response.Content.Headers.ContentLength = null;
                 return response;
+            case TestTimestampAuthorityMode.CrlNotACrl:
+                return Respond(HttpStatusCode.OK, "<html><body>Please sign in to the network.</body></html>"u8.ToArray());
+            case TestTimestampAuthorityMode.CrlFromOtherIssuer:
+                return Respond(HttpStatusCode.OK, OtherIssuerCrl);
+            case TestTimestampAuthorityMode.CrlExpired:
+                return Respond(HttpStatusCode.OK, ExpiredCrl);
             case TestTimestampAuthorityMode.CrlConnectionLost:
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {

@@ -181,6 +181,7 @@ internal static class CrlDistributionPoints
         IReadOnlyList<Uri> uris = [];
         var named = false;
         var coversAllReasons = true;
+        var namesCrlIssuer = false;
         if (point.HasData && point.PeekTag().HasSameClassAndValue(NameTag))
         {
             uris = ReadNameUris(point.ReadSequence(NameTag));
@@ -197,6 +198,7 @@ internal static class CrlDistributionPoints
         {
             ReadGeneralNames(point.ReadSequence(CrlIssuerTag));
             named = true;
+            namesCrlIssuer = true;
         }
 
         point.ThrowIfNotEmpty();
@@ -205,7 +207,7 @@ internal static class CrlDistributionPoints
             throw new AsnContentException("A distribution point must name a distribution point or a CRL issuer.");
         }
 
-        return new HttpDistributionPoint(uris, coversAllReasons);
+        return new HttpDistributionPoint(uris, coversAllReasons, namesCrlIssuer);
     }
 
     /// <summary>

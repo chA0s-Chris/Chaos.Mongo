@@ -28,5 +28,10 @@ public enum TestTimestampAuthorityMode
     CrlOversized,
     CrlOversizedWithoutLength,
     CrlConnectionLost,
-    ResponseOversized
+    ResponseOversized,
+    CrlNotACrl,
+    CrlFromOtherIssuer,
+    CrlExpired,
+    CounterSigned,
+    IgnoresRequestedPolicy
 }

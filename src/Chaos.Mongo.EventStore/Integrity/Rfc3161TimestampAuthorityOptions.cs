@@ -51,6 +51,13 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     public required String Name { get; set; }
 
     /// <summary>
+    /// Gets or sets the object identifier of the TSA policy that tokens must be issued under, such as a qualified
+    /// timestamping policy. It is requested with every timestamp, and a token under another policy is rejected
+    /// (RFC 3161, section 2.2). When <c>null</c>, the authority's default policy is accepted.
+    /// </summary>
+    public String? PolicyId { get; set; }
+
+    /// <summary>
     /// Gets or sets the longest time the chain validation may spend on one online revocation check or CRL download.
     /// The chain engine performs these outside the HTTP client, so a hung revocation host would otherwise block the
     /// timestamp attempt without limit. Defaults to 30 seconds.

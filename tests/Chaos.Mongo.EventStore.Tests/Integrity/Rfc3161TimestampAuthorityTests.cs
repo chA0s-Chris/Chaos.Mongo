@@ -67,6 +67,23 @@ public class Rfc3161TimestampAuthorityTests
     }
 
     [TestCase("")]
+    [TestCase("not an oid")]
+    [TestCase("1")]
+    public void Constructor_InvalidPolicyId_ThrowsArgumentException(String policyId)
+    {
+        var options = new Rfc3161TimestampAuthorityOptions
+        {
+            Name = "invalid-policy",
+            Uri = TestTimestampAuthority.TimestampUri,
+            PolicyId = policyId
+        };
+
+        var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+
+        act.Should().Throw<ArgumentException>().WithParameterName("options");
+    }
+
+    [TestCase("")]
     [TestCase(" ")]
     public void Constructor_MissingName_ThrowsArgumentException(String name)
     {
@@ -191,6 +208,14 @@ public class Rfc3161TimestampAuthorityTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Test]
+    public async Task TimestampAsync_CounterSignedToken_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.CounterSigned);
+
+        exception.Message.Should().Contain("countersignature");
+    }
+
     [TestCase(TestTimestampAuthorityMode.CrlOversized)]
     [TestCase(TestTimestampAuthorityMode.CrlOversizedWithoutLength)]
     public async Task TimestampAsync_CrlAboveMaximumResponseSize_Throws(TestTimestampAuthorityMode mode)
@@ -225,6 +250,46 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
 
         (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should().Contain("attempt timeout");
+    }
+
+    [Test]
+    public async Task TimestampAsync_CrlFromNamedCrlIssuer_CapturesItWithoutIssuerCheck()
+    {
+        var uriTag = new Asn1Tag(TagClass.ContextSpecific, 6);
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0)))
+            {
+                writer.WriteCharacterString(UniversalTagNumber.IA5String, TestTimestampAuthority.CrlUri.AbsoluteUri, uriTag);
+            }
+
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 2)))
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 4)))
+            {
+                writer.WriteEncodedValue(new X500DistinguishedName(TestTimestampAuthority.OtherIssuerName).RawData);
+            }
+        }
+
+        var testAuthority = CreateTestAuthority(rawCrlDistributionPoints: writer.Encode());
+        testAuthority.Mode = TestTimestampAuthorityMode.CrlFromOtherIssuer;
+
+        var token = await testAuthority.CreateAuthority().TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        token.CertificateRevocationLists.Should().ContainSingle().Which.Should().Equal(testAuthority.OtherIssuerCrl);
+    }
+
+    [TestCase(TestTimestampAuthorityMode.CrlNotACrl, "not a single DER-encoded CRL")]
+    [TestCase(TestTimestampAuthorityMode.CrlFromOtherIssuer, "not issued by the issuer")]
+    [TestCase(TestTimestampAuthorityMode.CrlExpired, "before the token's time")]
+    public async Task TimestampAsync_CrlNotUsable_Throws(TestTimestampAuthorityMode mode, String reason)
+    {
+        var exception = await TimestampExpectingFailureAsync(mode);
+
+        exception.Message.Should().Contain("could not be downloaded");
+        exception.InnerException.Should().BeOfType<InvalidDataException>().Which.Message.Should().Contain(reason);
     }
 
     [Test]
@@ -371,6 +436,18 @@ public class Rfc3161TimestampAuthorityTests
         token.CertificateRevocationLists.Should().HaveCount(2).And.AllSatisfy(crl => crl.Should().Equal(testAuthority.Crl));
     }
 
+    [Test]
+    public async Task TimestampAsync_RequiredPolicy_IsRequestedAndAccepted()
+    {
+        const String qualifiedPolicyId = "0.4.0.2023.1.1";
+        var authority = CreateTestAuthority().CreateAuthority(configure: options => options.PolicyId = qualifiedPolicyId);
+
+        var token = await authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        Rfc3161TimestampToken.TryDecode(token.Token, out var decoded, out _).Should().BeTrue();
+        decoded!.TokenInfo.PolicyId.Value.Should().Be(qualifiedPolicyId);
+    }
+
     [TestCase(TestTimestampAuthorityMode.Rejection)]
     [TestCase(TestTimestampAuthorityMode.TrailingData)]
     public async Task TimestampAsync_ResponseNotAccepted_Throws(TestTimestampAuthorityMode mode)
@@ -481,6 +558,19 @@ public class Rfc3161TimestampAuthorityTests
         var exception = await TimestampExpectingFailureAsync(mode);
 
         exception.Message.Should().Contain("differs from the local time");
+    }
+
+    [Test]
+    public async Task TimestampAsync_TokenUnderOtherPolicy_Throws()
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.IgnoresRequestedPolicy;
+        var authority = testAuthority.CreateAuthority(configure: options => options.PolicyId = "0.4.0.2023.1.1");
+
+        var act = () => authority.TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<TimestampAuthorityException>()).Which.Message.Should()
+                                                                      .Contain($"policy {TestTimestampAuthority.DefaultPolicyId}, not the required policy");
     }
 
     [Test]
