@@ -15,7 +15,8 @@ internal static class PersonalDataPathResolver
     /// Resolves the marks of every registered event type to its distinct element paths. A registered event type
     /// inherits the marks of its registered base event types whose first member its class map maps, so a derived
     /// event cannot store marked values without committing to them. An inherited member that is not mapped is not
-    /// stored, which is the case when the event store registers the class map on top of <see cref="Event{TAggregate}"/>.
+    /// stored, which is the case when a consumer registers the derived class map on top of a base class map that
+    /// skips the declaring class.
     /// </summary>
     /// <typeparam name="TAggregate">The aggregate type.</typeparam>
     /// <param name="options">The event store options holding the marks.</param>

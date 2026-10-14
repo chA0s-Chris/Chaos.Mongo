@@ -170,11 +170,11 @@ public class PersonalDataRegistrationTests
     }
 
     [Test]
-    public void WithEventStore_EventDerivedFromMarkedEvent_SkipsInheritedMarksOfUnmappedMembers()
+    public void WithEventStore_EventDerivedFromMarkedEvent_InheritsMarks()
     {
         var services = new ServiceCollection();
 
-        // The event store maps a derived event on top of Event<TAggregate>, so the inherited Memo is not stored.
+        // The event store maps a derived event along its class hierarchy, so the inherited Memo is stored.
         new MongoBuilder(services).WithEventStore<PersonalDataInheritedAggregate>(es => es
                                                                                         .WithEvent<PersonalDataInheritedEvent>(null, e => e.WithPersonalData(x => x.Memo))
                                                                                         .WithEvent<PersonalDataInheritedDerivedEvent>(
@@ -184,8 +184,8 @@ public class PersonalDataRegistrationTests
 
         var options = services.BuildServiceProvider().GetRequiredService<MongoEventStoreOptions<PersonalDataInheritedAggregate>>();
         options.PersonalDataPaths[typeof(PersonalDataInheritedEvent)].Should().Equal("Memo");
-        options.PersonalDataPaths[typeof(PersonalDataInheritedDerivedEvent)].Should().Equal("Note");
-        options.PersonalDataPaths.Should().NotContainKey(typeof(PersonalDataInheritedUnmarkedEvent));
+        options.PersonalDataPaths[typeof(PersonalDataInheritedDerivedEvent)].Should().Equal("Memo", "Note");
+        options.PersonalDataPaths[typeof(PersonalDataInheritedUnmarkedEvent)].Should().Equal("Memo");
     }
 
     [Test]
@@ -262,6 +262,27 @@ public class PersonalDataRegistrationTests
 
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("*PersonalDataOverlapEvent*'Person.Name'*'Person.Name'*overlaps*'Person'*'Person'*");
+    }
+
+    [Test]
+    public void WithEventStore_PreRegisteredMapSkippingMarkedBase_SkipsInheritedMarksOfUnmappedMembers()
+    {
+        // The derived class map is built directly on the event base class map, so the inherited Memo is not stored.
+        var derivedClassMap = new BsonClassMap(typeof(PersonalDataSkippedDerivedEvent),
+                                               BsonClassMap.LookupClassMap(typeof(Event<PersonalDataSkippedAggregate>)));
+        derivedClassMap.AutoMap();
+        BsonClassMap.RegisterClassMap(derivedClassMap);
+        var services = new ServiceCollection();
+
+        new MongoBuilder(services).WithEventStore<PersonalDataSkippedAggregate>(es => es
+                                                                                      .WithEvent<PersonalDataSkippedEvent>(null, e => e.WithPersonalData(x => x.Memo))
+                                                                                      .WithEvent<PersonalDataSkippedDerivedEvent>(
+                                                                                          null,
+                                                                                          e => e.WithPersonalData(x => x.Note)));
+
+        var options = services.BuildServiceProvider().GetRequiredService<MongoEventStoreOptions<PersonalDataSkippedAggregate>>();
+        options.PersonalDataPaths[typeof(PersonalDataSkippedEvent)].Should().Equal("Memo");
+        options.PersonalDataPaths[typeof(PersonalDataSkippedDerivedEvent)].Should().Equal("Note");
     }
 
     [Test]
@@ -375,6 +396,20 @@ public sealed class PersonalDataInheritedDerivedEvent : PersonalDataInheritedEve
 }
 
 public sealed class PersonalDataInheritedUnmarkedEvent : PersonalDataInheritedEvent;
+
+public sealed class PersonalDataSkippedAggregate : Aggregate;
+
+public class PersonalDataSkippedEvent : Event<PersonalDataSkippedAggregate>
+{
+    public String? Memo { get; set; }
+
+    public override void Execute(PersonalDataSkippedAggregate aggregate) { }
+}
+
+public sealed class PersonalDataSkippedDerivedEvent : PersonalDataSkippedEvent
+{
+    public String? Note { get; set; }
+}
 
 public sealed class PersonalDataHierarchyAggregate : Aggregate;
 
