@@ -20,6 +20,7 @@ Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
   - [Checkpoints](#checkpoints)
 - [Working with Events](#working-with-events)
   - [Defining Events](#defining-events)
+  - [Class Hierarchies](#class-hierarchies)
   - [Appending Events](#appending-events)
   - [Reading Events](#reading-events)
 - [Concurrency and Idempotency](#concurrency-and-idempotency)
@@ -519,6 +520,64 @@ public override void Execute(OrderAggregate aggregate)
     // Apply changes...
 }
 ```
+
+### Class Hierarchies
+
+Events and aggregates may derive from intermediate base classes. The event store registers their class maps along the
+real class hierarchy, so members declared on an intermediate class are stored and read back like the type's own
+members:
+
+```csharp
+public abstract class AuditedEvent : Event<OrderAggregate>
+{
+    public string ChangedBy { get; set; } = string.Empty;   // stored with every derived event
+}
+
+public class OrderRenamedEvent : AuditedEvent
+{
+    public string Name { get; set; } = string.Empty;
+
+    public override void Execute(OrderAggregate aggregate) => aggregate.Name = Name;
+}
+```
+
+The same applies to aggregates deriving from an intermediate class between them and `Aggregate`: inherited members
+are part of the read model and of checkpoints.
+
+**Discriminators:** `Event<TAggregate>` is the root of the event hierarchy, so events store an array of discriminators,
+one per class map in the hierarchy. An intermediate class adds its own entry, for example
+`["Event<OrderAggregate>", "AuditedEvent", "OrderRenamed"]`:
+
+- An intermediate event type registered with `WithEvent` uses the discriminator configured there, regardless of the
+  order of the `WithEvent` calls.
+- An unregistered intermediate type uses the driver's default: the discriminator of a `[BsonDiscriminator]` attribute,
+  otherwise the class name (for generic types including its type arguments, such as `AuditedEvent<String>`). Register
+  intermediate types explicitly when their names may change.
+- `ObservationalEvent<TAggregate>` itself does not appear in the array, so the discriminators of observational events
+  deriving directly from it are `["Event<OrderAggregate>", "OrderViewed"]`. Intermediate classes between
+  `ObservationalEvent<TAggregate>` and an observational event appear like any other intermediate class.
+- Class maps registered before the event store, including those of intermediate types, are used unchanged.
+
+During deserialization, the driver resolves the last discriminator among all types of the hierarchy. The registration
+therefore rejects two types in an aggregate's event hierarchy that share a discriminator with an
+`InvalidOperationException`; the driver would otherwise fail every read of that discriminator as ambiguous. This happens, for example, when `OrderPlacedV2 : OrderPlaced` is
+registered as `"OrderPlaced"` while `OrderPlaced` is no longer registered and thus defaults to the same name. Resolve it
+by registering the intermediate type with a distinct discriminator, such as `WithEvent<OrderPlaced>("OrderPlacedV1")`.
+
+> **Earlier versions** built every event class map directly on `Event<TAggregate>` and every aggregate class map
+> directly on `Aggregate`, so members declared on intermediate classes were silently neither stored nor read back.
+> Stored documents are not rewritten: events stored with the shorter discriminator array still deserialize, and sealed
+> events still verify. The data dropped by earlier versions cannot be recovered. Inherited event members were never
+> stored, so replay cannot restore them, and existing read models and checkpoints regain inherited members only when
+> later events set them. Until then, reconstruction from such a checkpoint can differ from a replay that starts at the
+> beginning of the stream. Consumers who registered their own class maps before the event store were not affected.
+
+> **Breaking change:** Registration now throws `InvalidOperationException` when two types in an aggregate's event
+> hierarchy share a discriminator. This includes an unregistered intermediate type whose default name matches another
+> event's discriminator, such as `OrderPlacedV2 : OrderPlaced` registered as `"OrderPlaced"`. Such configurations
+> previously started; register the intermediate type with a distinct discriminator. Events and read models stored with
+> inherited members contain elements that earlier versions do not map, so earlier versions fail to read them unless
+> extra elements are ignored. Do not run earlier versions against the same collections after upgrading.
 
 ### Appending Events
 

@@ -32,13 +32,15 @@ public static class MongoEventStoreSerializationSetup
     }
 
     /// <summary>
-    /// Registers BsonClassMaps for the aggregate type and its event types.
-    /// Guid fields are explicitly configured with <see cref="GuidRepresentation.Standard"/>.
+    /// Registers BsonClassMaps for the aggregate type and its event types along their class hierarchies, so members
+    /// declared on intermediate base classes are stored. Guid fields are explicitly configured with
+    /// <see cref="GuidRepresentation.Standard"/>.
     /// </summary>
     /// <typeparam name="TAggregate">The aggregate type.</typeparam>
     /// <param name="options">The event store options containing event type registrations.</param>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when integrity
+    /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when two types in the class
+    /// hierarchies of the event types share a discriminator, when integrity
     /// protection is enabled but the event base class map was registered without the integrity member, or when
     /// the event base class map or the class map declaring <see cref="IAggregate.Revision"/> was registered without
     /// the revision member.
@@ -62,9 +64,7 @@ public static class MongoEventStoreSerializationSetup
                     });
                 }
 
-                var aggregateClassMap = new BsonClassMap(aggregateType, BsonClassMap.LookupClassMap(typeof(Aggregate)));
-                aggregateClassMap.AutoMap();
-                BsonClassMap.RegisterClassMap(aggregateClassMap);
+                RegisterClassMapHierarchy(aggregateType, typeof(Aggregate), null, static _ => { });
             }
             else
             {
@@ -101,21 +101,28 @@ public static class MongoEventStoreSerializationSetup
         EnsureEventBaseMapsIntegrity(options);
         EnsureEventBaseMapsRevision<TAggregate>();
 
-        // Register each concrete event type with its discriminator
-        foreach (var (eventType, discriminator) in options.EventTypes)
+        // Register each event type along its hierarchy. A registered intermediate type receives its configured
+        // discriminator even when a derived event type is registered first.
+        foreach (var eventType in options.EventTypes.Keys)
         {
-            if (BsonClassMap.IsClassMapRegistered(eventType))
+            var wasRegistered = BsonClassMap.IsClassMapRegistered(eventType);
+            RegisterClassMapHierarchy(eventType, eventBaseType, typeof(ObservationalEvent<TAggregate>), classMap =>
+            {
+                if (options.EventTypes.TryGetValue(classMap.ClassType, out var discriminator))
+                {
+                    classMap.SetDiscriminator(discriminator);
+                }
+
+                EnsureNoReservedElementCollision<TAggregate>(classMap);
+            });
+
+            if (wasRegistered)
             {
                 EnsureNoReservedElementCollision<TAggregate>(GetRegisteredClassMap(eventType));
-                continue;
             }
-
-            var classMap = new BsonClassMap(eventType, BsonClassMap.LookupClassMap(eventBaseType));
-            classMap.AutoMap();
-            classMap.SetDiscriminator(discriminator);
-            EnsureNoReservedElementCollision<TAggregate>(classMap);
-            BsonClassMap.RegisterClassMap(classMap);
         }
+
+        EnsureUniqueEventDiscriminators(options);
 
         // Derive the replay filter from the registered class maps rather than from EventTypes, because class
         // maps registered by consumers keep their own discriminators.
@@ -238,8 +245,76 @@ public static class MongoEventStoreSerializationSetup
         }
     }
 
+    /// <summary>
+    /// Registering class maps for intermediate types adds their discriminators to the driver's registry. The driver
+    /// accepts a discriminator shared by two types of one hierarchy, but then fails every read of it as ambiguous.
+    /// </summary>
+    private static void EnsureUniqueEventDiscriminators<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        var registeredClassMaps = BsonClassMap.GetRegisteredClassMaps().ToDictionary(classMap => classMap.ClassType);
+        var typesByDiscriminator = new Dictionary<String, Type>();
+        foreach (var eventType in options.EventTypes.Keys)
+        {
+            for (var type = eventType; type is not null; type = type == typeof(Event<TAggregate>) ? null : type.BaseType)
+            {
+                if (!registeredClassMaps.TryGetValue(type, out var classMap) || classMap.Discriminator is not { } discriminator)
+                {
+                    continue;
+                }
+
+                if (!typesByDiscriminator.TryAdd(discriminator, type) && typesByDiscriminator[discriminator] != type)
+                {
+                    throw new InvalidOperationException(
+                        $"Event types {typesByDiscriminator[discriminator].Name} and {type.Name} of aggregate type " +
+                        $"{typeof(TAggregate).Name} share the discriminator '{discriminator}', so events stored with it could " +
+                        "not be read. Register one of them with a distinct discriminator, for example with " +
+                        "WithEvent<TEvent>(discriminator).");
+                }
+            }
+        }
+    }
+
     private static BsonClassMap GetRegisteredClassMap(Type classType)
         => BsonClassMap.GetRegisteredClassMaps().First(classMap => classMap.ClassType == classType);
+
+    /// <summary>
+    /// Registers the class map of <paramref name="classType"/> on top of the class map of its direct base type, so
+    /// members declared on intermediate classes are mapped. Missing base types are registered first, including those
+    /// above class maps registered by consumers, before <paramref name="configure"/> sees the new class map.
+    /// Intermediate base class maps are not looked up with <see cref="BsonClassMap.LookupClassMap"/>, because that
+    /// freezes them and auto-registers their missing base types with default settings.
+    /// </summary>
+    /// <param name="classType">The type to register.</param>
+    /// <param name="rootType">The registered base type at which registration stops.</param>
+    /// <param name="transparentType">
+    /// A base type without stored members that is left out of the class map hierarchy, or <c>null</c>.
+    /// </param>
+    /// <param name="configure">Configures each class map created by this method before it is registered.</param>
+    private static void RegisterClassMapHierarchy(Type classType,
+                                                  Type rootType,
+                                                  Type? transparentType,
+                                                  Action<BsonClassMap> configure)
+    {
+        if (classType == rootType || classType == transparentType || classType.BaseType is not { } baseType)
+        {
+            return;
+        }
+
+        RegisterClassMapHierarchy(baseType, rootType, transparentType, configure);
+        if (BsonClassMap.IsClassMapRegistered(classType))
+        {
+            return;
+        }
+
+        var baseClassMap = baseType == rootType || baseType == transparentType
+            ? BsonClassMap.LookupClassMap(rootType)
+            : GetRegisteredClassMap(baseType);
+        var classMap = new BsonClassMap(classType, baseClassMap);
+        classMap.AutoMap();
+        configure(classMap);
+        BsonClassMap.RegisterClassMap(classMap);
+    }
 
     private static void RegisterEventIntegrityClassMap()
     {
