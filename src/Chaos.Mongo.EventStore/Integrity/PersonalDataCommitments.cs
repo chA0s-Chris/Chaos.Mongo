@@ -121,18 +121,20 @@ internal static class PersonalDataCommitments
 
     /// <summary>
     /// Checks that the recorded commitments have the expected lengths and distinct paths, none of which is a
-    /// prefix of another. Overlapping paths cannot be substituted independently, so they are malformed.
+    /// prefix of another. Overlapping paths cannot be substituted independently, so they are malformed. Stored
+    /// <c>null</c> values deserialize to <c>null</c> references, so a tampered entry or commitment may be <c>null</c>.
     /// </summary>
     /// <param name="commitments">The recorded commitments.</param>
     /// <returns><c>true</c> when every commitment is well-formed; otherwise <c>false</c>.</returns>
-    public static Boolean IsWellFormed(IReadOnlyList<PersonalDataCommitment> commitments)
+    public static Boolean IsWellFormed(IReadOnlyList<PersonalDataCommitment?> commitments)
     {
         ArgumentNullException.ThrowIfNull(commitments);
 
         var paths = new HashSet<String>(StringComparer.Ordinal);
         foreach (var commitment in commitments)
         {
-            if (commitment.Commitment.Length != CommitmentLength ||
+            if (commitment?.Commitment is null ||
+                commitment.Commitment.Length != CommitmentLength ||
                 commitment.Salt is { Length: not SaltLength } ||
                 String.IsNullOrEmpty(commitment.Path) ||
                 !paths.Add(commitment.Path))

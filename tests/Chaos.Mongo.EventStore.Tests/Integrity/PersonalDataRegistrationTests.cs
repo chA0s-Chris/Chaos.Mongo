@@ -136,6 +136,63 @@ public class PersonalDataRegistrationTests
     }
 
     [Test]
+    public void WithEventStore_EventDerivedFromMarkedEventInRegisteredHierarchy_InheritsMarks()
+    {
+        BsonClassMap.RegisterClassMap<PersonalDataHierarchyDerivedEvent>(cm => cm.AutoMap());
+        BsonClassMap.RegisterClassMap<PersonalDataHierarchyUnmarkedEvent>(cm => cm.AutoMap());
+        var services = new ServiceCollection();
+
+        new MongoBuilder(services).WithEventStore<PersonalDataHierarchyAggregate>(es => es
+                                                                                        .WithEvent<PersonalDataHierarchyEvent>(null, e => e.WithPersonalData(x => x.Memo))
+                                                                                        .WithEvent<PersonalDataHierarchyDerivedEvent>(
+                                                                                            null,
+                                                                                            e => e.WithPersonalData(x => x.Note))
+                                                                                        .WithEvent<PersonalDataHierarchyUnmarkedEvent>());
+
+        var options = services.BuildServiceProvider().GetRequiredService<MongoEventStoreOptions<PersonalDataHierarchyAggregate>>();
+        options.PersonalDataPaths[typeof(PersonalDataHierarchyEvent)].Should().Equal("Memo");
+        options.PersonalDataPaths[typeof(PersonalDataHierarchyDerivedEvent)].Should().Equal("Memo", "Note");
+        options.PersonalDataPaths[typeof(PersonalDataHierarchyUnmarkedEvent)].Should().Equal("Memo");
+    }
+
+    [Test]
+    public void WithEventStore_EventDerivedFromMarkedEvent_SkipsInheritedMarksOfUnmappedMembers()
+    {
+        var services = new ServiceCollection();
+
+        // The event store maps a derived event on top of Event<TAggregate>, so the inherited Memo is not stored.
+        new MongoBuilder(services).WithEventStore<PersonalDataInheritedAggregate>(es => es
+                                                                                        .WithEvent<PersonalDataInheritedEvent>(null, e => e.WithPersonalData(x => x.Memo))
+                                                                                        .WithEvent<PersonalDataInheritedDerivedEvent>(
+                                                                                            null,
+                                                                                            e => e.WithPersonalData(x => x.Note))
+                                                                                        .WithEvent<PersonalDataInheritedUnmarkedEvent>());
+
+        var options = services.BuildServiceProvider().GetRequiredService<MongoEventStoreOptions<PersonalDataInheritedAggregate>>();
+        options.PersonalDataPaths[typeof(PersonalDataInheritedEvent)].Should().Equal("Memo");
+        options.PersonalDataPaths[typeof(PersonalDataInheritedDerivedEvent)].Should().Equal("Note");
+        options.PersonalDataPaths.Should().NotContainKey(typeof(PersonalDataInheritedUnmarkedEvent));
+    }
+
+    [Test]
+    public void WithEventStore_InheritedMarkOverlapsOwnMark_ThrowsInvalidOperationException()
+    {
+        BsonClassMap.RegisterClassMap<PersonalDataInheritedOverlapDerivedEvent>(cm => cm.AutoMap());
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        var act = () => builder.WithEventStore<PersonalDataInheritedOverlapAggregate>(es => es
+                                                                                            .WithEvent<PersonalDataInheritedOverlapEvent>(
+                                                                                                null,
+                                                                                                e => e.WithPersonalData(x => x.Person))
+                                                                                            .WithEvent<PersonalDataInheritedOverlapDerivedEvent>(
+                                                                                                null,
+                                                                                                e => e.WithPersonalData(x => x.Person!.Name)));
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*PersonalDataInheritedOverlapDerivedEvent*'Person.Name'*overlaps*'Person'*");
+    }
+
+    [Test]
     public void WithEventStore_MarkedMembers_ResolveToRenamedNestedElementPaths()
     {
         var services = new ServiceCollection();
@@ -288,6 +345,49 @@ public sealed class PersonalDataAddress
     [BsonElement("street")]
     public String? Street { get; set; }
 }
+
+public sealed class PersonalDataInheritedAggregate : Aggregate;
+
+public class PersonalDataInheritedEvent : Event<PersonalDataInheritedAggregate>
+{
+    public String? Memo { get; set; }
+
+    public override void Execute(PersonalDataInheritedAggregate aggregate) { }
+}
+
+public sealed class PersonalDataInheritedDerivedEvent : PersonalDataInheritedEvent
+{
+    public String? Note { get; set; }
+}
+
+public sealed class PersonalDataInheritedUnmarkedEvent : PersonalDataInheritedEvent;
+
+public sealed class PersonalDataHierarchyAggregate : Aggregate;
+
+public class PersonalDataHierarchyEvent : Event<PersonalDataHierarchyAggregate>
+{
+    public String? Memo { get; set; }
+
+    public override void Execute(PersonalDataHierarchyAggregate aggregate) { }
+}
+
+public sealed class PersonalDataHierarchyDerivedEvent : PersonalDataHierarchyEvent
+{
+    public String? Note { get; set; }
+}
+
+public sealed class PersonalDataHierarchyUnmarkedEvent : PersonalDataHierarchyEvent;
+
+public sealed class PersonalDataInheritedOverlapAggregate : Aggregate;
+
+public class PersonalDataInheritedOverlapEvent : Event<PersonalDataInheritedOverlapAggregate>
+{
+    public PersonalDataPerson? Person { get; set; }
+
+    public override void Execute(PersonalDataInheritedOverlapAggregate aggregate) { }
+}
+
+public sealed class PersonalDataInheritedOverlapDerivedEvent : PersonalDataInheritedOverlapEvent;
 
 public sealed class PersonalDataArrayAggregate : Aggregate;
 

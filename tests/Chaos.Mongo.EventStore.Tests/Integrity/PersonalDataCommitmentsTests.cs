@@ -89,6 +89,18 @@ public class PersonalDataCommitmentsTests
     }
 
     [Test]
+    public void ComputeCommitment_KnownInput_ReturnsIndependentlyComputedValue()
+    {
+        // Expected value computed outside .NET: SHA-256(salt ‖ 0x02 ‖ BSON string bytes of "Alice").
+        var value = new BsonDocument("Name", "Alice").ToBson();
+        RawBsonElements.TryLocate(value, "Name", out var type, out var range).Should().BeTrue();
+
+        var commitment = PersonalDataCommitments.ComputeCommitment(Salt, type, value.AsSpan(range));
+
+        Convert.ToHexString(commitment).ToLowerInvariant().Should().Be("e7211005defe57e75786d8e4d041b8ef31a3c4be9edbc460476cf1f0b2a5f1b5");
+    }
+
+    [Test]
     public void ComputeCommitment_SameInput_ReturnsSameSha256Value()
     {
         Byte[] value = [1, 2, 3];
@@ -118,6 +130,21 @@ public class PersonalDataCommitmentsTests
     [Test]
     public void IsWellFormed_ErasedCommitment_ReturnsTrue()
         => PersonalDataCommitments.IsWellFormed([CreateCommitment("Name", null)]).Should().BeTrue();
+
+    [Test]
+    public void IsWellFormed_NullCommitment_ReturnsFalse()
+        => PersonalDataCommitments.IsWellFormed([
+            new PersonalDataCommitment
+            {
+                Path = "Name",
+                Salt = Salt,
+                Commitment = null!
+            }
+        ]).Should().BeFalse();
+
+    [Test]
+    public void IsWellFormed_NullEntry_ReturnsFalse()
+        => PersonalDataCommitments.IsWellFormed([CreateCommitment("Name"), null!]).Should().BeFalse();
 
     [Test]
     [TestCase("Address", "Address.City")]

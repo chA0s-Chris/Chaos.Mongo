@@ -53,6 +53,33 @@ public class EventIntegrityChainTests
     }
 
     [Test]
+    public void ComputeHash_KnownInputs_ReturnsIndependentlyComputedValues()
+    {
+        // Expected values computed outside .NET: SHA-256(canonical ‖ previous) and
+        // SHA-256(canonical ‖ tag ‖ "Name\0" ‖ "Address.City\0" ‖ previous).
+        Byte[] canonical = [1, 2, 3];
+        var previousHash = new Byte[32];
+        List<PersonalDataCommitment> personalData =
+        [
+            new()
+            {
+                Path = "Name",
+                Commitment = new Byte[32]
+            },
+            new()
+            {
+                Path = "Address.City",
+                Commitment = new Byte[32]
+            }
+        ];
+
+        ToHex(EventIntegrityChain.ComputeHash(canonical, previousHash))
+            .Should().Be("a25945c851dcb2096b9f2de1e99729987f49136f6cbe2880d82576c0884dffbe");
+        ToHex(EventIntegrityChain.ComputeHash(canonical, personalData, previousHash))
+            .Should().Be("066365f8e738147dd7dd23189b26c26888a9ad4b5290cff9d63d2905bebd1229");
+    }
+
+    [Test]
     public void ComputeHash_WithPersonalData_DependsOnRecordedPathsAndTheirOrder()
     {
         Byte[] canonical = [1, 2, 3];
@@ -83,6 +110,28 @@ public class EventIntegrityChainTests
     [OneTimeSetUp]
     public void RegisterClassMaps()
         => new MongoBuilder(new ServiceCollection()).WithEventStore<ChainFormatAggregate>(es => es.WithEvent<ChainFormatEvent>());
+
+    [Test]
+    public void Seal_DottedSiblingName_HashCoversTheSiblingValue()
+    {
+        var document = new BsonDocument
+        {
+            { "Recipient.Name", "alias" },
+            { "Recipient", new BsonDocument("Name", "real") }
+        };
+        var previousHash = EventIntegrityChain.ComputeGenesis("Ledger", Guid.NewGuid());
+
+        var integrity = EventIntegrityChain.Seal(document.ToBson(), ["Recipient.Name"], previousHash, IntegritySealMode.Append);
+
+        var changed = document.DeepClone().AsBsonDocument;
+        changed["Recipient.Name"] = "forged";
+        var changedCanonical = PersonalDataCommitments.Canonicalize(changed.ToBson(), integrity.PersonalData!);
+        EventIntegrityChain.ComputeHash(changedCanonical, integrity.PersonalData, previousHash).Should().NotEqual(integrity.Hash);
+        var erased = document.DeepClone().AsBsonDocument;
+        erased["Recipient"]["Name"] = BsonNull.Value;
+        var erasedCanonical = PersonalDataCommitments.Canonicalize(erased.ToBson(), integrity.PersonalData!);
+        EventIntegrityChain.ComputeHash(erasedCanonical, integrity.PersonalData, previousHash).Should().Equal(integrity.Hash);
+    }
 
     [Test]
     public void Seal_ReturnsCurrentFormatChainedFromPreviousHash()
@@ -189,6 +238,8 @@ public class EventIntegrityChainTests
         result.Should().BeTrue();
         integrity.Should().BeEquivalentTo(sealedIntegrity);
     }
+
+    private static String ToHex(Byte[] value) => Convert.ToHexString(value).ToLowerInvariant();
 }
 
 public sealed class ChainFormatAggregate : Aggregate;

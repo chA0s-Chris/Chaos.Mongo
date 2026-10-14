@@ -55,6 +55,8 @@ internal static class RawBsonElements
     /// Replaces the value of every element addressed by a path with a binary value of subtype <c>0x00</c>
     /// holding the given bytes. The element keeps its name and position; the length prefixes of all enclosing
     /// documents are corrected. The other bytes are copied verbatim, so their representation is preserved exactly.
+    /// A path resolves as in <see cref="TryLocate"/>: each segment addresses the first element of that name, and
+    /// elements whose names contain a dot are never addressed.
     /// </summary>
     /// <param name="document">The serialized BSON document.</param>
     /// <param name="values">The binary payload for each dotted element path.</param>
@@ -144,6 +146,7 @@ internal static class RawBsonElements
         var lengthPosition = output.Position;
         output.Write(stackalloc Byte[4]);
         reader.ReadStartDocument();
+        var addressedNames = new HashSet<String>(StringComparer.Ordinal);
 
         while (true)
         {
@@ -154,10 +157,15 @@ internal static class RawBsonElements
                 break;
             }
 
-            var path = pathPrefix + reader.ReadName();
+            var name = reader.ReadName();
+            var path = pathPrefix + name;
             var valueStart = (Int32)reader.BsonStream.Position;
 
-            if (values.TryGetValue(path, out var replacement))
+            // Paths resolve as in TryLocate: only the first element of a name is addressed, and a name containing a
+            // dot is never a path segment. Otherwise the substituted element could differ from the committed one.
+            var addressable = !name.Contains(PathSeparator) && addressedNames.Add(name);
+
+            if (addressable && values.TryGetValue(path, out var replacement))
             {
                 reader.SkipValue();
                 remaining.Remove(path);
@@ -165,7 +173,7 @@ internal static class RawBsonElements
                 output.Write(source, elementStart + 1, valueStart - elementStart - 1);
                 WriteBinary(output, replacement);
             }
-            else if (type == BsonType.Document && HasPathBelow(remaining, path))
+            else if (addressable && type == BsonType.Document && HasPathBelow(remaining, path))
             {
                 output.Write(source, elementStart, valueStart - elementStart);
                 CopyDocument(reader, source, path + PathSeparator, values, remaining, output);

@@ -71,11 +71,11 @@ Everything stays internal until #160 makes the feature public.
   }
   ```
 
-- Validation runs in `MongoEventStoreSerializationSetup.RegisterClassMaps`, after the event class maps are registered.
+- Validation runs in `MongoEventStoreSerializationSetup.RegisterClassMaps`, after the event class maps are registered. Resolving a mark looks up the serializers of the traversed member types, which creates and freezes their class maps at registration.
 - **Nullability:** `Nullable<T>`, or a reference type that is not annotated as non-nullable (`NullabilityInfoContext`; oblivious counts as nullable).
 - **Arrays:** any segment before the last whose type serializes as an array is rejected. The last segment may be an array or a complex object; either is committed and erased as a whole.
 - **Element-name resolution:** each segment before the last must be serialized by a document serializer that resolves member element names (`IBsonDocumentSerializer.TryGetMemberSerializationInfo`), for example a class-map serializer. Otherwise, for example with a custom serializer or a primitive, registration fails. A dictionary segment is rejected explicitly, because the driver's dictionary serializer resolves every name as a key rather than a mapped member. An element name containing a dot is rejected, because the path could not address it.
-- **Storage of marks:** the resolved element paths per event type are stored in internal `MongoEventStoreOptions<TAggregate>` state, not in the process-global class maps. Stores configured differently can therefore verify the same events. Duplicate marks of one path are deduplicated.
+- **Storage of marks:** the resolved element paths per event type are stored in internal `MongoEventStoreOptions<TAggregate>` state, not in the process-global class maps. Stores configured differently can therefore verify the same events. Duplicate marks of one path are deduplicated. A registered event type inherits the marks of its registered base event types, so a derived event cannot store marked values without committing to them. An inherited mark is skipped when the derived class map does not map its first member, because such a member is not stored; this is the case for class maps the event store registers on top of `Event<TAggregate>`.
 - **Without protection:** marks are validated but have no effect.
 - Registration tests, both for errors and for resolved element paths such as renamed elements and nested chains, use dedicated aggregate and event types, because class-map registration is process-global and irreversible.
 - New types live in the `Chaos.Mongo.EventStore.Integrity` namespace, which the visibility test enumerates. `EventRegistrationBuilder<TAggregate, TEvent>` stays in the root namespace next to `MongoEventStoreBuilder<TAggregate>`, and the visibility test is extended to cover it and the new `WithEvent` overload.
@@ -97,7 +97,7 @@ _integrity: { …, PersonalData: [ { Path: "Recipient.Name", Salt: BinData(32), 
 
 ### Sealing
 
-- **Append:** `MongoEventStore.SealEventDocumentsAsync` computes the commitments and the canonical form from the serialized bytes of each event document. Its marks come from the event's runtime type.
+- **Append:** `MongoEventStore.SealEventDocumentsAsync` computes the commitments and the canonical form from the serialized bytes of each event document. Its marks come from the event's runtime type, including the marks inherited from its registered base event types.
 - **Retroactive:** `EventStreamSealer.SealAsync` resolves the event type from the stored discriminator through the driver's discriminator lookup for `Event<TAggregate>`. Hierarchical discriminators resolve to their concrete type. The sealer applies that type's current marks. An unknown discriminator seals without commitments.
 
 ### Verification

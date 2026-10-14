@@ -12,7 +12,10 @@ using System.Reflection;
 internal static class PersonalDataPathResolver
 {
     /// <summary>
-    /// Resolves the marks of every event type to its distinct element paths.
+    /// Resolves the marks of every registered event type to its distinct element paths. A registered event type
+    /// inherits the marks of its registered base event types whose first member its class map maps, so a derived
+    /// event cannot store marked values without committing to them. An inherited member that is not mapped is not
+    /// stored, which is the case when the event store registers the class map on top of <see cref="Event{TAggregate}"/>.
     /// </summary>
     /// <typeparam name="TAggregate">The aggregate type.</typeparam>
     /// <param name="options">The event store options holding the marks.</param>
@@ -27,12 +30,23 @@ internal static class PersonalDataPathResolver
         ArgumentNullException.ThrowIfNull(options);
 
         var result = new Dictionary<Type, IReadOnlyList<String>>();
-        foreach (var (eventType, marks) in options.PersonalDataMarks)
+        foreach (var eventType in options.EventTypes.Keys)
         {
+            var marks = CollectMarks(eventType, options.PersonalDataMarks);
+            if (marks.Count == 0)
+            {
+                continue;
+            }
+
             var paths = new List<String>(marks.Count);
             var marksByPath = new Dictionary<String, PersonalDataMark>(StringComparer.Ordinal);
-            foreach (var mark in marks)
+            foreach (var (mark, inherited) in marks)
             {
+                if (inherited && !IsFirstMemberMapped(eventType, mark))
+                {
+                    continue;
+                }
+
                 var path = ResolvePath(eventType, mark);
                 if (marksByPath.TryAdd(path, mark))
                 {
@@ -40,11 +54,35 @@ internal static class PersonalDataPathResolver
                 }
             }
 
+            if (paths.Count == 0)
+            {
+                continue;
+            }
+
             EnsureNoOverlap(eventType, paths, marksByPath);
             result[eventType] = paths;
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Collects the marks of an event type and of its base types, base types first.
+    /// </summary>
+    private static List<(PersonalDataMark Mark, Boolean Inherited)> CollectMarks(Type eventType,
+                                                                                 Dictionary<Type, List<PersonalDataMark>> marksByType)
+    {
+        var marks = new List<(PersonalDataMark Mark, Boolean Inherited)>();
+        for (var type = eventType; type is not null; type = type.BaseType)
+        {
+            if (marksByType.TryGetValue(type, out var typeMarks))
+            {
+                var inherited = type != eventType;
+                marks.InsertRange(0, typeMarks.Select(mark => (mark, inherited)));
+            }
+        }
+
+        return marks;
     }
 
     private static InvalidOperationException CreateError(Type eventType, PersonalDataMark mark, String reason)
@@ -94,6 +132,10 @@ internal static class PersonalDataPathResolver
                                                "A marked member must be nullable, because erasure sets its value to null.");
         }
     }
+
+    private static Boolean IsFirstMemberMapped(Type eventType, PersonalDataMark mark)
+        => BsonSerializer.LookupSerializer(eventType) is IBsonDocumentSerializer documentSerializer &&
+           documentSerializer.TryGetMemberSerializationInfo(mark.Members[0].Name, out _);
 
     private static String ResolvePath(Type eventType, PersonalDataMark mark)
     {

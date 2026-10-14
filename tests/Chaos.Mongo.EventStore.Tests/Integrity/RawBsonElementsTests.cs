@@ -98,6 +98,88 @@ public class RawBsonElementsTests
         BsonSerializer.Deserialize<BsonDocument>(result).Equals(expected).Should().BeTrue();
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ReplaceValuesWithBinary_DottedSiblingName_ReplacesOnlyTheNestedElement(Boolean dottedFirst)
+    {
+        var dotted = new BsonElement("Recipient.Name", "alias");
+        var nested = new BsonElement("Recipient", new BsonDocument("Name", "real"));
+        var replaced = new BsonElement("Recipient", new BsonDocument("Name", new BsonBinaryData(Payload)));
+        var document = new BsonDocument(dottedFirst
+                                            ? new[]
+                                            {
+                                                dotted,
+                                                nested
+                                            }
+                                            : new[]
+                                            {
+                                                nested,
+                                                dotted
+                                            });
+        var expected = new BsonDocument(dottedFirst
+                                            ? new[]
+                                            {
+                                                dotted,
+                                                replaced
+                                            }
+                                            : new[]
+                                            {
+                                                replaced,
+                                                dotted
+                                            });
+
+        var result = RawBsonElements.ReplaceValuesWithBinary(document.ToBson(), new Dictionary<String, Byte[]>
+        {
+            { "Recipient.Name", Payload }
+        });
+
+        result.Should().Equal(expected.ToBson());
+    }
+
+    [Test]
+    public void ReplaceValuesWithBinary_DuplicateNames_ReplacesOnlyTheFirstElement()
+    {
+        var document = new BsonDocument(true)
+        {
+            { "Name", "first" },
+            { "Name", "second" }
+        };
+        var expected = new BsonDocument(true)
+        {
+            { "Name", new BsonBinaryData(Payload) },
+            { "Name", "second" }
+        };
+
+        var result = RawBsonElements.ReplaceValuesWithBinary(document.ToBson(), new Dictionary<String, Byte[]>
+        {
+            { "Name", Payload }
+        });
+
+        result.Should().Equal(expected.ToBson());
+    }
+
+    [Test]
+    public void ReplaceValuesWithBinary_DuplicateParentNames_DescendsOnlyIntoTheFirstDocument()
+    {
+        var document = new BsonDocument(true)
+        {
+            { "Recipient", new BsonDocument("Name", "first") },
+            { "Recipient", new BsonDocument("Name", "second") }
+        };
+        var expected = new BsonDocument(true)
+        {
+            { "Recipient", new BsonDocument("Name", new BsonBinaryData(Payload)) },
+            { "Recipient", new BsonDocument("Name", "second") }
+        };
+
+        var result = RawBsonElements.ReplaceValuesWithBinary(document.ToBson(), new Dictionary<String, Byte[]>
+        {
+            { "Recipient.Name", Payload }
+        });
+
+        result.Should().Equal(expected.ToBson());
+    }
+
     [Test]
     public void ReplaceValuesWithBinary_MultiplePaths_ReplacesEveryValue()
     {
@@ -153,6 +235,24 @@ public class RawBsonElementsTests
 
         actDocument.Should().Throw<ArgumentNullException>().WithParameterName("document");
         actValues.Should().Throw<ArgumentNullException>().WithParameterName("values");
+    }
+
+    [Test]
+    public void ReplaceValuesWithBinary_PathOnlyBelowLaterDuplicateParent_ThrowsArgumentExceptionLikeTryLocate()
+    {
+        var bytes = new BsonDocument(true)
+        {
+            { "Recipient", new BsonDocument("Other", "first") },
+            { "Recipient", new BsonDocument("Name", "second") }
+        }.ToBson();
+
+        var act = () => RawBsonElements.ReplaceValuesWithBinary(bytes, new Dictionary<String, Byte[]>
+        {
+            { "Recipient.Name", Payload }
+        });
+
+        RawBsonElements.TryLocate(bytes, "Recipient.Name", out _, out _).Should().BeFalse();
+        act.Should().Throw<ArgumentException>().WithParameterName("values");
     }
 
     [TestCase("first")]

@@ -332,6 +332,22 @@ public class PersonalDataCommitmentIntegrationTests
     }
 
     [Test]
+    [TestCase("PersonalData.1")]
+    [TestCase("PersonalData.1.Commitment")]
+    public async Task VerifyStreamAsync_NullCommitmentEntryOrValue_ReportsMalformedIntegrity(String field)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+            Builders<BsonDocument>.Update.Set($"{EventIntegrityChain.ElementName}.{field}", BsonNull.Value));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_OverlappingRecordedPaths_ReportsMalformedIntegrity()
     {
         var context = await CreateContextAsync();
