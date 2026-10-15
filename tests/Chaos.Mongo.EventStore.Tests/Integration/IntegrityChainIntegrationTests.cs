@@ -192,7 +192,8 @@ public class IntegrityChainIntegrationTests
         var canonical = RawBsonElements.RemoveTopLevelElement(storedBytes, EventIntegrityChain.ElementName);
         var recomputedHash = EventIntegrityChain.ComputeHash(
             canonical,
-            EventIntegrityChain.ComputeGenesis(nameof(LedgerAggregate), aggregateId));
+            EventIntegrityChain.ComputeGenesis(nameof(LedgerAggregate), aggregateId),
+            IntegritySealMode.Append);
 
         entry.Integrity.Should().NotBeNull();
         recomputedHash.Should().Equal(entry.Integrity.Hash);

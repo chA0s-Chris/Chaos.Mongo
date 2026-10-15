@@ -46,17 +46,30 @@ public class EventIntegrityChainTests
     {
         Byte[] document = [1, 2, 3];
 
-        var first = EventIntegrityChain.ComputeHash(document, new Byte[32]);
-        var second = EventIntegrityChain.ComputeHash(document, Enumerable.Repeat((Byte)1, 32).ToArray());
+        var first = EventIntegrityChain.ComputeHash(document, new Byte[32], IntegritySealMode.Append);
+        var second = EventIntegrityChain.ComputeHash(document, Enumerable.Repeat((Byte)1, 32).ToArray(), IntegritySealMode.Append);
 
         first.Should().NotEqual(second);
     }
 
     [Test]
+    public void ComputeHash_DifferentSealModes_ReturnsDifferentValues()
+    {
+        Byte[] document = [1, 2, 3];
+        var previousHash = new Byte[32];
+
+        var appended = EventIntegrityChain.ComputeHash(document, previousHash, IntegritySealMode.Append);
+        var retroactive = EventIntegrityChain.ComputeHash(document, previousHash, IntegritySealMode.Retroactive);
+
+        appended.Should().NotEqual(retroactive);
+    }
+
+    [Test]
     public void ComputeHash_KnownInputs_ReturnsIndependentlyComputedValues()
     {
-        // Expected values computed outside .NET: SHA-256(canonical ‖ previous) and
-        // SHA-256(canonical ‖ tag ‖ "Name\0" ‖ "Address.City\0" ‖ previous).
+        // Expected values computed outside .NET: SHA-256(canonical ‖ previous ‖ mode) and
+        // SHA-256(canonical ‖ tag ‖ "Name\0" ‖ "Address.City\0" ‖ previous ‖ mode), with mode 0x01 for Append
+        // and 0x02 for Retroactive.
         Byte[] canonical = [1, 2, 3];
         var previousHash = new Byte[32];
         List<PersonalDataCommitment> personalData =
@@ -73,10 +86,14 @@ public class EventIntegrityChainTests
             }
         ];
 
-        ToHex(EventIntegrityChain.ComputeHash(canonical, previousHash))
-            .Should().Be("a25945c851dcb2096b9f2de1e99729987f49136f6cbe2880d82576c0884dffbe");
-        ToHex(EventIntegrityChain.ComputeHash(canonical, personalData, previousHash))
-            .Should().Be("066365f8e738147dd7dd23189b26c26888a9ad4b5290cff9d63d2905bebd1229");
+        ToHex(EventIntegrityChain.ComputeHash(canonical, previousHash, IntegritySealMode.Append))
+            .Should().Be("a12e9198a440ff040655cf2f69ece7e8fa403690a3b27cffa3cf1786a753a77f");
+        ToHex(EventIntegrityChain.ComputeHash(canonical, previousHash, IntegritySealMode.Retroactive))
+            .Should().Be("439f7d3c5be939848e577f7213c2ec1fa6aaa8344ce69347c9d7262202c827f3");
+        ToHex(EventIntegrityChain.ComputeHash(canonical, personalData, previousHash, IntegritySealMode.Append))
+            .Should().Be("b9e569762cbdab3b5ac254d6513a37766ed2fb321fe988df738eeff4099a0d69");
+        ToHex(EventIntegrityChain.ComputeHash(canonical, personalData, previousHash, IntegritySealMode.Retroactive))
+            .Should().Be("806fe704863e4e124cdf52cf5c363bf1f7a9e00548b324a9e01b1472012827ba");
     }
 
     [Test]
@@ -95,16 +112,25 @@ public class EventIntegrityChainTests
             Commitment = new Byte[32]
         };
 
-        var plain = EventIntegrityChain.ComputeHash(canonical, previousHash);
-        var withName = EventIntegrityChain.ComputeHash(canonical, [name], previousHash);
-        var withBoth = EventIntegrityChain.ComputeHash(canonical, [name, city], previousHash);
-        var reordered = EventIntegrityChain.ComputeHash(canonical, [city, name], previousHash);
+        const IntegritySealMode mode = IntegritySealMode.Append;
+        var plain = EventIntegrityChain.ComputeHash(canonical, previousHash, mode);
+        var withName = EventIntegrityChain.ComputeHash(canonical, [name], previousHash, mode);
+        var withBoth = EventIntegrityChain.ComputeHash(canonical, [name, city], previousHash, mode);
+        var reordered = EventIntegrityChain.ComputeHash(canonical, [city, name], previousHash, mode);
 
-        EventIntegrityChain.ComputeHash(canonical, null, previousHash).Should().Equal(plain);
+        EventIntegrityChain.ComputeHash(canonical, null, previousHash, mode).Should().Equal(plain);
         withName.Should().NotEqual(plain);
         withBoth.Should().NotEqual(withName);
         reordered.Should().NotEqual(withBoth);
-        EventIntegrityChain.ComputeHash(canonical, [name, city], previousHash).Should().Equal(withBoth);
+        EventIntegrityChain.ComputeHash(canonical, [name, city], previousHash, mode).Should().Equal(withBoth);
+    }
+
+    [Test]
+    public void EncodeSealMode_UndefinedMode_ThrowsArgumentOutOfRangeException()
+    {
+        var act = () => EventIntegrityChain.EncodeSealMode((IntegritySealMode)7);
+
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("sealMode");
     }
 
     [OneTimeSetUp]
@@ -126,11 +152,11 @@ public class EventIntegrityChainTests
         var changed = document.DeepClone().AsBsonDocument;
         changed["Recipient.Name"] = "forged";
         var changedCanonical = PersonalDataCommitments.Canonicalize(changed.ToBson(), integrity.PersonalData!);
-        EventIntegrityChain.ComputeHash(changedCanonical, integrity.PersonalData, previousHash).Should().NotEqual(integrity.Hash);
+        EventIntegrityChain.ComputeHash(changedCanonical, integrity.PersonalData, previousHash, IntegritySealMode.Append).Should().NotEqual(integrity.Hash);
         var erased = document.DeepClone().AsBsonDocument;
         erased["Recipient"]["Name"] = BsonNull.Value;
         var erasedCanonical = PersonalDataCommitments.Canonicalize(erased.ToBson(), integrity.PersonalData!);
-        EventIntegrityChain.ComputeHash(erasedCanonical, integrity.PersonalData, previousHash).Should().Equal(integrity.Hash);
+        EventIntegrityChain.ComputeHash(erasedCanonical, integrity.PersonalData, previousHash, IntegritySealMode.Append).Should().Equal(integrity.Hash);
     }
 
     [Test]
@@ -144,7 +170,7 @@ public class EventIntegrityChainTests
         integrity.FormatVersion.Should().Be(1);
         integrity.Algorithm.Should().Be("SHA-256");
         integrity.PreviousHash.Should().Equal(previousHash);
-        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash));
+        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash, IntegritySealMode.Retroactive));
         integrity.SealMode.Should().Be(IntegritySealMode.Retroactive);
     }
 
@@ -157,7 +183,7 @@ public class EventIntegrityChainTests
         var integrity = EventIntegrityChain.Seal(document, ["Missing"], previousHash, IntegritySealMode.Append);
 
         integrity.PersonalData.Should().BeNull();
-        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash));
+        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(document, previousHash, IntegritySealMode.Append));
         integrity.ToBsonDocument().Names.Should().BeEquivalentTo("FormatVersion", "Algorithm", "PreviousHash", "Hash", "SealMode");
     }
 
@@ -177,9 +203,10 @@ public class EventIntegrityChainTests
         integrity.PersonalData!.Select(commitment => commitment.Path).Should().Equal("Name", "Address.City");
         integrity.SealMode.Should().Be(IntegritySealMode.Retroactive);
         var canonical = PersonalDataCommitments.Canonicalize(document, integrity.PersonalData);
-        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(canonical, integrity.PersonalData, previousHash));
-        integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(canonical, previousHash), "the recorded paths are bound into the hash");
-        integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(document, previousHash));
+        const IntegritySealMode mode = IntegritySealMode.Retroactive;
+        integrity.Hash.Should().Equal(EventIntegrityChain.ComputeHash(canonical, integrity.PersonalData, previousHash, mode));
+        integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(canonical, previousHash, mode), "the recorded paths are bound into the hash");
+        integrity.Hash.Should().NotEqual(EventIntegrityChain.ComputeHash(document, previousHash, mode));
     }
 
     [Test]

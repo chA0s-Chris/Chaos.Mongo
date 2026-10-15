@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using System.Diagnostics.CodeAnalysis;
 
 /// <summary>
 /// Resolves element names of stored events through the registered class map, so untyped queries
@@ -17,6 +18,11 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     /// Gets the element name of <see cref="Event{TAggregate}.AggregateId"/>.
     /// </summary>
     public static String AggregateId => ElementNameOf(nameof(Event<TAggregate>.AggregateId));
+
+    /// <summary>
+    /// Gets the element name of <see cref="Event{TAggregate}.AggregateType"/>.
+    /// </summary>
+    public static String AggregateType => ElementNameOf(nameof(Event<TAggregate>.AggregateType));
 
     /// <summary>
     /// Gets the element name of the discriminator. It is resolved through the event serializer rather than
@@ -149,6 +155,19 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Reads the aggregate type stored in an event document without throwing on tampered values.
+    /// </summary>
+    /// <param name="document">The stored event document.</param>
+    /// <param name="aggregateType">The stored aggregate type when it is a string.</param>
+    /// <returns><c>true</c> when the document stores the aggregate type as a string; otherwise <c>false</c>.</returns>
+    public static Boolean TryReadAggregateType(BsonDocument document, [NotNullWhen(true)] out String? aggregateType)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        aggregateType = document.TryGetValue(AggregateType, out var value) && value is BsonString { Value: var name } ? name : null;
+        return aggregateType is not null;
     }
 
     private static String ElementNameOf(String memberName)

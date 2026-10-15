@@ -12,7 +12,6 @@ using System.Globalization;
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, IAggregate, new()
 {
-    private readonly String _aggregateTypeName = typeof(TAggregate).Name;
     private readonly IMongoHelper _mongoHelper;
     private readonly MongoEventStoreOptions<TAggregate> _options;
 
@@ -47,7 +46,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                                            .ToCursorAsync(cancellationToken);
 
         var expectedVersion = 1L;
-        var previousHash = EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId);
+        Byte[]? previousHash = null;
         var erasures = new List<UnrecordedErasure>();
         var recordedErasures = new HashSet<UnrecordedErasure>();
 
@@ -62,6 +61,17 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                         version != expectedVersion)
                     {
                         return StreamVerificationResult.Broken(expectedVersion, StreamVerificationFailure.VersionGap);
+                    }
+
+                    // The genesis value comes from the aggregate type stored in version 1, not from the class name.
+                    if (previousHash is null)
+                    {
+                        if (!EventDocumentFields<TAggregate>.TryReadAggregateType(rawDocument, out var aggregateType))
+                        {
+                            return StreamVerificationResult.Broken(expectedVersion, StreamVerificationFailure.MissingAggregateType);
+                        }
+
+                        previousHash = EventIntegrityChain.ComputeGenesis(aggregateType, aggregateId);
                     }
 
                     rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue);
@@ -176,6 +186,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             return StreamVerificationFailure.MalformedIntegrity;
         }
 
+        if (!Enum.IsDefined(integrity.SealMode))
+        {
+            return StreamVerificationFailure.MalformedIntegrity;
+        }
+
         if (integrity.FormatVersion != EventIntegrityChain.FormatVersion ||
             !String.Equals(integrity.Algorithm, EventIntegrityChain.Algorithm, StringComparison.Ordinal))
         {
@@ -220,7 +235,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, personalData);
         }
 
-        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, integrity.PersonalData, expectedPreviousHash);
+        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, integrity.PersonalData, expectedPreviousHash, integrity.SealMode);
         if (!recomputedHash.AsSpan().SequenceEqual(integrity.Hash))
         {
             return StreamVerificationFailure.HashMismatch;

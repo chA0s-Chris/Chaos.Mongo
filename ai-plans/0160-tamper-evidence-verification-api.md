@@ -12,11 +12,11 @@ The work stays one issue because the format freeze, the verification semantics, 
 
 ### Layer 1: Format freeze
 
-- [ ] The genesis value is derived from the `AggregateType` element stored in the version-1 document, not from `typeof(TAggregate).Name`, on append, in retroactive sealing and in verification. A stream whose stored `AggregateType` differs from `typeof(TAggregate).Name` verifies.
-- [ ] A version-1 document without a string `AggregateType` element fails verification at version 1. The sealing sweep skips that stream and logs it, and an append that would seal it fails with `MongoEventStoreException` without persisting anything.
-- [ ] The chain hash binds the seal mode. Changing a stored `SealMode` from `Append` to `Retroactive` or back is reported as a hash mismatch.
-- [ ] Both append paths still persist byte-identical documents, and write-time hashes still equal the hashes recomputed from the stored bytes.
-- [ ] Automated tests cover the behavior above, and pinned hashes in existing tests are updated to the new hash input.
+- [x] The genesis value is derived from the `AggregateType` element stored in the version-1 document, not from `typeof(TAggregate).Name`, on append, in retroactive sealing and in verification. A stream whose stored `AggregateType` differs from `typeof(TAggregate).Name` verifies.
+- [x] A version-1 document without a string `AggregateType` element fails verification at version 1. The sealing sweep skips that stream and logs it, and an append that would seal it fails with `MongoEventStoreException` without persisting anything.
+- [x] The chain hash binds the seal mode. Changing a stored `SealMode` from `Append` to `Retroactive` or back is reported as a hash mismatch.
+- [x] Both append paths still persist byte-identical documents, and write-time hashes still equal the hashes recomputed from the stored bytes.
+- [x] Automated tests cover the behavior above, and pinned hashes in existing tests are updated to the new hash input.
 
 ### Layer 2: Stream and anchor verification
 

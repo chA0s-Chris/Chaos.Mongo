@@ -17,7 +17,6 @@ using MongoDB.Driver;
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IAggregate, new()
 {
-    private readonly String _aggregateTypeName = typeof(TAggregate).Name;
     private readonly IMongoHelper _mongoHelper;
     private readonly MongoEventStoreOptions<TAggregate> _options;
 
@@ -61,12 +60,12 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
             }
 
             var prefix = boundary < 0
-                ? new SealedPrefix(0, EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId))
+                ? SealedPrefix.Genesis
                 : ReadSealedPrefix(window[boundary], aggregateId);
             var unsealed = window.Take(boundary < 0 ? window.Count : boundary).Reverse().ToList();
 
             var lastHash = await SealAsync(session, aggregateId, unsealed, prefix, cancellationToken);
-            if (prefix.Version + unsealed.Count != predecessorVersion)
+            if (prefix.Version + unsealed.Count != predecessorVersion || lastHash is null)
             {
                 throw new MongoConcurrencyException(
                     $"The stream of aggregate '{aggregateId}' changed concurrently while sealing it before an append.");
@@ -112,6 +111,12 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         }
     }
 
+    private static Byte[] ComputeGenesis(RawBsonDocument versionOneDocument, Guid aggregateId)
+        => EventDocumentFields<TAggregate>.TryReadAggregateType(versionOneDocument, out var aggregateType)
+            ? EventIntegrityChain.ComputeGenesis(aggregateType, aggregateId)
+            : throw new MongoEventStoreException(
+                $"Version 1 of aggregate '{aggregateId}' has no aggregate type, so the stream cannot be sealed.");
+
     private static void DisposeAll(List<RawBsonDocument> documents)
     {
         foreach (var document in documents)
@@ -138,10 +143,9 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         Int64? knownSealedVersion,
         CancellationToken cancellationToken)
     {
-        var genesis = new SealedPrefix(0, EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId));
         if (knownSealedVersion == 0)
         {
-            return genesis;
+            return SealedPrefix.Genesis;
         }
 
         var projection = Builders<BsonDocument>.Projection
@@ -165,7 +169,7 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
 
         if (head is null)
         {
-            return genesis;
+            return SealedPrefix.Genesis;
         }
 
         if (head.Contains(EventIntegrityChain.ElementName))
@@ -198,7 +202,7 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         }
 
         return sealedDocument is null
-            ? genesis
+            ? SealedPrefix.Genesis
             : ReadSealedPrefix(sealedDocument, aggregateId);
     }
 
@@ -270,9 +274,10 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
     }
 
     /// <summary>
-    /// Seals the given events, which must directly follow the sealed prefix, and returns the last hash.
+    /// Seals the given events, which must directly follow the sealed prefix, and returns the last hash, or
+    /// <c>null</c> when the prefix is the genesis and there is no event to seal.
     /// </summary>
-    private async Task<Byte[]> SealAsync(
+    private async Task<Byte[]?> SealAsync(
         IClientSessionHandle session,
         Guid aggregateId,
         IReadOnlyList<RawBsonDocument> events,
@@ -298,6 +303,9 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
                     $"Version {expectedVersion} of aggregate '{aggregateId}' was sealed concurrently.");
             }
 
+            // The genesis value comes from the aggregate type stored in version 1, the same bytes an independent
+            // verifier reads, so a renamed aggregate class does not change it.
+            previousHash ??= ComputeGenesis(document, aggregateId);
             var integrity = EventIntegrityChain.Seal(document.ToBson(), ResolvePersonalDataPaths(document), previousHash, IntegritySealMode.Retroactive);
             var filter = new BsonDocument
             {
@@ -328,5 +336,12 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         return previousHash;
     }
 
-    private sealed record SealedPrefix(Int64 Version, Byte[] Hash);
+    /// <summary>
+    /// The sealed prefix a chunk continues from. The genesis prefix carries no hash, because the genesis value is
+    /// derived from the version-1 event once it is read.
+    /// </summary>
+    private sealed record SealedPrefix(Int64 Version, Byte[]? Hash)
+    {
+        public static SealedPrefix Genesis { get; } = new(0, null);
+    }
 }

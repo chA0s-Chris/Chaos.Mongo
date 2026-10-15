@@ -18,6 +18,11 @@ internal enum StreamVerificationFailure
     NotSealed,
 
     /// <summary>
+    /// The version-1 event stores no aggregate type as a string, so the stream's genesis value cannot be derived.
+    /// </summary>
+    MissingAggregateType,
+
+    /// <summary>
     /// The event's integrity data cannot be read, for example because elements have unexpected types.
     /// </summary>
     MalformedIntegrity,

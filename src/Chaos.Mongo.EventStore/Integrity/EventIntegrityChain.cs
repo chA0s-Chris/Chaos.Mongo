@@ -13,8 +13,8 @@ using System.Text;
 /// </summary>
 /// <remarks>
 /// Each event's hash covers its canonical form, the stored BSON without the <c>_integrity</c> element,
-/// followed by the hash of its predecessor. Version 1 chains from a genesis value derived from the
-/// aggregate type and identifier.
+/// followed by the hash of its predecessor and its seal mode. Version 1 chains from a genesis value derived
+/// from the aggregate type stored in the version-1 event and the aggregate identifier.
 /// </remarks>
 internal static class EventIntegrityChain
 {
@@ -38,7 +38,10 @@ internal static class EventIntegrityChain
     /// <summary>
     /// Computes the genesis value that version 1 of a stream chains from.
     /// </summary>
-    /// <param name="aggregateType">The aggregate type name stored in the events.</param>
+    /// <param name="aggregateType">
+    /// The aggregate type name stored in the version-1 event. It is read from the stored bytes rather than taken
+    /// from the current class name, so a renamed aggregate class does not change the genesis value.
+    /// </param>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <returns>The genesis hash.</returns>
     public static Byte[] ComputeGenesis(String aggregateType, Guid aggregateId)
@@ -56,26 +59,33 @@ internal static class EventIntegrityChain
     /// </summary>
     /// <param name="canonicalDocument">The event's BSON without the <c>_integrity</c> element.</param>
     /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
+    /// <param name="sealMode">How the event is sealed.</param>
     /// <returns>The chain hash.</returns>
-    public static Byte[] ComputeHash(ReadOnlySpan<Byte> canonicalDocument, ReadOnlySpan<Byte> previousHash)
-        => ComputeHash(canonicalDocument, null, previousHash);
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="sealMode"/> is undefined.</exception>
+    public static Byte[] ComputeHash(ReadOnlySpan<Byte> canonicalDocument, ReadOnlySpan<Byte> previousHash, IntegritySealMode sealMode)
+        => ComputeHash(canonicalDocument, null, previousHash, sealMode);
 
     /// <summary>
     /// Computes the chain hash of an event with recorded personal data. The hash covers the canonical form, then
-    /// the binding of the recorded paths, then the predecessor's hash. Binding the paths distinguishes the canonical
-    /// form from a document that genuinely stores a commitment's bytes in place of a value without recording the
-    /// path, which would otherwise verify after the value was destroyed.
+    /// the binding of the recorded paths, then the predecessor's hash, then one byte for the seal mode. Binding the
+    /// paths distinguishes the canonical form from a document that genuinely stores a commitment's bytes in place of
+    /// a value without recording the path, which would otherwise verify after the value was destroyed. Binding the
+    /// seal mode lets anchored heads authenticate how every earlier event was sealed.
     /// </summary>
     /// <param name="canonicalDocument">
     /// The event's BSON without the <c>_integrity</c> element, with every recorded value replaced by its commitment.
     /// </param>
     /// <param name="personalData">The recorded commitments, or <c>null</c> when none is recorded.</param>
     /// <param name="previousHash">The predecessor's hash, or the genesis value for version 1.</param>
+    /// <param name="sealMode">How the event is sealed.</param>
     /// <returns>The chain hash.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="sealMode"/> is undefined.</exception>
     public static Byte[] ComputeHash(ReadOnlySpan<Byte> canonicalDocument,
                                      IReadOnlyList<PersonalDataCommitment>? personalData,
-                                     ReadOnlySpan<Byte> previousHash)
+                                     ReadOnlySpan<Byte> previousHash,
+                                     IntegritySealMode sealMode)
     {
+        var modeByte = EncodeSealMode(sealMode);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(canonicalDocument);
         if (personalData is not null)
@@ -84,8 +94,24 @@ internal static class EventIntegrityChain
         }
 
         hash.AppendData(previousHash);
+        hash.AppendData([modeByte]);
         return hash.GetHashAndReset();
     }
+
+    /// <summary>
+    /// Encodes a seal mode as the byte that the chain hash covers: <c>0x01</c> for
+    /// <see cref="IntegritySealMode.Append"/> and <c>0x02</c> for <see cref="IntegritySealMode.Retroactive"/>.
+    /// </summary>
+    /// <param name="sealMode">The seal mode.</param>
+    /// <returns>The encoded seal mode.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="sealMode"/> is undefined.</exception>
+    public static Byte EncodeSealMode(IntegritySealMode sealMode)
+        => sealMode switch
+        {
+            IntegritySealMode.Append => 0x01,
+            IntegritySealMode.Retroactive => 0x02,
+            _ => throw new ArgumentOutOfRangeException(nameof(sealMode), sealMode, "The seal mode is not defined.")
+        };
 
     /// <summary>
     /// Creates the integrity data that seals an event without personal data into its stream.
@@ -99,7 +125,7 @@ internal static class EventIntegrityChain
         {
             Algorithm = Algorithm,
             FormatVersion = FormatVersion,
-            Hash = ComputeHash(canonicalDocument, previousHash),
+            Hash = ComputeHash(canonicalDocument, previousHash, sealMode),
             PreviousHash = previousHash,
             SealMode = sealMode
         };
@@ -126,7 +152,7 @@ internal static class EventIntegrityChain
         {
             Algorithm = Algorithm,
             FormatVersion = FormatVersion,
-            Hash = ComputeHash(canonicalDocument, commitments, previousHash),
+            Hash = ComputeHash(canonicalDocument, commitments, previousHash, sealMode),
             PersonalData = commitments,
             PreviousHash = previousHash,
             SealMode = sealMode
