@@ -1,0 +1,266 @@
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// This file is licensed under the MIT license. See LICENSE in the project root for more information.
+namespace Chaos.Mongo.EventStore.Tests.Integration;
+
+using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.EventStore.Tests.Integrity;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using NUnit.Framework;
+using Testcontainers.MongoDb;
+
+public class CompletenessCheckIntegrationTests
+{
+    private readonly List<LedgerStoreContext> _contexts = [];
+    private readonly List<TestTimestampAuthority> _testAuthorities = [];
+    private MongoDbContainer _container;
+
+    [Test]
+    public async Task CheckAsync_AnchorAwaitingTimestamps_DoesNotCountAsCoverage()
+    {
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.HttpFailure;
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())));
+        var aggregateId = await context.AppendStreamAsync(2);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        await run.RunAsync();
+        await run.RunAsync();
+        (await GetStore(context).Leaves.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(1, "the anchor and its leaves exist");
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().ContainSingle().Which.Should().Match<CompletenessFinding>(f => f.Kind == CompletenessFindingKind.Unanchored &&
+                                                                                         f.AggregateId == aggregateId &&
+                                                                                         f.FirstVersion == 1);
+    }
+
+    [Test]
+    public async Task CheckAsync_BrokenAnchorChain_ReportsItFirst()
+    {
+        var context = await CreateAnchoredContextAsync();
+        await AnchorNewStreamAsync(context);
+        await AnchorNewStreamAsync(context);
+        await GetStore(context).Anchors.DeleteOneAsync(new BsonDocument(AnchorStore.SequenceField, 1L));
+
+        var findings = await CheckAsync(context);
+
+        findings[0].Kind.Should().Be(CompletenessFindingKind.AnchorChainBroken);
+        findings[0].AnchorChain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.SequenceGap, 0));
+    }
+
+    [Test]
+    public async Task CheckAsync_DeletedAndTruncatedStreams_AreReported()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var deleted = await AnchorNewStreamAsync(context, 2);
+        var truncated = await AnchorNewStreamAsync(context, 3);
+        await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(deleted));
+        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(truncated, 3));
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().HaveCount(2);
+        findings.Should().ContainEquivalentOf(new
+        {
+            Kind = CompletenessFindingKind.StreamDeleted,
+            AggregateId = (Guid?)deleted,
+            FirstVersion = (Int64?)1,
+            LastVersion = (Int64?)2,
+            HeadVersion = (Int64?)0
+        });
+        findings.Should().ContainEquivalentOf(new
+        {
+            Kind = CompletenessFindingKind.StreamTruncated,
+            AggregateId = (Guid?)truncated,
+            FirstVersion = (Int64?)3,
+            LastVersion = (Int64?)3,
+            HeadVersion = (Int64?)2
+        });
+        findings.Should().OnlyContain(f => f.Anchor != null);
+    }
+
+    [Test]
+    public async Task CheckAsync_FullyAnchoredStreams_ReportsNothing()
+    {
+        var context = await CreateAnchoredContextAsync();
+        await AnchorNewStreamAsync(context, 2);
+        await AnchorNewStreamAsync(context, 1);
+
+        (await CheckAsync(context)).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task CheckAsync_NeverAnchoredStream_ReportsUnanchoredVersionsWithAge()
+    {
+        var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FakeTimeProvider(now);
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(), timeProvider: timeProvider);
+        var aggregateId = Guid.NewGuid();
+        await context.Store.AppendEventsAsync([
+            LedgerStoreContext.CreateEntry(aggregateId, 1, createdUtc: now.UtcDateTime.AddHours(-3)),
+            LedgerStoreContext.CreateEntry(aggregateId, 2, createdUtc: now.UtcDateTime.AddHours(-1))
+        ]);
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().ContainSingle().Which.Should().Be(new CompletenessFinding(CompletenessFindingKind.Unanchored,
+                                                                                    aggregateId,
+                                                                                    1,
+                                                                                    2,
+                                                                                    2,
+                                                                                    TimeSpan.FromHours(3),
+                                                                                    null,
+                                                                                    null));
+    }
+
+    [Test]
+    public async Task CheckAsync_PartiallyAnchoredStream_ReportsFirstUnanchoredVersion()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var aggregateId = await AnchorNewStreamAsync(context, 2);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3), LedgerStoreContext.CreateEntry(aggregateId, 4)]);
+
+        var finding = (await CheckAsync(context)).Should().ContainSingle().Subject;
+
+        finding.Kind.Should().Be(CompletenessFindingKind.Unanchored);
+        finding.FirstVersion.Should().Be(3);
+        finding.LastVersion.Should().Be(4);
+        finding.Age.Should().NotBeNull();
+    }
+
+    [Test]
+    public async Task CheckAsync_RetroactivelySealedStream_ReportsProtectedSinceAnchor()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await LedgerStoreContext.CreateAsync(_container, false, databaseName: databaseName);
+        _contexts.Add(unprotected);
+        var context = await CreateAnchoredContextAsync(databaseName);
+        var aggregateId = await unprotected.AppendStreamAsync(3);
+        await context.Sweep.RunPassAsync();
+        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        var anchor = (await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1)).Anchor;
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
+        await RunUntilAnchoredAsync(context, aggregateId, 4);
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().ContainSingle().Which.Should().Be(new CompletenessFinding(CompletenessFindingKind.RetroactivelyProtected,
+                                                                                    aggregateId,
+                                                                                    1,
+                                                                                    3,
+                                                                                    4,
+                                                                                    null,
+                                                                                    anchor,
+                                                                                    null));
+    }
+
+    [Test]
+    public async Task CheckAsync_UnsealedStream_ReportsUnsealedAndUnanchoredVersions()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await LedgerStoreContext.CreateAsync(_container, false, databaseName: databaseName);
+        _contexts.Add(unprotected);
+        var context = await CreateAnchoredContextAsync(databaseName);
+        var aggregateId = await unprotected.AppendStreamAsync(2);
+
+        var findings = await CheckAsync(context);
+
+        findings.Select(f => (f.Kind, f.FirstVersion, f.LastVersion))
+                .Should().Equal((CompletenessFindingKind.Unsealed, 1L, 2L), (CompletenessFindingKind.Unanchored, 1L, 2L));
+        findings.Should().OnlyContain(f => f.AggregateId == aggregateId);
+    }
+
+    [Test]
+    public async Task CheckAsync_WithoutAnchors_ThrowsInvalidOperationException()
+    {
+        var context = await CreateContextAsync();
+
+        var act = () => CheckAsync(context);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*needs anchors*");
+    }
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
+
+    private static async Task<List<CompletenessFinding>> CheckAsync(LedgerStoreContext context)
+    {
+        var findings = new List<CompletenessFinding>();
+        await foreach (var finding in context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync())
+        {
+            findings.Add(finding);
+        }
+
+        return findings;
+    }
+
+    private static AnchorStore GetStore(LedgerStoreContext context) => context.ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
+
+    private static async Task RunUntilAnchoredAsync(LedgerStoreContext context, Guid aggregateId, Int64 version)
+    {
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while ((await GetStore(context).FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail("The version was not anchored within the timeout.");
+            }
+
+            await run.RunAsync();
+        }
+    }
+
+    private async Task<Guid> AnchorNewStreamAsync(LedgerStoreContext context, Int32 eventCount = 1)
+    {
+        var aggregateId = await context.AppendStreamAsync(eventCount);
+        await RunUntilAnchoredAsync(context, aggregateId, eventCount);
+        return aggregateId;
+    }
+
+    private async Task<LedgerStoreContext> CreateAnchoredContextAsync(String? databaseName = null)
+    {
+        var testAuthority = CreateTestAuthority();
+        return await CreateContextAsync(mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())),
+                                        databaseName);
+    }
+
+    private async Task<LedgerStoreContext> CreateContextAsync(Action<MongoBuilder>? configureMongo = null,
+                                                              String? databaseName = null,
+                                                              TimeProvider? timeProvider = null)
+    {
+        var context = await LedgerStoreContext.CreateAsync(_container,
+                                                           databaseName: databaseName,
+                                                           configureMongo: configureMongo,
+                                                           timeProvider: timeProvider);
+        _contexts.Add(context);
+        return context;
+    }
+
+    private TestTimestampAuthority CreateTestAuthority()
+    {
+        var testAuthority = new TestTimestampAuthority();
+        _testAuthorities.Add(testAuthority);
+        return testAuthority;
+    }
+}

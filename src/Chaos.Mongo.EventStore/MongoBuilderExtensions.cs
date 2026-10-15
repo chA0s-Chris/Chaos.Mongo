@@ -88,6 +88,11 @@ public static class MongoBuilderExtensions
                                               sp.GetRequiredService<IMongoHelper>(),
                                               options,
                                               sp.GetRequiredService<EventStreamVerifier<TAggregate>>()));
+            builder.Services.AddSingleton(sp => new CompletenessChecker<TAggregate>(
+                                              sp.GetRequiredService<IMongoHelper>(),
+                                              options,
+                                              sp.GetService<AnchorVerifier>(),
+                                              sp.GetService<TimeProvider>() ?? TimeProvider.System));
 
             // Retroactively seal events stored without integrity data
             builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(

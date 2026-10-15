@@ -42,11 +42,11 @@ The work stays one issue because the format freeze, the verification semantics, 
 
 ### Layer 4: Completeness check
 
-- [ ] A completeness check over all streams of an aggregate type reports every stream with events that no completed anchor covers. Each report gives the first unanchored version, the head version, and the age of the oldest unanchored event.
-- [ ] It reports a stream whose anchored head no longer exists, whether the whole stream was deleted or truncated below its anchored version.
-- [ ] It reports retroactively sealed events as "protected since anchor X" with their version range, and unsealed events as unsealed.
-- [ ] It runs the anchor-chain verification first, with the trusted head when one is given, and reports a broken anchor chain, because deleted-stream detection relies on it.
-- [ ] Automated tests cover the behavior above, including a deleted stream, a truncated stream, a never-anchored stream, a retroactively sealed stream and an anchor awaiting timestamps, whose leaves do not count as coverage.
+- [x] A completeness check over all streams of an aggregate type reports every stream with events that no completed anchor covers. Each report gives the first unanchored version, the head version, and the age of the oldest unanchored event.
+- [x] It reports a stream whose anchored head no longer exists, whether the whole stream was deleted or truncated below its anchored version.
+- [x] It reports retroactively sealed events as "protected since anchor X" with their version range, and unsealed events as unsealed.
+- [x] It runs the anchor-chain verification first, with the trusted head when one is given, and reports a broken anchor chain, because deleted-stream detection relies on it.
+- [x] Automated tests cover the behavior above, including a deleted stream, a truncated stream, a never-anchored stream, a retroactively sealed stream and an anchor awaiting timestamps, whose leaves do not count as coverage.
 
 ### Layer 5: Specification and reference verifier
 

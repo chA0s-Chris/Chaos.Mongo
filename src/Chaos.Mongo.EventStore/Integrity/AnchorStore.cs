@@ -591,6 +591,32 @@ internal sealed class AnchorStore
                         cancellationToken);
 
     /// <summary>
+    /// Reads the identifiers and sequence numbers of every completed anchor. Anchor documents that cannot be read are
+    /// skipped; the verification of the chain of anchors reports them.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The completed anchors by identifier.</returns>
+    public async Task<Dictionary<Guid, AnchorReference>> ReadCompletedAnchorReferencesAsync(CancellationToken cancellationToken)
+    {
+        var documents = await Anchors.Find(new BsonDocument(StatusField, nameof(AnchorStatus.Completed)))
+                                     .Project(new BsonDocument
+                                     {
+                                         { SequenceField, 1 }
+                                     })
+                                     .ToListAsync(cancellationToken);
+        var anchors = new Dictionary<Guid, AnchorReference>();
+        foreach (var document in documents)
+        {
+            if (TryRead(document, d => new AnchorReference(d["_id"].AsGuid, d[SequenceField].ToInt64()), out var anchor))
+            {
+                anchors[anchor.AnchorId] = anchor;
+            }
+        }
+
+        return anchors;
+    }
+
+    /// <summary>
     /// Reads the leaf documents of an anchor in leaf order without parsing them, so the verification of the chain of
     /// anchors can report damaged leaves.
     /// </summary>
@@ -733,6 +759,30 @@ internal sealed class AnchorStore
         => ReadAllAsync(FindRaw(Leaves, new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
                         ReadLeaf,
                         cancellationToken);
+
+    /// <summary>
+    /// Streams the leaves of every stream of an aggregate type, ordered by aggregate identifier and anchor sequence,
+    /// using the index on the stream identity. Leaf documents that cannot be read are skipped.
+    /// </summary>
+    /// <param name="aggregateType">The aggregate type name.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The leaves.</returns>
+    public async IAsyncEnumerable<AnchorLeaf> StreamLeavesOfTypeAsync(String aggregateType, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var cursor = await Leaves.Find(new BsonDocument(AggregateTypeField, aggregateType))
+                                       .Sort(StreamLeavesSort())
+                                       .ToCursorAsync(cancellationToken);
+        while (await cursor.MoveNextAsync(cancellationToken))
+        {
+            foreach (var document in cursor.Current)
+            {
+                if (TryRead(document, ReadLeaf, out var leaf))
+                {
+                    yield return leaf;
+                }
+            }
+        }
+    }
 
     /// <summary>
     /// Reads a committed anchor document, that is one awaiting its timestamps or completed. Every element must have

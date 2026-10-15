@@ -27,6 +27,11 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     public static String AggregateType => ElementNameOf(nameof(Event<TAggregate>.AggregateType));
 
     /// <summary>
+    /// Gets the element name of <see cref="Event{TAggregate}.CreatedUtc"/>.
+    /// </summary>
+    public static String CreatedUtc => ElementNameOf(nameof(Event<TAggregate>.CreatedUtc));
+
+    /// <summary>
     /// Gets the element name of the discriminator. It is resolved through the event serializer rather than
     /// <see cref="BsonSerializer.LookupDiscriminatorConvention"/>, which lets the class map register the
     /// hierarchical convention of its root class first; looking the convention up directly before the first
