@@ -9,16 +9,17 @@ using System.Security.Cryptography.X509Certificates;
 /// An entry of a CRL's revoked certificates (RFC 5280, section 5.1.2.6) with the entry extensions that decide whether
 /// it revokes a certificate at a time. The CRL's signature is not verified.
 /// </summary>
-/// <param name="Issuer">
-/// The encoded name of the certificate's issuer: the CRL issuer, unless a <c>certificateIssuer</c> extension of an
-/// indirect CRL names another one (RFC 5280, section 5.3.3); <c>null</c> when that extension names no directory name.
+/// <param name="Issuers">
+/// The encoded names the certificate's issuer may have: the CRL issuer, unless a <c>certificateIssuer</c> extension of
+/// an indirect CRL names others (RFC 5280, section 5.3.3), in which case every directory name it lists; empty when that
+/// extension lists no directory name.
 /// </param>
 /// <param name="SerialNumber">The certificate's serial number as encoded in the CRL.</param>
 /// <param name="RevocationDate">The time the CA processed the revocation.</param>
 /// <param name="InvalidityDate">The time from which the certificate is known or suspected to be invalid, if stated.</param>
 /// <param name="RemovedFromCrl">Whether the entry's reason is <c>removeFromCRL</c>, which lifts an earlier hold.</param>
 internal sealed record RevokedCertificate(
-    ReadOnlyMemory<Byte>? Issuer,
+    IReadOnlyList<ReadOnlyMemory<Byte>> Issuers,
     ReadOnlyMemory<Byte> SerialNumber,
     DateTimeOffset RevocationDate,
     DateTimeOffset? InvalidityDate,
@@ -52,7 +53,7 @@ internal sealed record RevokedCertificate(
             return entries;
         }
 
-        ReadOnlyMemory<Byte>? issuer = header.Issuer;
+        IReadOnlyList<ReadOnlyMemory<Byte>> issuers = [header.Issuer];
         var revokedCertificates = tbsCertList.ReadSequence();
         while (revokedCertificates.HasData)
         {
@@ -78,14 +79,14 @@ internal sealed record RevokedCertificate(
                             break;
                         case CertificateIssuerOid:
                             // Applies to this and every following entry until the next such extension.
-                            issuer = ReadSingle(value, ReadDirectoryName);
+                            issuers = ReadSingle(value, ReadDirectoryNames);
                             break;
                     }
                 }
             }
 
             entry.ThrowIfNotEmpty();
-            entries.Add(new RevokedCertificate(issuer, serialNumber, revocationDate, invalidityDate, removedFromCrl));
+            entries.Add(new RevokedCertificate(issuers, serialNumber, revocationDate, invalidityDate, removedFromCrl));
         }
 
         return entries;
@@ -96,37 +97,41 @@ internal sealed record RevokedCertificate(
     /// </summary>
     /// <param name="certificate">The certificate.</param>
     /// <param name="time">The time.</param>
-    /// <returns><c>true</c> when the entry names the certificate and revokes it at or before the time.</returns>
+    /// <returns>
+    /// <c>true</c> when the entry names the certificate and revokes it at or before the time. An entry whose issuer names
+    /// are unknown matches by serial number alone.
+    /// </returns>
     public Boolean Revokes(X509Certificate2 certificate, DateTimeOffset time)
     {
         ArgumentNullException.ThrowIfNull(certificate);
         return !RemovedFromCrl &&
                SerialNumber.Span.SequenceEqual(certificate.SerialNumberBytes.Span) &&
-               (Issuer is not { } issuer || issuer.Span.SequenceEqual(certificate.IssuerName.RawData)) &&
+               ((Issuers.Count == 0) || Issuers.Any(issuer => issuer.Span.SequenceEqual(certificate.IssuerName.RawData))) &&
                (RevokedFrom <= time);
     }
 
     /// <summary>
-    /// Reads the first <c>directoryName</c> of a <c>GeneralNames</c> value; <c>null</c> when it names none.
+    /// Reads every <c>directoryName</c> of a <c>GeneralNames</c> value, skipping names of other kinds.
     /// </summary>
-    private static ReadOnlyMemory<Byte>? ReadDirectoryName(AsnReader reader)
+    private static IReadOnlyList<ReadOnlyMemory<Byte>> ReadDirectoryNames(AsnReader reader)
     {
         var directoryNameTag = new Asn1Tag(TagClass.ContextSpecific, 4, true);
         var names = reader.ReadSequence();
+        var directoryNames = new List<ReadOnlyMemory<Byte>>();
         while (names.HasData)
         {
             if (names.PeekTag() == directoryNameTag)
             {
                 var directoryName = names.ReadSequence(directoryNameTag);
-                var name = directoryName.ReadEncodedValue();
+                directoryNames.Add(directoryName.ReadEncodedValue());
                 directoryName.ThrowIfNotEmpty();
-                return name;
+                continue;
             }
 
             names.ReadEncodedValue();
         }
 
-        return null;
+        return directoryNames;
     }
 
     /// <summary>

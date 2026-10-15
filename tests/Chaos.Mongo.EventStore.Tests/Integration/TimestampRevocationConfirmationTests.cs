@@ -7,6 +7,7 @@ using Chaos.Mongo.EventStore.Tests.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 using NUnit.Framework;
 using System.Security.Cryptography;
 using Testcontainers.MongoDb;
@@ -18,6 +19,31 @@ public class TimestampRevocationConfirmationTests
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ConfirmAsync_LockLostWhileTheAuthorityAnswers_RecordsNothing(Boolean crlUnavailable)
+    {
+        var fixture = await CreateFixtureAsync();
+        var anchor = await fixture.AnchorAsync();
+        var timestamp = anchor.Timestamps[0];
+        fixture.TestAuthority.ServedCrl = fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+        fixture.TestAuthority.Mode = crlUnavailable ? TestTimestampAuthorityMode.CrlUnavailable : TestTimestampAuthorityMode.Valid;
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(2));
+        var confirmer = new TimestampRevocationConfirmer(fixture.Store, [fixture.Authority], fixture.Options, fixture.Time, fixture.Logger);
+        var lockChecks = 0;
+
+        // The check before the authority is asked succeeds; the one after it answers fails.
+        await confirmer.ConfirmAsync(_ => Task.FromResult(++lockChecks == 1), CancellationToken.None);
+
+        lockChecks.Should().Be(2);
+        fixture.TestAuthority.CrlRequests.Should().BeGreaterThan(1, "the authority was asked");
+        var unchanged = await fixture.ReadTimestampAsync(anchor);
+        unchanged.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        unchanged.ConfirmingRevocationLists.Should().BeEmpty();
+        unchanged.ConfirmationNotBeforeUtc.Should().BeNull();
+        unchanged.ConfirmationFailure.Should().BeNull();
+    }
+
     [Test]
     public async Task Constructor_InvalidRevocationSettings_ThrowsArgumentException()
     {
@@ -26,6 +52,23 @@ public class TimestampRevocationConfirmationTests
         FluentActions.Invoking(() => fixture.CreateRun()).Should().Throw<ArgumentException>().WithMessage("*revocation grace period*");
         fixture.Options.RevocationGracePeriod = TimeSpan.FromHours(72);
         FluentActions.Invoking(() => fixture.CreateRun()).Should().Throw<ArgumentException>().WithMessage("*revocation grace period*");
+    }
+
+    [Test]
+    public async Task FindOldestUnconfirmedTimestampUtcAsync_LaterAnchorWithEarlierToken_ReturnsTheEarliestToken()
+    {
+        var fixture = await CreateFixtureAsync();
+        var first = await fixture.AnchorAsync();
+        var second = await fixture.AnchorAsync();
+
+        // An authority whose clock runs behind, within the allowed skew, stamps the later anchor with an earlier time.
+        var earlier = first.Timestamps[0].TimestampUtc - TimeSpan.FromMinutes(3);
+        await fixture.Store.Anchors.UpdateOneAsync(new BsonDocument("_id", new BsonBinaryData(second.Id, GuidRepresentation.Standard)),
+                                                   new BsonDocument("$set", new BsonDocument("Timestamps.0.TimestampUtc", earlier)));
+
+        var oldest = await fixture.Store.FindOldestUnconfirmedTimestampUtcAsync(CancellationToken.None);
+
+        oldest.Should().BeCloseTo(earlier, TimeSpan.FromMilliseconds(1));
     }
 
     [OneTimeSetUp]
@@ -243,23 +286,29 @@ public class TimestampRevocationConfirmationTests
         fixture.Logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("revocation status"));
     }
 
-    [TestCase(true)]
-    [TestCase(false)]
-    public async Task RunAsync_CustomAuthorityReturnsUnusableCrl_CountsTheFailure(Boolean malformed)
+    [TestCase("malformed", "not a single DER-encoded CRL")]
+    [TestCase("issued too early", "before the required")]
+    [TestCase("without next update", "states no next update")]
+    public async Task RunAsync_CustomAuthorityReturnsUnusableCrl_CountsTheFailure(String kind, String reason)
     {
         var fixture = await CreateFixtureAsync();
         var anchor = await fixture.AnchorAsync();
         var timestamp = anchor.Timestamps[0];
-        var crl = malformed ? "not a CRL"u8.ToArray() : fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod - TimeSpan.FromMinutes(1));
+        var crl = kind switch
+        {
+            "malformed" => "not a CRL"u8.ToArray(),
+            "issued too early" => fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod - TimeSpan.FromMinutes(1)),
+            _ => fixture.TestAuthority.BuildCrlWithoutNextUpdate(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1))
+        };
         var authority = new FixedRevocationListsAuthority(fixture.Authority, RevocationLists.Issued([crl]));
-        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(2));
 
         await fixture.CreateRun(authority).RunAsync();
 
         var failed = await fixture.ReadTimestampAsync(anchor);
         failed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
         failed.ConfirmationFailure.Should().NotBeNull();
-        failed.ConfirmationFailure.LastFailure.Should().Contain(malformed ? "not a single DER-encoded CRL" : "before the required");
+        failed.ConfirmationFailure.LastFailure.Should().Contain(reason);
     }
 
     [Test]

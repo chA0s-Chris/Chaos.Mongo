@@ -247,6 +247,38 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Encodes an unsigned CRL of the authority's CA issued at <paramref name="thisUpdate"/> without a next update; CRL
+    /// signatures are not verified.
+    /// </summary>
+    public Byte[] BuildCrlWithoutNextUpdate(DateTimeOffset thisUpdate)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteInteger(1);
+                WriteEcdsaWithSha256(writer);
+                writer.WriteEncodedValue(Root.SubjectName.RawData);
+                writer.WriteUtcTime(thisUpdate);
+            }
+
+            WriteEcdsaWithSha256(writer);
+            writer.WriteBitString([0x00]);
+        }
+
+        return writer.Encode();
+
+        static void WriteEcdsaWithSha256(AsnWriter writer)
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
+            }
+        }
+    }
+
+    /// <summary>
     /// Creates the production authority configured against this test authority, trusting its root unless another
     /// root is given, without revocation checks. It reads the local time from <paramref name="timeProvider"/> when
     /// given.
@@ -320,37 +352,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
         return request.CreateSelfSigned(notBefore, notAfter);
-    }
-
-    /// <summary>
-    /// Encodes an unsigned CRL of a CA without a next update; the authority does not verify CRL signatures.
-    /// </summary>
-    private static Byte[] EncodeCrlWithoutNextUpdate(X509Certificate2 issuer)
-    {
-        var writer = new AsnWriter(AsnEncodingRules.DER);
-        using (writer.PushSequence())
-        {
-            using (writer.PushSequence())
-            {
-                writer.WriteInteger(1);
-                WriteEcdsaWithSha256(writer);
-                writer.WriteEncodedValue(issuer.SubjectName.RawData);
-                writer.WriteUtcTime(DateTimeOffset.UtcNow.AddHours(-1));
-            }
-
-            WriteEcdsaWithSha256(writer);
-            writer.WriteBitString([0x00]);
-        }
-
-        return writer.Encode();
-
-        static void WriteEcdsaWithSha256(AsnWriter writer)
-        {
-            using (writer.PushSequence())
-            {
-                writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
-            }
-        }
     }
 
     /// <summary>
@@ -498,7 +499,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             case TestTimestampAuthorityMode.CrlExpired:
                 return Respond(HttpStatusCode.OK, ExpiredCrl);
             case TestTimestampAuthorityMode.CrlWithoutNextUpdate:
-                return Respond(HttpStatusCode.OK, EncodeCrlWithoutNextUpdate(Root));
+                return Respond(HttpStatusCode.OK, BuildCrlWithoutNextUpdate(DateTimeOffset.UtcNow.AddHours(-1)));
             case TestTimestampAuthorityMode.CrlIssuedInFuture:
                 return Respond(HttpStatusCode.OK, BuildCrl(DateTimeOffset.UtcNow.AddDays(1)));
             case TestTimestampAuthorityMode.CrlIssuedAfterToken:

@@ -35,7 +35,7 @@ public class RevokedCertificateTests
         entries[0].RevocationDate.Should().Be(RevokedAt);
         entries[0].InvalidityDate.Should().BeNull();
         entries[0].RemovedFromCrl.Should().BeFalse();
-        entries[0].Issuer.GetValueOrDefault().ToArray().Should().Equal(issuer.SubjectName.RawData);
+        entries[0].Issuers.Should().ContainSingle().Which.ToArray().Should().Equal(issuer.SubjectName.RawData);
         entries[1].SerialNumber.ToArray().Should().Equal(0x7F);
     }
 
@@ -53,21 +53,27 @@ public class RevokedCertificateTests
     public void DecodeAll_EntryExtensions_ReadsInvalidityDateRemovalAndIndirectIssuers()
     {
         var crlIssuer = new X500DistinguishedName("CN=Chaos.Mongo Indirect CRL Issuer");
+        var thirdIssuer = new X500DistinguishedName("CN=Chaos.Mongo Third CA");
         var crl = EncodeCrl(crlIssuer,
                             entries:
                             [
                                 Entry([0x01], RevokedAt, (InvalidityDateOid, EncodeGeneralizedTime(RevokedAt.AddDays(-2)))),
                                 Entry([0x02], RevokedAt, (CertificateIssuerOid, EncodeDirectoryNames(OtherIssuer)), (ReasonCodeOid, EncodeReason(8))),
                                 Entry([0x03], RevokedAt, (ReasonCodeOid, EncodeReason(1))),
-                                Entry([0x04], RevokedAt, (CertificateIssuerOid, EncodeDnsName("ca.test")))
+                                Entry([0x04], RevokedAt, (CertificateIssuerOid, EncodeDnsName("ca.test"))),
+                                Entry([0x05], RevokedAt, (CertificateIssuerOid, EncodeDirectoryNames(OtherIssuer, thirdIssuer)))
                             ]);
 
         var entries = RevokedCertificate.DecodeAll(crl);
 
-        entries.Select(entry => entry.Issuer?.ToArray()).Should().BeEquivalentTo(
-            [crlIssuer.RawData, OtherIssuer.RawData, OtherIssuer.RawData, null],
-            options => options.WithStrictOrdering(),
-            "a certificate issuer applies to the following entries until the next one");
+        var issuers = entries.Select(entry => entry.Issuers.Select(issuer => issuer.ToArray()).ToList()).ToList();
+        issuers.Should().HaveCount(5);
+        issuers[0].Should().ContainSingle().Which.Should().Equal(crlIssuer.RawData);
+        issuers[1].Should().ContainSingle().Which.Should().Equal(OtherIssuer.RawData);
+        issuers[2].Should().ContainSingle().Which.Should().Equal(OtherIssuer.RawData, "a certificate issuer applies to the following entries");
+        issuers[3].Should().BeEmpty("the certificate issuer names no directory name");
+        issuers[4].Should().HaveCount(2, "every directory name of the certificate issuer counts");
+        issuers[4][1].Should().Equal(thirdIssuer.RawData);
         entries[0].InvalidityDate.Should().Be(RevokedAt.AddDays(-2));
         entries[0].RevokedFrom.Should().Be(RevokedAt.AddDays(-2));
         entries[1].RemovedFromCrl.Should().BeTrue();
@@ -89,15 +95,13 @@ public class RevokedCertificateTests
     public void Revokes_EntryForTheCertificate_DependsOnIssuerSerialTimeAndRemoval()
     {
         using var certificate = CreateCertificate("CN=Chaos.Mongo Test TSA", OtherIssuer, SerialNumber);
-        var entry = new RevokedCertificate(OtherIssuer.RawData, SerialNumber, RevokedAt, null, false);
-
-        entry.Revokes(certificate, RevokedAt).Should().BeTrue();
-        entry.Revokes(certificate, RevokedAt.AddSeconds(-1)).Should().BeFalse("the revocation lies after the time");
-        (entry with
+        var someoneElse = new X500DistinguishedName("CN=Someone Else").RawData;
+        var entry = new RevokedCertificate([OtherIssuer.RawData], SerialNumber, RevokedAt, null, false);
+        var invalidEarlier = entry with
         {
             InvalidityDate = RevokedAt.AddHours(-1)
-        }).Revokes(certificate, RevokedAt.AddSeconds(-1)).Should().BeTrue();
-        (entry with
+        };
+        var otherSerial = entry with
         {
             SerialNumber = new Byte[]
             {
@@ -105,19 +109,32 @@ public class RevokedCertificateTests
                 0x02,
                 0x04
             }
-        }).Revokes(certificate, RevokedAt).Should().BeFalse();
-        (entry with
+        };
+        var otherIssuer = entry with
         {
-            Issuer = new X500DistinguishedName("CN=Someone Else").RawData
-        }).Revokes(certificate, RevokedAt).Should().BeFalse();
-        (entry with
+            Issuers = [someoneElse]
+        };
+        var secondIssuerMatches = entry with
         {
-            Issuer = null
-        }).Revokes(certificate, RevokedAt).Should().BeTrue("an unknown issuer matches by serial number");
-        (entry with
+            Issuers = [someoneElse, OtherIssuer.RawData]
+        };
+        var unknownIssuer = entry with
+        {
+            Issuers = []
+        };
+        var removed = entry with
         {
             RemovedFromCrl = true
-        }).Revokes(certificate, RevokedAt).Should().BeFalse();
+        };
+
+        entry.Revokes(certificate, RevokedAt).Should().BeTrue();
+        entry.Revokes(certificate, RevokedAt.AddSeconds(-1)).Should().BeFalse("the revocation lies after the time");
+        invalidEarlier.Revokes(certificate, RevokedAt.AddSeconds(-1)).Should().BeTrue();
+        otherSerial.Revokes(certificate, RevokedAt).Should().BeFalse();
+        otherIssuer.Revokes(certificate, RevokedAt).Should().BeFalse();
+        secondIssuerMatches.Revokes(certificate, RevokedAt).Should().BeTrue("any of the listed names matches");
+        unknownIssuer.Revokes(certificate, RevokedAt).Should().BeTrue("an unknown issuer matches by serial number");
+        removed.Revokes(certificate, RevokedAt).Should().BeFalse();
         FluentActions.Invoking(() => entry.Revokes(null!, RevokedAt)).Should().Throw<ArgumentNullException>();
     }
 
@@ -187,13 +204,18 @@ public class RevokedCertificateTests
         }
     }
 
-    private static Byte[] EncodeDirectoryNames(X500DistinguishedName name)
+    private static Byte[] EncodeDirectoryNames(params X500DistinguishedName[] names)
     {
         var writer = new AsnWriter(AsnEncodingRules.DER);
         using (writer.PushSequence())
-        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 4, true)))
         {
-            writer.WriteEncodedValue(name.RawData);
+            foreach (var name in names)
+            {
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 4, true)))
+                {
+                    writer.WriteEncodedValue(name.RawData);
+                }
+            }
         }
 
         return writer.Encode();

@@ -104,7 +104,10 @@ internal sealed class TimestampRevocationConfirmer
                 continue;
             }
 
-            await ConfirmChainAsync(_authorities[chain.Key.Authority], timestamps, cancellationToken);
+            if (!await ConfirmChainAsync(_authorities[chain.Key.Authority], timestamps, ensureLock, cancellationToken))
+            {
+                return;
+            }
         }
     }
 
@@ -130,9 +133,14 @@ internal sealed class TimestampRevocationConfirmer
         => String.Join(":", certificateChain.Select(certificate => Convert.ToHexString(SHA256.HashData(certificate))));
 
     /// <summary>
-    /// Asks the authority for CRLs of one chain and records the outcome on its due entries.
+    /// Asks the authority for CRLs of one chain and records the outcome on its due entries, unless the run's lock was
+    /// lost while the authority answered.
     /// </summary>
-    private async Task ConfirmChainAsync(ITimestampAuthority authority, IReadOnlyList<UnconfirmedTimestamp> timestamps, CancellationToken cancellationToken)
+    /// <returns><c>false</c> when the lock was lost and nothing was recorded.</returns>
+    private async Task<Boolean> ConfirmChainAsync(ITimestampAuthority authority,
+                                                  IReadOnlyList<UnconfirmedTimestamp> timestamps,
+                                                  Func<CancellationToken, Task<Boolean>> ensureLock,
+                                                  CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         var issuedNotBefore = timestamps[0].TimestampUtc + _options.RevocationGracePeriod;
@@ -141,6 +149,13 @@ internal sealed class TimestampRevocationConfirmer
             var result = await authority.GetRevocationListsAsync(timestamps[0].CertificateChain,
                                                                  new DateTimeOffset(issuedNotBefore, TimeSpan.Zero),
                                                                  cancellationToken);
+
+            // The authority may answer after the lease ran out; another instance may then hold the lock.
+            if (!await ensureLock(cancellationToken))
+            {
+                return false;
+            }
+
             if (result.NextUpdate is { } nextUpdate)
             {
                 var retryUtc = nextUpdate.UtcDateTime < now + MaximumRetryDelay ? nextUpdate.UtcDateTime : now + MaximumRetryDelay;
@@ -148,7 +163,7 @@ internal sealed class TimestampRevocationConfirmer
                 _logger.LogDebug("The CRLs of timestamp authority {AuthorityName} were issued before {IssuedNotBefore:O}; " +
                                  "confirming {TimestampCount} timestamps is attempted again from {RetryUtc:O}",
                                  authority.Name, issuedNotBefore, timestamps.Count, retryUtc);
-                return;
+                return true;
             }
 
             await RecordStatusesAsync(authority, timestamps, result.Lists, issuedNotBefore, now, cancellationToken);
@@ -158,8 +173,15 @@ internal sealed class TimestampRevocationConfirmer
             _logger.LogWarning(ex, "Confirming the revocation status of {TimestampCount} timestamps of authority {AuthorityName} failed; " +
                                    "it is retried from {RetryUtc:O}",
                                timestamps.Count, authority.Name, now + MaximumRetryDelay);
+            if (!await ensureLock(cancellationToken))
+            {
+                return false;
+            }
+
             await _store.RecordTimestampConfirmationFailureAsync(timestamps, ex.Message, now, now + MaximumRetryDelay, cancellationToken);
         }
+
+        return true;
     }
 
     /// <summary>
@@ -174,7 +196,8 @@ internal sealed class TimestampRevocationConfirmer
                                            DateTime now,
                                            CancellationToken cancellationToken)
     {
-        // The authority's checks are repeated, so the acceptance rule also holds for custom authorities.
+        // The authority's time checks are repeated, so the acceptance rule also holds for custom authorities; issuer and
+        // size remain the authority's checks.
         var issuedAt = DateTime.MaxValue;
         var entries = new List<RevokedCertificate>();
         foreach (var crl in lists)
@@ -194,6 +217,12 @@ internal sealed class TimestampRevocationConfirmer
             {
                 throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned a CRL issued at {header.ThisUpdate:O}, " +
                                                $"before the required {issuedNotBefore:O}.");
+            }
+
+            if (header.NextUpdate is not { } nextUpdate || (nextUpdate.UtcDateTime < issuedNotBefore))
+            {
+                throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned a CRL that states no next update, " +
+                                               $"or one before the required {issuedNotBefore:O}.");
             }
 
             issuedAt = header.ThisUpdate.UtcDateTime < issuedAt ? header.ThisUpdate.UtcDateTime : issuedAt;

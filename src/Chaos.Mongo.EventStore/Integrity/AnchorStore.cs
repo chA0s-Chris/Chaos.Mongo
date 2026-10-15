@@ -402,18 +402,30 @@ internal sealed class AnchorStore
     /// authority is still configured.
     /// </summary>
     /// <remarks>
-    /// No anchor is created while one awaits its timestamps, so the tokens of an anchor are older than those of every
-    /// later anchor, and the oldest unconfirmed token is one of the first anchor that holds any.
+    /// Token times only roughly follow the anchor order: authorities' clocks may differ within their allowed skew, so a
+    /// later anchor can hold an earlier token. The minimum is therefore taken over every unconfirmed entry.
     /// </remarks>
     /// <returns>The token's time, or <c>null</c> when every token is confirmed.</returns>
     public async Task<DateTime?> FindOldestUnconfirmedTimestampUtcAsync(CancellationToken cancellationToken)
     {
-        var document = await Anchors.Find(HasUnconfirmedTimestamp())
-                                    .Sort(new BsonDocument(SequenceField, 1))
-                                    .Project(TimestampsWithoutRevocationLists())
-                                    .Limit(1)
-                                    .FirstOrDefaultAsync(cancellationToken);
-        return document is null ? null : ReadUnconfirmedTimestamps(document).Min(timestamp => timestamp.TimestampUtc);
+        var pipeline = new[]
+        {
+            new BsonDocument("$match", HasUnconfirmedTimestamp()),
+            new BsonDocument("$project", new BsonDocument
+            {
+                { $"{TimestampsField}.{RevocationStatusField}", 1 },
+                { $"{TimestampsField}.{TimestampUtcField}", 1 }
+            }),
+            new BsonDocument("$unwind", $"${TimestampsField}"),
+            new BsonDocument("$match", HasUnconfirmedTimestamp()),
+            new BsonDocument("$group", new BsonDocument
+            {
+                { "_id", BsonNull.Value },
+                { TimestampUtcField, new BsonDocument("$min", $"${TimestampsField}.{TimestampUtcField}") }
+            })
+        };
+        var result = await Anchors.Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken).FirstOrDefaultAsync(cancellationToken);
+        return result?[TimestampUtcField].ToUniversalTime();
     }
 
     /// <summary>
