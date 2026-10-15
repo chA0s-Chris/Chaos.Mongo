@@ -186,7 +186,7 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
         => new(MongoHelper, CandidateSource);
 
     public EventStreamVerifier<LedgerAggregate> CreateVerifier()
-        => new(MongoHelper, Options);
+        => ServiceProvider.GetService<EventStreamVerifier<LedgerAggregate>>() ?? new EventStreamVerifier<LedgerAggregate>(MongoHelper, Options);
 
     public Task<BsonDocument> FindEventAsync(Guid aggregateId, Int64 version)
         => Events.Find(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version)).SingleAsync();

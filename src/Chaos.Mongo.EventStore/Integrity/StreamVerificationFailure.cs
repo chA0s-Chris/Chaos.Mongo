@@ -50,5 +50,16 @@ internal enum StreamVerificationFailure
     /// <summary>
     /// A personal data value whose salt is absent is not <c>null</c>, so the value was kept while its salt was removed.
     /// </summary>
-    ErasedPersonalDataPresent
+    ErasedPersonalDataPresent,
+
+    /// <summary>
+    /// A version that a completed anchor covers no longer exists, so the stream was truncated or deleted.
+    /// </summary>
+    AnchoredVersionMissing,
+
+    /// <summary>
+    /// The stored hash of a version that a completed anchor covers differs from the anchor's leaf, so the stream was
+    /// rewritten or rolled back.
+    /// </summary>
+    AnchoredHashMismatch
 }

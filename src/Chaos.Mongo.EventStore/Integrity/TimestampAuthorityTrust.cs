@@ -1,0 +1,23 @@
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// This file is licensed under the MIT license. See LICENSE in the project root for more information.
+namespace Chaos.Mongo.EventStore.Integrity;
+
+using System.Security.Cryptography.X509Certificates;
+
+/// <summary>
+/// The trust settings stored timestamp tokens of one authority are verified with.
+/// </summary>
+internal sealed class TimestampAuthorityTrust
+{
+    /// <summary>
+    /// Gets or sets the object identifier of the policy the authority's tokens must be issued under, or <c>null</c>
+    /// to accept any policy.
+    /// </summary>
+    public String? PolicyId { get; set; }
+
+    /// <summary>
+    /// Gets the roots the authority's certificate chains must lead to. When empty, the system trust store is used, as
+    /// when tokens are received.
+    /// </summary>
+    public X509Certificate2Collection TrustedRoots { get; } = [];
+}

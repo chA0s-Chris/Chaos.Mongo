@@ -25,41 +25,9 @@ using System.Security.Cryptography.X509Certificates;
 internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 {
     private const Int32 DigestLength = 32;
-    private const String EcPublicKeyOid = "1.2.840.10045.2.1";
-    private const Int32 MinimumEcKeySize = 256;
-    private const Int32 MinimumRsaKeySize = 2048;
     private const Int32 NonceLength = 16;
     private const Int32 ReadChunkSize = 81920;
-    private const String RsaPssPublicKeyOid = "1.2.840.113549.1.1.10";
-    private const String RsaPublicKeyOid = "1.2.840.113549.1.1.1";
-    private const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
     private const String TimestampQueryMediaType = "application/timestamp-query";
-
-    /// <summary>
-    /// MD2, MD4, MD5 and SHA-1, which are not collision resistant.
-    /// </summary>
-    private static readonly HashSet<String> WeakDigestAlgorithmOids =
-    [
-        "1.2.840.113549.2.2",
-        "1.2.840.113549.2.4",
-        "1.2.840.113549.2.5",
-        "1.3.14.3.2.26"
-    ];
-
-    /// <summary>
-    /// Signature algorithms that name one of <see cref="WeakDigestAlgorithmOids"/>: RSA with MD2, MD4, MD5 and SHA-1,
-    /// ECDSA with SHA-1 and DSA with SHA-1.
-    /// </summary>
-    private static readonly HashSet<String> WeakSignatureAlgorithmOids =
-    [
-        "1.2.840.113549.1.1.2",
-        "1.2.840.113549.1.1.3",
-        "1.2.840.113549.1.1.4",
-        "1.2.840.113549.1.1.5",
-        "1.3.14.3.2.29",
-        "1.2.840.10045.4.1",
-        "1.2.840.10040.4.3"
-    ];
 
     private readonly HttpClient _httpClient;
     private readonly Rfc3161TimestampAuthorityOptions _options;
@@ -106,30 +74,6 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     public String Name => _options.Name;
 
     /// <summary>
-    /// Gets the size of an RSA or ECDSA key and the minimum this authority requires for it; other key types are not
-    /// size-checked. The size is <c>null</c> when the platform cannot read the key, as for RSASSA-PSS keys today.
-    /// </summary>
-    private static (Int32? KeySize, Int32 Minimum) GetKeySize(X509Certificate2 certificate)
-    {
-        switch (certificate.PublicKey.Oid.Value)
-        {
-            case RsaPublicKeyOid:
-            case RsaPssPublicKeyOid:
-                using (var key = certificate.GetRSAPublicKey())
-                {
-                    return (key?.KeySize, MinimumRsaKeySize);
-                }
-            case EcPublicKeyOid:
-                using (var key = certificate.GetECDsaPublicKey())
-                {
-                    return (key?.KeySize, MinimumEcKeySize);
-                }
-            default:
-                return (null, 0);
-        }
-    }
-
-    /// <summary>
     /// Gets a value indicating whether an exception is a failed or timed-out HTTP exchange. Bodies are read after the
     /// headers arrive, so a connection lost while reading one surfaces as an <see cref="IOException"/>.
     /// </summary>
@@ -142,48 +86,6 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         var sequence = new AsnReader(response, AsnEncodingRules.BER).ReadSequence();
         sequence.ReadEncodedValue();
         return sequence.ReadEncodedValue().ToArray();
-    }
-
-    private ValidatedChain BuildChain(Rfc3161TimestampToken token, X509Certificate2 signer)
-    {
-        using var chain = new X509Chain();
-        chain.ChainPolicy.RevocationMode = _options.RevocationMode;
-        chain.ChainPolicy.UrlRetrievalTimeout = _options.RevocationCheckTimeout;
-        chain.ChainPolicy.ApplicationPolicy.Add(new Oid(TimeStampingPurposeOid));
-        chain.ChainPolicy.VerificationTime = token.TokenInfo.Timestamp.UtcDateTime;
-        var tokenCertificates = token.AsSignedCms().Certificates;
-        chain.ChainPolicy.ExtraStore.AddRange(tokenCertificates);
-        if (_options.TrustedRoots.Count > 0)
-        {
-            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.AddRange(_options.TrustedRoots);
-        }
-
-        var elements = new List<X509Certificate2>();
-        try
-        {
-            if (!chain.Build(signer))
-            {
-                var statuses = String.Join(", ", chain.ChainStatus.Select(status => status.Status));
-                throw Fail($"the token's certificate chain is not trusted ({statuses}).");
-            }
-
-            // Everything needed later is copied out, so the certificates can be disposed here.
-            elements.AddRange(chain.ChainElements.Select(element => element.Certificate));
-            var crlSources = GetCrlSources(elements.Take(elements.Count - 1));
-            return new ValidatedChain(elements.Select(certificate => certificate.RawData).ToList(), crlSources);
-        }
-        catch (AsnContentException ex)
-        {
-            throw Fail("a certificate of the token's chain has a malformed CRL distribution point.", ex);
-        }
-        finally
-        {
-            foreach (var certificate in elements.Concat(tokenCertificates))
-            {
-                certificate.Dispose();
-            }
-        }
     }
 
     /// <summary>
@@ -290,72 +192,23 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     private TimestampAuthorityException Fail(String message, Exception? innerException = null)
         => new(_options.Name, message, innerException);
 
-    /// <summary>
-    /// Gets the CRLs a certificate's distribution points name, with their HTTP locations and, unless a point names
-    /// another CRL issuer, the issuer they must come from. Points without an HTTP location are skipped, but a
-    /// certificate that names distribution points must yield at least one CRL that covers all revocation reasons
-    /// (RFC 5280, section 4.2.1.13); points limited to some reasons are captured beside it.
-    /// </summary>
-    private IReadOnlyList<CrlSource> GetCrlSources(X509Certificate2 certificate)
-    {
-        var points = CrlDistributionPoints.GetHttpDistributionPoints(certificate);
-        if (!points.Any(point => point.CoversAllReasons) && CrlDistributionPoints.NamesDistributionPoints(certificate))
-        {
-            throw Fail($"the certificate '{certificate.Subject}' names CRL distribution points, but none with an HTTP or HTTPS location " +
-                       "covers all revocation reasons.");
-        }
-
-        return points.Select(point => new CrlSource(point.Locations, point.NamesCrlIssuer ? null : certificate.IssuerName.RawData)).ToList();
-    }
-
-    /// <summary>
-    /// Gets the distinct CRLs the distribution points of certificates name.
-    /// </summary>
-    private IReadOnlyList<CrlSource> GetCrlSources(IEnumerable<X509Certificate2> certificates)
-        => certificates.SelectMany(GetCrlSources)
-                       .DistinctBy(source => (String.Join(" ", source.Locations.Select(uri => uri.AbsoluteUri)),
-                                              Convert.ToHexString(source.Issuer ?? [])))
-                       .ToList();
-
-    /// <summary>
-    /// Gets the distinct CRLs the distribution points of a stored chain's non-root certificates name.
-    /// </summary>
-    private IReadOnlyList<CrlSource> GetCrlSources(IReadOnlyList<Byte[]> certificateChain)
-    {
-        var certificates = new List<X509Certificate2>();
-        try
-        {
-            foreach (var certificate in certificateChain.Take(certificateChain.Count - 1))
-            {
-                certificates.Add(X509CertificateLoader.LoadCertificate(certificate));
-            }
-
-            return GetCrlSources(certificates);
-        }
-        catch (CryptographicException ex)
-        {
-            throw Fail("a certificate of the stored chain is malformed.", ex);
-        }
-        catch (AsnContentException ex)
-        {
-            throw Fail("a certificate of the stored chain has a malformed CRL distribution point.", ex);
-        }
-        finally
-        {
-            foreach (var certificate in certificates)
-            {
-                certificate.Dispose();
-            }
-        }
-    }
-
     private async Task<RevocationLists> GetRevocationListsCoreAsync(IReadOnlyList<Byte[]> certificateChain,
                                                                     DateTimeOffset issuedNotBefore,
                                                                     CancellationToken cancellationToken)
     {
         var crls = new List<Byte[]>();
         DateTimeOffset? tooEarlyNextUpdate = null;
-        foreach (var source in GetCrlSources(certificateChain))
+        IReadOnlyList<CrlSource> sources;
+        try
+        {
+            sources = TimestampTokenValidation.GetCrlSources(certificateChain);
+        }
+        catch (TimestampTokenValidationException ex)
+        {
+            throw Fail(ex.Message, ex.InnerException);
+        }
+
+        foreach (var source in sources)
         {
             var downloaded = await DownloadCrlAsync(source, issuedNotBefore, "the required issue time", issuedNotBefore, cancellationToken);
             if (downloaded.Crl is { } crl)
@@ -456,13 +309,25 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         ValidatedChain chain;
         using (signer)
         {
-            ValidateContent(token);
-            ValidatePolicy(token);
-            ValidateTime(token);
-            ValidateSigner(signer);
-            ValidateAlgorithms(token, signer);
-            ValidateAuthorityName(token, signer);
-            chain = BuildChain(token, signer);
+            try
+            {
+                TimestampTokenValidation.ValidateContent(token);
+                TimestampTokenValidation.ValidatePolicy(token, _policyId);
+                ValidateTime(token);
+                TimestampTokenValidation.ValidateSigner(signer);
+                TimestampTokenValidation.ValidateAlgorithms(token, signer);
+                TimestampTokenValidation.ValidateAuthorityName(token, signer);
+                chain = TimestampTokenValidation.BuildChain(token,
+                                                            signer,
+                                                            new ChainSettings(_options.TrustedRoots,
+                                                                              _options.RevocationMode,
+                                                                              _options.RevocationCheckTimeout,
+                                                                              []));
+            }
+            catch (TimestampTokenValidationException ex)
+            {
+                throw Fail(ex.Message, ex.InnerException);
+            }
         }
 
         var crls = new List<Byte[]>();
@@ -473,91 +338,6 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
 
         return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp);
-    }
-
-    /// <summary>
-    /// Requires the token to be signed with a collision-resistant digest and the signing key to have at least 2048 bits
-    /// for RSA or 256 bits for ECDSA, so a token is not weak evidence from the day it is issued (ETSI TS 119 312).
-    /// The Pkcs types accept any algorithm. The signing-certificate identifier may still use SHA-1 (ESSCertID), which
-    /// only names the certificate.
-    /// </summary>
-    private void ValidateAlgorithms(Rfc3161TimestampToken token, X509Certificate2 signer)
-    {
-        var signerInfo = token.AsSignedCms().SignerInfos[0];
-        if (WeakDigestAlgorithmOids.Contains(signerInfo.DigestAlgorithm.Value!) ||
-            WeakSignatureAlgorithmOids.Contains(signerInfo.SignatureAlgorithm.Value!))
-        {
-            throw Fail($"the token is signed with a weak algorithm (digest {signerInfo.DigestAlgorithm.Value}, signature " +
-                       $"{signerInfo.SignatureAlgorithm.Value}); MD5 and SHA-1 are not accepted.");
-        }
-
-        var (keySize, minimum) = GetKeySize(signer);
-        if (keySize is null && minimum > 0)
-        {
-            throw Fail("the signing key's size could not be determined.");
-        }
-
-        if (keySize < minimum)
-        {
-            throw Fail($"the signing key has {keySize} bits, fewer than the required {minimum}.");
-        }
-    }
-
-    /// <summary>
-    /// Requires a <c>tsa</c> name in the token to correspond to a subject name of the signing certificate
-    /// (RFC 3161, section 2.4.2); a token without one is accepted.
-    /// </summary>
-    private void ValidateAuthorityName(Rfc3161TimestampToken token, X509Certificate2 signer)
-    {
-        if (token.TokenInfo.GetTimestampAuthorityName() is not { } authorityName)
-        {
-            return;
-        }
-
-        try
-        {
-            if (!TimestampAuthorityName.Matches(authorityName, signer))
-            {
-                throw Fail("the token's TSA name does not correspond to a subject name of the signing certificate.");
-            }
-        }
-        catch (AsnContentException ex)
-        {
-            throw Fail("the token's TSA name is malformed.", ex);
-        }
-    }
-
-    /// <summary>
-    /// Requires the signed content to be exactly one DER <c>TSTInfo</c> and the token to carry no signature besides
-    /// the authority's (RFC 3161, section 2.4.2). The Pkcs decoder does not reject data that follows the
-    /// <c>TSTInfo</c>, although the signature covers that data, and it requires one signer but ignores
-    /// countersignatures.
-    /// </summary>
-    private void ValidateContent(Rfc3161TimestampToken token)
-    {
-        var signedCms = token.AsSignedCms();
-        var content = signedCms.ContentInfo.Content;
-        if (!Rfc3161TimestampTokenInfo.TryDecode(content, out _, out var bytesConsumed) || bytesConsumed != content.Length)
-        {
-            throw Fail("the token's signed content is not exactly one TSTInfo.");
-        }
-
-        if (signedCms.SignerInfos[0].CounterSignerInfos.Count > 0)
-        {
-            throw Fail("the token carries a countersignature besides the authority's signature.");
-        }
-    }
-
-    /// <summary>
-    /// Requires the token to be issued under the configured policy (RFC 3161, section 2.2). The Pkcs types do not
-    /// compare the token's policy with the requested one.
-    /// </summary>
-    private void ValidatePolicy(Rfc3161TimestampToken token)
-    {
-        if (_policyId is not null && token.TokenInfo.PolicyId.Value != _policyId.Value)
-        {
-            throw Fail($"the token is issued under policy {token.TokenInfo.PolicyId.Value}, not the required policy {_policyId.Value}.");
-        }
     }
 
     private (Rfc3161TimestampToken Token, Byte[] RawToken) ValidateResponse(Rfc3161TimestampRequest request, Byte[] response)
@@ -575,47 +355,6 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         catch (CryptographicException ex)
         {
             throw Fail("the response does not match the request.", ex);
-        }
-    }
-
-    /// <summary>
-    /// Requires the signing certificate to be reserved for timestamping (RFC 3161, section 2.3) and, when it carries a
-    /// key usage extension, to permit signatures (RFC 5280, section 4.2.1.3). Both extensions are decoded on first
-    /// access, so an undecodable one fails the attempt here. A certificate must not carry an extension more than once
-    /// (RFC 5280, section 4.2); the extension accessors would read only one instance.
-    /// </summary>
-    private void ValidateSigner(X509Certificate2 signer)
-    {
-        var duplicate = signer.Extensions.GroupBy(extension => extension.Oid?.Value)
-                              .FirstOrDefault(extensions => extensions.Count() > 1);
-        if (duplicate is not null)
-        {
-            throw Fail($"the signing certificate carries the extension {duplicate.Key} more than once.");
-        }
-
-        List<String?> purposes;
-        X509KeyUsageFlags? keyUsages;
-        try
-        {
-            purposes = signer.Extensions.OfType<X509EnhancedKeyUsageExtension>()
-                             .SelectMany(extension => extension.EnhancedKeyUsages.Cast<Oid>())
-                             .Select(purpose => purpose.Value)
-                             .ToList();
-            keyUsages = signer.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault()?.KeyUsages;
-        }
-        catch (CryptographicException ex)
-        {
-            throw Fail("the signing certificate's usage extensions are malformed.", ex);
-        }
-
-        if (purposes.Count == 0 || purposes.Any(purpose => purpose != TimeStampingPurposeOid))
-        {
-            throw Fail("the signing certificate's extended key usage must contain only id-kp-timeStamping.");
-        }
-
-        if (keyUsages is { } usages && (usages & (X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation)) == 0)
-        {
-            throw Fail("the signing certificate's key usage permits neither digitalSignature nor nonRepudiation.");
         }
     }
 
@@ -659,12 +398,6 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     }
 
     /// <summary>
-    /// A CRL to capture: the alternative locations of a distribution point and the issuer its CRL must come from, or
-    /// <c>null</c> when the point names another CRL issuer.
-    /// </summary>
-    private sealed record CrlSource(IReadOnlyList<Uri> Locations, Byte[]? Issuer);
-
-    /// <summary>
     /// The issue and next update of a usable CRL.
     /// </summary>
     private sealed record CrlTimes(DateTimeOffset ThisUpdate, DateTimeOffset NextUpdate);
@@ -673,6 +406,4 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     /// A downloaded CRL, or the earliest next update of the usable CRLs that were issued too early.
     /// </summary>
     private sealed record DownloadedCrl(Byte[]? Crl, DateTimeOffset? NextUpdate);
-
-    private sealed record ValidatedChain(IReadOnlyList<Byte[]> Certificates, IReadOnlyList<CrlSource> CrlSources);
 }

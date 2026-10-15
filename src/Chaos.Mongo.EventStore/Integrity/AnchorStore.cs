@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 /// <summary>
@@ -371,6 +372,49 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Finds the completed anchors whose leaf for a stream has a version at least the given one, in anchor order, with
+    /// that leaf. Leaves of other anchors are ignored. Leaf and anchor documents that cannot be read, for example after
+    /// tampering, are skipped; the verification of the chain of anchors reports damaged anchors.
+    /// </summary>
+    /// <param name="aggregateType">The aggregate type name.</param>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="minimumVersion">The lowest leaf version to include.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The leaves in completed anchors, ordered by anchor sequence.</returns>
+    public async Task<IReadOnlyList<CompletedStreamLeaf>> FindCompletedStreamLeavesAsync(String aggregateType,
+                                                                                         Guid aggregateId,
+                                                                                         Int64 minimumVersion,
+                                                                                         CancellationToken cancellationToken)
+    {
+        var documents = await Leaves.Find(StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
+                                    .Sort(StreamLeavesSort())
+                                    .ToListAsync(cancellationToken);
+        var anchors = new Dictionary<Guid, AnchorRecord?>();
+        var leaves = new List<CompletedStreamLeaf>();
+        foreach (var document in documents)
+        {
+            if (!TryRead(document, ReadLeaf, out var leaf))
+            {
+                continue;
+            }
+
+            if (!anchors.TryGetValue(leaf.AnchorId, out var anchor))
+            {
+                var anchorDocument = await Anchors.Find(new BsonDocument("_id", ToBson(leaf.AnchorId))).FirstOrDefaultAsync(cancellationToken);
+                anchor = anchorDocument is not null && TryRead(anchorDocument, ReadAnchor, out var read) ? read : null;
+                anchors[leaf.AnchorId] = anchor;
+            }
+
+            if (anchor is { Status: AnchorStatus.Completed } && anchor.Sequence == leaf.AnchorSequence)
+            {
+                leaves.Add(new CompletedStreamLeaf(leaf, anchor));
+            }
+        }
+
+        return leaves;
+    }
+
+    /// <summary>
     /// Finds the completed anchor with the lowest sequence number whose completion was not yet notified.
     /// </summary>
     public async Task<AnchorRecord?> FindFirstUnnotifiedAsync(CancellationToken cancellationToken)
@@ -434,18 +478,7 @@ internal sealed class AnchorStore
     /// uncommitted attempts are included; callers check the anchor.
     /// </summary>
     public IAsyncEnumerable<AnchorLeaf> FindStreamLeavesAsync(String aggregateType, Guid aggregateId, Int64 minimumVersion, CancellationToken cancellationToken)
-        => ReadAllAsync(Leaves.Find(new BsonDocument
-                              {
-                                  { AggregateTypeField, aggregateType },
-                                  { AggregateIdField, ToBson(aggregateId) },
-                                  { VersionField, new BsonDocument("$gte", minimumVersion) }
-                              })
-                              .Sort(new BsonDocument
-                              {
-                                  { AggregateTypeField, 1 },
-                                  { AggregateIdField, 1 },
-                                  { AnchorSequenceField, 1 }
-                              }),
+        => ReadAllAsync(Leaves.Find(StreamLeavesFilter(aggregateType, aggregateId, minimumVersion)).Sort(StreamLeavesSort()),
                         ReadLeaf,
                         cancellationToken);
 
@@ -535,6 +568,18 @@ internal sealed class AnchorStore
         });
         return Anchors.UpdateOneAsync(ById(anchorId, AnchorStatus.Completed), update, cancellationToken: cancellationToken);
     }
+
+    /// <summary>
+    /// Reads every committed anchor document, that is every anchor with a sequence number, in sequence order and
+    /// without parsing them, so the verification of the chain of anchors can report damaged documents.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The anchor documents.</returns>
+    public IAsyncEnumerable<BsonDocument> ReadCommittedAnchorDocumentsAsync(CancellationToken cancellationToken)
+        => ReadAllAsync(Anchors.Find(new BsonDocument(SequenceField, new BsonDocument("$exists", true)))
+                               .Sort(new BsonDocument(SequenceField, 1)),
+                        document => document,
+                        cancellationToken);
 
     /// <summary>
     /// Reads the leaves of an anchor in leaf order.
@@ -628,6 +673,23 @@ internal sealed class AnchorStore
                document[HashField].AsByteArray,
                ReadBinaries(document["Proof"]));
 
+    /// <summary>
+    /// Reads a stored document without throwing on documents whose elements are missing or have unexpected types.
+    /// </summary>
+    internal static Boolean TryRead<T>(BsonDocument document, Func<BsonDocument, T> read, [NotNullWhen(true)] out T? value) where T : class
+    {
+        try
+        {
+            value = read(document);
+            return true;
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or FormatException or ArgumentException or OverflowException)
+        {
+            value = null;
+            return false;
+        }
+    }
+
     private static BsonDocument ById(Guid anchorId, AnchorStatus status)
         => new()
         {
@@ -703,6 +765,22 @@ internal sealed class AnchorStore
                                                                             ReadBinaries(entry[CertificateChainHashesField]),
                                                                             entry[TimestampUtcField].ToUniversalTime(),
                                                                             ReadOptionalTime(entry, ConfirmationNotBeforeField)));
+
+    private static BsonDocument StreamLeavesFilter(String aggregateType, Guid aggregateId, Int64 minimumVersion)
+        => new()
+        {
+            { AggregateTypeField, aggregateType },
+            { AggregateIdField, ToBson(aggregateId) },
+            { VersionField, new BsonDocument("$gte", minimumVersion) }
+        };
+
+    private static BsonDocument StreamLeavesSort()
+        => new()
+        {
+            { AggregateTypeField, 1 },
+            { AggregateIdField, 1 },
+            { AnchorSequenceField, 1 }
+        };
 
     private static BsonBinaryData ToBson(Guid value) => new(value, GuidRepresentation.Standard);
 

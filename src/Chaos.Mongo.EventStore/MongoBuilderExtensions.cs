@@ -79,6 +79,12 @@ public static class MongoBuilderExtensions
                                            options,
                                            sp.GetRequiredService<IEventStore<TAggregate>>()));
 
+            // Verification compares streams with anchors when anchoring or verification is configured at module level.
+            builder.Services.AddSingleton(sp => new EventStreamVerifier<TAggregate>(
+                                              sp.GetRequiredService<IMongoHelper>(),
+                                              options,
+                                              sp.GetService<AnchorVerifier>()));
+
             // Retroactively seal events stored without integrity data
             builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
                                               sp.GetRequiredService<IMongoHelper>(),
@@ -144,6 +150,19 @@ public static class MongoBuilderExtensions
         configure(anchoring);
         anchoring.Validate();
 
+        // The trust settings of RFC 3161 authorities also apply when their stored tokens are verified.
+        var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
+        foreach (var authority in anchoring.Rfc3161Authorities)
+        {
+            var trust = new TimestampAuthorityTrust
+            {
+                PolicyId = authority.PolicyId
+            };
+            trust.TrustedRoots.AddRange(authority.TrustedRoots);
+            verification.AnchoringAuthorities[authority.Name] = trust;
+        }
+
+        AddAnchorVerifier(builder.Services);
         builder.WithAnchorCandidates();
         builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
         builder.Services.AddSingleton(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
@@ -176,6 +195,46 @@ public static class MongoBuilderExtensions
                                                                           NullLogger<IntegrityAnchoringService>.Instance));
         builder.Services.AddHostedService(sp => new IntegrityAnchoringHostedService(sp.GetRequiredService<IntegrityAnchoringService>()));
         return builder;
+    }
+
+    /// <summary>
+    /// Configures how anchors and their stored timestamp tokens are verified, once at module level. It registers the
+    /// anchor verification without the anchoring run, so a container that only verifies, for example an audit tool
+    /// with read-only credentials, needs no timestamp authority. With anchoring configured as well, the trust settings
+    /// of its RFC 3161 authorities apply unless configured here.
+    /// </summary>
+    /// <param name="builder">The Mongo builder.</param>
+    /// <param name="configure">Configures the trust settings, the revocation grace period and the anchor collections.</param>
+    /// <returns>The Mongo builder for method chaining.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when verification is already configured.</exception>
+    internal static MongoBuilder WithIntegrityVerification(this MongoBuilder builder, Action<IntegrityVerificationBuilder>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityVerificationBuilder)))
+        {
+            throw new InvalidOperationException("Integrity verification is already configured; configure it once at module level.");
+        }
+
+        var verificationBuilder = new IntegrityVerificationBuilder(verification, GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services));
+        configure?.Invoke(verificationBuilder);
+
+        // Registered only to detect a second configuration.
+        builder.Services.AddSingleton(verificationBuilder);
+        AddAnchorVerifier(builder.Services);
+        return builder;
+    }
+
+    private static void AddAnchorVerifier(IServiceCollection services)
+    {
+        if (services.Any(s => s.ServiceType == typeof(AnchorVerifier)))
+        {
+            return;
+        }
+
+        var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(services);
+        var verification = GetOrAddSingleton<IntegrityVerificationOptions>(services);
+        services.AddSingleton(sp => new AnchorVerifier(sp.GetRequiredService<IMongoHelper>(), anchoring, verification));
     }
 
     /// <summary>

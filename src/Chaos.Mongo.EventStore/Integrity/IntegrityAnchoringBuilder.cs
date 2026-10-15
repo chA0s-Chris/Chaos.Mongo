@@ -9,6 +9,7 @@ internal sealed class IntegrityAnchoringBuilder
 {
     private readonly List<Func<IServiceProvider, ITimestampAuthority>> _authorities = [];
     private readonly HashSet<String> _authorityNames = [];
+    private readonly List<Rfc3161TimestampAuthorityOptions> _rfc3161Authorities = [];
 
     internal IntegrityAnchoringBuilder(IntegrityAnchoringOptions options)
     {
@@ -25,6 +26,11 @@ internal sealed class IntegrityAnchoringBuilder
     /// Gets the completion hook, if one is configured.
     /// </summary>
     internal Func<IServiceProvider, CompletedAnchor, CancellationToken, Task>? CompletionHook { get; private set; }
+
+    /// <summary>
+    /// Gets the options of the configured RFC 3161 authorities, whose trust settings also apply to verification.
+    /// </summary>
+    internal IReadOnlyList<Rfc3161TimestampAuthorityOptions> Rfc3161Authorities => _rfc3161Authorities;
 
     /// <summary>
     /// Sets the hook that is notified of every completed anchor, in anchor order and at least once. Anchors completed
@@ -136,6 +142,7 @@ internal sealed class IntegrityAnchoringBuilder
             Uri = uri
         };
         configure?.Invoke(options);
+        _rfc3161Authorities.Add(options);
         _authorities.Add(serviceProvider => new Rfc3161TimestampAuthority(options, serviceProvider));
         return this;
     }
