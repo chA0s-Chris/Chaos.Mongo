@@ -47,7 +47,14 @@ internal sealed class AnchorEvidenceResolver
                                                await ReadAllAsync(timestamp.CertificateChainHashes, resolved, cancellationToken),
                                                await ReadAllAsync(timestamp.CertificateRevocationListHashes, resolved, cancellationToken),
                                                timestamp.TimestampUtc,
-                                               timestamp.ObtainedUtc));
+                                               timestamp.ObtainedUtc)
+            {
+                RevocationStatus = timestamp.RevocationStatus,
+                RevocationStatusUtc = timestamp.RevocationStatusUtc,
+                ConfirmingRevocationLists = await ReadAllAsync(timestamp.ConfirmingRevocationListHashes, resolved, cancellationToken),
+                ConfirmationNotBeforeUtc = timestamp.ConfirmationNotBeforeUtc,
+                ConfirmationFailure = timestamp.ConfirmationFailure
+            });
         }
 
         return CompletedAnchor.From(anchor, timestamps);

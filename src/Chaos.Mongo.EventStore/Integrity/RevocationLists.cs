@@ -1,0 +1,50 @@
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// This file is licensed under the MIT license. See LICENSE in the project root for more information.
+namespace Chaos.Mongo.EventStore.Integrity;
+
+/// <summary>
+/// The CRLs that confirm the revocation status of a certificate chain at a time, or the information that a CRL
+/// available today was issued too early to do so.
+/// </summary>
+internal sealed class RevocationLists
+{
+    private RevocationLists(IReadOnlyList<Byte[]> lists, DateTimeOffset? nextUpdate)
+    {
+        Lists = lists;
+        NextUpdate = nextUpdate;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a distribution point offers only a CRL issued too early.
+    /// </summary>
+    public Boolean IsIssuedTooEarly => NextUpdate is not null;
+
+    /// <summary>
+    /// Gets the CRLs, one per distribution point of the chain's non-root certificates; empty when the CRLs were issued
+    /// too early or the chain names no distribution points.
+    /// </summary>
+    public IReadOnlyList<Byte[]> Lists { get; }
+
+    /// <summary>
+    /// Gets the earliest next update among the CRLs issued too early, or <c>null</c> when the CRLs are available.
+    /// </summary>
+    public DateTimeOffset? NextUpdate { get; }
+
+    /// <summary>
+    /// Creates the result for CRLs that were all issued late enough.
+    /// </summary>
+    /// <param name="lists">The CRLs.</param>
+    /// <returns>The result.</returns>
+    public static RevocationLists Issued(IReadOnlyList<Byte[]> lists)
+    {
+        ArgumentNullException.ThrowIfNull(lists);
+        return new RevocationLists(lists, null);
+    }
+
+    /// <summary>
+    /// Creates the result for a distribution point whose current CRL was issued too early.
+    /// </summary>
+    /// <param name="nextUpdate">The earliest next update among the CRLs issued too early.</param>
+    /// <returns>The result.</returns>
+    public static RevocationLists IssuedTooEarly(DateTimeOffset nextUpdate) => new([], nextUpdate);
+}

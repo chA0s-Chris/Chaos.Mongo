@@ -67,4 +67,19 @@ internal sealed class IntegrityAnchoringOptions
     /// Gets or sets the number of valid timestamp tokens an anchor needs to complete. Defaults to 1.
     /// </summary>
     public Int32 MinimumTimestampTokens { get; set; } = 1;
+
+    /// <summary>
+    /// Gets or sets the age of the oldest timestamp token with an unconfirmed revocation status above which a run
+    /// reports the confirmation delay through a log entry and a metric. It must exceed
+    /// <see cref="RevocationGracePeriod"/>. Defaults to 72 hours, which covers the default grace period plus a daily
+    /// CRL interval with a margin.
+    /// </summary>
+    public TimeSpan RevocationConfirmationDelayThreshold { get; set; } = TimeSpan.FromHours(72);
+
+    /// <summary>
+    /// Gets or sets the time after a token's time that the CRLs confirming its revocation status must be issued at or
+    /// after, so revocations requested shortly before the token's time have reached them; confirmation starts once
+    /// it has passed. Defaults to 24 hours.
+    /// </summary>
+    public TimeSpan RevocationGracePeriod { get; set; } = TimeSpan.FromHours(24);
 }

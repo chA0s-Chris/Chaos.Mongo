@@ -48,6 +48,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     private const String TstInfoContentTypeOid = "1.2.840.113549.1.9.16.1.4";
     private readonly Boolean _alternativeTsaName;
     private readonly List<Byte[]?> _nonces = [];
+    private Int32 _crlRequests;
 
     /// <summary>
     /// Creates the authority. Its signing certificate names <paramref name="crlLocations"/> as one CRL distribution
@@ -157,6 +158,11 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public Byte[] Crl { get; }
 
     /// <summary>
+    /// Gets the number of CRL requests received so far.
+    /// </summary>
+    public Int32 CrlRequests => Volatile.Read(ref _crlRequests);
+
+    /// <summary>
     /// Gets a CRL of the authority's CA that expired before any token the authority issues.
     /// </summary>
     public Byte[] ExpiredCrl { get; }
@@ -180,6 +186,17 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Gets the self-signed root of the test CA.
     /// </summary>
     public X509Certificate2 Root { get; }
+
+    /// <summary>
+    /// Gets or sets the CRL served at every location in the modes that serve <see cref="Crl"/>, instead of it.
+    /// </summary>
+    public Byte[]? ServedCrl { get; set; }
+
+    /// <summary>
+    /// Gets the CRLs served at single locations in the modes that serve <see cref="Crl"/>, instead of it and of
+    /// <see cref="ServedCrl"/>.
+    /// </summary>
+    public IDictionary<Uri, Byte[]> ServedCrlsByLocation { get; } = new Dictionary<Uri, Byte[]>();
 
     /// <summary>
     /// Gets the authority's signing certificate, including its private key.
@@ -219,12 +236,61 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Builds a CRL of the authority's CA issued at <paramref name="thisUpdate"/>, valid until
+    /// <paramref name="nextUpdate"/> or for a week, that revokes the given certificates.
+    /// </summary>
+    public Byte[] BuildCrl(DateTimeOffset thisUpdate, DateTimeOffset? nextUpdate = null, params (Byte[] SerialNumber, DateTimeOffset RevokedAt)[] revoked)
+    {
+        var builder = new CertificateRevocationListBuilder();
+        foreach (var (serialNumber, revokedAt) in revoked)
+        {
+            builder.AddEntry(serialNumber, revokedAt);
+        }
+
+        return builder.Build(Root, BigInteger.One, nextUpdate ?? thisUpdate.AddDays(7), HashAlgorithmName.SHA256, thisUpdate: thisUpdate);
+    }
+
+    /// <summary>
+    /// Encodes an unsigned CRL of the authority's CA issued at <paramref name="thisUpdate"/> without a next update; CRL
+    /// signatures are not verified.
+    /// </summary>
+    public Byte[] BuildCrlWithoutNextUpdate(DateTimeOffset thisUpdate)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteInteger(1);
+                WriteEcdsaWithSha256(writer);
+                writer.WriteEncodedValue(Root.SubjectName.RawData);
+                writer.WriteUtcTime(thisUpdate);
+            }
+
+            WriteEcdsaWithSha256(writer);
+            writer.WriteBitString([0x00]);
+        }
+
+        return writer.Encode();
+
+        static void WriteEcdsaWithSha256(AsnWriter writer)
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
+            }
+        }
+    }
+
+    /// <summary>
     /// Creates the production authority configured against this test authority, trusting its root unless another
-    /// root is given, without revocation checks.
+    /// root is given, without revocation checks. It reads the local time from <paramref name="timeProvider"/> when
+    /// given.
     /// </summary>
     public Rfc3161TimestampAuthority CreateAuthority(X509Certificate2? trustedRoot = null,
                                                      String name = "test-tsa",
-                                                     Action<Rfc3161TimestampAuthorityOptions>? configure = null)
+                                                     Action<Rfc3161TimestampAuthorityOptions>? configure = null,
+                                                     TimeProvider? timeProvider = null)
     {
         var options = new Rfc3161TimestampAuthorityOptions
         {
@@ -235,7 +301,13 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         };
         options.TrustedRoots.Add(trustedRoot ?? Root);
         configure?.Invoke(options);
-        return new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
+        var services = new ServiceCollection();
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
+
+        return new Rfc3161TimestampAuthority(options, services.BuildServiceProvider());
     }
 
     protected override void Dispose(Boolean disposing)
@@ -301,37 +373,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
-    /// Encodes an unsigned CRL of a CA without a next update; the authority does not verify CRL signatures.
-    /// </summary>
-    private static Byte[] EncodeCrlWithoutNextUpdate(X509Certificate2 issuer)
-    {
-        var writer = new AsnWriter(AsnEncodingRules.DER);
-        using (writer.PushSequence())
-        {
-            using (writer.PushSequence())
-            {
-                writer.WriteInteger(1);
-                WriteEcdsaWithSha256(writer);
-                writer.WriteEncodedValue(issuer.SubjectName.RawData);
-                writer.WriteUtcTime(DateTimeOffset.UtcNow.AddHours(-1));
-            }
-
-            WriteEcdsaWithSha256(writer);
-            writer.WriteBitString([0x00]);
-        }
-
-        return writer.Encode();
-
-        static void WriteEcdsaWithSha256(AsnWriter writer)
-        {
-            using (writer.PushSequence())
-            {
-                writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
-            }
-        }
-    }
-
-    /// <summary>
     /// Encodes a certificate's subject as a <c>directoryName</c> general name.
     /// </summary>
     private static Byte[] EncodeDirectoryName(X509Certificate2 certificate)
@@ -374,12 +415,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         {
             Content = new ByteArrayContent(content ?? [])
         };
-
-    /// <summary>
-    /// Builds a CRL of the authority's CA issued at <paramref name="thisUpdate"/> and valid for a week.
-    /// </summary>
-    private Byte[] BuildCrl(DateTimeOffset thisUpdate)
-        => new CertificateRevocationListBuilder().Build(Root, BigInteger.One, thisUpdate.AddDays(7), HashAlgorithmName.SHA256, thisUpdate: thisUpdate);
 
     private Byte[] CreateResponse(Byte[] query)
     {
@@ -461,6 +496,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 
     private async Task<HttpResponseMessage> ServeCrlAsync(Uri uri, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _crlRequests);
         if (Mode == TestTimestampAuthorityMode.CrlHangs)
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -481,7 +517,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             case TestTimestampAuthorityMode.CrlExpired:
                 return Respond(HttpStatusCode.OK, ExpiredCrl);
             case TestTimestampAuthorityMode.CrlWithoutNextUpdate:
-                return Respond(HttpStatusCode.OK, EncodeCrlWithoutNextUpdate(Root));
+                return Respond(HttpStatusCode.OK, BuildCrlWithoutNextUpdate(DateTimeOffset.UtcNow.AddHours(-1)));
             case TestTimestampAuthorityMode.CrlIssuedInFuture:
                 return Respond(HttpStatusCode.OK, BuildCrl(DateTimeOffset.UtcNow.AddDays(1)));
             case TestTimestampAuthorityMode.CrlIssuedAfterToken:
@@ -498,7 +534,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                           ((Mode == TestTimestampAuthorityMode.CrlPrimaryUnavailable) && (uri == CrlUri));
         if (!unavailable)
         {
-            return Respond(HttpStatusCode.OK, Mode == TestTimestampAuthorityMode.CrlEmpty ? [] : Crl);
+            var served = ServedCrlsByLocation.TryGetValue(uri, out var located) ? located : ServedCrl ?? Crl;
+            return Respond(HttpStatusCode.OK, Mode == TestTimestampAuthorityMode.CrlEmpty ? [] : served);
         }
 
         return uri == CrlMirrorUri ? throw new HttpRequestException("The CRL mirror is unreachable.") : Respond(HttpStatusCode.NotFound);

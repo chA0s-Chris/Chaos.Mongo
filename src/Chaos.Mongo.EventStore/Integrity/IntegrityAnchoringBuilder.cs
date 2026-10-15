@@ -30,6 +30,11 @@ internal sealed class IntegrityAnchoringBuilder
     /// Sets the hook that is notified of every completed anchor, in anchor order and at least once. Anchors completed
     /// before a hook was configured are notified first, in order.
     /// </summary>
+    /// <remarks>
+    /// An anchor completes long before the revocation grace period of its tokens has passed, so its timestamp entries
+    /// are usually still unconfirmed when the hook receives it. The confirming CRLs are added to the stored anchor
+    /// later; the hook is not notified again.
+    /// </remarks>
     /// <param name="hook">The hook; it receives the service provider, the anchor and a cancellation token.</param>
     /// <returns>The builder for method chaining.</returns>
     public IntegrityAnchoringBuilder OnAnchorCompleted(Func<IServiceProvider, CompletedAnchor, CancellationToken, Task> hook)
@@ -81,6 +86,30 @@ internal sealed class IntegrityAnchoringBuilder
     public IntegrityAnchoringBuilder WithMinimumTimestampTokens(Int32 minimum)
     {
         Options.MinimumTimestampTokens = minimum;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the age of the oldest timestamp token with an unconfirmed revocation status above which the revocation
+    /// confirmation delay is reported. Defaults to 72 hours; it must exceed the revocation grace period.
+    /// </summary>
+    /// <param name="threshold">The threshold.</param>
+    /// <returns>The builder for method chaining.</returns>
+    public IntegrityAnchoringBuilder WithRevocationConfirmationDelayThreshold(TimeSpan threshold)
+    {
+        Options.RevocationConfirmationDelayThreshold = threshold;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the time after a token's time that the CRLs confirming its revocation status must be issued at or after.
+    /// Defaults to 24 hours.
+    /// </summary>
+    /// <param name="gracePeriod">The grace period.</param>
+    /// <returns>The builder for method chaining.</returns>
+    public IntegrityAnchoringBuilder WithRevocationGracePeriod(TimeSpan gracePeriod)
+    {
+        Options.RevocationGracePeriod = gracePeriod;
         return this;
     }
 
@@ -156,6 +185,11 @@ internal sealed class IntegrityAnchoringBuilder
         if (Options.Interval <= TimeSpan.Zero || Options.DelayThreshold <= TimeSpan.Zero || Options.MaxLeavesPerAnchor < 1)
         {
             throw new InvalidOperationException("The anchoring interval, the delay threshold and the maximum number of leaves must be positive.");
+        }
+
+        if (Options.RevocationGracePeriod <= TimeSpan.Zero || Options.RevocationConfirmationDelayThreshold <= Options.RevocationGracePeriod)
+        {
+            throw new InvalidOperationException("The revocation grace period must be positive and less than the revocation confirmation delay threshold.");
         }
     }
 }

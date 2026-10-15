@@ -35,6 +35,11 @@ using System.Security.Cryptography;
 ///     discarded long ago; under the lock, a prepared attempt belongs to a crashed or superseded run. A run does not
 ///     loop, so a backlog drains at one anchor per run.
 ///     </para>
+///     <para>
+///     After the phases, whatever their outcome and even when they throw, a run confirms the revocation status of
+///     stored tokens whose grace period has passed (see <see cref="TimestampRevocationConfirmer"/>); only a lost lock
+///     skips it. Confirmation therefore does not block anchoring, and a failing anchoring phase does not starve it.
+///     </para>
 /// </remarks>
 internal sealed class AnchoringRun
 {
@@ -47,6 +52,7 @@ internal sealed class AnchoringRun
 
     private const Int32 LeafInsertBatchSize = 1_000;
     private readonly IReadOnlyList<ITimestampAuthority> _authorities;
+    private readonly TimestampRevocationConfirmer _confirmer;
     private readonly AnchorEvidenceStore _evidence;
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
@@ -80,6 +86,7 @@ internal sealed class AnchoringRun
         _notifier = notifier;
         _store = new AnchorStore(mongoHelper, options);
         _evidence = new AnchorEvidenceStore(mongoHelper, options);
+        _confirmer = new TimestampRevocationConfirmer(_store, _evidence, authorities, options, timeProvider, logger);
     }
 
     /// <summary>
@@ -88,6 +95,16 @@ internal sealed class AnchoringRun
     /// point leaves it set, so the anchor delay can still be reported.
     /// </summary>
     internal DateTime? LastReadOldestCandidateUtc { get; private set; }
+
+    /// <summary>
+    /// Gets or sets the number of anchors whose due entries the revocation confirmation of one run reads at most. Tests
+    /// lower it.
+    /// </summary>
+    internal Int32 MaximumConfirmationAnchorsPerRun
+    {
+        get => _confirmer.MaximumAnchorsPerRun;
+        set => _confirmer.MaximumAnchorsPerRun = value;
+    }
 
     /// <summary>
     /// Gets or sets a callback invoked after each phase. Tests use it to abort a run after any phase and resume
@@ -117,7 +134,24 @@ internal sealed class AnchoringRun
         await _store.CleanUpDiscardedAsync(_timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
         var notified = await NotifyAsync(runLock, cancellationToken);
 
-        var result = await RunPhasesAsync(runLock, cancellationToken);
+        AnchoringRunResult result;
+        try
+        {
+            result = await RunPhasesAsync(runLock, cancellationToken);
+        }
+        catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
+        {
+            // An anchoring failure can repeat on every run, for example for an anchor that cannot be stored, and must
+            // not keep stored tokens from being confirmed; the run still fails afterwards.
+            await ConfirmRevocationAsync(runLock, cancellationToken);
+            throw;
+        }
+
+        if (result.Outcome != AnchoringRunOutcome.LockLost)
+        {
+            await ConfirmRevocationAsync(runLock, cancellationToken);
+        }
+
         if (notified)
         {
             // A hook that failed before the run is retried on the next run, not again in this one.
@@ -153,6 +187,12 @@ internal sealed class AnchoringRun
         {
             throw new ArgumentException("The maximum number of leaves and the candidate batch size must be positive.", nameof(options));
         }
+
+        if (options.RevocationGracePeriod <= TimeSpan.Zero || options.RevocationConfirmationDelayThreshold <= options.RevocationGracePeriod)
+        {
+            throw new ArgumentException("The revocation grace period must be positive and less than the revocation confirmation delay threshold.",
+                                        nameof(options));
+        }
     }
 
     private async Task CommitAsync(AnchorRecord anchor, AnchorCandidateBatch lastBatch, CancellationToken cancellationToken)
@@ -168,6 +208,27 @@ internal sealed class AnchoringRun
                                                        await _source.AcknowledgeAsync(session, lastBatch, ct);
                                                    },
                                                    cancellationToken: cancellationToken);
+
+    /// <summary>
+    /// Confirms the revocation status of due tokens unless the lock was lost. A failure is logged and retried by the
+    /// next run, so it never fails the run.
+    /// </summary>
+    private async Task ConfirmRevocationAsync(IMongoLock runLock, CancellationToken cancellationToken)
+    {
+        if (!runLock.IsValid)
+        {
+            return;
+        }
+
+        try
+        {
+            await _confirmer.ConfirmAsync(ct => EnsureLockAsync(runLock, ct), cancellationToken);
+        }
+        catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
+        {
+            _logger.LogError(ex, "Confirming the revocation status of timestamps failed; it is retried with the next run");
+        }
+    }
 
     private async Task<Boolean> EnsureLockAsync(IMongoLock runLock, CancellationToken cancellationToken)
     {

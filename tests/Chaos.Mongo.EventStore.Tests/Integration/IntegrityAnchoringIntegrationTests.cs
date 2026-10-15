@@ -325,6 +325,39 @@ public class IntegrityAnchoringIntegrationTests
     }
 
     [Test]
+    public async Task RunOnceAsync_FailingRunWithUnconfirmedTimestamp_StillReportsTheConfirmationDelay()
+    {
+        using var metrics = new AnchoringMetricsCollector();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()), timeProvider: timeProvider);
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+        await context.AppendStreamAsync(1);
+        await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.Outcome == AnchoringRunOutcome.Completed);
+        timeProvider.Advance(TimeSpan.FromHours(73));
+        context.ServiceProvider.GetRequiredService<AnchoringRun>().PhaseCompleted = (phase, _) =>
+            phase == AnchoringPhase.CandidatesRead ? throw new InvalidOperationException("The run failed.") : Task.CompletedTask;
+        await context.AppendStreamAsync(1);
+
+        var reported = false;
+        await WaitUntilAsync(async () =>
+        {
+            var before = CountExceeded();
+            if (await service.RunOnceAsync(CancellationToken.None) is not null)
+            {
+                return false;
+            }
+
+            reported = CountExceeded() > before;
+            return true;
+        });
+
+        reported.Should().BeTrue();
+
+        Int32 CountExceeded() => metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayExceededInstrument);
+    }
+
+    [Test]
     public async Task RunOnceAsync_FailingRun_LogsErrorForTheNextRunToRetry()
     {
         var logger = new CapturingLogger<IntegrityAnchoringService>();
@@ -400,6 +433,35 @@ public class IntegrityAnchoringIntegrationTests
         logger.Entries.Should().NotContain(entry => entry.Level == LogLevel.Warning);
         metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayInstrument);
         metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument);
+    }
+
+    [Test]
+    public async Task RunOnceAsync_UnconfirmedTimestamp_RecordsTheConfirmationDelayAndAlertsAboveTheThreshold()
+    {
+        var logger = new CapturingLogger<IntegrityAnchoringService>();
+        using var metrics = new AnchoringMetricsCollector();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()),
+                                               timeProvider: timeProvider,
+                                               configureServices: services => services.AddSingleton<ILogger<IntegrityAnchoringService>>(logger));
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+        await context.AppendStreamAsync(1);
+
+        await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.Outcome == AnchoringRunOutcome.Completed);
+
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayInstrument);
+        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayExceededInstrument);
+        logger.Entries.Should().NotContain(entry => entry.Level == LogLevel.Warning);
+
+        // The CRL the authority serves stays issued too early, so the token remains unconfirmed.
+        timeProvider.Advance(TimeSpan.FromHours(73));
+        await service.RunOnceAsync(CancellationToken.None);
+
+        logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("above the revocation confirmation delay threshold"));
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayExceededInstrument);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayInstrument &&
+                                                             measurement.Value > TimeSpan.FromHours(72).TotalSeconds);
     }
 
     [Test]
