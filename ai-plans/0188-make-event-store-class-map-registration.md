@@ -10,11 +10,11 @@ The goal is to build all missing event class maps in memory, validate them toget
 
 ## Acceptance Criteria
 
-- [ ] When registration fails because two event class maps share a discriminator, because a configured event type uses the reserved erasure discriminator, either through `WithEvent` or through its pre-registered class map, or because a class map maps the reserved `_integrity` element, no event class map of that call is registered, including intermediate class maps and class maps of event types that would have passed on their own.
-- [ ] After such a failure, a retry in the same process with corrected options (a changed discriminator, or without the offending event type) succeeds, and its events round-trip with the discriminators configured for the retry.
-- [ ] Discriminator uniqueness is checked across registered and pending class maps together, so a pending class map that collides with a class map of an earlier registration or of the consumer is still rejected.
-- [ ] Successful registrations behave as before: same discriminators, same stored members, pre-registered class maps used unchanged, and the existing event store tests still pass.
-- [ ] Automated tests cover each failure case above and the corrected retry.
+- [x] When registration fails because two event class maps share a discriminator, because a configured event type uses the reserved erasure discriminator, either through `WithEvent` or through its pre-registered class map, or because a class map maps the reserved `_integrity` element, no event class map of that call is registered, including intermediate class maps and class maps of event types that would have passed on their own.
+- [x] After such a failure caused by the call's own options, a retry in the same process with corrected options (a changed discriminator, or without the offending event type) succeeds, and its events round-trip with the discriminators configured for the retry. A failure caused by a class map the consumer registered beforehand cannot be retried in the same process, because that class map stays registered.
+- [x] Discriminator uniqueness is checked across registered and pending class maps together, so a pending class map that collides with a class map of an earlier registration or of the consumer is still rejected.
+- [x] Successful registrations behave as before: same discriminators, same stored members, pre-registered class maps used unchanged, and the existing event store tests still pass.
+- [x] Automated tests cover each failure case above and the corrected retry.
 
 ## Technical Details
 
