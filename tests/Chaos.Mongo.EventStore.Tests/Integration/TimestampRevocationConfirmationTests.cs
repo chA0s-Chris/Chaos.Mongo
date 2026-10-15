@@ -29,7 +29,12 @@ public class TimestampRevocationConfirmationTests
         fixture.TestAuthority.ServedCrl = fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
         fixture.TestAuthority.Mode = crlUnavailable ? TestTimestampAuthorityMode.CrlUnavailable : TestTimestampAuthorityMode.Valid;
         fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(2));
-        var confirmer = new TimestampRevocationConfirmer(fixture.Store, [fixture.Authority], fixture.Options, fixture.Time, fixture.Logger);
+        var confirmer = new TimestampRevocationConfirmer(fixture.Store,
+                                                         new AnchorEvidenceStore(fixture.Context.MongoHelper, fixture.Options),
+                                                         [fixture.Authority],
+                                                         fixture.Options,
+                                                         fixture.Time,
+                                                         fixture.Logger);
         var lockChecks = 0;
 
         // The check before the authority is asked succeeds; the one after it answers fails.
@@ -184,6 +189,8 @@ public class TimestampRevocationConfirmationTests
         var confirmed = await fixture.ReadTimestampAsync(anchor);
         confirmed.RevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed);
         confirmed.ConfirmingRevocationLists.Should().ContainSingle().Which.Should().Equal(crl);
+        (await fixture.ReadAnchorAsync(anchor)).Timestamps.Single().ConfirmingRevocationListHashes
+                                               .Should().ContainSingle().Which.Should().Equal(SHA256.HashData(crl), "the entry references the CRL in the evidence store");
         confirmed.CertificateRevocationLists.Should().ContainSingle().Which.Should().Equal(fixture.TestAuthority.Crl);
         confirmed.RevocationStatusUtc.Should().BeCloseTo(fixture.Time.GetUtcNow().UtcDateTime, TimeSpan.FromMilliseconds(1));
         confirmed.ConfirmationFailure.Should().BeNull();
@@ -457,6 +464,10 @@ public class TimestampRevocationConfirmationTests
         public async Task<AnchorRecord> ReadAnchorAsync(AnchorRecord anchor)
             => await Store.FindAsync(anchor.Id, CancellationToken.None) ?? throw new InvalidOperationException("The anchor is gone.");
 
-        public async Task<AnchorTimestamp> ReadTimestampAsync(AnchorRecord anchor) => (await ReadAnchorAsync(anchor)).Timestamps.Single();
+        /// <summary>
+        /// Reads the only timestamp of a completed anchor with its evidence resolved.
+        /// </summary>
+        public async Task<AnchorTimestamp> ReadTimestampAsync(AnchorRecord anchor)
+            => (await new AnchorEvidenceResolver(Context.MongoHelper, Options).ResolveAsync(await ReadAnchorAsync(anchor))).Timestamps.Single();
     }
 }

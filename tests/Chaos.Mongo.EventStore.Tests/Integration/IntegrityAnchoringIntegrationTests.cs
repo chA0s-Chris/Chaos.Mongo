@@ -14,6 +14,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using Testcontainers.MongoDb;
 
 /// <summary>
@@ -110,6 +111,45 @@ public class IntegrityAnchoringIntegrationTests
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [Test]
+    public async Task NotifyAsync_EvidenceMissing_KeepsTheAnchorUnnotifiedUntilItCanBeResolved()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        var store = GetStore(context);
+        var evidence = new AnchorEvidenceStore(context.MongoHelper, options);
+        var stream = await context.AppendStreamAsync(1);
+        await RunUntilAsync(context.ServiceProvider.GetRequiredService<AnchoringRun>(), _ => IsAnchoredAsync(store, stream));
+        await evidence.Evidence.DeleteOneAsync(new BsonDocument("_id", new BsonBinaryData(SHA256.HashData(testAuthority.Crl))));
+        var notified = new List<CompletedAnchor>();
+        var logger = new CapturingLogger<AnchorCompletionNotifier>();
+        var notifier = new AnchorCompletionNotifier(context.MongoHelper,
+                                                    options,
+                                                    context.ServiceProvider.GetRequiredService<IServiceScopeFactory>(),
+                                                    (_, anchor, _) =>
+                                                    {
+                                                        notified.Add(anchor);
+                                                        return Task.CompletedTask;
+                                                    },
+                                                    TimeProvider.System,
+                                                    logger);
+
+        var whileMissing = await notifier.NotifyAsync(_ => Task.FromResult(true), CancellationToken.None);
+        var unnotified = await store.FindFirstUnnotifiedAsync(CancellationToken.None);
+        await evidence.StoreAsync(testAuthority.Crl, CancellationToken.None);
+        var afterRestoring = await notifier.NotifyAsync(_ => Task.FromResult(true), CancellationToken.None);
+
+        whileMissing.Should().BeFalse();
+        unnotified.Should().NotBeNull();
+        logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Error && entry.Message.Contains("cannot be resolved"));
+        afterRestoring.Should().BeTrue();
+        notified.Should().ContainSingle().Which.Timestamps.Should().ContainSingle()
+                .Which.CertificateRevocationLists.Should().ContainSingle()
+                .Which.Should().Equal(testAuthority.Crl);
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None)).Should().BeNull();
+    }
 
     [TestCase(false)]
     [TestCase(true)]

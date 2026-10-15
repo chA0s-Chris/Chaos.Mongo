@@ -79,7 +79,7 @@ Long-term validation closes the gap with a grace period: once it has passed, the
 
 ### Storage, options and diagnostics
 
-- `AnchorTimestamp` gains the confirming CRLs, the revocation status, its recording time and the confirmation failures. They are stored the same way as the stamping-time CRLs, so #171's content-addressed evidence store can take both: whichever of #171 and this issue lands second moves both. Until #171 lands, confirmation roughly doubles the CRL bytes embedded per entry.
+- The stored timestamp entry (`AnchorTimestampReference`, from #171) gains the revocation status, its recording time, the confirmation failures, the next attempt time and the confirming CRLs as SHA-256 references. #171 landed first, so confirming CRLs go into its content-addressed evidence store like the stamping-time CRLs, stored before the entry references them; the resolved `AnchorTimestamp` carries their bytes.
 - `IntegrityAnchoringOptions` and `IntegrityAnchoringBuilder` gain the grace period and the unconfirmed-delay threshold. The 72-hour default covers the 24-hour grace period plus one daily CRL interval with a margin.
 - `IntegrityAnchoringDiagnostics` gains three instruments (new): the age of the oldest unconfirmed entry, a counter of runs above the threshold, and a counter of entries marked revoked. `IntegrityAnchoringService` reports them like the anchor delay.
 - The completion hook is unchanged. Its documentation states that a `CompletedAnchor`'s entries are usually unconfirmed when it is delivered, and that confirming CRLs are read from the store and, later, through #160.

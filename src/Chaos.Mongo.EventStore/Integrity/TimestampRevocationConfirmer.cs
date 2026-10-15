@@ -4,7 +4,6 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using Microsoft.Extensions.Logging;
 using System.Formats.Asn1;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 /// <summary>
@@ -44,23 +43,27 @@ internal sealed class TimestampRevocationConfirmer
     internal static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromHours(1);
 
     private readonly IReadOnlyDictionary<String, ITimestampAuthority> _authorities;
+    private readonly AnchorEvidenceStore _evidence;
     private readonly ILogger _logger;
     private readonly IntegrityAnchoringOptions _options;
     private readonly AnchorStore _store;
     private readonly TimeProvider _timeProvider;
 
     public TimestampRevocationConfirmer(AnchorStore store,
+                                        AnchorEvidenceStore evidence,
                                         IReadOnlyList<ITimestampAuthority> authorities,
                                         IntegrityAnchoringOptions options,
                                         TimeProvider timeProvider,
                                         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(authorities);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _store = store;
+        _evidence = evidence;
         _authorities = authorities.ToDictionary(authority => authority.Name);
         _options = options;
         _timeProvider = timeProvider;
@@ -88,7 +91,7 @@ internal sealed class TimestampRevocationConfirmer
                                                               now,
                                                               MaximumAnchorsPerRun,
                                                               cancellationToken);
-        foreach (var chain in due.GroupBy(timestamp => (timestamp.Authority, ChainKey: GetChainKey(timestamp.CertificateChain))))
+        foreach (var chain in due.GroupBy(timestamp => (timestamp.Authority, ChainKey: GetChainKey(timestamp.CertificateChainHashes))))
         {
             var timestamps = chain.OrderBy(timestamp => timestamp.TimestampUtc).ToList();
             if (!await ensureLock(cancellationToken))
@@ -98,7 +101,7 @@ internal sealed class TimestampRevocationConfirmer
 
             // Entries that became due while their chain waits wait with it, which also keeps them out of the bounded
             // read until then.
-            if (await _store.FindChainDeferralAsync(chain.Key.Authority, timestamps[0].CertificateChain, now, cancellationToken) is { } deferredUntil)
+            if (await _store.FindChainDeferralAsync(chain.Key.Authority, timestamps[0].CertificateChainHashes, now, cancellationToken) is { } deferredUntil)
             {
                 await _store.DeferTimestampConfirmationAsync(timestamps, deferredUntil, cancellationToken);
                 continue;
@@ -129,8 +132,8 @@ internal sealed class TimestampRevocationConfirmer
         return null;
     }
 
-    private static String GetChainKey(IReadOnlyList<Byte[]> certificateChain)
-        => String.Join(":", certificateChain.Select(certificate => Convert.ToHexString(SHA256.HashData(certificate))));
+    private static String GetChainKey(IReadOnlyList<Byte[]> certificateChainHashes)
+        => String.Join(":", certificateChainHashes.Select(Convert.ToHexString));
 
     /// <summary>
     /// Asks the authority for CRLs of one chain and records the outcome on its due entries, unless the run's lock was
@@ -146,7 +149,8 @@ internal sealed class TimestampRevocationConfirmer
         var issuedNotBefore = timestamps[0].TimestampUtc + _options.RevocationGracePeriod;
         try
         {
-            var result = await authority.GetRevocationListsAsync(timestamps[0].CertificateChain,
+            var certificateChain = await ReadChainAsync(timestamps[0].CertificateChainHashes, cancellationToken);
+            var result = await authority.GetRevocationListsAsync(certificateChain,
                                                                  new DateTimeOffset(issuedNotBefore, TimeSpan.Zero),
                                                                  cancellationToken);
 
@@ -166,7 +170,7 @@ internal sealed class TimestampRevocationConfirmer
                 return true;
             }
 
-            await RecordStatusesAsync(authority, timestamps, result.Lists, issuedNotBefore, now, cancellationToken);
+            await RecordStatusesAsync(authority, timestamps, certificateChain, result.Lists, issuedNotBefore, now, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -185,12 +189,29 @@ internal sealed class TimestampRevocationConfirmer
     }
 
     /// <summary>
+    /// Reads a chain's certificates from the evidence store.
+    /// </summary>
+    /// <exception cref="AnchorEvidenceException">Thrown when a certificate is missing or does not match its hash.</exception>
+    private async Task<IReadOnlyList<Byte[]>> ReadChainAsync(IReadOnlyList<Byte[]> certificateChainHashes, CancellationToken cancellationToken)
+    {
+        var certificates = new List<Byte[]>(certificateChainHashes.Count);
+        foreach (var hash in certificateChainHashes)
+        {
+            certificates.Add(await _evidence.ReadAsync(hash, cancellationToken));
+        }
+
+        return certificates;
+    }
+
+    /// <summary>
     /// Confirms every entry whose required issue time the CRLs meet, as revoked when an entry of them revokes a
-    /// certificate of the chain at or before the token's time.
+    /// certificate of the chain at or before the token's time. The CRLs are stored in the evidence store before the
+    /// entries reference them.
     /// </summary>
     /// <exception cref="InvalidDataException">Thrown when a returned CRL was issued too early or is malformed.</exception>
     private async Task RecordStatusesAsync(ITimestampAuthority authority,
                                            IReadOnlyList<UnconfirmedTimestamp> timestamps,
+                                           IReadOnlyList<Byte[]> certificateChain,
                                            IReadOnlyList<Byte[]> lists,
                                            DateTime issuedNotBefore,
                                            DateTime now,
@@ -229,12 +250,18 @@ internal sealed class TimestampRevocationConfirmer
         }
 
         var statuses = timestamps.Where(timestamp => timestamp.TimestampUtc + _options.RevocationGracePeriod <= issuedAt)
-                                 .Select(timestamp => (Timestamp: timestamp, Revoked: FindRevokedCertificate(timestamp.CertificateChain, entries, timestamp.TimestampUtc)))
+                                 .Select(timestamp => (Timestamp: timestamp, Revoked: FindRevokedCertificate(certificateChain, entries, timestamp.TimestampUtc)))
                                  .ToList();
+        var listHashes = new List<Byte[]>(lists.Count);
+        foreach (var crl in lists)
+        {
+            listHashes.Add(await _evidence.StoreAsync(crl, cancellationToken));
+        }
+
         await _store.ConfirmTimestampsAsync(statuses.Select(status => (status.Timestamp,
                                                                        status.Revoked is null ? TimestampRevocationStatus.Confirmed : TimestampRevocationStatus.Revoked))
                                                     .ToList(),
-                                            lists,
+                                            listHashes,
                                             now,
                                             cancellationToken);
         foreach (var (timestamp, revoked) in statuses.Where(status => status.Revoked is not null))

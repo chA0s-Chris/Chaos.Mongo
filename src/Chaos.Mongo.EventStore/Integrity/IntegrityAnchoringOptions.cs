@@ -9,6 +9,18 @@ namespace Chaos.Mongo.EventStore.Integrity;
 internal sealed class IntegrityAnchoringOptions
 {
     /// <summary>
+    /// Gets or sets the name of the collection that holds the chunks of evidence items too large to store inline.
+    /// Defaults to <c>"IntegrityAnchorEvidenceChunks"</c>.
+    /// </summary>
+    public String AnchorEvidenceChunksCollectionName { get; set; } = "IntegrityAnchorEvidenceChunks";
+
+    /// <summary>
+    /// Gets or sets the name of the collection that holds the tokens, certificates and CRLs of anchor timestamps,
+    /// addressed by their SHA-256. Defaults to <c>"IntegrityAnchorEvidence"</c>.
+    /// </summary>
+    public String AnchorEvidenceCollectionName { get; set; } = "IntegrityAnchorEvidence";
+
+    /// <summary>
     /// Gets or sets the name of the collection that holds the leaves and inclusion proofs of anchors.
     /// Defaults to <c>"IntegrityAnchorLeaves"</c>.
     /// </summary>

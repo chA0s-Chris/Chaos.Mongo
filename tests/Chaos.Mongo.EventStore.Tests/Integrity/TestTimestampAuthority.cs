@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integrity;
 
 using Chaos.Mongo.EventStore.Integrity;
 using Microsoft.Extensions.DependencyInjection;
+using System.Buffers.Binary;
 using System.Formats.Asn1;
 using System.Net;
 using System.Numerics;
@@ -58,6 +59,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// of <paramref name="rsaKeySize"/> bits when given. With
     /// <paramref name="duplicateKeyUsage"/> the signer carries its key usage extension twice, and with an alternative
     /// TSA name its subject alternative names extension carries <paramref name="rawAlternativeNames"/> when given.
+    /// The CA's CRL lists <paramref name="revokedCertificates"/> revoked certificates, about 28 bytes each, so tests
+    /// can capture large CRLs.
     /// </summary>
     public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                   Byte[]? rawCrlDistributionPoints = null,
@@ -69,7 +72,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   Byte[]? rawKeyUsage = null,
                                   Boolean duplicateKeyUsage = false,
                                   Byte[]? rawAlternativeNames = null,
-                                  Int32? rsaKeySize = null)
+                                  Int32? rsaKeySize = null,
+                                  Int32 revokedCertificates = 0)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
@@ -132,7 +136,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             : null;
         var certificate = patched ?? issued;
         SigningCertificate = ecdsaKey is not null ? certificate.CopyWithPrivateKey(ecdsaKey) : certificate.CopyWithPrivateKey(rsaKey!);
-        Crl = new CertificateRevocationListBuilder().Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
+        Crl = BuildRevocationList(revokedCertificates, notBefore).Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
         ExpiredCrl = new CertificateRevocationListBuilder().Build(Root,
                                                                   BigInteger.One,
                                                                   DateTimeOffset.UtcNow.AddDays(-1),
@@ -331,6 +335,20 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
 
         return Task.FromResult(Respond(HttpStatusCode.NotFound));
+    }
+
+    private static CertificateRevocationListBuilder BuildRevocationList(Int32 revokedCertificates, DateTimeOffset revokedAt)
+    {
+        var builder = new CertificateRevocationListBuilder();
+        var serialNumber = new Byte[9];
+        serialNumber[0] = 0x01;
+        for (var index = 0L; index < revokedCertificates; index++)
+        {
+            BinaryPrimitives.WriteInt64BigEndian(serialNumber.AsSpan(1), index);
+            builder.AddEntry(serialNumber, revokedAt);
+        }
+
+        return builder;
     }
 
     /// <summary>

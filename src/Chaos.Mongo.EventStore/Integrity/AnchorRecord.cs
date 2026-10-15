@@ -20,7 +20,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="PeriodStartUtc">The start of the anchored period.</param>
 /// <param name="PeriodEndUtc">The end of the anchored period: the commit time of the newest candidate.</param>
 /// <param name="OldestCandidateUtc">The oldest commit time among the anchor's candidates.</param>
-/// <param name="Timestamps">The valid timestamp tokens obtained so far.</param>
+/// <param name="Timestamps">The valid timestamp tokens obtained so far, referencing their evidence.</param>
 /// <param name="AuthorityFailures">The failed attempts per authority.</param>
 /// <param name="CreatedUtc">The time the attempt created the anchor.</param>
 /// <param name="CompletedUtc">The time the anchor completed, or <c>null</c> before.</param>
@@ -37,7 +37,7 @@ internal sealed record AnchorRecord(
     DateTime PeriodStartUtc,
     DateTime PeriodEndUtc,
     DateTime OldestCandidateUtc,
-    IReadOnlyList<AnchorTimestamp> Timestamps,
+    IReadOnlyList<AnchorTimestampReference> Timestamps,
     IReadOnlyList<AnchorAuthorityFailure> AuthorityFailures,
     DateTime CreatedUtc,
     DateTime? CompletedUtc);

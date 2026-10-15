@@ -3,9 +3,9 @@
 namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
-/// A timestamp token stored on an anchor, with the evidence captured when it was obtained and the CRLs that later
-/// confirm its chain's revocation status. RFC 4998 renewal can later append re-timestamping entries to an anchor's
-/// list.
+/// A timestamp token of an anchor with the evidence captured when it was obtained and, once confirmed, the CRLs that
+/// confirm its chain's revocation status, resolved from its <see cref="AnchorTimestampReference"/> so a handed-out
+/// anchor is self-contained.
 /// </summary>
 /// <param name="Authority">The name of the authority that issued the token.</param>
 /// <param name="Token">The raw RFC 3161 token.</param>
@@ -28,7 +28,7 @@ internal sealed record AnchorTimestamp(
 
     /// <summary>
     /// Gets the time before which confirmation is not attempted again, because the CRLs available at the last attempt
-    /// were issued too early; <c>null</c> when no attempt found that.
+    /// were issued too early or the attempt failed; <c>null</c> when no attempt was deferred.
     /// </summary>
     public DateTime? ConfirmationNotBeforeUtc { get; init; }
 
