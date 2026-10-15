@@ -148,6 +148,7 @@ public static class MongoBuilderExtensions
         builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
         builder.Services.AddSingleton(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp => new SealingAnchorLookup(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton(sp => new AnchorEvidenceResolver(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp =>
         {
             var timeProvider = sp.GetService<TimeProvider>() ?? TimeProvider.System;

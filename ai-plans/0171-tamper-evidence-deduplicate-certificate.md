@@ -10,14 +10,14 @@ This change moves tokens, certificates and CRLs into a content-addressed evidenc
 
 ## Acceptance Criteria
 
-- [ ] Tokens, certificates and CRLs are stored once per distinct content in a new evidence store keyed by their SHA-256. An anchor's timestamp entries hold only references to them besides the authority name and times, preserving the order and any duplicates within a chain or CRL list.
-- [ ] An anchor whose authorities' evidence together is well beyond 16 MiB is created and completed, and its anchor document holds no token, certificate or CRL bytes.
-- [ ] Evidence shared across anchors and authorities is stored once: consecutive anchors stamped with unchanged chains and CRLs add no certificate or CRL documents, and two authorities that share a certificate or CRL store it once.
-- [ ] An evidence item larger than the MongoDB document limit is stored and resolved byte-identical.
-- [ ] Storing evidence is idempotent and crash-safe: an attempt that stores evidence partially, including part of a chunked item, and fails before referencing it leaves the anchor retryable, and a later run completes it.
-- [ ] The completion hook's `CompletedAnchor`, and an anchor resolved through a new internal evidence resolver, are self-contained: their tokens, chains and CRLs are byte-identical to what the authority returned.
-- [ ] Resolving an anchor fails with a clear error when referenced evidence is missing or does not match its hash.
-- [ ] Existing anchoring, notification and lookup tests pass, adapted only where they read evidence bytes from `AnchorRecord`, and automated tests cover the criteria above.
+- [x] Tokens, certificates and CRLs are stored once per distinct content in a new evidence store keyed by their SHA-256. An anchor's timestamp entries hold only references to them besides the authority name and times, preserving the order and any duplicates within a chain or CRL list.
+- [x] An anchor whose authorities' evidence together is well beyond 16 MiB is created and completed, and its anchor document holds no token, certificate or CRL bytes.
+- [x] Evidence shared across anchors and authorities is stored once: consecutive anchors stamped with unchanged chains and CRLs add no certificate or CRL documents, and two authorities that share a certificate or CRL store it once.
+- [x] An evidence item larger than the MongoDB document limit is stored and resolved byte-identical.
+- [x] Storing evidence is idempotent and crash-safe: an attempt that stores evidence partially, including part of a chunked item, and fails before referencing it leaves the anchor retryable, and a later run completes it.
+- [x] The completion hook's `CompletedAnchor`, and an anchor resolved through a new internal evidence resolver, are self-contained: their tokens, chains and CRLs are byte-identical to what the authority returned.
+- [x] Resolving an anchor fails with a clear error when referenced evidence is missing or does not match its hash.
+- [x] Existing anchoring, notification and lookup tests pass, adapted only where they read evidence bytes from `AnchorRecord`, and automated tests cover the criteria above.
 
 ## Technical Details
 

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using NUnit.Framework;
+using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using Testcontainers.MongoDb;
 
@@ -46,6 +47,20 @@ public class AnchoringRunTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    public async Task ResolveAsync_AnchorAwaitingTimestamps_ThrowsArgumentException()
+    {
+        var context = await CreateContextAsync();
+        var testAuthority = CreateTestAuthority();
+        testAuthority.Mode = TestTimestampAuthorityMode.Unreachable;
+        await context.AppendStreamAsync(1);
+
+        var awaiting = (await RunUntilAsync(CreateRun(context, testAuthority.CreateAuthority()), AnchoringRunOutcome.AwaitingTimestamps)).Anchor!;
+
+        await FluentActions.Invoking(() => CreateResolver(context).ResolveAsync(awaiting)).Should().ThrowAsync<ArgumentException>();
+        await FluentActions.Invoking(() => CreateResolver(context).ResolveAsync(null!)).Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Test]
     public async Task RunAsync_AttemptDiscardedBeforeCommit_FailsAndLeavesCandidatesForTheNextRun()
     {
         var context = await CreateContextAsync();
@@ -64,6 +79,28 @@ public class AnchoringRunTests
         (await ReadLeavesAsync(store, anchors)).Should().ContainSingle(leaf => leaf.AggregateId == stream);
         (await store.Anchors.CountDocumentsAsync(new BsonDocument(AnchorStore.StatusField, nameof(AnchorStatus.Discarded)))).Should().Be(1);
         (await store.Leaves.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(anchors[0].LeafCount);
+    }
+
+    [Test]
+    public async Task RunAsync_ChainWithRepeatedCrl_ReferencesItsEvidenceInOrderWithDuplicates()
+    {
+        var context = await CreateContextAsync();
+        var testAuthority = CreateTestAuthority(new TestTimestampAuthority(rawCrlDistributionPoints: TestTimestampAuthority.EncodeDistributionPoints(
+                                                                               [TestTimestampAuthority.CrlUri.AbsoluteUri],
+                                                                               [TestTimestampAuthority.CrlMirrorUri.AbsoluteUri])));
+        await context.AppendStreamAsync(1);
+
+        var anchor = (await RunUntilAsync(CreateRun(context, testAuthority.CreateAuthority()), AnchoringRunOutcome.Completed)).Anchor!;
+
+        var entry = anchor.Timestamps.Should().ContainSingle().Subject;
+        entry.CertificateChainHashes.Should().BeEquivalentTo([SHA256.HashData(testAuthority.SigningCertificate.RawData), SHA256.HashData(testAuthority.Root.RawData)],
+                                                             options => options.WithStrictOrdering());
+        entry.CertificateRevocationListHashes.Should().HaveCount(2).And.AllSatisfy(hash => hash.Should().Equal(SHA256.HashData(testAuthority.Crl)));
+        var resolved = (await CreateResolver(context).ResolveAsync(anchor)).Timestamps.Should().ContainSingle().Subject;
+        resolved.CertificateChain[0].Should().Equal(testAuthority.SigningCertificate.RawData);
+        resolved.CertificateChain[1].Should().Equal(testAuthority.Root.RawData);
+        resolved.CertificateRevocationLists.Should().HaveCount(2).And.AllSatisfy(crl => crl.Should().Equal(testAuthority.Crl));
+        (await CountEvidenceAsync(context, testAuthority.Crl)).Should().Be(1);
     }
 
     [Test]
@@ -107,7 +144,7 @@ public class AnchoringRunTests
         anchors[1].PeriodStartUtc.Should().Be(anchors[0].PeriodEndUtc);
         foreach (var anchor in anchors)
         {
-            await AssertVerifiableAsync(store, anchor);
+            await AssertVerifiableAsync(context, anchor);
         }
     }
 
@@ -216,6 +253,62 @@ public class AnchoringRunTests
             .Should().Be(1, "a superseded run may still write leaves of a recently discarded attempt");
         (await store.Anchors.CountDocumentsAsync(new BsonDocument("_id", new BsonBinaryData(longDiscarded, GuidRepresentation.Standard))))
             .Should().Be(0, "attempts discarded long ago are removed together with their leaves");
+    }
+
+    [Test]
+    public async Task RunAsync_EvidencePartiallyStoredBeforeAFailure_CompletesTheAnchorOnALaterRun()
+    {
+        var context = await CreateContextAsync();
+        var store = GetStore(context);
+        var evidence = new AnchorEvidenceStore(context.MongoHelper, GetOptions(context));
+        var testAuthority = CreateTestAuthority(new TestTimestampAuthority(revokedCertificates: 200_000));
+        testAuthority.Crl.Length.Should().BeGreaterThan(AnchorEvidenceStore.ChunkSize, "the CRL must be stored in chunks");
+        testAuthority.Mode = TestTimestampAuthorityMode.Unreachable;
+        var run = CreateRun(context, testAuthority.CreateAuthority());
+        var stream = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, AnchoringRunOutcome.AwaitingTimestamps);
+
+        // An attempt that stored the first chunk of the CRL and failed before referencing it.
+        var crlHash = SHA256.HashData(testAuthority.Crl);
+        await evidence.Chunks.InsertOneAsync(new BsonDocument
+        {
+            { "_id", AnchorEvidenceStore.ChunkId(crlHash, 0) },
+            { AnchorEvidenceStore.DataField, testAuthority.Crl.AsSpan(0, AnchorEvidenceStore.ChunkSize).ToArray() }
+        });
+        testAuthority.Mode = TestTimestampAuthorityMode.Valid;
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, stream));
+
+        var anchor = (await ReadCommittedAnchorsAsync(store)).Should().ContainSingle().Subject;
+        await AssertVerifiableAsync(context, anchor);
+        (await CreateResolver(context).ResolveAsync(anchor)).Timestamps.Should().ContainSingle()
+                                                            .Which.CertificateRevocationLists.Should().ContainSingle()
+                                                            .Which.Should().Equal(testAuthority.Crl);
+        (await evidence.Chunks.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(2);
+    }
+
+    [Test]
+    public async Task RunAsync_EvidenceWellBeyond16Megabytes_CompletesAnchorWithoutEmbeddingIt()
+    {
+        var context = await CreateContextAsync();
+        var store = GetStore(context);
+        GetOptions(context).MinimumTimestampTokens = 3;
+        var testAuthorities = Enumerable.Range(0, 3).Select(_ => CreateTestAuthority(new TestTimestampAuthority(revokedCertificates: 230_000))).ToList();
+        testAuthorities.Sum(testAuthority => (Int64)testAuthority.Crl.Length).Should().BeGreaterThan(18L * 1024 * 1024);
+        var run = CreateRun(context, testAuthorities.Select((testAuthority, index) => testAuthority.CreateAuthority(name: $"tsa-{index}")).ToArray<ITimestampAuthority>());
+        await context.AppendStreamAsync(1);
+
+        var anchor = (await RunUntilAsync(run, AnchoringRunOutcome.Completed)).Anchor!;
+
+        anchor.Timestamps.Select(timestamp => timestamp.Authority).Should().Equal("tsa-0", "tsa-1", "tsa-2");
+        var size = await store.Anchors.Aggregate()
+                              .Match(new BsonDocument("_id", new BsonBinaryData(anchor.Id, GuidRepresentation.Standard)))
+                              .Project(new BsonDocument("Size", new BsonDocument("$bsonSize", "$$ROOT")))
+                              .SingleAsync();
+        size["Size"].ToInt32().Should().BeLessThan(8 * 1024, "the anchor references its evidence instead of embedding it");
+        await AssertVerifiableAsync(context, anchor);
+        var resolved = await CreateResolver(context).ResolveAsync(anchor);
+        resolved.Timestamps.Select(timestamp => timestamp.CertificateRevocationLists.Single())
+                .Should().BeEquivalentTo(testAuthorities.Select(testAuthority => testAuthority.Crl), options => options.WithStrictOrdering());
     }
 
     [TestCase(nameof(AnchoringPhase.CandidatesRead))]
@@ -351,7 +444,7 @@ public class AnchoringRunTests
             anchor.HashAlgorithm.Should().Be("SHA-256");
             anchor.Timestamps.Should().ContainSingle().Which.Authority.Should().Be("test-tsa");
             anchor.PeriodEndUtc.Should().BeOnOrAfter(anchor.PeriodStartUtc).And.BeOnOrAfter(anchor.OldestCandidateUtc);
-            await AssertVerifiableAsync(store, anchor);
+            await AssertVerifiableAsync(context, anchor);
         }
 
         (await ReadLeavesAsync(store, anchors)).Select(leaf => (leaf.AggregateId, leaf.Version))
@@ -376,7 +469,6 @@ public class AnchoringRunTests
     public async Task RunAsync_OneOfSeveralAuthoritiesFails_CompletesAtMinimumAndRecordsTheFailure()
     {
         var context = await CreateContextAsync();
-        var store = GetStore(context);
         var failing = CreateTestAuthority();
         failing.Mode = TestTimestampAuthorityMode.HttpFailure;
         var run = CreateRun(context, CreateTestAuthority().CreateAuthority(name: "reliable"), failing.CreateAuthority(name: "failing"));
@@ -390,7 +482,7 @@ public class AnchoringRunTests
                                                                                                            failure.Authority == "failing" && failure.FailureCount == 1 &&
                                                                                                            failure.LastFailure.Contains("500"));
         anchor.CompletedUtc.Should().NotBeNull();
-        await AssertVerifiableAsync(store, anchor);
+        await AssertVerifiableAsync(context, anchor);
     }
 
     [Test]
@@ -459,6 +551,32 @@ public class AnchoringRunTests
     }
 
     [Test]
+    public async Task RunAsync_UnchangedEvidence_IsStoredOnceAcrossAnchorsAndAuthorities()
+    {
+        var context = await CreateContextAsync();
+        var store = GetStore(context);
+        GetOptions(context).MinimumTimestampTokens = 2;
+        var testAuthority = CreateTestAuthority();
+        var run = CreateRun(context, testAuthority.CreateAuthority(name: "a"), testAuthority.CreateAuthority(name: "b"));
+        var first = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, first));
+        var second = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, second));
+
+        var anchors = await ReadCommittedAnchorsAsync(store);
+        anchors.Should().HaveCount(2).And.OnlyContain(anchor => anchor.Timestamps.Count == 2);
+        (await CountEvidenceAsync(context, testAuthority.SigningCertificate.RawData)).Should().Be(1);
+        (await CountEvidenceAsync(context, testAuthority.Root.RawData)).Should().Be(1);
+        (await CountEvidenceAsync(context, testAuthority.Crl)).Should().Be(1);
+        (await new AnchorEvidenceStore(context.MongoHelper, GetOptions(context)).Evidence.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty))
+            .Should().Be(7, "four tokens besides the shared signing certificate, root and CRL");
+        foreach (var anchor in anchors)
+        {
+            await AssertVerifiableAsync(context, anchor);
+        }
+    }
+
+    [Test]
     public async Task RunAsync_WhileAnotherRunHoldsTheLock_IsSkipped()
     {
         var context = await CreateContextAsync();
@@ -498,9 +616,9 @@ public class AnchoringRunTests
         _testAuthorities.Clear();
     }
 
-    private static async Task AssertVerifiableAsync(AnchorStore store, AnchorRecord anchor)
+    private static async Task AssertVerifiableAsync(LedgerStoreContext context, AnchorRecord anchor)
     {
-        var leaves = await store.ReadLeavesAsync(anchor.Id, CancellationToken.None);
+        var leaves = await GetStore(context).ReadLeavesAsync(anchor.Id, CancellationToken.None);
         leaves.Should().HaveCount(anchor.LeafCount);
         leaves.Select(leaf => leaf.Index).Should().Equal(Enumerable.Range(0, anchor.LeafCount));
         leaves.Should().OnlyContain(leaf => leaf.AnchorSequence == anchor.Sequence);
@@ -516,7 +634,8 @@ public class AnchoringRunTests
 
         AnchorEncoding.ComputeAnchorDigest(anchor.FormatVersion, anchor.Sequence, anchor.PreviousDigest, anchor.MerkleRoot)
                       .Should().Equal(anchor.AnchorDigest);
-        foreach (var timestamp in anchor.Timestamps)
+        var resolved = await CreateResolver(context).ResolveAsync(anchor);
+        foreach (var timestamp in resolved.Timestamps)
         {
             Rfc3161TimestampToken.TryDecode(timestamp.Token, out var token, out _).Should().BeTrue();
             token!.TokenInfo.GetMessageHash().ToArray().Should().Equal(anchor.AnchorDigest);
@@ -524,6 +643,12 @@ public class AnchoringRunTests
             timestamp.CertificateRevocationLists.Should().ContainSingle();
         }
     }
+
+    private static Task<Int64> CountEvidenceAsync(LedgerStoreContext context, Byte[] data)
+        => new AnchorEvidenceStore(context.MongoHelper, GetOptions(context)).Evidence
+                                                                            .CountDocumentsAsync(new BsonDocument("_id", new BsonBinaryData(SHA256.HashData(data))));
+
+    private static AnchorEvidenceResolver CreateResolver(LedgerStoreContext context) => new(context.MongoHelper, GetOptions(context));
 
     private static AnchoringRun CreateRun(LedgerStoreContext context, params ITimestampAuthority[] authorities)
         => CreateRun(context, context.CandidateSource, authorities);
@@ -633,9 +758,9 @@ public class AnchoringRunTests
         return context;
     }
 
-    private TestTimestampAuthority CreateTestAuthority()
+    private TestTimestampAuthority CreateTestAuthority(TestTimestampAuthority? testAuthority = null)
     {
-        var testAuthority = new TestTimestampAuthority();
+        testAuthority ??= new TestTimestampAuthority();
         _testAuthorities.Add(testAuthority);
         return testAuthority;
     }

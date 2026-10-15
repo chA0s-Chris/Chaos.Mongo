@@ -3,8 +3,9 @@
 namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
-/// A completed anchor as passed to the completion hook: its stored fields and tokens, without its leaves. A hook that
-/// needs the leaves, for example to replicate them to WORM storage, streams them through <see cref="AnchorLeafReader"/>.
+/// A completed anchor as passed to the completion hook: its stored fields and its tokens with their evidence, without
+/// its leaves; it is resolved through <see cref="AnchorEvidenceResolver"/>. A hook that needs the leaves, for example
+/// to replicate them to WORM storage, streams them through <see cref="AnchorLeafReader"/>.
 /// </summary>
 /// <param name="Id">The anchor identifier.</param>
 /// <param name="Sequence">The position in the chain of anchors.</param>
@@ -39,17 +40,26 @@ internal sealed record CompletedAnchor(
     DateTime CompletedUtc)
 {
     /// <summary>
-    /// Creates the hook payload from a completed anchor.
+    /// Creates the self-contained anchor from a completed anchor and its resolved timestamps.
     /// </summary>
     /// <param name="anchor">The completed anchor.</param>
-    /// <returns>The payload.</returns>
-    /// <exception cref="ArgumentException">Thrown when the anchor is not completed.</exception>
-    public static CompletedAnchor From(AnchorRecord anchor)
+    /// <param name="timestamps">The anchor's timestamps with their evidence, in the anchor's order.</param>
+    /// <returns>The self-contained anchor.</returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown when the anchor is not completed or the timestamps do not match the anchor's entries.
+    /// </exception>
+    public static CompletedAnchor From(AnchorRecord anchor, IReadOnlyList<AnchorTimestamp> timestamps)
     {
         ArgumentNullException.ThrowIfNull(anchor);
+        ArgumentNullException.ThrowIfNull(timestamps);
         if (anchor is not { Status: AnchorStatus.Completed, CompletedUtc: { } completedUtc })
         {
             throw new ArgumentException("The anchor is not completed.", nameof(anchor));
+        }
+
+        if (!timestamps.Select(timestamp => timestamp.Authority).SequenceEqual(anchor.Timestamps.Select(timestamp => timestamp.Authority)))
+        {
+            throw new ArgumentException("The timestamps do not match the anchor's entries.", nameof(timestamps));
         }
 
         return new CompletedAnchor(anchor.Id,
@@ -63,7 +73,7 @@ internal sealed record CompletedAnchor(
                                    anchor.PeriodStartUtc,
                                    anchor.PeriodEndUtc,
                                    anchor.OldestCandidateUtc,
-                                   anchor.Timestamps,
+                                   timestamps,
                                    anchor.AuthorityFailures,
                                    anchor.CreatedUtc,
                                    completedUtc);

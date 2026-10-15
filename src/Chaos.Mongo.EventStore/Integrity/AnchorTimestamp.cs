@@ -3,8 +3,8 @@
 namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
-/// A timestamp token stored on an anchor, with the evidence captured when it was obtained. RFC 4998 renewal can
-/// later append re-timestamping entries to an anchor's list.
+/// A timestamp token of an anchor with the evidence captured when it was obtained, resolved from its
+/// <see cref="AnchorTimestampReference"/> so a handed-out anchor is self-contained.
 /// </summary>
 /// <param name="Authority">The name of the authority that issued the token.</param>
 /// <param name="Token">The raw RFC 3161 token.</param>

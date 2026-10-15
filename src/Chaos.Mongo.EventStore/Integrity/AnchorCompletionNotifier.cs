@@ -9,16 +9,18 @@ using Microsoft.Extensions.Logging;
 /// Passes completed anchors to the application's completion hook, in sequence order and at least once.
 /// </summary>
 /// <remarks>
-/// An anchor is marked notified only after the hook returns. A failing hook is logged and retried on the next run,
-/// and later anchors are not notified before it succeeds; anchoring itself continues. Each hook call runs in its own
-/// dependency-injection scope. The run's lock is checked before each anchor and kept alive while a hook runs; when
-/// the lease cannot be extended, the hook is cancelled and its anchor stays unnotified, so a slow hook keeps the lock
-/// instead of outliving it while another instance notifies the same anchors.
+/// An anchor is marked notified only after the hook returns. A failing hook, or evidence that cannot be resolved, is
+/// logged and retried on the next run, and later anchors are not notified before it succeeds; anchoring itself
+/// continues. Each hook call runs in its own dependency-injection scope. The run's lock is checked before each anchor
+/// and kept alive while its evidence is resolved and its hook runs; when the lease cannot be extended, the hook is
+/// cancelled and its anchor stays unnotified, so a slow hook keeps the lock instead of outliving it while another
+/// instance notifies the same anchors.
 /// </remarks>
 internal sealed class AnchorCompletionNotifier
 {
     private readonly Func<IServiceProvider, CompletedAnchor, CancellationToken, Task> _hook;
     private readonly ILogger _logger;
+    private readonly AnchorEvidenceResolver _resolver;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AnchorStore _store;
     private readonly TimeProvider _timeProvider;
@@ -35,6 +37,7 @@ internal sealed class AnchorCompletionNotifier
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _store = new AnchorStore(mongoHelper, options);
+        _resolver = new AnchorEvidenceResolver(mongoHelper, options);
         _scopeFactory = scopeFactory;
         _hook = hook;
         _timeProvider = timeProvider;
@@ -95,8 +98,9 @@ internal sealed class AnchorCompletionNotifier
         var keepAlive = KeepLockAliveAsync(ensureLockAsync, hookCancellation, hookCompleted.Token);
         try
         {
+            var completed = await _resolver.ResolveAsync(anchor, hookCancellation.Token);
             await using var scope = _scopeFactory.CreateAsyncScope();
-            await _hook(scope.ServiceProvider, CompletedAnchor.From(anchor), hookCancellation.Token);
+            await _hook(scope.ServiceProvider, completed, hookCancellation.Token);
 
             // A hook that observes the cancellation and returns normally may have abandoned its work as well.
             if (hookCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -110,6 +114,12 @@ internal sealed class AnchorCompletionNotifier
         catch (OperationCanceledException) when (hookCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             LogLockLost(anchor);
+            return false;
+        }
+        catch (AnchorEvidenceException ex)
+        {
+            _logger.LogError(ex, "The evidence of anchor {AnchorSequence} cannot be resolved; it and later anchors are notified on a later run",
+                             anchor.Sequence);
             return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)

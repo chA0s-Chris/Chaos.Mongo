@@ -65,10 +65,11 @@ internal sealed class AnchorStore
     public IMongoCollection<BsonDocument> Leaves => _mongoHelper.Database.GetCollection<BsonDocument>(_options.AnchorLeavesCollectionName);
 
     /// <summary>
-    /// Appends a validated token unless the authority already delivered one for the anchor.
+    /// Appends a validated token, whose evidence is already stored, unless the authority already delivered one for the
+    /// anchor.
     /// </summary>
     /// <returns><c>true</c> when the token was added.</returns>
-    public async Task<Boolean> AddTimestampAsync(Guid anchorId, AnchorTimestamp timestamp, CancellationToken cancellationToken)
+    public async Task<Boolean> AddTimestampAsync(Guid anchorId, AnchorTimestampReference timestamp, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(timestamp);
         var filter = ById(anchorId, AnchorStatus.AwaitingTimestamp);
@@ -449,11 +450,11 @@ internal sealed class AnchorStore
                document["LastFailure"].AsString,
                document["LastFailureUtc"].ToUniversalTime());
 
-    private static AnchorTimestamp ReadTimestamp(BsonDocument document)
+    private static AnchorTimestampReference ReadTimestamp(BsonDocument document)
         => new(document[AuthorityField].AsString,
-               document["Token"].AsByteArray,
-               ReadBinaries(document["CertificateChain"]),
-               ReadBinaries(document["CertificateRevocationLists"]),
+               document["TokenHash"].AsByteArray,
+               ReadBinaries(document["CertificateChainHashes"]),
+               ReadBinaries(document["CertificateRevocationListHashes"]),
                document["TimestampUtc"].ToUniversalTime(),
                document["ObtainedUtc"].ToUniversalTime());
 
@@ -468,13 +469,13 @@ internal sealed class AnchorStore
             { "LastFailureUtc", failure.LastFailureUtc }
         };
 
-    private static BsonDocument ToBson(AnchorTimestamp timestamp)
+    private static BsonDocument ToBson(AnchorTimestampReference timestamp)
         => new()
         {
             { AuthorityField, timestamp.Authority },
-            { "Token", timestamp.Token },
-            { "CertificateChain", new BsonArray(timestamp.CertificateChain.Select(certificate => new BsonBinaryData(certificate))) },
-            { "CertificateRevocationLists", new BsonArray(timestamp.CertificateRevocationLists.Select(crl => new BsonBinaryData(crl))) },
+            { "TokenHash", timestamp.TokenHash },
+            { "CertificateChainHashes", new BsonArray(timestamp.CertificateChainHashes.Select(hash => new BsonBinaryData(hash))) },
+            { "CertificateRevocationListHashes", new BsonArray(timestamp.CertificateRevocationListHashes.Select(hash => new BsonBinaryData(hash))) },
             { "TimestampUtc", timestamp.TimestampUtc },
             { "ObtainedUtc", timestamp.ObtainedUtc }
         };

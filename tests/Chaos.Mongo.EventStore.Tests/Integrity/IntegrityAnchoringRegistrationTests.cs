@@ -83,6 +83,7 @@ public class IntegrityAnchoringRegistrationTests
         services.GetRequiredService<AnchoringRun>().Should().NotBeNull();
         services.GetRequiredService<AnchorLeafReader>().Should().NotBeNull();
         services.GetRequiredService<SealingAnchorLookup>().Should().NotBeNull();
+        services.GetRequiredService<AnchorEvidenceResolver>().Should().NotBeNull();
     }
 
     [Test]
