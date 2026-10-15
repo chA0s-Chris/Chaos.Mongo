@@ -47,6 +47,7 @@ internal sealed class AnchoringRun
 
     private const Int32 LeafInsertBatchSize = 1_000;
     private readonly IReadOnlyList<ITimestampAuthority> _authorities;
+    private readonly AnchorEvidenceStore _evidence;
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
     private readonly AnchorCompletionNotifier? _notifier;
@@ -78,6 +79,7 @@ internal sealed class AnchoringRun
         _logger = logger;
         _notifier = notifier;
         _store = new AnchorStore(mongoHelper, options);
+        _evidence = new AnchorEvidenceStore(mongoHelper, options);
     }
 
     /// <summary>
@@ -389,12 +391,7 @@ internal sealed class AnchoringRun
                 continue;
             }
 
-            var timestamp = new AnchorTimestamp(authority.Name,
-                                                token.Token,
-                                                token.CertificateChain,
-                                                token.CertificateRevocationLists,
-                                                token.Timestamp.UtcDateTime,
-                                                _timeProvider.GetUtcNow().UtcDateTime);
+            var timestamp = await StoreEvidenceAsync(authority.Name, token, _timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
             if (await _store.AddTimestampAsync(anchor.Id, timestamp, cancellationToken))
             {
                 tokens++;
@@ -409,6 +406,28 @@ internal sealed class AnchoringRun
         _logger.LogInformation("Anchor {AnchorSequence} with {LeafCount} leaves completed with {TokenCount} timestamp tokens",
                                anchor.Sequence, anchor.LeafCount, tokens);
         return true;
+    }
+
+    /// <summary>
+    /// Stores the token and its evidence before the anchor references them, so an anchor never references evidence
+    /// that is not complete.
+    /// </summary>
+    private async Task<AnchorTimestampReference> StoreEvidenceAsync(String authority, TimestampToken token, DateTime obtainedUtc, CancellationToken cancellationToken)
+    {
+        var tokenHash = await _evidence.StoreAsync(token.Token, cancellationToken);
+        var certificateHashes = new List<Byte[]>(token.CertificateChain.Count);
+        foreach (var certificate in token.CertificateChain)
+        {
+            certificateHashes.Add(await _evidence.StoreAsync(certificate, cancellationToken));
+        }
+
+        var crlHashes = new List<Byte[]>(token.CertificateRevocationLists.Count);
+        foreach (var crl in token.CertificateRevocationLists)
+        {
+            crlHashes.Add(await _evidence.StoreAsync(crl, cancellationToken));
+        }
+
+        return new AnchorTimestampReference(authority, tokenHash, certificateHashes, crlHashes, token.Timestamp.UtcDateTime, obtainedUtc);
     }
 
     private sealed record CandidateRead(IReadOnlyList<AnchorCandidate> Heads, AnchorCandidateBatch LastBatch, DateTime OldestUtc, DateTime NewestUtc);
