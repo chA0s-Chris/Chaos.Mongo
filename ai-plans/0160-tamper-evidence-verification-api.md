@@ -33,12 +33,12 @@ The work stays one issue because the format freeze, the verification semantics, 
 
 ### Layer 3: Checkpoints and read model
 
-- [ ] Checkpoints of protected stores record the chain hash of the event at their version. Checkpoints of unprotected stores are stored unchanged. An erasure rebuild keeps the recorded hash.
-- [ ] With protection enabled, a `CheckpointDocument<TAggregate>` class map that a consumer registered before the event store fails at registration with an error naming the reason, and the class-map registry stays unchanged. A class map the event store registered itself, for example in an earlier registration in the same process, is reused.
-- [ ] A derived-data check reports every checkpoint whose recorded hash differs from the event hash at its version. A checkpoint without a recorded hash is reported as unverifiable, not as a failure.
-- [ ] The derived-data check replays the stream from its start and reports a read model that differs from the replayed state. In the same pass, it reports every checkpoint whose state differs from the replayed state at its version.
-- [ ] The derived-data check requires an intact chain. Otherwise it reports the stream verification failure and compares nothing.
-- [ ] Automated tests cover the behavior above, including a manipulated read model, a manipulated checkpoint state, a checkpoint moved to another version, and a stream with erased personal data.
+- [x] Checkpoints of protected stores record the chain hash of the event at their version. Checkpoints of unprotected stores are stored unchanged. An erasure rebuild keeps the recorded hash.
+- [x] With protection enabled, a `CheckpointDocument<TAggregate>` class map that a consumer registered before the event store fails at registration with an error naming the reason, and the class-map registry stays unchanged. A class map the event store registered itself, for example in an earlier registration in the same process, is reused.
+- [x] A derived-data check reports every checkpoint whose recorded hash differs from the event hash at its version. A checkpoint without a recorded hash is reported as unverifiable, not as a failure.
+- [x] The derived-data check replays the stream from its start and reports a read model that differs from the replayed state. In the same pass, it reports every checkpoint whose state differs from the replayed state at its version.
+- [x] The derived-data check requires an intact chain. Otherwise it reports the stream verification failure and compares nothing.
+- [x] Automated tests cover the behavior above, including a manipulated read model, a manipulated checkpoint state, a checkpoint moved to another version, and a stream with erased personal data.
 
 ### Layer 4: Completeness check
 

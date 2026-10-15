@@ -306,6 +306,13 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                         ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
                         : eventDocuments;
 
+                    // The checkpoint records the chain hash of the event at its version, a state-changing event of this
+                    // batch, so it can be validated against the stream later.
+                    if (checkpoint is not null && _options.IntegrityProtectionEnabled)
+                    {
+                        checkpoint.ChainHash = eventList.First(e => e.Version == checkpoint.Id.Version).Integrity?.Hash;
+                    }
+
                     // Documents always exist when the bulk write is enabled; the null check only proves it.
                     if (_options.BulkWriteOptimizationEnabled && documents is not null)
                     {

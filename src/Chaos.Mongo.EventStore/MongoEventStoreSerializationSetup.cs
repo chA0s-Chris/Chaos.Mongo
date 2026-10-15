@@ -6,6 +6,7 @@ using Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
+using System.Collections.Concurrent;
 
 /// <summary>
 /// Handles BsonClassMap registration for aggregates and events, including discriminator configuration
@@ -14,6 +15,13 @@ using MongoDB.Bson.Serialization.Serializers;
 public static class MongoEventStoreSerializationSetup
 {
     private static readonly GuidSerializer GuidStandardSerializer = new(GuidRepresentation.Standard);
+
+    /// <summary>
+    /// The checkpoint class maps the event store registered itself. Class maps are process-global, so later
+    /// registrations, for example in a separate container, reuse them, while a class map registered by a consumer is
+    /// rejected under protection.
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, Boolean> OwnCheckpointClassMaps = new();
 
     /// <summary>
     /// Ensures a <see cref="GuidSerializer"/> with <see cref="GuidRepresentation.Standard"/> is registered globally.
@@ -61,6 +69,8 @@ public static class MongoEventStoreSerializationSetup
                 "itself. Register the concrete or intermediate observational event types instead.",
                 nameof(options));
         }
+
+        EnsureCheckpointClassMapOwned(options);
 
         // Register the concrete aggregate type
         var aggregateType = typeof(TAggregate);
@@ -180,7 +190,8 @@ public static class MongoEventStoreSerializationSetup
             });
         }
 
-        // Register CheckpointDocument<TAggregate>
+        // Register CheckpointDocument<TAggregate>. The chain hash is mapped regardless of whether protection is enabled,
+        // so a protected store can reuse a class map registered for an unprotected one.
         var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
         if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
         {
@@ -188,7 +199,11 @@ public static class MongoEventStoreSerializationSetup
             {
                 cm.AutoMap();
                 cm.MapIdMember(c => c.Id);
+                cm.MapMember(c => c.ChainHash)
+                  .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
+                  .SetIgnoreIfNull(true);
             });
+            OwnCheckpointClassMaps.TryAdd(checkpointDocumentType, true);
         }
     }
 
@@ -259,6 +274,27 @@ public static class MongoEventStoreSerializationSetup
             $"The class map of {declaringType.Name} for aggregate type {typeof(TAggregate).Name} was registered before the " +
             $"event store and does not map the {nameof(IAggregate.Revision)} member, which the event store requires. " +
             $"Map {nameof(IAggregate.Revision)}, for example with AutoMap().");
+    }
+
+    /// <summary>
+    /// Under protection, checkpoints record the chain hash in a non-public member that only the event store's own
+    /// class map maps. A checkpoint class map registered by a consumer is rejected before anything is registered.
+    /// </summary>
+    private static void EnsureCheckpointClassMapOwned<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
+        if (!options.IntegrityProtectionEnabled ||
+            !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
+            OwnCheckpointClassMaps.ContainsKey(checkpointDocumentType))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Integrity protection is enabled for aggregate type {typeof(TAggregate).Name}, but the class map of " +
+            $"{nameof(CheckpointDocument<TAggregate>)} was registered before the event store. Checkpoints record their chain hash " +
+            "through the event store's own class map; let the event store register it.");
     }
 
     private static void EnsureEventBaseMapsIntegrity<TAggregate>(MongoEventStoreOptions<TAggregate> options)
