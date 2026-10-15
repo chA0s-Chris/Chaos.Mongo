@@ -34,7 +34,9 @@ public class IntegrityAnchoringRegistrationTests
                                                                                           .WithInterval(TimeSpan.FromMinutes(1))
                                                                                           .WithDelayThreshold(TimeSpan.FromMinutes(30))
                                                                                           .WithMinimumTimestampTokens(2)
-                                                                                          .WithMaxLeavesPerAnchor(10))
+                                                                                          .WithMaxLeavesPerAnchor(10)
+                                                                                          .WithRevocationGracePeriod(TimeSpan.FromHours(48))
+                                                                                          .WithRevocationConfirmationDelayThreshold(TimeSpan.FromHours(96)))
                                             .Services.BuildServiceProvider();
 
         var options = services.GetRequiredService<IntegrityAnchoringOptions>();
@@ -43,6 +45,8 @@ public class IntegrityAnchoringRegistrationTests
         options.DelayThreshold.Should().Be(TimeSpan.FromMinutes(30));
         options.MinimumTimestampTokens.Should().Be(2);
         options.MaxLeavesPerAnchor.Should().Be(10);
+        options.RevocationGracePeriod.Should().Be(TimeSpan.FromHours(48));
+        options.RevocationConfirmationDelayThreshold.Should().Be(TimeSpan.FromHours(96));
         services.GetRequiredService<AnchoringRun>().Should().NotBeNull();
     }
 
@@ -77,6 +81,8 @@ public class IntegrityAnchoringRegistrationTests
         options.DelayThreshold.Should().Be(TimeSpan.FromHours(1));
         options.MinimumTimestampTokens.Should().Be(1);
         options.MaxLeavesPerAnchor.Should().Be(100_000);
+        options.RevocationGracePeriod.Should().Be(TimeSpan.FromHours(24));
+        options.RevocationConfirmationDelayThreshold.Should().Be(TimeSpan.FromHours(72));
         services.GetRequiredService<IAnchorCandidateSource>().Should().BeOfType<ChangeStreamAnchorCandidateSource>();
         services.GetServices<IHostedService>().Should().ContainSingle(service => service is IntegrityAnchoringHostedService);
         services.GetServices<IMongoConfigurator>().Should().ContainSingle(configurator => configurator is IntegrityAnchoringConfigurator);
@@ -92,6 +98,18 @@ public class IntegrityAnchoringRegistrationTests
                                                                                      .WithRfc3161TimestampAuthority("tsa", AuthorityUri));
 
         act.Should().Throw<ArgumentException>().WithMessage("*'tsa' is used more than once*");
+    }
+
+    [TestCase(0, 72)]
+    [TestCase(24, 24)]
+    [TestCase(48, 24)]
+    public void WithIntegrityAnchoring_InvalidRevocationSettings_ThrowsInvalidOperationException(Int32 gracePeriodHours, Int32 thresholdHours)
+    {
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+                                                                                     .WithRevocationGracePeriod(TimeSpan.FromHours(gracePeriodHours))
+                                                                                     .WithRevocationConfirmationDelayThreshold(TimeSpan.FromHours(thresholdHours)));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*revocation grace period must be positive and less than*");
     }
 
     [Test]

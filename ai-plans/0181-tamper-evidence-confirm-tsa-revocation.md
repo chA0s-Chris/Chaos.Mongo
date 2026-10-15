@@ -10,21 +10,21 @@ Long-term validation closes the gap with a grace period: once it has passed, the
 
 ## Acceptance Criteria
 
-- [ ] After a configurable grace period (default 24 hours) following a token's time, an anchoring run obtains CRLs for every CRL distribution point of the entry's non-root chain certificates. It accepts only CRLs whose `thisUpdate` is at or after the token's time plus the grace period. Until such CRLs are available for every point, the entry stays unconfirmed and later runs retry.
-- [ ] A CRL that passes the checks but was issued too early leaves the entry unconfirmed. It does not count as a failure or log a warning, and the entry's chain is not requested again before that CRL's `nextUpdate` or one hour later, whichever comes first. Download errors, and CRLs that fail the checks at every location of a point, count as failures and are logged.
-- [ ] Confirming CRLs pass the same checks as stamping-time CRLs: a single DER-encoded CRL of the expected issuer, stating a next update, not issued later than the local time allows, and within the response size limit. A CRL that fails these checks counts as unavailable at that location.
-- [ ] A timestamp entry stores its confirming CRLs beside the stamping-time CRLs, together with:
+- [x] After a configurable grace period (default 24 hours) following a token's time, an anchoring run obtains CRLs for every CRL distribution point of the entry's non-root chain certificates. It accepts only CRLs whose `thisUpdate` is at or after the token's time plus the grace period. Until such CRLs are available for every point, the entry stays unconfirmed and later runs retry.
+- [x] A CRL that passes the checks but was issued too early leaves the entry unconfirmed. It does not count as a failure or log a warning, and the entry's chain is not requested again before that CRL's `nextUpdate` or one hour later, whichever comes first. Download errors, and CRLs that fail the checks at every location of a point, count as failures and are logged.
+- [x] Confirming CRLs pass the same checks as stamping-time CRLs: a single DER-encoded CRL of the expected issuer, stating a next update, not issued later than the local time allows, and within the response size limit. A CRL that fails these checks counts as unavailable at that location.
+- [x] A timestamp entry stores its confirming CRLs beside the stamping-time CRLs, together with:
   - its revocation status (unconfirmed, confirmed or revoked)
   - when that status was recorded
   - the number of failed confirmation attempts and the last failure
-- [ ] When a confirming CRL lists a chain certificate as revoked at or before the token's time, the entry is marked revoked with its CRLs, an error is logged and a metric is incremented. The anchor's status does not change.
-- [ ] Confirmation does not block anchoring:
+- [x] When a confirming CRL lists a chain certificate as revoked at or before the token's time, the entry is marked revoked with its CRLs, an error is logged and a metric is incremented. The anchor's status does not change.
+- [x] Confirmation does not block anchoring:
   - anchors complete at the configured minimum of tokens, as today
   - confirmation runs in every run that holds the lock, including when the anchor awaiting timestamps cannot complete and when the anchoring phases throw; the anchoring exception still fails the run afterwards
   - a failed confirmation is logged and retried later, without failing the run or affecting other entries
-- [ ] When the oldest unconfirmed entry's token time is older than a configurable threshold (default 72 hours), this is reported through a log entry and a metric, like the anchor delay.
-- [ ] The grace period and the threshold are configurable through the anchoring builder. Registration rejects a non-positive grace period and a threshold that does not exceed the grace period.
-- [ ] Automated tests cover:
+- [x] When the oldest unconfirmed entry's token time is older than a configurable threshold (default 72 hours), this is reported through a log entry and a metric, like the anchor delay.
+- [x] The grace period and the threshold are configurable through the anchoring builder. Registration rejects a non-positive grace period and a threshold that does not exceed the grace period.
+- [x] Automated tests cover:
   - confirmation after the grace period
   - CRLs issued too early, which are retried
   - each CRL check
@@ -73,6 +73,7 @@ Long-term validation closes the gap with a grace period: once it has passed, the
 - It covers entries of `AwaitingTimestamp` and `Completed` anchors whose token time plus the grace period has passed.
 - Downloads are bounded per run. Each authority is asked once per distinct certificate chain, with the earliest `issuedNotBefore` among that chain's due entries. The CRLs it returns confirm every due entry of that chain whose `issuedNotBefore` they meet. A backlog after an outage therefore costs one download set per chain, not one per entry.
 - When a chain's CRL was issued too early, the next attempt time is recorded for that chain (per authority and chain), and the run skips the chain until then, including for entries that become due in the meantime. This is safe because a CRL that is too early for the chain's earliest due entry is too early for all later ones. The pacing therefore holds across instances. Where the time is stored, in a small state document per authority and chain or on the chain's entries, is an implementation choice. The one-hour cap is a fixed internal value; it is needed because many CAs state a `nextUpdate` days ahead while issuing CRLs daily.
+- A failed attempt defers the chain's due entries by the same one hour. A run reads due entries from a bounded number of anchors (1,000), leaving out entries whose next attempt lies in the future before the bound applies, and checks the chain's deferral by authority and certificate chain before each request. A chain that waits or keeps failing therefore cannot keep other chains' entries from being read.
 - Each entry update is filtered by the entry's unconfirmed status, which keeps updates idempotent and crash-safe. An entry is identified by its authority and token rather than by authority alone, because RFC 4998 renewal may later add more entries for the same authority.
 - `AnchorStore` gets an index that lets a run find anchors with unconfirmed entries without scanning the whole anchors collection, which grows by about 8,600 anchors a month at the default interval.
 

@@ -19,6 +19,22 @@ internal interface ITimestampAuthority
     String Name { get; }
 
     /// <summary>
+    /// Obtains the CRLs of every distribution point a stored certificate chain's non-root certificates name, each
+    /// issued no earlier than a given time, to confirm the chain's revocation status after a token's time.
+    /// </summary>
+    /// <param name="certificateChain">The DER-encoded certificates from the signing certificate to the root.</param>
+    /// <param name="issuedNotBefore">The time the CRLs must be issued at or after.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>
+    /// The CRLs, an empty list when the chain names no distribution points, or the information that a point's CRL
+    /// was issued too early.
+    /// </returns>
+    /// <exception cref="TimestampAuthorityException">Thrown when a CRL could not be obtained.</exception>
+    Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
+                                                  DateTimeOffset issuedNotBefore,
+                                                  CancellationToken cancellationToken);
+
+    /// <summary>
     /// Obtains and validates a timestamp token for a digest.
     /// </summary>
     /// <param name="digest">The digest to timestamp.</param>

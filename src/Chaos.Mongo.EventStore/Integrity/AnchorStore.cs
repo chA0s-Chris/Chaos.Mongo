@@ -31,16 +31,28 @@ internal sealed class AnchorStore
     private const String AggregateTypeField = "AggregateType";
     private const String AuthorityFailuresField = "AuthorityFailures";
     private const String AuthorityField = "Authority";
+    private const String CertificateChainField = "CertificateChain";
+    private const String CertificateRevocationListsField = "CertificateRevocationLists";
     private const String CompletedField = "CompletedUtc";
+    private const String ConfirmationFailureCountField = "ConfirmationFailureCount";
+    private const String ConfirmationNotBeforeField = "ConfirmationNotBeforeUtc";
+    private const String ConfirmingRevocationListsField = "ConfirmingRevocationLists";
     private const String DiscardedField = "DiscardedUtc";
     private const String HashField = "Hash";
     private const String IndexField = "Index";
+    private const String LastConfirmationFailureField = "LastConfirmationFailure";
+    private const String LastConfirmationFailureUtcField = "LastConfirmationFailureUtc";
     private const String LeavesByAnchorIndexName = "AnchorId_with_Index_Unique";
     private const String LeavesByStreamIndexName = "AggregateType_with_AggregateId_with_AnchorSequence_with_Version";
     private const String NotifiedField = "Notified";
+    private const String RevocationStatusField = "RevocationStatus";
+    private const String RevocationStatusUtcField = "RevocationStatusUtc";
     private const String SequenceIndexName = "Sequence_Unique";
     private const String StatusIndexName = "Status";
+    private const String TimestampUtcField = "TimestampUtc";
     private const String TimestampsField = "Timestamps";
+    private const String TokenField = "Token";
+    private const String UnconfirmedIndexName = "Unconfirmed_Sequence";
     private const String UnnotifiedIndexName = "Unnotified_Sequence";
     private const String VersionField = "Version";
     private readonly IMongoHelper _mongoHelper;
@@ -160,6 +172,46 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Records the revocation status of unconfirmed timestamp entries together with the CRLs that confirm it.
+    /// </summary>
+    /// <param name="statuses">
+    /// The entries and their status, <see cref="TimestampRevocationStatus.Confirmed"/> or
+    /// <see cref="TimestampRevocationStatus.Revoked"/>.
+    /// </param>
+    /// <param name="revocationLists">The confirming CRLs.</param>
+    /// <param name="utcNow">The current time.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    public Task ConfirmTimestampsAsync(IReadOnlyList<(UnconfirmedTimestamp Timestamp, TimestampRevocationStatus Status)> statuses,
+                                       IReadOnlyList<Byte[]> revocationLists,
+                                       DateTime utcNow,
+                                       CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(statuses);
+        ArgumentNullException.ThrowIfNull(revocationLists);
+        var lists = new BsonArray(revocationLists.Select(crl => new BsonBinaryData(crl)));
+        return UpdateUnconfirmedAsync(statuses.Select(status => (status.Timestamp, new BsonDocument("$set", new BsonDocument
+                                      {
+                                          { $"{TimestampsField}.$[entry].{RevocationStatusField}", status.Status.ToString() },
+                                          { $"{TimestampsField}.$[entry].{RevocationStatusUtcField}", utcNow },
+                                          { $"{TimestampsField}.$[entry].{ConfirmingRevocationListsField}", lists }
+                                      }))),
+                                      cancellationToken);
+    }
+
+    /// <summary>
+    /// Defers the confirmation of unconfirmed timestamp entries, because the CRLs available today were issued too early.
+    /// </summary>
+    /// <param name="timestamps">The entries.</param>
+    /// <param name="notBeforeUtc">The time before which confirmation is not attempted again.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    public Task DeferTimestampConfirmationAsync(IReadOnlyList<UnconfirmedTimestamp> timestamps, DateTime notBeforeUtc, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(timestamps);
+        var update = new BsonDocument("$set", new BsonDocument($"{TimestampsField}.$[entry].{ConfirmationNotBeforeField}", notBeforeUtc));
+        return UpdateUnconfirmedAsync(timestamps.Select(timestamp => (timestamp, update)), cancellationToken);
+    }
+
+    /// <summary>
     /// Marks every prepared attempt as discarded. Runs before a new attempt under the run lock, so a prepared anchor
     /// can only belong to a crashed or superseded attempt.
     /// </summary>
@@ -207,6 +259,14 @@ internal sealed class AnchorStore
                                                        { StatusField, nameof(AnchorStatus.Completed) },
                                                        { NotifiedField, false }
                                                    }
+                                               }),
+            cancellationToken: cancellationToken);
+        await Anchors.Indexes.CreateOneOrUpdateAsync(
+            new CreateIndexModel<BsonDocument>(new BsonDocument(SequenceField, 1),
+                                               new CreateIndexOptions<BsonDocument>
+                                               {
+                                                   Name = UnconfirmedIndexName,
+                                                   PartialFilterExpression = HasUnconfirmedTimestamp()
                                                }),
             cancellationToken: cancellationToken);
         await Leaves.Indexes.CreateOneOrUpdateAsync(
@@ -263,6 +323,53 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Finds the latest time an unconfirmed timestamp entry of an authority and certificate chain is deferred to, if it
+    /// lies beyond the current time, so the chain's entries that became due meanwhile can wait for it as well.
+    /// </summary>
+    /// <param name="authority">The name of the authority.</param>
+    /// <param name="certificateChain">The DER-encoded certificates of the chain.</param>
+    /// <param name="utcNow">The current time.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The time the chain waits for, or <c>null</c> when it does not wait.</returns>
+    public async Task<DateTime?> FindChainDeferralAsync(String authority,
+                                                        IReadOnlyList<Byte[]> certificateChain,
+                                                        DateTime utcNow,
+                                                        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        ArgumentNullException.ThrowIfNull(certificateChain);
+        var deferredEntry = new BsonDocument
+        {
+            { RevocationStatusField, nameof(TimestampRevocationStatus.Unconfirmed) },
+            { AuthorityField, authority },
+            { CertificateChainField, new BsonArray(certificateChain.Select(certificate => new BsonBinaryData(certificate))) },
+            { ConfirmationNotBeforeField, new BsonDocument("$gt", utcNow) }
+        };
+        var filter = HasUnconfirmedTimestamp();
+        filter.Add(TimestampsField, new BsonDocument("$elemMatch", deferredEntry));
+        var pipeline = new[]
+        {
+            new BsonDocument("$match", filter),
+            new BsonDocument("$project", new BsonDocument
+            {
+                { $"{TimestampsField}.{RevocationStatusField}", 1 },
+                { $"{TimestampsField}.{AuthorityField}", 1 },
+                { $"{TimestampsField}.{CertificateChainField}", 1 },
+                { $"{TimestampsField}.{ConfirmationNotBeforeField}", 1 }
+            }),
+            new BsonDocument("$unwind", $"${TimestampsField}"),
+            new BsonDocument("$match", new BsonDocument(deferredEntry.Select(element => new BsonElement($"{TimestampsField}.{element.Name}", element.Value)))),
+            new BsonDocument("$group", new BsonDocument
+            {
+                { "_id", BsonNull.Value },
+                { ConfirmationNotBeforeField, new BsonDocument("$max", $"${TimestampsField}.{ConfirmationNotBeforeField}") }
+            })
+        };
+        var result = await Anchors.Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken).FirstOrDefaultAsync(cancellationToken);
+        return result?[ConfirmationNotBeforeField].ToUniversalTime();
+    }
+
+    /// <summary>
     /// Finds the completed anchor with the lowest sequence number whose completion was not yet notified.
     /// </summary>
     public async Task<AnchorRecord?> FindFirstUnnotifiedAsync(CancellationToken cancellationToken)
@@ -291,6 +398,25 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Finds the time of the oldest timestamp token whose revocation status is unconfirmed, whether or not its
+    /// authority is still configured.
+    /// </summary>
+    /// <remarks>
+    /// No anchor is created while one awaits its timestamps, so the tokens of an anchor are older than those of every
+    /// later anchor, and the oldest unconfirmed token is one of the first anchor that holds any.
+    /// </remarks>
+    /// <returns>The token's time, or <c>null</c> when every token is confirmed.</returns>
+    public async Task<DateTime?> FindOldestUnconfirmedTimestampUtcAsync(CancellationToken cancellationToken)
+    {
+        var document = await Anchors.Find(HasUnconfirmedTimestamp())
+                                    .Sort(new BsonDocument(SequenceField, 1))
+                                    .Project(TimestampsWithoutRevocationLists())
+                                    .Limit(1)
+                                    .FirstOrDefaultAsync(cancellationToken);
+        return document is null ? null : ReadUnconfirmedTimestamps(document).Min(timestamp => timestamp.TimestampUtc);
+    }
+
+    /// <summary>
     /// Finds the leaves of a stream with at least the given version, in anchor sequence order. Leaves of discarded or
     /// uncommitted attempts are included; callers check the anchor.
     /// </summary>
@@ -309,6 +435,45 @@ internal sealed class AnchorStore
                               }),
                         ReadLeaf,
                         cancellationToken);
+
+    /// <summary>
+    /// Finds the unconfirmed timestamp entries of the given authorities whose token time lies at or before a time and
+    /// whose confirmation is not deferred beyond the current time, in anchor order, without reading their CRLs.
+    /// Deferred entries are left out before the anchors are bounded, so chains that wait or keep failing cannot take up
+    /// the bound.
+    /// </summary>
+    /// <param name="dueUtc">The latest token time to include.</param>
+    /// <param name="authorities">The names of the authorities.</param>
+    /// <param name="utcNow">The current time.</param>
+    /// <param name="maximumAnchors">The maximum number of anchors to read entries from.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The entries.</returns>
+    public async Task<IReadOnlyList<UnconfirmedTimestamp>> FindUnconfirmedTimestampsAsync(DateTime dueUtc,
+                                                                                          IReadOnlyCollection<String> authorities,
+                                                                                          DateTime utcNow,
+                                                                                          Int32 maximumAnchors,
+                                                                                          CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(authorities);
+        var filter = HasUnconfirmedTimestamp();
+        filter.Add(TimestampsField, new BsonDocument("$elemMatch", new BsonDocument
+        {
+            { RevocationStatusField, nameof(TimestampRevocationStatus.Unconfirmed) },
+            { TimestampUtcField, new BsonDocument("$lte", dueUtc) },
+            { AuthorityField, new BsonDocument("$in", new BsonArray(authorities)) },
+            { ConfirmationNotBeforeField, new BsonDocument("$not", new BsonDocument("$gt", utcNow)) }
+        }));
+        var documents = await Anchors.Find(filter)
+                                     .Sort(new BsonDocument(SequenceField, 1))
+                                     .Project(TimestampsWithoutRevocationLists())
+                                     .Limit(maximumAnchors)
+                                     .ToListAsync(cancellationToken);
+        return documents.SelectMany(ReadUnconfirmedTimestamps)
+                        .Where(timestamp => (timestamp.TimestampUtc <= dueUtc) &&
+                                            authorities.Contains(timestamp.Authority) &&
+                                            !(timestamp.ConfirmationNotBeforeUtc > utcNow))
+                        .ToList();
+    }
 
     /// <summary>
     /// Inserts leaves of a prepared attempt.
@@ -371,6 +536,38 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
+    /// Counts a failed attempt to confirm the revocation status of unconfirmed timestamp entries and defers their next
+    /// attempt.
+    /// </summary>
+    /// <param name="timestamps">The entries.</param>
+    /// <param name="failure">The message of the failure.</param>
+    /// <param name="utcNow">The current time.</param>
+    /// <param name="retryUtc">The time before which confirmation is not attempted again.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    public Task RecordTimestampConfirmationFailureAsync(IReadOnlyList<UnconfirmedTimestamp> timestamps,
+                                                        String failure,
+                                                        DateTime utcNow,
+                                                        DateTime retryUtc,
+                                                        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(timestamps);
+        ArgumentNullException.ThrowIfNull(failure);
+        var update = new BsonDocument
+        {
+            { "$inc", new BsonDocument($"{TimestampsField}.$[entry].{ConfirmationFailureCountField}", 1) },
+            {
+                "$set", new BsonDocument
+                {
+                    { $"{TimestampsField}.$[entry].{LastConfirmationFailureField}", failure },
+                    { $"{TimestampsField}.$[entry].{LastConfirmationFailureUtcField}", utcNow },
+                    { $"{TimestampsField}.$[entry].{ConfirmationNotBeforeField}", retryUtc }
+                }
+            }
+        };
+        return UpdateUnconfirmedAsync(timestamps.Select(timestamp => (timestamp, update)), cancellationToken);
+    }
+
+    /// <summary>
     /// Replaces the recorded authority failures of an anchor awaiting its timestamps.
     /// </summary>
     public Task SetAuthorityFailuresAsync(Guid anchorId, IEnumerable<AnchorAuthorityFailure> failures, CancellationToken cancellationToken)
@@ -426,6 +623,12 @@ internal sealed class AnchorStore
             { StatusField, status.ToString() }
         };
 
+    /// <summary>
+    /// Matches anchors with at least one timestamp entry whose revocation status is unconfirmed.
+    /// </summary>
+    private static BsonDocument HasUnconfirmedTimestamp()
+        => new($"{TimestampsField}.{RevocationStatusField}", nameof(TimestampRevocationStatus.Unconfirmed));
+
     private static async IAsyncEnumerable<T> ReadAllAsync<T>(IFindFluent<BsonDocument, BsonDocument> find,
                                                              Func<BsonDocument, T> read,
                                                              [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -443,19 +646,67 @@ internal sealed class AnchorStore
     private static IReadOnlyList<Byte[]> ReadBinaries(BsonValue value)
         => value.AsBsonArray.Select(item => item.AsByteArray).ToList();
 
+    private static TimestampConfirmationFailure? ReadConfirmationFailure(BsonDocument document)
+        => document.GetValue(ConfirmationFailureCountField, 0).ToInt32() is var count and > 0
+            ? new TimestampConfirmationFailure(count,
+                                               document[LastConfirmationFailureField].AsString,
+                                               document[LastConfirmationFailureUtcField].ToUniversalTime())
+            : null;
+
     private static AnchorAuthorityFailure ReadFailure(BsonDocument document)
         => new(document[AuthorityField].AsString,
                document["FailureCount"].ToInt32(),
                document["LastFailure"].AsString,
                document["LastFailureUtc"].ToUniversalTime());
 
+    private static DateTime? ReadOptionalTime(BsonDocument document, String field)
+        => document.GetValue(field, BsonNull.Value).IsBsonNull ? null : document[field].ToUniversalTime();
+
     private static AnchorTimestamp ReadTimestamp(BsonDocument document)
         => new(document[AuthorityField].AsString,
-               document["Token"].AsByteArray,
-               ReadBinaries(document["CertificateChain"]),
-               ReadBinaries(document["CertificateRevocationLists"]),
-               document["TimestampUtc"].ToUniversalTime(),
-               document["ObtainedUtc"].ToUniversalTime());
+               document[TokenField].AsByteArray,
+               ReadBinaries(document[CertificateChainField]),
+               ReadBinaries(document[CertificateRevocationListsField]),
+               document[TimestampUtcField].ToUniversalTime(),
+               document["ObtainedUtc"].ToUniversalTime())
+        {
+            RevocationStatus = Enum.Parse<TimestampRevocationStatus>(document[RevocationStatusField].AsString),
+            RevocationStatusUtc = ReadOptionalTime(document, RevocationStatusUtcField),
+            ConfirmingRevocationLists = ReadBinaries(document.GetValue(ConfirmingRevocationListsField, new BsonArray())),
+            ConfirmationNotBeforeUtc = ReadOptionalTime(document, ConfirmationNotBeforeField),
+            ConfirmationFailure = ReadConfirmationFailure(document)
+        };
+
+    /// <summary>
+    /// Reads the unconfirmed timestamp entries of an anchor document projected by
+    /// <see cref="TimestampsWithoutRevocationLists"/>.
+    /// </summary>
+    private static IEnumerable<UnconfirmedTimestamp> ReadUnconfirmedTimestamps(BsonDocument anchor)
+        => anchor[TimestampsField].AsBsonArray
+                                  .Select(item => item.AsBsonDocument)
+                                  .Where(entry => entry[RevocationStatusField].AsString == nameof(TimestampRevocationStatus.Unconfirmed))
+                                  .Select(entry => new UnconfirmedTimestamp(anchor["_id"].AsGuid,
+                                                                            anchor[SequenceField].ToInt64(),
+                                                                            entry[AuthorityField].AsString,
+                                                                            entry[TokenField].AsByteArray,
+                                                                            ReadBinaries(entry[CertificateChainField]),
+                                                                            entry[TimestampUtcField].ToUniversalTime(),
+                                                                            ReadOptionalTime(entry, ConfirmationNotBeforeField)));
+
+    /// <summary>
+    /// Projects an anchor to its identifier, sequence number and timestamp entries without their CRLs, which can be
+    /// large.
+    /// </summary>
+    private static BsonDocument TimestampsWithoutRevocationLists()
+        => new()
+        {
+            { $"{TimestampsField}.{CertificateRevocationListsField}", 0 },
+            { $"{TimestampsField}.{ConfirmingRevocationListsField}", 0 },
+            { AuthorityFailuresField, 0 },
+            { "PreviousDigest", 0 },
+            { "MerkleRoot", 0 },
+            { AnchorDigestField, 0 }
+        };
 
     private static BsonBinaryData ToBson(Guid value) => new(value, GuidRepresentation.Standard);
 
@@ -472,11 +723,13 @@ internal sealed class AnchorStore
         => new()
         {
             { AuthorityField, timestamp.Authority },
-            { "Token", timestamp.Token },
-            { "CertificateChain", new BsonArray(timestamp.CertificateChain.Select(certificate => new BsonBinaryData(certificate))) },
-            { "CertificateRevocationLists", new BsonArray(timestamp.CertificateRevocationLists.Select(crl => new BsonBinaryData(crl))) },
-            { "TimestampUtc", timestamp.TimestampUtc },
-            { "ObtainedUtc", timestamp.ObtainedUtc }
+            { TokenField, timestamp.Token },
+            { CertificateChainField, new BsonArray(timestamp.CertificateChain.Select(certificate => new BsonBinaryData(certificate))) },
+            { CertificateRevocationListsField, new BsonArray(timestamp.CertificateRevocationLists.Select(crl => new BsonBinaryData(crl))) },
+            { TimestampUtcField, timestamp.TimestampUtc },
+            { "ObtainedUtc", timestamp.ObtainedUtc },
+            { RevocationStatusField, timestamp.RevocationStatus.ToString() },
+            { ConfirmingRevocationListsField, new BsonArray(timestamp.ConfirmingRevocationLists.Select(crl => new BsonBinaryData(crl))) }
         };
 
     private static BsonDocument ToBson(AnchorLeaf leaf)
@@ -491,4 +744,34 @@ internal sealed class AnchorStore
             { HashField, leaf.Hash },
             { "Proof", new BsonArray(leaf.Proof.Select(hash => new BsonBinaryData(hash))) }
         };
+
+    /// <summary>
+    /// Updates timestamp entries that are still unconfirmed, each identified by its authority and token, so an
+    /// update applies at most once.
+    /// </summary>
+    private async Task UpdateUnconfirmedAsync(IEnumerable<(UnconfirmedTimestamp Timestamp, BsonDocument Update)> updates, CancellationToken cancellationToken)
+    {
+        var models = updates.Select(update => new UpdateOneModel<BsonDocument>(new BsonDocument("_id", ToBson(update.Timestamp.AnchorId)), update.Update)
+                            {
+                                ArrayFilters =
+                                [
+                                    new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument
+                                    {
+                                        { $"entry.{AuthorityField}", update.Timestamp.Authority },
+                                        { $"entry.{TokenField}", update.Timestamp.Token },
+                                        { $"entry.{RevocationStatusField}", nameof(TimestampRevocationStatus.Unconfirmed) }
+                                    })
+                                ]
+                            })
+                            .ToList();
+        if (models.Count > 0)
+        {
+            await Anchors.BulkWriteAsync(models,
+                                         new BulkWriteOptions
+                                         {
+                                             IsOrdered = false
+                                         },
+                                         cancellationToken);
+        }
+    }
 }

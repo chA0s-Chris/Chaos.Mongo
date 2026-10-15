@@ -170,11 +170,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 
             // Everything needed later is copied out, so the certificates can be disposed here.
             elements.AddRange(chain.ChainElements.Select(element => element.Certificate));
-            var crlSources = elements.Take(elements.Count - 1)
-                                     .SelectMany(GetCrlSources)
-                                     .DistinctBy(source => (String.Join(" ", source.Locations.Select(uri => uri.AbsoluteUri)),
-                                                            Convert.ToHexString(source.Issuer ?? [])))
-                                     .ToList();
+            var crlSources = GetCrlSources(elements.Take(elements.Count - 1));
             return new ValidatedChain(elements.Select(certificate => certificate.RawData).ToList(), crlSources);
         }
         catch (AsnContentException ex)
@@ -193,12 +189,13 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     /// <summary>
     /// Checks that a download is usable evidence: an HTTP location must point to a single DER-encoded CRL (RFC 5280,
     /// section 4.2.1.13), issued by the certificate's issuer unless the point names another CRL issuer, whose CRLs
-    /// are not checked here. It must state its next update (RFC 5280, section 5.1.2.5), which must not lie before the
-    /// token's time, and must not claim to be issued later than the local time allows. A CRL issued after the token's
-    /// time is accepted: it lists every revocation up to its issue, so it is stronger evidence for the token's time.
+    /// are not checked here. It must state its next update (RFC 5280, section 5.1.2.5), which must not lie before
+    /// <paramref name="validAt"/>, and must not claim to be issued later than the local time allows. A CRL issued after
+    /// the token's time is accepted: it lists every revocation up to its issue, so it is stronger evidence for the
+    /// token's time.
     /// </summary>
-    /// <returns><c>null</c> when the CRL is usable; otherwise the reason it is not.</returns>
-    private InvalidDataException? CheckCrl(Byte[] crl, Uri location, Byte[]? issuer, DateTimeOffset tokenTime)
+    /// <returns>The CRL's issue and next update when it is usable; otherwise the reason it is not.</returns>
+    private (CrlTimes? Times, InvalidDataException? Error) CheckCrl(Byte[] crl, Uri location, Byte[]? issuer, DateTimeOffset validAt, String validAtName)
     {
         CertificateRevocationListHeader header;
         try
@@ -207,36 +204,45 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
         catch (AsnContentException ex)
         {
-            return new InvalidDataException($"The data at {location} is not a single DER-encoded CRL.", ex);
+            return (null, new InvalidDataException($"The data at {location} is not a single DER-encoded CRL.", ex));
         }
 
         if (issuer is not null && !header.Issuer.Span.SequenceEqual(issuer))
         {
-            return new InvalidDataException($"The CRL at {location} is not issued by the issuer of the certificate that names it.");
+            return (null, new InvalidDataException($"The CRL at {location} is not issued by the issuer of the certificate that names it."));
         }
 
         if (header.NextUpdate is not { } nextUpdate)
         {
-            return new InvalidDataException($"The CRL at {location} states no next update.");
+            return (null, new InvalidDataException($"The CRL at {location} states no next update."));
         }
 
         var latestIssue = _timeProvider.GetUtcNow() + _options.MaximumClockSkew;
         if (header.ThisUpdate > latestIssue)
         {
-            return new InvalidDataException($"The CRL at {location} was issued at {header.ThisUpdate:O}, after the local time allows.");
+            return (null, new InvalidDataException($"The CRL at {location} was issued at {header.ThisUpdate:O}, after the local time allows."));
         }
 
-        return nextUpdate < tokenTime
-            ? new InvalidDataException($"The CRL at {location} expired at {nextUpdate:O}, before the token's time {tokenTime:O}.")
-            : null;
+        return nextUpdate < validAt
+            ? (null, new InvalidDataException($"The CRL at {location} expired at {nextUpdate:O}, before {validAtName} {validAt:O}."))
+            : (new CrlTimes(header.ThisUpdate, nextUpdate), null);
     }
 
     /// <summary>
-    /// Downloads the CRL of a distribution point from the first of its locations that serves a usable one.
+    /// Downloads the CRL of a distribution point from the first of its locations that serves a usable one, issued at or
+    /// after <paramref name="issuedNotBefore"/> when given. A usable CRL issued earlier is skipped, so another location
+    /// may still serve a later one.
     /// </summary>
-    private async Task<Byte[]> DownloadCrlAsync(CrlSource source, DateTimeOffset tokenTime, CancellationToken cancellationToken)
+    /// <returns>The CRL, or the earliest next update of the usable CRLs that were issued too early.</returns>
+    /// <exception cref="TimestampAuthorityException">Thrown when no location serves a usable CRL.</exception>
+    private async Task<DownloadedCrl> DownloadCrlAsync(CrlSource source,
+                                                       DateTimeOffset validAt,
+                                                       String validAtName,
+                                                       DateTimeOffset? issuedNotBefore,
+                                                       CancellationToken cancellationToken)
     {
         Exception? lastError = null;
+        DateTimeOffset? tooEarlyNextUpdate = null;
         foreach (var location in source.Locations)
         {
             try
@@ -255,11 +261,20 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
                     continue;
                 }
 
-                lastError = CheckCrl(crl, location, source.Issuer, tokenTime);
-                if (lastError is null)
+                var (times, error) = CheckCrl(crl, location, source.Issuer, validAt, validAtName);
+                if (times is null)
                 {
-                    return crl;
+                    lastError = error;
+                    continue;
                 }
+
+                if (times.ThisUpdate < issuedNotBefore)
+                {
+                    tooEarlyNextUpdate = tooEarlyNextUpdate < times.NextUpdate ? tooEarlyNextUpdate : times.NextUpdate;
+                    continue;
+                }
+
+                return new DownloadedCrl(crl, null);
             }
             catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
             {
@@ -267,7 +282,9 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             }
         }
 
-        throw Fail($"the CRL at {String.Join(", ", source.Locations)} could not be downloaded.", lastError);
+        return tooEarlyNextUpdate is { } nextUpdate
+            ? new DownloadedCrl(null, nextUpdate)
+            : throw Fail($"the CRL at {String.Join(", ", source.Locations)} could not be downloaded.", lastError);
     }
 
     private TimestampAuthorityException Fail(String message, Exception? innerException = null)
@@ -289,6 +306,69 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
 
         return points.Select(point => new CrlSource(point.Locations, point.NamesCrlIssuer ? null : certificate.IssuerName.RawData)).ToList();
+    }
+
+    /// <summary>
+    /// Gets the distinct CRLs the distribution points of certificates name.
+    /// </summary>
+    private IReadOnlyList<CrlSource> GetCrlSources(IEnumerable<X509Certificate2> certificates)
+        => certificates.SelectMany(GetCrlSources)
+                       .DistinctBy(source => (String.Join(" ", source.Locations.Select(uri => uri.AbsoluteUri)),
+                                              Convert.ToHexString(source.Issuer ?? [])))
+                       .ToList();
+
+    /// <summary>
+    /// Gets the distinct CRLs the distribution points of a stored chain's non-root certificates name.
+    /// </summary>
+    private IReadOnlyList<CrlSource> GetCrlSources(IReadOnlyList<Byte[]> certificateChain)
+    {
+        var certificates = new List<X509Certificate2>();
+        try
+        {
+            foreach (var certificate in certificateChain.Take(certificateChain.Count - 1))
+            {
+                certificates.Add(X509CertificateLoader.LoadCertificate(certificate));
+            }
+
+            return GetCrlSources(certificates);
+        }
+        catch (CryptographicException ex)
+        {
+            throw Fail("a certificate of the stored chain is malformed.", ex);
+        }
+        catch (AsnContentException ex)
+        {
+            throw Fail("a certificate of the stored chain has a malformed CRL distribution point.", ex);
+        }
+        finally
+        {
+            foreach (var certificate in certificates)
+            {
+                certificate.Dispose();
+            }
+        }
+    }
+
+    private async Task<RevocationLists> GetRevocationListsCoreAsync(IReadOnlyList<Byte[]> certificateChain,
+                                                                    DateTimeOffset issuedNotBefore,
+                                                                    CancellationToken cancellationToken)
+    {
+        var crls = new List<Byte[]>();
+        DateTimeOffset? tooEarlyNextUpdate = null;
+        foreach (var source in GetCrlSources(certificateChain))
+        {
+            var downloaded = await DownloadCrlAsync(source, issuedNotBefore, "the required issue time", issuedNotBefore, cancellationToken);
+            if (downloaded.Crl is { } crl)
+            {
+                crls.Add(crl);
+            }
+            else
+            {
+                tooEarlyNextUpdate = tooEarlyNextUpdate < downloaded.NextUpdate ? tooEarlyNextUpdate : downloaded.NextUpdate;
+            }
+        }
+
+        return tooEarlyNextUpdate is { } nextUpdate ? RevocationLists.IssuedTooEarly(nextUpdate) : RevocationLists.Issued(crls);
     }
 
     /// <summary>
@@ -343,6 +423,23 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         }
     }
 
+    /// <summary>
+    /// Runs one attempt bounded by <see cref="Rfc3161TimestampAuthorityOptions.AttemptTimeout"/>.
+    /// </summary>
+    private async Task<T> RunAttemptAsync<T>(Func<CancellationToken, Task<T>> attempt, CancellationToken cancellationToken)
+    {
+        using var attemptSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        attemptSource.CancelAfter(_options.AttemptTimeout);
+        try
+        {
+            return await attempt(attemptSource.Token);
+        }
+        catch (OperationCanceledException ex) when (attemptSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw Fail($"the attempt exceeded the attempt timeout of {_options.AttemptTimeout}.", ex);
+        }
+    }
+
     private async Task<TimestampToken> TimestampCoreAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
     {
         var request = Rfc3161TimestampRequest.CreateFromHash(digest,
@@ -371,7 +468,8 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
         var crls = new List<Byte[]>();
         foreach (var source in chain.CrlSources)
         {
-            crls.Add(await DownloadCrlAsync(source, token.TokenInfo.Timestamp, cancellationToken));
+            var downloaded = await DownloadCrlAsync(source, token.TokenInfo.Timestamp, "the token's time", null, cancellationToken);
+            crls.Add(downloaded.Crl ?? throw new InvalidOperationException("A CRL download without a minimum issue time returned no CRL."));
         }
 
         return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp);
@@ -536,6 +634,15 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     }
 
     /// <inheritdoc/>
+    public Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
+                                                         DateTimeOffset issuedNotBefore,
+                                                         CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(certificateChain);
+        return RunAttemptAsync(attemptToken => GetRevocationListsCoreAsync(certificateChain, issuedNotBefore, attemptToken), cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
     {
         if (algorithm != HashAlgorithmName.SHA256)
@@ -548,16 +655,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             throw new ArgumentException($"A SHA-256 digest has {DigestLength} bytes.", nameof(digest));
         }
 
-        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        attempt.CancelAfter(_options.AttemptTimeout);
-        try
-        {
-            return await TimestampCoreAsync(digest, algorithm, attempt.Token);
-        }
-        catch (OperationCanceledException ex) when (attempt.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-        {
-            throw Fail($"the attempt exceeded the attempt timeout of {_options.AttemptTimeout}.", ex);
-        }
+        return await RunAttemptAsync(attemptToken => TimestampCoreAsync(digest, algorithm, attemptToken), cancellationToken);
     }
 
     /// <summary>
@@ -565,6 +663,16 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
     /// <c>null</c> when the point names another CRL issuer.
     /// </summary>
     private sealed record CrlSource(IReadOnlyList<Uri> Locations, Byte[]? Issuer);
+
+    /// <summary>
+    /// The issue and next update of a usable CRL.
+    /// </summary>
+    private sealed record CrlTimes(DateTimeOffset ThisUpdate, DateTimeOffset NextUpdate);
+
+    /// <summary>
+    /// A downloaded CRL, or the earliest next update of the usable CRLs that were issued too early.
+    /// </summary>
+    private sealed record DownloadedCrl(Byte[]? Crl, DateTimeOffset? NextUpdate);
 
     private sealed record ValidatedChain(IReadOnlyList<Byte[]> Certificates, IReadOnlyList<CrlSource> CrlSources);
 }

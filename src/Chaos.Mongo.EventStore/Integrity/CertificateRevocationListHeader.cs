@@ -19,7 +19,17 @@ internal sealed record CertificateRevocationListHeader(ReadOnlyMemory<Byte> Issu
     /// <param name="crl">The encoded CRL.</param>
     /// <returns>The header.</returns>
     /// <exception cref="AsnContentException">Thrown when the data is not exactly one DER-encoded CRL.</exception>
-    public static CertificateRevocationListHeader Decode(ReadOnlyMemory<Byte> crl)
+    public static CertificateRevocationListHeader Decode(ReadOnlyMemory<Byte> crl) => Decode(crl, out _);
+
+    /// <summary>
+    /// Decodes the header of exactly one DER-encoded <c>CertificateList</c> and returns the rest of its
+    /// <c>TBSCertList</c>, which starts with the revoked certificates if there are any.
+    /// </summary>
+    /// <param name="crl">The encoded CRL.</param>
+    /// <param name="remainder">The reader positioned after the header fields of the <c>TBSCertList</c>.</param>
+    /// <returns>The header.</returns>
+    /// <exception cref="AsnContentException">Thrown when the data is not exactly one DER-encoded CRL.</exception>
+    internal static CertificateRevocationListHeader Decode(ReadOnlyMemory<Byte> crl, out AsnReader remainder)
     {
         // CertificateList ::= SEQUENCE { tbsCertList TBSCertList, signatureAlgorithm AlgorithmIdentifier, signatureValue BIT STRING }
         var reader = new AsnReader(crl, AsnEncodingRules.DER);
@@ -46,13 +56,14 @@ internal sealed record CertificateRevocationListHeader(ReadOnlyMemory<Byte> Issu
         var issuer = tbsCertList.ReadEncodedValue();
         var thisUpdate = ReadTime(tbsCertList) ?? throw new AsnContentException("A CRL must state when it was issued.");
         var nextUpdate = tbsCertList.HasData ? ReadTime(tbsCertList) : null;
+        remainder = tbsCertList;
         return new CertificateRevocationListHeader(issuer, thisUpdate, nextUpdate);
     }
 
     /// <summary>
     /// Reads a <c>Time</c>, which is a UTCTime or a GeneralizedTime; <c>null</c> when the next value is neither.
     /// </summary>
-    private static DateTimeOffset? ReadTime(AsnReader reader)
+    internal static DateTimeOffset? ReadTime(AsnReader reader)
     {
         var tag = reader.PeekTag();
         if (tag.HasSameClassAndValue(Asn1Tag.UtcTime))

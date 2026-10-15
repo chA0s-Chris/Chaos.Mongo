@@ -6,11 +6,14 @@ using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// Runs the anchoring run in the background, once at start and then once per
-/// <see cref="IntegrityAnchoringOptions.Interval"/>, and reports the anchor delay after every run.
+/// <see cref="IntegrityAnchoringOptions.Interval"/>, and reports the anchor delay and the revocation confirmation
+/// delay after every run.
 /// </summary>
 /// <remarks>
 /// After a run that failed or lost its lock, the delay of the anchor awaiting its timestamps, or else of the last known
-/// oldest unanchored candidate, is reported, so the alert does not go silent while anchoring fails.
+/// oldest unanchored candidate, is reported, so the alert does not go silent while anchoring fails. The revocation
+/// confirmation delay is read from the stored anchors after every run, including failed ones, except a run skipped
+/// because another instance holds the lock.
 /// </remarks>
 internal sealed class IntegrityAnchoringService
 {
@@ -60,7 +63,13 @@ internal sealed class IntegrityAnchoringService
         {
             _logger.LogError(ex, "The anchoring run failed and is retried with the next run");
             await ReportDelayAfterFailureAsync(cancellationToken);
+            await ReportRevocationConfirmationDelayAsync(cancellationToken);
             return null;
+        }
+
+        if (result.Outcome != AnchoringRunOutcome.LockUnavailable)
+        {
+            await ReportRevocationConfirmationDelayAsync(cancellationToken);
         }
 
         _unanchoredSinceUtc = result.Outcome is AnchoringRunOutcome.AwaitingTimestamps or AnchoringRunOutcome.LockLost
@@ -155,6 +164,39 @@ internal sealed class IntegrityAnchoringService
         if (oldest is { } value)
         {
             ReportDelay(value);
+        }
+    }
+
+    /// <summary>
+    /// Reports the age of the oldest token whose revocation status is unconfirmed, including tokens of authorities that
+    /// are no longer configured and therefore stay unconfirmed.
+    /// </summary>
+    private async Task ReportRevocationConfirmationDelayAsync(CancellationToken cancellationToken)
+    {
+        DateTime? oldest;
+        try
+        {
+            oldest = await _store.FindOldestUnconfirmedTimestampUtcAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "The oldest unconfirmed timestamp could not be read to report the revocation confirmation delay");
+            return;
+        }
+
+        if (oldest is not { } value)
+        {
+            return;
+        }
+
+        var delay = _timeProvider.GetUtcNow().UtcDateTime - value;
+        var exceeded = delay > _options.RevocationConfirmationDelayThreshold;
+        IntegrityAnchoringDiagnostics.RecordRevocationConfirmationDelay(delay, exceeded);
+        if (exceeded)
+        {
+            _logger.LogWarning("The revocation status of a timestamp issued {RevocationConfirmationDelay} ago is still unconfirmed, " +
+                               "above the revocation confirmation delay threshold of {RevocationConfirmationDelayThreshold}",
+                               delay, _options.RevocationConfirmationDelayThreshold);
         }
     }
 
