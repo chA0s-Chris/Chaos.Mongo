@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes the outcome of verifying that an event is anchored.
 /// </summary>
-internal enum EventAnchorStatus
+public enum EventAnchorStatus
 {
     /// <summary>
     /// Anchors are not configured, so the event's anchoring was not checked.

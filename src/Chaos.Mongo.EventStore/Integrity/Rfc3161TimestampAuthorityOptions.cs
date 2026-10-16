@@ -7,7 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 /// <summary>
 /// Configures one <see cref="Rfc3161TimestampAuthority"/>.
 /// </summary>
-internal sealed class Rfc3161TimestampAuthorityOptions
+public sealed class Rfc3161TimestampAuthorityOptions
 {
     private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
     {

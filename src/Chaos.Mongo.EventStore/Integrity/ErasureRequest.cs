@@ -10,7 +10,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <c>null</c>. The selection is every commitment recorded in a selected event that matches <see cref="Paths"/>, or
 /// every commitment when it is <c>null</c>, and still has its salt.
 /// </remarks>
-internal sealed class ErasureRequest
+public sealed class ErasureRequest
 {
     public ErasureRequest(String reference, IReadOnlyCollection<Int64>? versions = null, IReadOnlyCollection<String>? paths = null)
     {

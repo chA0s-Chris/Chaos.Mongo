@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes a finding of the completeness check.
 /// </summary>
-internal enum CompletenessFindingKind
+public enum CompletenessFindingKind
 {
     /// <summary>
     /// The chain of anchors is broken, so findings about deleted or truncated streams may be incomplete.

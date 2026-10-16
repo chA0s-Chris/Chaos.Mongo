@@ -7,7 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 /// <summary>
 /// The trust settings stored timestamp tokens of one authority are verified with.
 /// </summary>
-internal sealed class TimestampAuthorityTrust
+public sealed class TimestampAuthorityTrust
 {
     /// <summary>
     /// Gets or sets the object identifier of the policy the authority's tokens must be issued under, or <c>null</c>

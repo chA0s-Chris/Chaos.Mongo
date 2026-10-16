@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes why the verification of the chain of anchors failed.
 /// </summary>
-internal enum AnchorChainFailure
+public enum AnchorChainFailure
 {
     /// <summary>
     /// The expected sequence number is missing, so an anchor was deleted or sequence numbers were changed.

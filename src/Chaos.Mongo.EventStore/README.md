@@ -8,6 +8,8 @@
 
 Event sourcing for MongoDB with aggregate reconstruction, append-only event streams, optimistic concurrency, idempotency, checkpoints, and transactional callbacks.
 
+Opt-in tamper evidence seals event streams into hash chains and anchors them with RFC 3161 timestamps, so modification, deletion and backdating can be proven to third parties, while personal data stays erasable. The evidence follows an open specification and can be verified without .NET.
+
 ## Installation
 
 ```bash
@@ -68,6 +70,7 @@ This package references [`Chaos.Mongo`](https://www.nuget.org/packages/Chaos.Mon
 ## Documentation
 
 - [Complete Event Store documentation](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/event-store.md)
+- [Tamper evidence](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/event-store.md#tamper-evidence) and its [specification](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/tamper-evidence-specification.md)
 - [Getting Started with Chaos.Mongo](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/getting-started.md)
 - [Transactions](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/transactions.md)
 - [Project overview](https://github.com/chA0s-Chris/Chaos.Mongo)

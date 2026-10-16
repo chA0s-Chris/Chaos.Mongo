@@ -9,7 +9,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The chain of anchors only proves consistency up to its last remaining anchor. Without a trusted head kept outside the
 /// database, deleting the newest anchors together with the streams they cover cannot be detected.
 /// </remarks>
-internal sealed class AnchorVerifier
+internal sealed class AnchorVerifier : IAnchorVerifier
 {
     private static readonly Byte[] FirstPreviousDigest = new Byte[AnchorEncoding.HashLength];
     private readonly IntegrityAnchoringOptions _anchoring;

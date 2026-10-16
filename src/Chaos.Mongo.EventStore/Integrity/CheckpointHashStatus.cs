@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes how a checkpoint's recorded chain hash compares with the stream.
 /// </summary>
-internal enum CheckpointHashStatus
+public enum CheckpointHashStatus
 {
     /// <summary>
     /// The recorded chain hash equals the hash of the event at the checkpoint's version.

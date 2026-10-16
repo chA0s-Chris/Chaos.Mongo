@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes why the verification of an event in a stream failed.
 /// </summary>
-internal enum StreamVerificationFailure
+public enum StreamVerificationFailure
 {
     /// <summary>
     /// The expected version is missing, so an event was deleted or versions were changed.

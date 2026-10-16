@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes the state of a personal data value recorded in an event's integrity data.
 /// </summary>
-internal enum PersonalDataStatus
+public enum PersonalDataStatus
 {
     /// <summary>
     /// The value and its salt are present.

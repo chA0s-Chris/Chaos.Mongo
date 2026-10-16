@@ -15,7 +15,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="StoredRevocationStatus">
 /// The revocation status stored on the anchor, for comparison only; anyone who can write the anchors can change it.
 /// </param>
-internal sealed record TimestampVerificationResult(
+public sealed record TimestampVerificationResult(
     String Authority,
     DateTime TimestampUtc,
     Boolean IsValid,

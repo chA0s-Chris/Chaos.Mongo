@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes how the stored read model compares with the state replayed from the stream.
 /// </summary>
-internal enum ReadModelStatus
+public enum ReadModelStatus
 {
     /// <summary>
     /// The read model was not compared, because the stream's chain is broken.

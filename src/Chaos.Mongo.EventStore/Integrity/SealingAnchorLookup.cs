@@ -8,7 +8,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <remarks>
 /// The sealing anchor is looked up instead of stored on the event: a stored reference would modify sealed documents
 /// after sealing and need a second rule for appended events. The same rule yields the anchor that proves an appended
-/// event existed no later than its timestamp. #160 exposes it through the verification API.
+/// event existed no later than its timestamp. The verification API reports it per version.
 /// </remarks>
 internal sealed class SealingAnchorLookup
 {

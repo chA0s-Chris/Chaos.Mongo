@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes why the anchoring of an event does not verify.
 /// </summary>
-internal enum EventAnchorFailure
+public enum EventAnchorFailure
 {
     /// <summary>
     /// The chain from the event to the anchored version does not verify, for example because a version is missing or

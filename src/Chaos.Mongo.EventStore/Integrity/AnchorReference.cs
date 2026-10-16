@@ -7,4 +7,4 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 /// <param name="AnchorId">The anchor identifier.</param>
 /// <param name="Sequence">The anchor's position in the chain of anchors.</param>
-internal sealed record AnchorReference(Guid AnchorId, Int64 Sequence);
+public sealed record AnchorReference(Guid AnchorId, Int64 Sequence);

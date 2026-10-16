@@ -13,7 +13,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// when the first event was appended and cannot be derived from the events, so only this agreement is checked; it is
 /// <c>true</c> for a broken chain, whose derived data is not compared.
 /// </param>
-internal sealed record DerivedDataVerificationResult(
+public sealed record DerivedDataVerificationResult(
     StreamVerificationResult Stream,
     ReadModelStatus ReadModel,
     IReadOnlyList<CheckpointVerification> Checkpoints,

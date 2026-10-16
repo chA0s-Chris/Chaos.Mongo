@@ -27,7 +27,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// whose leaf shows its highest anchored version.
 /// </param>
 /// <param name="AnchorChain">For a broken chain of anchors, the result of its verification.</param>
-internal sealed record CompletenessFinding(
+public sealed record CompletenessFinding(
     CompletenessFindingKind Kind,
     Guid? AggregateId,
     Int64? FirstVersion,

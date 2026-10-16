@@ -78,6 +78,7 @@ public static class MongoBuilderExtensions
                                            sp.GetRequiredService<IMongoHelper>(),
                                            options,
                                            sp.GetRequiredService<IEventStore<TAggregate>>()));
+            builder.Services.AddScoped<IPersonalDataEraser<TAggregate>>(sp => sp.GetRequiredService<PersonalDataEraser<TAggregate>>());
 
             // Verification compares streams with anchors when anchoring or verification is configured at module level.
             builder.Services.AddSingleton(sp => new EventStreamVerifier<TAggregate>(
@@ -93,6 +94,11 @@ public static class MongoBuilderExtensions
                                               options,
                                               sp.GetService<AnchorVerifier>(),
                                               sp.GetService<TimeProvider>() ?? TimeProvider.System));
+            builder.Services.AddSingleton<IEventStoreIntegrity<TAggregate>>(sp => new EventStoreIntegrity<TAggregate>(
+                                                                                sp.GetRequiredService<EventStreamVerifier<TAggregate>>(),
+                                                                                sp.GetRequiredService<DerivedDataVerifier<TAggregate>>(),
+                                                                                sp.GetRequiredService<CompletenessChecker<TAggregate>>(),
+                                                                                sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
 
             // Retroactively seal events stored without integrity data
             builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
@@ -109,31 +115,6 @@ public static class MongoBuilderExtensions
     }
 
     /// <summary>
-    /// Collects anchor candidates for all protected aggregate types from one change stream. Event stores may be
-    /// registered before or after this call; the source reads the protected types when it is resolved.
-    /// </summary>
-    /// <param name="builder">The Mongo builder.</param>
-    /// <returns>The Mongo builder for method chaining.</returns>
-    internal static MongoBuilder WithAnchorCandidates(this MongoBuilder builder)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-        var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
-        if (builder.Services.Any(s => s.ServiceType == typeof(IAnchorCandidateSource)))
-        {
-            return builder;
-        }
-
-        builder.Services.AddSingleton<IAnchorCandidateSource>(sp => new ChangeStreamAnchorCandidateSource(
-                                                                  sp.GetRequiredService<IMongoHelper>(),
-                                                                  anchoring,
-                                                                  sp.GetService<ProtectedStreamRegistry>() ?? new ProtectedStreamRegistry(),
-                                                                  sp.GetService<TimeProvider>() ?? TimeProvider.System,
-                                                                  sp.GetService<ILogger<ChangeStreamAnchorCandidateSource>>() ??
-                                                                  NullLogger<ChangeStreamAnchorCandidateSource>.Instance));
-        return builder;
-    }
-
-    /// <summary>
     /// Configures the anchoring pipeline once at module level: a hosted service anchors the changed stream heads of all
     /// protected aggregate types at the configured interval and has the anchors timestamped. It registers the
     /// change-stream candidate source through <see cref="WithAnchorCandidates"/>.
@@ -145,7 +126,7 @@ public static class MongoBuilderExtensions
     /// Thrown when anchoring is already configured, when no timestamp authority is configured, when a setting is out
     /// of range, or when the verification configuration names other anchor collections.
     /// </exception>
-    internal static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
+    public static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
@@ -225,7 +206,7 @@ public static class MongoBuilderExtensions
     /// Thrown when verification is already configured, or when it names other anchor collections than the anchoring
     /// configuration.
     /// </exception>
-    internal static MongoBuilder WithIntegrityVerification(this MongoBuilder builder, Action<IntegrityVerificationBuilder>? configure = null)
+    public static MongoBuilder WithIntegrityVerification(this MongoBuilder builder, Action<IntegrityVerificationBuilder>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
@@ -253,6 +234,31 @@ public static class MongoBuilderExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Collects anchor candidates for all protected aggregate types from one change stream. Event stores may be
+    /// registered before or after this call; the source reads the protected types when it is resolved.
+    /// </summary>
+    /// <param name="builder">The Mongo builder.</param>
+    /// <returns>The Mongo builder for method chaining.</returns>
+    internal static MongoBuilder WithAnchorCandidates(this MongoBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IAnchorCandidateSource)))
+        {
+            return builder;
+        }
+
+        builder.Services.AddSingleton<IAnchorCandidateSource>(sp => new ChangeStreamAnchorCandidateSource(
+                                                                  sp.GetRequiredService<IMongoHelper>(),
+                                                                  anchoring,
+                                                                  sp.GetService<ProtectedStreamRegistry>() ?? new ProtectedStreamRegistry(),
+                                                                  sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                                                  sp.GetService<ILogger<ChangeStreamAnchorCandidateSource>>() ??
+                                                                  NullLogger<ChangeStreamAnchorCandidateSource>.Instance));
+        return builder;
+    }
+
     private static void AddAnchorVerifier(IServiceCollection services)
     {
         if (services.Any(s => s.ServiceType == typeof(AnchorVerifier)))
@@ -263,6 +269,7 @@ public static class MongoBuilderExtensions
         var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(services);
         var verification = GetOrAddSingleton<IntegrityVerificationOptions>(services);
         services.AddSingleton(sp => new AnchorVerifier(sp.GetRequiredService<IMongoHelper>(), anchoring, verification));
+        services.AddSingleton<IAnchorVerifier>(sp => sp.GetRequiredService<AnchorVerifier>());
     }
 
     /// <summary>

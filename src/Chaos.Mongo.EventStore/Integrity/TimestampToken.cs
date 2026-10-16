@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// A validated RFC 3161 timestamp token together with the evidence captured at stamping time.
 /// </summary>
-internal sealed class TimestampToken
+public sealed class TimestampToken
 {
     public TimestampToken(Byte[] token,
                           IReadOnlyList<Byte[]> certificateChain,

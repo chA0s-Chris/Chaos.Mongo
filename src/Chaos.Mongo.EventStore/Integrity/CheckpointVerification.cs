@@ -8,7 +8,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="Version">The checkpoint's version.</param>
 /// <param name="HashStatus">How the recorded chain hash compares with the stream.</param>
 /// <param name="StateMatches">Whether the checkpoint's state equals the state replayed up to its version.</param>
-internal sealed record CheckpointVerification(Int64 Version, CheckpointHashStatus HashStatus, Boolean StateMatches)
+public sealed record CheckpointVerification(Int64 Version, CheckpointHashStatus HashStatus, Boolean StateMatches)
 {
     /// <summary>
     /// Gets a value indicating whether the checkpoint is consistent with the stream. A checkpoint without a recorded

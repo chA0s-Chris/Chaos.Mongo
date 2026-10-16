@@ -1,6 +1,6 @@
 # Tamper Evidence Specification
 
-**Format version 1.** Status: draft until the tamper-evidence feature is released; then this version is stable and changes only through a new format version.
+**Format version 1.** Status: stable. A change to anything this document defines needs a new format version; verifiers keep accepting version 1.
 
 This document defines, at byte level, the evidence that `Chaos.Mongo.EventStore` stores for tamper-evident event streams, so it can be verified without Chaos.Mongo and without .NET: with any BSON library, or the raw bytes, plus OpenSSL. The [reference verifier](../tools/tamper-evidence-verifier/verify.py) implements it in Python with the standard library only, and the [test vectors](../spec/tamper-evidence/v1) pin its results.
 

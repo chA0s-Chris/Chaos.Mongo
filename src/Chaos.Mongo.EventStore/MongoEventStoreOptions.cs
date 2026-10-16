@@ -62,6 +62,12 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     public String EventsCollectionSuffix { get; set; } = "_Events";
 
     /// <summary>
+    /// Gets a value indicating whether appended events are sealed into a per-stream hash chain. Enabled with
+    /// <see cref="MongoEventStoreBuilder{TAggregate}.WithIntegrityProtection"/>. Defaults to <c>false</c>.
+    /// </summary>
+    public Boolean IntegrityProtectionEnabled { get; internal set; }
+
+    /// <summary>
     /// Gets or sets the number of additional attempts an append with store-assigned versions makes after the
     /// first one, when another writer commits to the same stream concurrently. Defaults to 3.
     /// </summary>
@@ -73,10 +79,21 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     public String ReadModelCollectionName => CollectionPrefix;
 
     /// <summary>
-    /// Gets or sets a value indicating whether appended events are sealed into a per-stream hash chain.
-    /// Defaults to <c>false</c>.
+    /// Gets the maximum number of events sealed retroactively in one transaction. An append to a stream with more
+    /// unsealed predecessors fails until the sealing sweep caught the stream up. Defaults to 1,000.
     /// </summary>
-    internal Boolean IntegrityProtectionEnabled { get; set; }
+    public Int32 SealingChunkSize { get; internal set; } = 1000;
+
+    /// <summary>
+    /// Gets the delay between two passes of the background sealing sweep. Defaults to 24 hours.
+    /// </summary>
+    public TimeSpan SealingSweepInterval { get; internal set; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Gets the delay before a failed sealing pass, or one that lost the sweep lock, is retried. The retry resumes the
+    /// pass. Defaults to 1 minute.
+    /// </summary>
+    public TimeSpan SealingSweepRetryDelay { get; internal set; } = TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// Gets the name of the collection that stores the integrity sealing state.
@@ -106,22 +123,4 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// can verify the same events.
     /// </summary>
     internal IReadOnlyDictionary<Type, IReadOnlyList<String>> PersonalDataPaths { get; set; } = new Dictionary<Type, IReadOnlyList<String>>();
-
-    /// <summary>
-    /// Gets or sets the maximum number of events sealed retroactively in one transaction. The append
-    /// safety net uses the same bound. Defaults to 1,000.
-    /// </summary>
-    internal Int32 SealingChunkSize { get; set; } = 1000;
-
-    /// <summary>
-    /// Gets or sets the delay between two passes of the background sealing sweep. Defaults to 24 hours.
-    /// </summary>
-    internal TimeSpan SealingSweepInterval { get; set; } = TimeSpan.FromHours(24);
-
-    /// <summary>
-    /// Gets or sets the delay before a failed sealing pass, or one that lost the sweep lock, is retried.
-    /// The retry resumes the pass.
-    /// Defaults to 1 minute.
-    /// </summary>
-    internal TimeSpan SealingSweepRetryDelay { get; set; } = TimeSpan.FromMinutes(1);
 }

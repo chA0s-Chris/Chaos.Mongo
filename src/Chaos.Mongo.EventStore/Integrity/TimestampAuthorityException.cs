@@ -7,7 +7,7 @@ using Chaos.Mongo.EventStore.Errors;
 /// <summary>
 /// Thrown when a timestamp authority is unreachable, fails, or returns a token that does not pass validation.
 /// </summary>
-internal sealed class TimestampAuthorityException : MongoEventStoreException
+public sealed class TimestampAuthorityException : MongoEventStoreException
 {
     public TimestampAuthorityException(String authorityName, String message, Exception? innerException = null)
         : base($"Timestamp authority '{authorityName}': {message}", innerException)

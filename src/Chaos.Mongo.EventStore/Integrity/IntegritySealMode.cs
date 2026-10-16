@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes how an event was sealed into its stream's hash chain.
 /// </summary>
-internal enum IntegritySealMode
+public enum IntegritySealMode
 {
     /// <summary>
     /// The event was sealed while it was appended.

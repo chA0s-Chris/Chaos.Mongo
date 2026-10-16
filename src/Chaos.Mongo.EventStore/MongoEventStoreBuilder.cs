@@ -109,33 +109,6 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     }
 
     /// <summary>
-    /// Sets the suffix appended to the collection prefix for the events collection.
-    /// Defaults to <c>"_Events"</c>.
-    /// </summary>
-    /// <param name="suffix">The events collection suffix.</param>
-    /// <returns>This builder instance for method chaining.</returns>
-    public MongoEventStoreBuilder<TAggregate> WithEventsCollectionSuffix(String suffix)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(suffix);
-        Options.EventsCollectionSuffix = suffix;
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the number of additional attempts an append with store-assigned versions makes after the first
-    /// one, when another writer commits to the same stream concurrently. Defaults to 3.
-    /// </summary>
-    /// <param name="retries">The number of additional attempts; <c>0</c> disables retries.</param>
-    /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="retries"/> is negative.</exception>
-    public MongoEventStoreBuilder<TAggregate> WithMaxAppendRetries(Int32 retries)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(retries);
-        Options.MaxAppendRetries = retries;
-        return this;
-    }
-
-    /// <summary>
     /// Registers an event type for this aggregate and configures its registration, for example to mark members
     /// as personal data.
     /// </summary>
@@ -145,8 +118,8 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     /// </param>
     /// <param name="configure">Configures the registration of the event type.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    internal MongoEventStoreBuilder<TAggregate> WithEvent<TEvent>(String? discriminator,
-                                                                  Action<EventRegistrationBuilder<TAggregate, TEvent>> configure)
+    public MongoEventStoreBuilder<TAggregate> WithEvent<TEvent>(String? discriminator,
+                                                                Action<EventRegistrationBuilder<TAggregate, TEvent>> configure)
         where TEvent : Event<TAggregate>
     {
         ArgumentNullException.ThrowIfNull(configure);
@@ -163,12 +136,44 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
     }
 
     /// <summary>
-    /// Enables tamper evidence: appended events are sealed into a per-stream hash chain.
+    /// Sets the suffix appended to the collection prefix for the events collection.
+    /// Defaults to <c>"_Events"</c>.
     /// </summary>
+    /// <param name="suffix">The events collection suffix.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    internal MongoEventStoreBuilder<TAggregate> WithIntegrityProtection()
+    public MongoEventStoreBuilder<TAggregate> WithEventsCollectionSuffix(String suffix)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(suffix);
+        Options.EventsCollectionSuffix = suffix;
+        return this;
+    }
+
+    /// <summary>
+    /// Enables tamper evidence: appended events are sealed into a per-stream hash chain, events stored without integrity
+    /// data are sealed retroactively by a background sweep, and checkpoints record the chain hash at their version. Mark
+    /// personal data through the <see cref="EventRegistrationBuilder{TAggregate, TEvent}"/> of an event registration before
+    /// enabling it: a value sealed without a mark can never be erased without breaking the chain.
+    /// </summary>
+    /// <param name="configure">Configures the retroactive sealing sweep.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    public MongoEventStoreBuilder<TAggregate> WithIntegrityProtection(Action<IntegrityProtectionBuilder<TAggregate>>? configure = null)
     {
         Options.IntegrityProtectionEnabled = true;
+        configure?.Invoke(new IntegrityProtectionBuilder<TAggregate>(Options));
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the number of additional attempts an append with store-assigned versions makes after the first
+    /// one, when another writer commits to the same stream concurrently. Defaults to 3.
+    /// </summary>
+    /// <param name="retries">The number of additional attempts; <c>0</c> disables retries.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="retries"/> is negative.</exception>
+    public MongoEventStoreBuilder<TAggregate> WithMaxAppendRetries(Int32 retries)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(retries);
+        Options.MaxAppendRetries = retries;
         return this;
     }
 }

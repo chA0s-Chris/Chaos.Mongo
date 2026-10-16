@@ -5,11 +5,11 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Streams the leaves of an anchor, which may exceed what fits into memory or one document.
 /// </summary>
-internal sealed class AnchorLeafReader
+public sealed class AnchorLeafReader
 {
     private readonly AnchorStore _store;
 
-    public AnchorLeafReader(IMongoHelper mongoHelper, IntegrityAnchoringOptions options)
+    internal AnchorLeafReader(IMongoHelper mongoHelper, IntegrityAnchoringOptions options)
     {
         _store = new AnchorStore(mongoHelper, options);
     }

@@ -15,7 +15,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// this anchor.
 /// </param>
 /// <param name="PersonalData">The state of each personal data value the event records.</param>
-internal sealed record VerifiedEvent(
+public sealed record VerifiedEvent(
     Int64 Version,
     Byte[] Hash,
     Byte[] PreviousHash,

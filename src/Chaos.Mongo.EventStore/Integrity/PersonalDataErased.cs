@@ -12,7 +12,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// is disabled.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-internal sealed class PersonalDataErased<TAggregate> : ObservationalEvent<TAggregate>
+public sealed class PersonalDataErased<TAggregate> : ObservationalEvent<TAggregate>
     where TAggregate : class, IAggregate, new()
 {
     /// <summary>
@@ -23,12 +23,12 @@ internal sealed class PersonalDataErased<TAggregate> : ObservationalEvent<TAggre
     /// <summary>
     /// The pinned element name of <see cref="Entries"/>.
     /// </summary>
-    public const String EntriesElement = "Entries";
+    internal const String EntriesElement = "Entries";
 
     /// <summary>
     /// The pinned element name of <see cref="Reference"/>.
     /// </summary>
-    public const String ReferenceElement = "Reference";
+    internal const String ReferenceElement = "Reference";
 
     /// <summary>
     /// Gets or sets the erased paths per event version.

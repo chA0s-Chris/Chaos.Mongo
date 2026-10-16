@@ -24,7 +24,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="AuthorityFailures">The failed attempts per authority recorded while the anchor awaited its tokens.</param>
 /// <param name="CreatedUtc">The time the attempt created the anchor.</param>
 /// <param name="CompletedUtc">The time the anchor completed.</param>
-internal sealed record CompletedAnchor(
+public sealed record CompletedAnchor(
     Guid Id,
     Int64 Sequence,
     Int32 FormatVersion,
@@ -50,7 +50,7 @@ internal sealed record CompletedAnchor(
     /// <exception cref="ArgumentException">
     /// Thrown when the anchor is not completed or the timestamps do not match the anchor's entries.
     /// </exception>
-    public static CompletedAnchor From(AnchorRecord anchor, IReadOnlyList<AnchorTimestamp> timestamps)
+    internal static CompletedAnchor From(AnchorRecord anchor, IReadOnlyList<AnchorTimestamp> timestamps)
     {
         ArgumentNullException.ThrowIfNull(anchor);
         ArgumentNullException.ThrowIfNull(timestamps);

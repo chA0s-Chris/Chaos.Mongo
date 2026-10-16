@@ -11,7 +11,7 @@ using System.Security.Cryptography;
 /// Implementations for APIs other than RFC 3161 over HTTP still return an RFC 3161 token, so every token can be
 /// verified the same way.
 /// </remarks>
-internal interface ITimestampAuthority
+public interface ITimestampAuthority
 {
     /// <summary>
     /// Gets the name that identifies the authority in stored anchors.

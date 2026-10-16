@@ -58,12 +58,12 @@ The work stays one issue because the format freeze, the verification semantics, 
 
 ### Layer 6: Public release
 
-- [ ] The complete public surface of the feature is reviewed as a whole and made public. A public-surface test replaces the visibility test: it lists every public integrity type and member, so later changes to the surface are deliberate.
-- [ ] Verification and erasure are exposed through new public interfaces. Per-aggregate verification and erasure are registered only for protected aggregate types, and anchor verification is registered by the anchoring or verification-only registration. `IEventStore<TAggregate>` gains no members.
-- [ ] `PersonalDataErased<TAggregate>` is public, so readers of `GetEventStream` can recognize erasure events.
-- [ ] The specification and the `_integrity` format are marked stable (format version 1), in the specification and in the code documentation.
-- [ ] `docs/event-store.md` and the package README cover every documentation item listed in #160, plus the #171 and #181 items and the limitations listed in Technical Details.
-- [ ] The existing test suite passes, and merged line coverage stays at or above 95 %.
+- [x] The complete public surface of the feature is reviewed as a whole and made public. A public-surface test replaces the visibility test: it lists every public integrity type and member, so later changes to the surface are deliberate.
+- [x] Verification and erasure are exposed through new public interfaces. Per-aggregate verification and erasure are registered only for protected aggregate types, and anchor verification is registered by the anchoring or verification-only registration. `IEventStore<TAggregate>` gains no members.
+- [x] `PersonalDataErased<TAggregate>` is public, so readers of `GetEventStream` can recognize erasure events.
+- [x] The specification and the `_integrity` format are marked stable (format version 1), in the specification and in the code documentation.
+- [x] `docs/event-store.md` and the package README cover every documentation item listed in #160, plus the #171 and #181 items and the limitations listed in Technical Details.
+- [x] The existing test suite passes, and merged line coverage stays at or above 95 %.
 
 ## Technical Details
 

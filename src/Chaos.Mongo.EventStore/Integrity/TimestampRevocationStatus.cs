@@ -6,7 +6,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The revocation status of a timestamp token's certificate chain at the token's time, as shown by CRLs issued at
 /// least a grace period after it.
 /// </summary>
-internal enum TimestampRevocationStatus
+public enum TimestampRevocationStatus
 {
     /// <summary>
     /// No CRLs issued late enough have been obtained yet.

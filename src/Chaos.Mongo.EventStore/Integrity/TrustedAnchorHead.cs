@@ -8,4 +8,4 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 /// <param name="Sequence">The anchor's sequence number.</param>
 /// <param name="AnchorDigest">The anchor's digest.</param>
-internal sealed record TrustedAnchorHead(Int64 Sequence, Byte[] AnchorDigest);
+public sealed record TrustedAnchorHead(Int64 Sequence, Byte[] AnchorDigest);

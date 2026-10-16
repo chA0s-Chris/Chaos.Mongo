@@ -14,7 +14,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="Version">The anchored stream head version.</param>
 /// <param name="Hash">The chain hash of that version.</param>
 /// <param name="Proof">The inclusion proof of the leaf.</param>
-internal sealed record AnchorLeaf(
+public sealed record AnchorLeaf(
     Guid AnchorId,
     Int64 AnchorSequence,
     Int32 Index,

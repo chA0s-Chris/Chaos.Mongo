@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Configures how anchors and their timestamp tokens are verified, including in a container that does not anchor.
 /// </summary>
-internal sealed class IntegrityVerificationBuilder
+public sealed class IntegrityVerificationBuilder
 {
     private readonly IntegrityAnchoringOptions _anchoring;
     private String[]? _anchorCollections;
@@ -21,7 +21,7 @@ internal sealed class IntegrityVerificationBuilder
     /// <summary>
     /// Gets the verification options this builder fills.
     /// </summary>
-    public IntegrityVerificationOptions Options { get; }
+    internal IntegrityVerificationOptions Options { get; }
 
     /// <summary>
     /// Sets the names of the collections that hold the anchors, their leaves and their evidence, when they differ from

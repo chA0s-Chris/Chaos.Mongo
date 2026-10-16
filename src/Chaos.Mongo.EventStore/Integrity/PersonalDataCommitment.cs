@@ -4,7 +4,8 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
 /// The commitment to one personal data value of a sealed event, stored in the <c>PersonalData</c> array
-/// of the event's <c>_integrity</c> element. The format is a draft until the tamper-evidence feature is released.
+/// of the event's <c>_integrity</c> element, in the stable format version 1 that docs/tamper-evidence-specification.md
+/// defines.
 /// </summary>
 internal sealed class PersonalDataCommitment
 {

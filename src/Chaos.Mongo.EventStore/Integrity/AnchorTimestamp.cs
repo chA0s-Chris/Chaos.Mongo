@@ -13,7 +13,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="CertificateRevocationLists">The CRLs captured for the chain.</param>
 /// <param name="TimestampUtc">The time the authority asserts in the token.</param>
 /// <param name="ObtainedUtc">The time the token was obtained.</param>
-internal sealed record AnchorTimestamp(
+public sealed record AnchorTimestamp(
     String Authority,
     Byte[] Token,
     IReadOnlyList<Byte[]> CertificateChain,

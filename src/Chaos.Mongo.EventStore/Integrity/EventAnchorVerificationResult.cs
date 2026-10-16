@@ -20,7 +20,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The version of the stream's leaf in that anchor, or <c>null</c> when no anchor is named.
 /// </param>
 /// <param name="Timestamps">The result for each of the anchor's timestamp tokens; empty when they were not verified.</param>
-internal sealed record EventAnchorVerificationResult(
+public sealed record EventAnchorVerificationResult(
     EventAnchorStatus Status,
     EventAnchorFailure? Failure,
     AnchorReference? Anchor,
@@ -30,10 +30,10 @@ internal sealed record EventAnchorVerificationResult(
     /// <summary>
     /// Gets the result for an event that no completed anchor covers yet.
     /// </summary>
-    public static EventAnchorVerificationResult NotAnchored { get; } = new(EventAnchorStatus.NotAnchored, null, null, null, []);
+    internal static EventAnchorVerificationResult NotAnchored { get; } = new(EventAnchorStatus.NotAnchored, null, null, null, []);
 
     /// <summary>
     /// Gets the result for an event whose anchoring was not checked because anchors are not configured.
     /// </summary>
-    public static EventAnchorVerificationResult NotChecked { get; } = new(EventAnchorStatus.NotChecked, null, null, null, []);
+    internal static EventAnchorVerificationResult NotChecked { get; } = new(EventAnchorStatus.NotChecked, null, null, null, []);
 }

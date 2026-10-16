@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Configures the module-level anchoring pipeline. There is no default timestamp authority.
 /// </summary>
-internal sealed class IntegrityAnchoringBuilder
+public sealed class IntegrityAnchoringBuilder
 {
     private readonly List<Func<IServiceProvider, ITimestampAuthority>> _authorities = [];
     private readonly HashSet<String> _authorityNames = [];
@@ -18,14 +18,14 @@ internal sealed class IntegrityAnchoringBuilder
     }
 
     /// <summary>
-    /// Gets the anchoring options this builder fills.
-    /// </summary>
-    public IntegrityAnchoringOptions Options { get; }
-
-    /// <summary>
     /// Gets the completion hook, if one is configured.
     /// </summary>
     internal Func<IServiceProvider, CompletedAnchor, CancellationToken, Task>? CompletionHook { get; private set; }
+
+    /// <summary>
+    /// Gets the anchoring options this builder fills.
+    /// </summary>
+    internal IntegrityAnchoringOptions Options { get; }
 
     /// <summary>
     /// Gets the options of the configured RFC 3161 authorities, whose trust settings also apply to verification.

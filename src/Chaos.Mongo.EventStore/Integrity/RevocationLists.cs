@@ -6,7 +6,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The CRLs that confirm the revocation status of a certificate chain at a time, or the information that a CRL
 /// available today was issued too early to do so.
 /// </summary>
-internal sealed class RevocationLists
+public sealed class RevocationLists
 {
     private RevocationLists(IReadOnlyList<Byte[]> lists, DateTimeOffset? nextUpdate)
     {

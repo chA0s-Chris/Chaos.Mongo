@@ -7,7 +7,8 @@ using System.Security.Cryptography;
 using System.Text;
 
 /// <summary>
-/// The byte layouts of anchor leaves and anchor digests. They become part of the specification in #160.
+/// The byte layouts of anchor leaves and anchor digests, as docs/tamper-evidence-specification.md defines them for the
+/// stable format version 1.
 /// </summary>
 internal static class AnchorEncoding
 {
