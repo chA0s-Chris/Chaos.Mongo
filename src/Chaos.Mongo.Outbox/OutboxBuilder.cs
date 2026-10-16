@@ -23,13 +23,27 @@ public sealed class OutboxBuilder
     private TimeSpan _retryBackoffMaxDelay = OutboxOptions.DefaultRetryBackoffMaxDelay;
 
     /// <summary>
+    /// Gets the publisher factory configured by
+    /// <see cref="WithPublisher(Func{IServiceProvider, IOutboxPublisher}, ServiceLifetime)"/>.
+    /// </summary>
+    /// <remarks>
+    /// Once a publisher is configured, exactly one of <see cref="PublisherType"/> and <see cref="PublisherFactory"/> is
+    /// non-null.
+    /// </remarks>
+    public Func<IServiceProvider, IOutboxPublisher>? PublisherFactory { get; private set; }
+
+    /// <summary>
     /// Gets the publisher service lifetime.
     /// </summary>
     public ServiceLifetime PublisherLifetime { get; private set; } = ServiceLifetime.Transient;
 
     /// <summary>
-    /// Gets the publisher implementation type.
+    /// Gets the publisher implementation type configured by <see cref="WithPublisher{TPublisher}()"/>.
     /// </summary>
+    /// <remarks>
+    /// Once a publisher is configured, exactly one of <see cref="PublisherType"/> and <see cref="PublisherFactory"/> is
+    /// non-null.
+    /// </remarks>
     public Type? PublisherType { get; private set; }
 
     /// <summary>
@@ -48,10 +62,10 @@ public sealed class OutboxBuilder
     /// </summary>
     public void Validate()
     {
-        if (PublisherType is null)
+        if (PublisherType is null && PublisherFactory is null)
         {
             throw new InvalidOperationException(
-                "An IOutboxPublisher implementation must be registered. Use WithPublisher<T>() to register one.");
+                "An IOutboxPublisher implementation must be registered. Use WithPublisher<T>() or WithPublisher(Func<IServiceProvider, IOutboxPublisher>) to register one.");
         }
 
         if (MessageTypes.Count == 0)
@@ -184,17 +198,38 @@ public sealed class OutboxBuilder
     }
 
     /// <summary>
+    /// Registers a factory that creates the user's <see cref="IOutboxPublisher"/> with a specific service lifetime.
+    /// </summary>
+    /// <param name="factory">The factory creating the publisher.</param>
+    /// <param name="lifetime">The service lifetime for the publisher. Defaults to <see cref="ServiceLifetime.Transient"/>.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="factory"/> is <c>null</c>.</exception>
+    /// <remarks>
+    /// Replaces any previously configured publisher type or factory. The processor resolves the publisher once per
+    /// nonempty batch from a fresh scope, so transient and scoped factories receive that scope's provider and may
+    /// resolve scoped services. A singleton factory is invoked once with the root provider and must not resolve
+    /// scoped services. If the factory returns <c>null</c>, publisher resolution throws an
+    /// <see cref="InvalidOperationException"/> naming the outbox.
+    /// </remarks>
+    public OutboxBuilder WithPublisher(Func<IServiceProvider, IOutboxPublisher> factory,
+                                       ServiceLifetime lifetime = ServiceLifetime.Transient)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        PublisherFactory = factory;
+        PublisherType = null;
+        PublisherLifetime = lifetime;
+        return this;
+    }
+
+    /// <summary>
     /// Registers the user's <see cref="IOutboxPublisher"/> implementation with the default transient lifetime.
     /// </summary>
     /// <typeparam name="TPublisher">The publisher implementation type.</typeparam>
     /// <returns>This builder instance for method chaining.</returns>
+    /// <remarks>Replaces any previously configured publisher type or factory.</remarks>
     public OutboxBuilder WithPublisher<TPublisher>()
         where TPublisher : class, IOutboxPublisher
-    {
-        PublisherType = typeof(TPublisher);
-        PublisherLifetime = ServiceLifetime.Transient;
-        return this;
-    }
+        => WithPublisher<TPublisher>(ServiceLifetime.Transient);
 
     /// <summary>
     /// Registers the user's <see cref="IOutboxPublisher"/> implementation with a specific service lifetime.
@@ -202,10 +237,12 @@ public sealed class OutboxBuilder
     /// <typeparam name="TPublisher">The publisher implementation type.</typeparam>
     /// <param name="lifetime">The service lifetime for the publisher.</param>
     /// <returns>This builder instance for method chaining.</returns>
+    /// <remarks>Replaces any previously configured publisher type or factory.</remarks>
     public OutboxBuilder WithPublisher<TPublisher>(ServiceLifetime lifetime)
         where TPublisher : class, IOutboxPublisher
     {
         PublisherType = typeof(TPublisher);
+        PublisherFactory = null;
         PublisherLifetime = lifetime;
         return this;
     }

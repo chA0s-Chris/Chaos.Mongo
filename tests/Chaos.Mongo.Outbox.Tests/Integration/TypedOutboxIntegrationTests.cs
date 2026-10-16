@@ -85,6 +85,57 @@ public class TypedOutboxIntegrationTests
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Processor_FactoryCreatedPublisher_ReceivesMessages(Boolean typed)
+    {
+        var sink = new TestOutboxPublisher();
+        var invocations = 0;
+        var mongoBuilder = new ServiceCollection()
+                           .AddLogging()
+                           .AddMongo(_container.GetConnectionString(), $"TypedOutboxFactory_{Guid.NewGuid():N}", o =>
+                           {
+                               o.RunConfiguratorsOnStartup = false;
+                               o.ApplyMigrationsOnStartup = false;
+                           });
+
+        void ConfigureFactory(OutboxBuilder o) => o.WithMessage<TestPayload>("TestPayload")
+                                                   .WithPollingInterval(TimeSpan.FromMilliseconds(50))
+                                                   .WithPublisher(_ =>
+                                                   {
+                                                       Interlocked.Increment(ref invocations);
+                                                       return sink;
+                                                   }, ServiceLifetime.Scoped);
+
+        if (typed)
+            mongoBuilder.WithOutbox<FirstDestination>(ConfigureFactory);
+        else
+            mongoBuilder.WithOutbox(ConfigureFactory);
+
+        await using var provider = mongoBuilder.Services.BuildServiceProvider();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        var outbox = typed ? provider.GetRequiredService<IOutbox<FirstDestination>>() : provider.GetRequiredService<IOutbox>();
+        var processor = typed
+            ? provider.GetRequiredService<IOutboxProcessor<FirstDestination>>()
+            : provider.GetRequiredService<IOutboxProcessor>();
+        using (var session = await provider.GetRequiredService<IMongoHelper>().Client.StartSessionAsync())
+        {
+            session.StartTransaction();
+            await outbox.AddMessageAsync(session, new TestPayload
+            {
+                Name = "From factory"
+            });
+            await session.CommitTransactionAsync();
+        }
+
+        await processor.StartAsync();
+        await WaitUntilAsync(() => Task.FromResult(!sink.PublishedMessages.IsEmpty));
+        await processor.StopAsync();
+
+        sink.PublishedMessages.Should().ContainSingle().Which.Type.Should().Be("TestPayload");
+        invocations.Should().BePositive();
+    }
+
     [Test]
     public async Task RunAsync_DifferentRetentionPolicies_CreatesIndependentIndexes()
     {

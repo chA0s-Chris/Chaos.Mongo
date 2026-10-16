@@ -49,6 +49,16 @@ public class OutboxBuilderTests
     }
 
     [Test]
+    public void Validate_FactoryPublisher_Succeeds()
+    {
+        var builder = new OutboxBuilder().WithPublisher(_ => new TestOutboxPublisher()).WithMessage<TestPayload>();
+
+        var act = builder.Validate;
+
+        act.Should().NotThrow();
+    }
+
+    [Test]
     public void Validate_NoMessageTypes_ThrowsInvalidOperationException()
     {
         var builder = new OutboxBuilder();
@@ -67,7 +77,8 @@ public class OutboxBuilderTests
 
         var act = builder.Validate;
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*IOutboxPublisher*");
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*IOutboxPublisher*WithPublisher<T>()*WithPublisher(Func<IServiceProvider, IOutboxPublisher>)*");
     }
 
     [Test]
@@ -289,6 +300,42 @@ public class OutboxBuilderTests
     }
 
     [Test]
+    public void WithPublisher_FactoryAfterType_ReplacesType()
+    {
+        var builder = new OutboxBuilder();
+        Func<IServiceProvider, IOutboxPublisher> factory = _ => new TestOutboxPublisher();
+
+        builder.WithPublisher<TestOutboxPublisher>(ServiceLifetime.Scoped).WithPublisher(factory, ServiceLifetime.Singleton);
+
+        builder.PublisherFactory.Should().BeSameAs(factory);
+        builder.PublisherType.Should().BeNull();
+        builder.PublisherLifetime.Should().Be(ServiceLifetime.Singleton);
+    }
+
+    [Test]
+    public void WithPublisher_Factory_SetsFactoryAndDefaultLifetime()
+    {
+        var builder = new OutboxBuilder();
+        Func<IServiceProvider, IOutboxPublisher> factory = _ => new TestOutboxPublisher();
+
+        builder.WithPublisher(factory).Should().BeSameAs(builder);
+
+        builder.PublisherFactory.Should().BeSameAs(factory);
+        builder.PublisherType.Should().BeNull();
+        builder.PublisherLifetime.Should().Be(ServiceLifetime.Transient);
+    }
+
+    [Test]
+    public void WithPublisher_NullFactory_ThrowsArgumentNullException()
+    {
+        var builder = new OutboxBuilder();
+
+        var act = () => builder.WithPublisher(null!);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("factory");
+    }
+
+    [Test]
     public void WithPublisher_SetsPublisherType()
     {
         var builder = new OutboxBuilder();
@@ -296,6 +343,18 @@ public class OutboxBuilderTests
         builder.WithPublisher<TestOutboxPublisher>();
 
         builder.PublisherType.Should().Be(typeof(TestOutboxPublisher));
+    }
+
+    [Test]
+    public void WithPublisher_TypeAfterFactory_ReplacesFactory()
+    {
+        var builder = new OutboxBuilder();
+
+        builder.WithPublisher(_ => new TestOutboxPublisher(), ServiceLifetime.Singleton).WithPublisher<TestOutboxPublisher>();
+
+        builder.PublisherType.Should().Be(typeof(TestOutboxPublisher));
+        builder.PublisherFactory.Should().BeNull();
+        builder.PublisherLifetime.Should().Be(ServiceLifetime.Transient);
     }
 
     [Test]

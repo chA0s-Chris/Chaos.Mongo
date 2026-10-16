@@ -10,14 +10,14 @@ The goal is a lazy, provider-aware publisher factory for the default and typed o
 
 ## Acceptance Criteria
 
-- [ ] `OutboxBuilder.WithPublisher(Func<IServiceProvider, IOutboxPublisher>, ServiceLifetime)` exists, defaulting to `ServiceLifetime.Transient`. The processor resolves the factory-created publisher with the configured lifetime for both the default outbox and `WithOutbox<TOutbox>` outboxes.
-- [ ] `OutboxBuilder.PublisherFactory` is a new public property exposing the configured factory. Once a publisher is configured, exactly one of `PublisherType` and `PublisherFactory` is non-null. The XML documentation of both properties states this.
-- [ ] The type-based and factory-based `WithPublisher` overloads replace each other's configuration, including the lifetime; the last call wins.
-- [ ] `OutboxBuilder.Validate()` accepts either a publisher type or a factory. When neither is configured, it throws `InvalidOperationException` with a message naming both overloads. A null factory throws `ArgumentNullException`.
-- [ ] Unit tests cover factory registration for each lifetime and both outbox kinds, last-call-wins in both directions between the type and factory overloads, and validation when neither is set. Merged line coverage remains at least 95%.
-- [ ] An integration test shows a factory-created publisher receiving messages from the processor.
-- [ ] `docs/transactional-outbox.md` and `src/Chaos.Mongo.Outbox/README.md` document the factory overload, including which service provider the factory receives for each lifetime. The Builder Options table lists the factory overload and states that one of the two `WithPublisher` forms is required.
-- [ ] `docs/queues.md` documents the existing `MongoQueueBuilder<TPayload>.WithPayloadHandler(Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>>)` overload with an example.
+- [x] `OutboxBuilder.WithPublisher(Func<IServiceProvider, IOutboxPublisher>, ServiceLifetime)` exists, defaulting to `ServiceLifetime.Transient`. The processor resolves the factory-created publisher with the configured lifetime for both the default outbox and `WithOutbox<TOutbox>` outboxes.
+- [x] `OutboxBuilder.PublisherFactory` is a new public property exposing the configured factory. Once a publisher is configured, exactly one of `PublisherType` and `PublisherFactory` is non-null. The XML documentation of both properties states this.
+- [x] The type-based and factory-based `WithPublisher` overloads replace each other's configuration, including the lifetime; the last call wins.
+- [x] `OutboxBuilder.Validate()` accepts either a publisher type or a factory. When neither is configured, it throws `InvalidOperationException` with a message naming both overloads. A null factory throws `ArgumentNullException`.
+- [x] Unit tests cover factory registration for each lifetime and both outbox kinds, last-call-wins in both directions between the type and factory overloads, and validation when neither is set. Merged line coverage remains at least 95%.
+- [x] An integration test shows a factory-created publisher receiving messages from the processor.
+- [x] `docs/transactional-outbox.md` and `src/Chaos.Mongo.Outbox/README.md` document the factory overload, including which service provider the factory receives for each lifetime. The Builder Options table lists the factory overload and states that one of the two `WithPublisher` forms is required.
+- [x] `docs/queues.md` documents the existing `MongoQueueBuilder<TPayload>.WithPayloadHandler(Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>>)` overload with an example.
 
 ## Technical Details
 

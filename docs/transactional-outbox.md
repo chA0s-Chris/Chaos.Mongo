@@ -14,6 +14,7 @@ Transactional outbox support for MongoDB, built on top of `Chaos.Mongo`.
   - [IOutboxProcessor](#ioutboxprocessor)
 - [Configuration](#configuration)
   - [Registering the Outbox](#registering-the-outbox)
+  - [Publisher Factories](#publisher-factories)
   - [Multiple Typed Outboxes](#multiple-typed-outboxes)
   - [Builder Options](#builder-options)
   - [Processing Filter](#processing-filter)
@@ -251,10 +252,40 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 
 - `IOutbox` as a singleton
 - `IOutboxProcessor` as a singleton
-- Your `IOutboxPublisher` implementation
+- Your `IOutboxPublisher` implementation or factory
 - `OutboxOptions`
 - `OutboxConfigurator` for index creation
 - `OutboxHostedService` when `WithAutoStartProcessor()` is enabled
+
+### Publisher Factories
+
+Use the factory overload of `WithPublisher` when the publisher needs services or
+values from the container that a type registration cannot supply:
+
+```csharp
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox(o => o
+        .WithMessage<OrderPlacedMessage>("OrderPlaced")
+        .WithPublisher(
+            sp => new BrokerPublisher(
+                sp.GetRequiredService<IBrokerClient>(),
+                sp.GetRequiredService<IOptions<BrokerOptions>>().Value.Topic),
+            ServiceLifetime.Scoped));
+```
+
+The factory runs lazily when the processor resolves the publisher, not when
+`WithOutbox` is called, so the configure delegate and its registration checks still
+run eagerly. The lifetime defaults to transient and decides which provider the
+factory receives:
+
+- **Transient** and **scoped** factories run with the processor's per-batch scope,
+  so they can resolve scoped services. Both run once per nonempty batch.
+- A **singleton** factory runs once with the root provider and must not resolve
+  scoped services.
+
+The factory works the same way for `WithOutbox<TOutbox>`. A type and a factory replace
+each other: the last `WithPublisher` call wins. A factory that returns `null` causes
+publisher resolution to fail with an `InvalidOperationException` that names the outbox.
 
 ### Multiple Typed Outboxes
 
@@ -356,7 +387,8 @@ destination's processor.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `WithPublisher<TPublisher>()` | Required | Registers the publisher implementation; default lifetime is transient and an overload accepts `ServiceLifetime` |
+| `WithPublisher<TPublisher>()` | Required¹ | Registers the publisher implementation; default lifetime is transient and an overload accepts `ServiceLifetime` |
+| `WithPublisher(Func<IServiceProvider, IOutboxPublisher>, ServiceLifetime)` | Required¹ | Registers a publisher factory; lifetime defaults to transient (see [Publisher Factories](#publisher-factories)) |
 | `WithMessage<TPayload>(string? discriminator = null)` | Required | Registers a payload type; discriminator defaults to the class name |
 | `WithCollectionName(string)` | `"Outbox"` | Sets the outbox collection name |
 | `WithMaxRetries(int)` | `5` | Maximum failed attempts before a message becomes `Failed` |
@@ -367,6 +399,8 @@ destination's processor.
 | `WithLockTimeout(TimeSpan)` | `5m` | When a locked message becomes reclaimable |
 | `WithRetentionPeriod(TimeSpan)` | Disabled | Creates TTL indexes for processed and failed messages |
 | `WithAutoStartProcessor()` | Disabled | Starts the processor automatically via hosted service |
+
+¹ One of the two `WithPublisher` forms is required. Calling either one replaces any earlier publisher configuration.
 
 ### Processing Filter
 
