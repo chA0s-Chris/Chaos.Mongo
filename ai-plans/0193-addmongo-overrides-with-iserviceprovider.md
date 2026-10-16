@@ -10,13 +10,13 @@ The goal is a first-class way to configure `MongoOptions` with access to the `IS
 
 ## Acceptance Criteria
 
-- [ ] `MongoBuilder.ConfigureOptions(Action<IServiceProvider, MongoOptions>)` is available after every `AddMongo` entry point, including `AddMongo(IConfiguration, String)`. It runs after the configuration applied by that entry point and returns the builder for chaining.
-- [ ] New `AddMongo` overloads accept a required `Action<IServiceProvider, MongoOptions>` for the parameterless, connection-string, and `MongoUrl` entry points. The connection-string and `MongoUrl` overloads set `Url` and `DefaultDatabase` before invoking the delegate, consistent with the existing overloads.
-- [ ] Options configured through the new APIs are still validated by `MongoOptionsValidation` and `ValidateOnStart`.
-- [ ] Null delegates and null URLs throw `ArgumentNullException`, and null or whitespace connection strings throw `ArgumentException`, at the call site, consistent with the existing overloads.
-- [ ] Existing usages keep compiling and behaving unchanged, including `AddMongo()`, `AddMongo(connectionString)`, `AddMongo(url)`, and `Action<MongoOptions>` lambdas. The only exception is the documented literal-`null` `configure` argument on the three-argument connection-string and `MongoUrl` overloads.
-- [ ] Automated tests cover the new APIs, and merged line coverage remains at least 95%.
-- [ ] `docs/configuration.md` (and `docs/getting-started.md` where appropriate) documents the new APIs with a DI-backed example. The docs state that the delegate runs when the options are first resolved (at startup under a generic host, because of `ValidateOnStart`) and that, for `IOptions<MongoOptions>` as used by the library, it receives the root provider.
+- [x] `MongoBuilder.ConfigureOptions(Action<IServiceProvider, MongoOptions>)` is available after every `AddMongo` entry point, including `AddMongo(IConfiguration, String)`. It runs after the configuration applied by that entry point and returns the builder for chaining.
+- [x] New `AddMongo` overloads accept a required `Action<IServiceProvider, MongoOptions>` for the parameterless, connection-string, and `MongoUrl` entry points. The connection-string and `MongoUrl` overloads set `Url` and `DefaultDatabase` before invoking the delegate, consistent with the existing overloads.
+- [x] Options configured through the new APIs are still validated by `MongoOptionsValidation` and `ValidateOnStart`.
+- [x] Null delegates and null URLs throw `ArgumentNullException`, and null or whitespace connection strings throw `ArgumentException`, at the call site, consistent with the existing overloads.
+- [x] Existing usages keep compiling and behaving unchanged, including `AddMongo()`, `AddMongo(connectionString)`, `AddMongo(url)`, and `Action<MongoOptions>` lambdas. The only exception is the documented literal-`null` `configure` argument on the three-argument connection-string and `MongoUrl` overloads.
+- [x] Automated tests cover the new APIs, and merged line coverage remains at least 95%.
+- [x] `docs/configuration.md` (and `docs/getting-started.md` where appropriate) documents the new APIs with a DI-backed example. The docs state that the delegate runs when the options are first resolved (at startup under a generic host, because of `ValidateOnStart`) and that, for `IOptions<MongoOptions>` as used by the library, it receives the root provider.
 
 ## Technical Details
 

@@ -48,6 +48,34 @@ public class MongoBuilder
     public IServiceCollection Services => _services;
 
     /// <summary>
+    /// Configures <see cref="MongoOptions"/> using services from the dependency-injection container.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     The action runs after all configuration registered before this call, such as the configuration applied by
+    ///     the <c>AddMongo</c> overload that created this builder. Options validation runs after all configuration.
+    ///     </para>
+    ///     <para>
+    ///     The action is invoked when the options are first resolved (at startup under a generic host, because the
+    ///     options are validated on start). The library resolves them through
+    ///     <see cref="Microsoft.Extensions.Options.IOptions{TOptions}"/>, so the action receives the root service
+    ///     provider; resolving scoped services from it throws when scope validation is enabled.
+    ///     </para>
+    /// </remarks>
+    /// <param name="configure">The action that configures the options using the service provider.</param>
+    /// <returns>This builder instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="configure"/> is null.</exception>
+    public MongoBuilder ConfigureOptions(Action<IServiceProvider, MongoOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        _services.AddOptions<MongoOptions>()
+                 .Configure<IServiceProvider>((options, serviceProvider) => configure(serviceProvider, options));
+
+        return this;
+    }
+
+    /// <summary>
     /// Registers a specific MongoDB configurator.
     /// </summary>
     /// <typeparam name="T">The type of configurator to register.</typeparam>
