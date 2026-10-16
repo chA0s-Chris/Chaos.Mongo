@@ -68,6 +68,23 @@ var mongoUrl = new MongoUrl("mongodb://localhost:27017/myDatabase");
 services.AddMongo(mongoUrl);
 ```
 
+### Using registered services
+
+The parameterless, connection-string, and `MongoUrl` overloads each have a variant whose delegate also receives the `IServiceProvider`. `ConfigureOptions` adds such a delegate after any entry point, including configuration binding:
+
+```csharp
+services.AddMongo("mongodb://localhost:27017", null, (serviceProvider, options) =>
+{
+    var environment = serviceProvider.GetRequiredService<IHostEnvironment>();
+    options.DefaultDatabase = $"myapp-{environment.EnvironmentName.ToLowerInvariant()}";
+});
+
+services.AddMongo(configuration, "MongoDB")
+        .ConfigureOptions((serviceProvider, options) => { /* ... */ });
+```
+
+See [Configuring options with registered services](configuration.md#configuring-options-with-registered-services) for when the delegate runs and which services it can resolve.
+
 ## Collection type mapping
 
 Map CLR types to collection names during registration:

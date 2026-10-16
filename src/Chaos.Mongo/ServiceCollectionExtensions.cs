@@ -35,6 +35,25 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Adds MongoDB services to the service collection and configures <see cref="MongoOptions"/> using services from
+    /// the dependency-injection container.
+    /// </summary>
+    /// <remarks>
+    /// The action is invoked when the options are first resolved and receives the root service provider.
+    /// See <see cref="MongoBuilder.ConfigureOptions"/> for details.
+    /// </remarks>
+    /// <param name="services">The service collection to add MongoDB services to.</param>
+    /// <param name="configure">The action that configures <see cref="MongoOptions"/> using the service provider.</param>
+    /// <returns>A <see cref="MongoBuilder"/> for configuring MongoDB services.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="configure"/> is null.</exception>
+    public static MongoBuilder AddMongo(this IServiceCollection services, Action<IServiceProvider, MongoOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        return services.AddMongo().ConfigureOptions(configure);
+    }
+
+    /// <summary>
     /// Adds MongoDB services to the service collection using configuration from an <see cref="IConfiguration"/> section.
     /// </summary>
     /// <param name="services">The service collection to add MongoDB services to.</param>
@@ -80,6 +99,35 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Adds MongoDB services to the service collection using a connection string and configures
+    /// <see cref="MongoOptions"/> using services from the dependency-injection container.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MongoOptions.Url"/> and <see cref="MongoOptions.DefaultDatabase"/> are set before
+    /// <paramref name="configure"/> is invoked. The action is invoked when the options are first resolved and receives
+    /// the root service provider. See <see cref="MongoBuilder.ConfigureOptions"/> for details.
+    /// </remarks>
+    /// <param name="services">The service collection to add MongoDB services to.</param>
+    /// <param name="connectionString">The MongoDB connection string.</param>
+    /// <param name="databaseName">
+    /// The database name to use, or <c>null</c> to use the database name from the connection string.
+    /// </param>
+    /// <param name="configure">The action that configures <see cref="MongoOptions"/> using the service provider.</param>
+    /// <returns>A <see cref="MongoBuilder"/> for configuring MongoDB services.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="connectionString"/> is null or whitespace.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="configure"/> is null.</exception>
+    public static MongoBuilder AddMongo(this IServiceCollection services,
+                                        String connectionString,
+                                        String? databaseName,
+                                        Action<IServiceProvider, MongoOptions> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        return services.AddMongo(connectionString, databaseName).ConfigureOptions(configure);
+    }
+
+    /// <summary>
     /// Adds MongoDB services to the service collection using a MongoDB URL.
     /// </summary>
     /// <param name="services">The service collection to add MongoDB services to.</param>
@@ -98,6 +146,32 @@ public static class ServiceCollectionExtensions
             options.DefaultDatabase = databaseName;
             configure?.Invoke(options);
         });
+    }
+
+    /// <summary>
+    /// Adds MongoDB services to the service collection using a MongoDB URL and configures <see cref="MongoOptions"/>
+    /// using services from the dependency-injection container.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MongoOptions.Url"/> and <see cref="MongoOptions.DefaultDatabase"/> are set before
+    /// <paramref name="configure"/> is invoked. The action is invoked when the options are first resolved and receives
+    /// the root service provider. See <see cref="MongoBuilder.ConfigureOptions"/> for details.
+    /// </remarks>
+    /// <param name="services">The service collection to add MongoDB services to.</param>
+    /// <param name="url">The MongoDB URL.</param>
+    /// <param name="databaseName">The database name to use, or <c>null</c> to use the database name from the URL.</param>
+    /// <param name="configure">The action that configures <see cref="MongoOptions"/> using the service provider.</param>
+    /// <returns>A <see cref="MongoBuilder"/> for configuring MongoDB services.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="url"/> or <paramref name="configure"/> is null.</exception>
+    public static MongoBuilder AddMongo(this IServiceCollection services,
+                                        MongoUrl url,
+                                        String? databaseName,
+                                        Action<IServiceProvider, MongoOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        return services.AddMongo(url, databaseName).ConfigureOptions(configure);
     }
 
     internal static IServiceCollection AddMongoQueue(this IServiceCollection services)

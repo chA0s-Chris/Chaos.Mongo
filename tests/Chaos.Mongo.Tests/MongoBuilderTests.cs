@@ -4,11 +4,144 @@ namespace Chaos.Mongo.Tests;
 
 using Chaos.Mongo.Configuration;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using MongoDB.Driver;
 using NUnit.Framework;
 
 public class MongoBuilderTests
 {
+    [Test]
+    public void ConfigureOptions_AfterAddMongoWithConfiguration_OverridesBoundValues()
+    {
+        // Arrange
+        IConfiguration configuration = new ConfigurationBuilder()
+                                       .AddInMemoryCollection(new Dictionary<String, String?>
+                                       {
+                                           ["Mongo:Url"] = "mongodb://localhost:27017/confdb",
+                                           ["Mongo:DefaultDatabase"] = "boundDb"
+                                       })
+                                       .Build();
+        var services = new ServiceCollection();
+        String? observedDefaultDatabase = null;
+
+        // Act
+        services.AddMongo(configuration, "Mongo")
+                .ConfigureOptions((_, options) =>
+                {
+                    observedDefaultDatabase = options.DefaultDatabase;
+                    options.DefaultDatabase = "overriddenDb";
+                });
+
+        // Assert
+        var options = services.BuildServiceProvider().GetRequiredService<IOptions<MongoOptions>>().Value;
+        observedDefaultDatabase.Should().Be("boundDb");
+        options.DefaultDatabase.Should().Be("overriddenDb");
+        options.Url.Should().NotBeNull();
+        options.Url!.DatabaseName.Should().Be("confdb");
+    }
+
+    [Test]
+    public void ConfigureOptions_AfterAddMongoWithConfigureAction_RunsAfterConfigureAction()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        String? observedHolderId = null;
+
+        // Act
+        services.AddMongo(options =>
+                {
+                    options.Url = new MongoUrl("mongodb://localhost:27017/test");
+                    options.HolderId = "fromConfigureAction";
+                })
+                .ConfigureOptions((_, options) => observedHolderId = options.HolderId);
+
+        // Assert
+        _ = services.BuildServiceProvider().GetRequiredService<IOptions<MongoOptions>>().Value;
+        observedHolderId.Should().Be("fromConfigureAction");
+    }
+
+    [Test]
+    public void ConfigureOptions_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        // Act
+        var result = builder.ConfigureOptions((_, _) => { });
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void ConfigureOptions_WhenCalledMultipleTimes_RunsInRegistrationOrder()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var invocations = new List<String>();
+
+        // Act
+        services.AddMongo("mongodb://localhost:27017/test")
+                .ConfigureOptions((_, _) => invocations.Add("first"))
+                .ConfigureOptions((_, _) => invocations.Add("second"));
+
+        // Assert
+        _ = services.BuildServiceProvider().GetRequiredService<IOptions<MongoOptions>>().Value;
+        invocations.Should().Equal("first", "second");
+    }
+
+    [Test]
+    public void ConfigureOptions_WhenConfigureIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var builder = new MongoBuilder(new ServiceCollection());
+
+        // Act
+        var act = () => builder.ConfigureOptions(null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>()
+           .WithParameterName("configure");
+    }
+
+    [Test]
+    public void ConfigureOptions_WhenUrlIsMissing_FailsValidation()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddMongo()
+                .ConfigureOptions((_, options) => options.UseDefaultCollectionNames = false);
+        var options = services.BuildServiceProvider().GetRequiredService<IOptions<MongoOptions>>();
+
+        // Act
+        var act = () => _ = options.Value;
+
+        // Assert
+        act.Should().Throw<OptionsValidationException>()
+           .WithMessage("*MongoOptions.Url must be configured*");
+    }
+
+    [Test]
+    public void ConfigureOptions_WhenUrlIsSuppliedFromRegisteredService_PassesValidation()
+    {
+        // Arrange
+        var url = new MongoUrl("mongodb://localhost:27017/fromService");
+        var services = new ServiceCollection();
+        services.AddSingleton(url);
+
+        // Act
+        services.AddMongo()
+                .ConfigureOptions((serviceProvider, options) => options.Url = serviceProvider.GetRequiredService<MongoUrl>());
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IStartupValidator>().Validate();
+        act.Should().NotThrow();
+        provider.GetRequiredService<IOptions<MongoOptions>>().Value.Url.Should().BeSameAs(url);
+    }
+
     [Test]
     public void Constructor_WhenServicesIsNull_ThrowsArgumentNullException()
     {

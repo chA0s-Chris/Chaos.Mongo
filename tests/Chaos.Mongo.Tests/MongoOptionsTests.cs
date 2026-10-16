@@ -114,6 +114,64 @@ public class MongoOptionsTests
     }
 
     [Test]
+    public void AddMongo_WithConnectionStringAndServiceProviderConfigure_SetsUrlAndDefaultDatabaseBeforeInvokingConfigure()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        MongoUrl? observedUrl = null;
+        String? observedDefaultDatabase = null;
+        IServiceProvider? observedServiceProvider = null;
+
+        // Act
+        services.AddMongo("mongodb://localhost:27017", "csDb", (serviceProvider, options) =>
+        {
+            observedServiceProvider = serviceProvider;
+            observedUrl = options.Url;
+            observedDefaultDatabase = options.DefaultDatabase;
+        });
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<MongoOptions>>().Value;
+        observedServiceProvider.Should().NotBeNull();
+        observedUrl.Should().NotBeNull();
+        observedUrl!.Server.Host.Should().Be("localhost");
+        observedDefaultDatabase.Should().Be("csDb");
+        options.DefaultDatabase.Should().Be("csDb");
+    }
+
+    [Test]
+    public void AddMongo_WithConnectionStringAndServiceProviderConfigure_WhenConfigureIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        var act = () => services.AddMongo("mongodb://localhost:27017/test", null, (Action<IServiceProvider, MongoOptions>)null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>()
+           .WithParameterName("configure");
+        services.Should().BeEmpty();
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void AddMongo_WithConnectionStringAndServiceProviderConfigure_WhenConnectionStringIsInvalid_ThrowsArgumentException(String? connectionString)
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        var act = () => services.AddMongo(connectionString!, null, (_, _) => { });
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithParameterName("connectionString");
+    }
+
+    [Test]
     public void AddMongo_WithConnectionString_RegistersUrlAndValidates()
     {
         // Arrange
@@ -159,6 +217,105 @@ public class MongoOptionsTests
 
         // Assert
         factoryMock.Verify(f => f.CreateConnection(url, databaseName), Times.Once);
+    }
+
+    [Test]
+    public void AddMongo_WithMongoUrlAndServiceProviderConfigure_SetsUrlAndDefaultDatabaseBeforeInvokingConfigure()
+    {
+        // Arrange
+        var url = new MongoUrl("mongodb://localhost:27017");
+        var services = new ServiceCollection();
+        MongoUrl? observedUrl = null;
+        String? observedDefaultDatabase = null;
+
+        // Act
+        services.AddMongo(url, "urlDb", (_, options) =>
+        {
+            observedUrl = options.Url;
+            observedDefaultDatabase = options.DefaultDatabase;
+        });
+
+        // Assert
+        var options = services.BuildServiceProvider().GetRequiredService<IOptions<MongoOptions>>().Value;
+        observedUrl.Should().BeSameAs(url);
+        observedDefaultDatabase.Should().Be("urlDb");
+        options.DefaultDatabase.Should().Be("urlDb");
+    }
+
+    [Test]
+    public void AddMongo_WithMongoUrlAndServiceProviderConfigure_WhenConfigureIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        var act = () => services.AddMongo(new MongoUrl("mongodb://localhost:27017/test"), null, (Action<IServiceProvider, MongoOptions>)null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>()
+           .WithParameterName("configure");
+        services.Should().BeEmpty();
+    }
+
+    [Test]
+    public void AddMongo_WithMongoUrlAndServiceProviderConfigure_WhenUrlIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        var act = () => services.AddMongo((MongoUrl)null!, null, (_, _) => { });
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>()
+           .WithParameterName("url");
+    }
+
+    [Test]
+    public void AddMongo_WithServiceProviderConfigure_ResolvesRegisteredService()
+    {
+        // Arrange
+        var url = new MongoUrl("mongodb://localhost:27017/fromService");
+        var services = new ServiceCollection();
+        services.AddSingleton(url);
+
+        // Act
+        services.AddMongo((serviceProvider, options) => options.Url = serviceProvider.GetRequiredService<MongoUrl>());
+
+        // Assert
+        var options = services.BuildServiceProvider().GetRequiredService<IOptions<MongoOptions>>().Value;
+        options.Url.Should().BeSameAs(url);
+    }
+
+    [Test]
+    public void AddMongo_WithServiceProviderConfigure_WhenConfigureIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        var act = () => services.AddMongo((Action<IServiceProvider, MongoOptions>)null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>()
+           .WithParameterName("configure");
+        services.Should().BeEmpty();
+    }
+
+    [Test]
+    public void AddMongo_WithServiceProviderConfigure_WhenUrlIsMissing_FailsStartupValidation()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddMongo((_, options) => options.DefaultDatabase = "noUrl");
+        var startupValidator = services.BuildServiceProvider().GetRequiredService<IStartupValidator>();
+
+        // Act
+        var act = () => startupValidator.Validate();
+
+        // Assert
+        act.Should().Throw<OptionsValidationException>()
+           .WithMessage("*MongoOptions.Url must be configured*");
     }
 
     [Test]
