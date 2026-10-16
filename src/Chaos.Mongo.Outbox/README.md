@@ -107,6 +107,24 @@ and singleton publishers live for their destination's service provider lifetime.
 The same implementation type registered for two outboxes still has independent
 instances and lifetimes. Singleton publishers must not depend on scoped services.
 
+When a publisher needs container services or settings, register a factory instead
+of a type. It works for default and typed outboxes:
+
+```csharp
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox(o => o
+        .WithMessage<OrderPlaced>("OrderPlaced")
+        .WithPublisher(
+            sp => new BrokerPublisher(sp.GetRequiredService<IBrokerClient>()),
+            ServiceLifetime.Scoped));
+```
+
+The factory runs when the processor resolves the publisher. Transient (the default)
+and scoped factories receive the per-batch scope's provider and can resolve scoped
+services. A singleton factory runs once with the root provider and must not resolve
+scoped services. The last `WithPublisher` call wins, whether it passes a type or a
+factory.
+
 Automatic startup initializes and starts every enabled processor. Successful index
 initialization is shared with general MongoDB startup and cached for the
 configurator's lifetime; failed or canceled attempts can be retried. For manual

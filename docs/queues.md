@@ -48,6 +48,16 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithClosedItemRetention(TimeSpan.FromHours(6)));
 ```
 
+When the handler needs more than constructor injection can supply, register a factory instead. The handler is registered as transient, and the factory runs with the root `IServiceProvider` each time an item is handled, so it must not resolve scoped services. A queue accepts either a handler type or a factory, not both:
+
+```csharp
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithQueue<EmailMessage>(queue => queue
+        .WithPayloadHandler(sp => new EmailMessageHandler(
+            sp.GetRequiredService<IEmailService>()))
+        .WithAutoStartSubscription());
+```
+
 If no collection name is specified, `IMongoQueueCollectionNameGenerator` derives one from the payload type. A queue is registered as `IMongoQueue<TPayload>` and as the non-generic `IMongoQueue`.
 
 ### Processing options

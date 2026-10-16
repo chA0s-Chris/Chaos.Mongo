@@ -63,6 +63,30 @@ public static class MongoBuilderExtensions
         return builder;
     }
 
+    private static ServiceDescriptor CreatePublisherDescriptor(OutboxBuilder outboxBuilder, OutboxRegistration registration)
+    {
+        var lifetime = outboxBuilder.PublisherLifetime;
+        if (outboxBuilder.PublisherFactory is { } factory)
+        {
+            var identity = registration.Options.Identity;
+
+            IOutboxPublisher CreatePublisher(IServiceProvider serviceProvider)
+            {
+                var publisher = factory.Invoke(serviceProvider);
+                return publisher ?? throw new InvalidOperationException($"The IOutboxPublisher factory of outbox '{identity}' returned null.");
+            }
+
+            return registration.MarkerType is null
+                ? new ServiceDescriptor(typeof(IOutboxPublisher), CreatePublisher, lifetime)
+                : new ServiceDescriptor(typeof(IOutboxPublisher), registration, (sp, _) => CreatePublisher(sp), lifetime);
+        }
+
+        var publisherType = outboxBuilder.PublisherType ?? throw new InvalidOperationException("An IOutboxPublisher implementation is required.");
+        return registration.MarkerType is null
+            ? new ServiceDescriptor(typeof(IOutboxPublisher), publisherType, lifetime)
+            : new ServiceDescriptor(typeof(IOutboxPublisher), registration, publisherType, lifetime);
+    }
+
     private static OutboxRegistration Register(MongoBuilder builder, Action<OutboxBuilder> configure, Type? markerType)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -86,13 +110,10 @@ public static class MongoBuilderExtensions
                 $"Outbox '{identity}' and outbox '{conflict.Options.Identity}' both use collection '{options.CollectionName}'. Configure distinct collection names.");
         }
 
-        var publisherType = outboxBuilder.PublisherType ?? throw new InvalidOperationException("An IOutboxPublisher implementation is required.");
         OutboxSerializationSetup.RegisterClassMaps(outboxBuilder.MessageTypes);
         var registration = new OutboxRegistration(markerType, options);
         builder.Services.AddSingleton(registration);
-        builder.Services.Add(markerType is null
-                                 ? new ServiceDescriptor(typeof(IOutboxPublisher), publisherType, outboxBuilder.PublisherLifetime)
-                                 : new ServiceDescriptor(typeof(IOutboxPublisher), registration, publisherType, outboxBuilder.PublisherLifetime));
+        builder.Services.Add(CreatePublisherDescriptor(outboxBuilder, registration));
         builder.Services.AddTransient<IMongoConfigurator>(registration.GetConfigurator);
         builder.Services.TryAddTransient<IOutboxConfiguratorRunner>(sp => new OutboxConfiguratorRunner(
                                                                         sp.GetRequiredService<IMongoHelper>(),
