@@ -111,12 +111,6 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
         }
     }
 
-    private static Byte[] ComputeGenesis(RawBsonDocument versionOneDocument, Guid aggregateId)
-        => EventDocumentFields<TAggregate>.TryReadAggregateType(versionOneDocument, out var aggregateType)
-            ? EventIntegrityChain.ComputeGenesis(aggregateType, aggregateId)
-            : throw new MongoEventStoreException(
-                $"Version 1 of aggregate '{aggregateId}' has no aggregate type, so the stream cannot be sealed.");
-
     private static void DisposeAll(List<RawBsonDocument> documents)
     {
         foreach (var document in documents)
@@ -305,7 +299,7 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
 
             // The genesis value comes from the aggregate type stored in version 1, the same bytes an independent
             // verifier reads, so a renamed aggregate class does not change it.
-            previousHash ??= ComputeGenesis(document, aggregateId);
+            previousHash ??= EventDocumentFields<TAggregate>.ComputeGenesis(document, aggregateId);
             var integrity = EventIntegrityChain.Seal(document.ToBson(), ResolvePersonalDataPaths(document), previousHash, IntegritySealMode.Retroactive);
             var filter = new BsonDocument
             {

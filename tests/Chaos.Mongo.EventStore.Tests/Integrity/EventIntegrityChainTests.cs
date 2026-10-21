@@ -31,6 +31,15 @@ public class EventIntegrityChainTests
     }
 
     [Test]
+    public void ComputeGenesis_KnownInput_ReturnsIndependentlyComputedValue()
+    {
+        // Expected value computed outside .NET: SHA-256(tag ‖ "LedgerAggregate" ‖ 0x00 ‖ UUID bytes in RFC 9562 order).
+        var genesis = EventIntegrityChain.ComputeGenesis("LedgerAggregate", Guid.Parse("0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e01"));
+
+        ToHex(genesis).Should().Be("9b48b7940e512806721730931c5ca02b3295ea1c4f18264b504e0b855be260a7");
+    }
+
+    [Test]
     public void ComputeGenesis_SameInput_ReturnsSameSha256Value()
     {
         var aggregateId = Guid.NewGuid();

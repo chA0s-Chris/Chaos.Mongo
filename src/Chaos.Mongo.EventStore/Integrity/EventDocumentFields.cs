@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Integrity;
 
+using Chaos.Mongo.EventStore.Errors;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
@@ -44,6 +45,20 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     /// Gets the element name of <see cref="Event{TAggregate}.Version"/>.
     /// </summary>
     public static String Version => ElementNameOf(nameof(Event<TAggregate>.Version));
+
+    /// <summary>
+    /// Computes the genesis value of a stream from the aggregate type stored in its version-1 event, the same bytes an
+    /// independent verifier reads, so a renamed aggregate class does not change it.
+    /// </summary>
+    /// <param name="versionOneDocument">The stored version-1 event.</param>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <returns>The genesis value.</returns>
+    /// <exception cref="MongoEventStoreException">Thrown when the event stores no aggregate type as a string.</exception>
+    public static Byte[] ComputeGenesis(BsonDocument versionOneDocument, Guid aggregateId)
+        => TryReadAggregateType(versionOneDocument, out var aggregateType)
+            ? EventIntegrityChain.ComputeGenesis(aggregateType, aggregateId)
+            : throw new MongoEventStoreException(
+                $"Version 1 of aggregate '{aggregateId}' stores no aggregate type as a string, so the stream cannot be sealed.");
 
     /// <summary>
     /// Creates a filter that excludes events whose concrete type is a registered observational event type.

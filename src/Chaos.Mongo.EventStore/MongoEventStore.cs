@@ -78,16 +78,6 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <summary>
-    /// Computes the genesis value from the aggregate type stored in the version-1 event, the same bytes an
-    /// independent verifier reads.
-    /// </summary>
-    private static Byte[] ComputeGenesis(BsonDocument versionOneDocument, Guid aggregateId)
-        => EventDocumentFields<TAggregate>.TryReadAggregateType(versionOneDocument, out var aggregateType)
-            ? EventIntegrityChain.ComputeGenesis(aggregateType, aggregateId)
-            : throw new MongoEventStoreException(
-                $"Version 1 of aggregate '{aggregateId}' has no aggregate type, so the stream cannot be sealed.");
-
-    /// <summary>
     /// Creates an identifier for an event that was appended without one. Version 7 GUIDs are
     /// time-ordered and reduce fragmentation of the unique <c>_id</c> index on the events
     /// collection, so they are preferred wherever the target framework provides them.
@@ -580,7 +570,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         var aggregateId = eventList[0].AggregateId;
         var firstVersion = eventList[0].Version;
         var previousHash = firstVersion == 1
-            ? ComputeGenesis(eventDocuments[0], aggregateId)
+            ? EventDocumentFields<TAggregate>.ComputeGenesis(eventDocuments[0], aggregateId)
             : await ReadPredecessorHashAsync(session, aggregateId, firstVersion - 1, cancellationToken);
 
         var sealedDocuments = new List<BsonDocument>(eventDocuments.Count);
