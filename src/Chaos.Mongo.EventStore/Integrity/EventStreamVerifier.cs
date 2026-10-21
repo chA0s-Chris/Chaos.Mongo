@@ -100,14 +100,25 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The verification result.</returns>
-    public async Task<StreamVerificationResult> VerifyStreamAsync(Guid aggregateId, CancellationToken cancellationToken = default)
+    public Task<StreamVerificationResult> VerifyStreamAsync(Guid aggregateId, CancellationToken cancellationToken = default)
+        => VerifyStreamAsync(aggregateId, null, cancellationToken);
+
+    /// <summary>
+    /// Verifies a stream as <see cref="VerifyStreamAsync(Guid, CancellationToken)"/> does, reading in a session, so a
+    /// snapshot session sees the stream and its leaves at one point in time.
+    /// </summary>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="session">The session to read in, or <c>null</c>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The verification result.</returns>
+    internal async Task<StreamVerificationResult> VerifyStreamAsync(Guid aggregateId, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
         // The leaves are read first: events are only appended and erasure keeps their hashes, so every leaf completed
         // before the scan names a version the scan sees, while one completed during the scan could not.
         var leaves = _anchors is null
             ? new StreamLeaves([], null)
-            : await _anchors.Store.ReadStreamLeavesAsync(_aggregateTypeName, aggregateId, 1, cancellationToken);
-        var scan = await ScanChainAsync(aggregateId, cancellationToken);
+            : await _anchors.Store.ReadStreamLeavesAsync(_aggregateTypeName, aggregateId, 1, session, cancellationToken);
+        var scan = await ScanChainAsync(aggregateId, session, cancellationToken);
         var events = BuildVerifiedEvents(scan, leaves.Completed);
         var transitions = FindSealModeTransitions(scan.Events);
 
@@ -436,13 +447,15 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// <summary>
     /// Recomputes the chain of a stream from version 1 until the first broken version or the end of the stream.
     /// </summary>
-    private async Task<ChainScan> ScanChainAsync(Guid aggregateId, CancellationToken cancellationToken)
+    private async Task<ChainScan> ScanChainAsync(Guid aggregateId, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
         var versionElement = EventDocumentFields<TAggregate>.Version;
         var discriminatorElement = EventDocumentFields<TAggregate>.Discriminator;
-        using var cursor = await GetEventsCollection().Find(EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId))
-                                                      .Sort(new BsonDocument(versionElement, 1))
-                                                      .ToCursorAsync(cancellationToken);
+        var filter = EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId);
+        var events = GetEventsCollection();
+        using var cursor = await (session is null ? events.Find(filter) : events.Find(session, filter))
+                                 .Sort(new BsonDocument(versionElement, 1))
+                                 .ToCursorAsync(cancellationToken);
 
         var scan = new ChainScan();
         Byte[]? previousHash = null;

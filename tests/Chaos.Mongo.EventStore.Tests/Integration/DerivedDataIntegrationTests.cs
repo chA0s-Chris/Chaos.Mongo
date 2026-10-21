@@ -70,6 +70,26 @@ public class DerivedDataIntegrationTests
     }
 
     [Test]
+    public async Task VerifyAsync_AppendDuringCheck_ReadsOneSnapshot()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        var verifier = GetVerifier(context);
+        verifier.StreamVerified = async () =>
+        {
+            // A checkpoint at version 6 records a chain hash the verified stream does not contain.
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 5)]);
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 6)]);
+        };
+
+        var result = await verifier.VerifyAsync(aggregateId);
+
+        result.IsConsistent.Should().BeTrue();
+        result.Checkpoints.Select(c => c.Version).Should().Equal(2, 4);
+        (await context.CountEventsAsync(aggregateId)).Should().Be(6);
+    }
+
+    [Test]
     public async Task VerifyAsync_BrokenChain_ComparesNoDerivedData()
     {
         var context = await CreateContextAsync();
@@ -81,7 +101,25 @@ public class DerivedDataIntegrationTests
 
         result.Stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.HashMismatch));
         result.ReadModel.Should().Be(ReadModelStatus.NotChecked);
+        result.CreationTimeConsistent.Should().BeTrue();
         result.Checkpoints.Should().BeEmpty();
+        result.IsConsistent.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task VerifyAsync_ChangedReadModelCreationTime_ReportsInconsistentCreationTime()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+                     .UpdateOneAsync(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)),
+                                     Builders<BsonDocument>.Update.Set("CreatedUtc", new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        result.ReadModel.Should().Be(ReadModelStatus.Matches);
+        result.Checkpoints.Should().OnlyContain(c => c.IsConsistent);
+        result.CreationTimeConsistent.Should().BeFalse();
         result.IsConsistent.Should().BeFalse();
     }
 
@@ -173,7 +211,36 @@ public class DerivedDataIntegrationTests
         var result = await GetVerifier(context).VerifyAsync(aggregateId);
 
         result.ReadModel.Should().Be(deleteReadModel ? ReadModelStatus.Missing : ReadModelStatus.Differs);
-        result.Checkpoints.Should().OnlyContain(c => c.IsConsistent, "checkpoints take their creation time from themselves without a read model");
+        result.Checkpoints.Should().OnlyContain(c => c.IsConsistent);
+        result.CreationTimeConsistent.Should().BeTrue();
+        result.IsConsistent.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task VerifyAsync_RevisionRemovedAfterObservationalEvent_ReportsReadModelAndCheckpoints()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = Guid.NewGuid();
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1)]);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateAudit(aggregateId, 2)]);
+        for (var version = 3; version <= 5; version++)
+        {
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, version)]);
+        }
+
+        var intact = await GetVerifier(context).VerifyAsync(aggregateId);
+        var idFilter = new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard));
+        await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+                     .UpdateOneAsync(idFilter, Builders<BsonDocument>.Update.Unset("Revision"));
+        await GetCheckpoints(context).UpdateManyAsync(FilterDefinition<BsonDocument>.Empty,
+                                                      Builders<BsonDocument>.Update.Unset("Revision").Unset("State.Revision"));
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        intact.IsConsistent.Should().BeTrue();
+        intact.Checkpoints.Should().NotBeEmpty();
+        result.ReadModel.Should().Be(ReadModelStatus.Differs, "version 5 is revision 4, so the read model cannot predate revisions");
+        result.Checkpoints.Should().OnlyContain(c => !c.StateMatches);
         result.IsConsistent.Should().BeFalse();
     }
 

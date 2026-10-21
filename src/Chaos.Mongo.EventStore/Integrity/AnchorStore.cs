@@ -623,11 +623,16 @@ internal sealed class AnchorStore
     /// <param name="aggregateType">The aggregate type name.</param>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="minimumVersion">The lowest leaf version to include.</param>
+    /// <param name="session">The session to read in, for example a snapshot session, or <c>null</c>.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The stream's leaves.</returns>
-    public async Task<StreamLeaves> ReadStreamLeavesAsync(String aggregateType, Guid aggregateId, Int64 minimumVersion, CancellationToken cancellationToken)
+    public async Task<StreamLeaves> ReadStreamLeavesAsync(String aggregateType,
+                                                          Guid aggregateId,
+                                                          Int64 minimumVersion,
+                                                          IClientSessionHandle? session,
+                                                          CancellationToken cancellationToken)
     {
-        var documents = await FindRaw(Leaves, StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
+        var documents = await Find(Leaves, session, StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
                               .Sort(StreamLeavesSort())
                               .ToListAsync(cancellationToken);
         Int64? firstUnreadable = null;
@@ -649,7 +654,7 @@ internal sealed class AnchorStore
         if (streamLeaves.Count > 0)
         {
             var ids = new BsonArray(streamLeaves.Select(leaf => leaf.AnchorId).Distinct().Select(ToBson));
-            var anchorDocuments = await FindRaw(Anchors, new BsonDocument("_id", new BsonDocument("$in", ids))).ToListAsync(cancellationToken);
+            var anchorDocuments = await Find(Anchors, session, new BsonDocument("_id", new BsonDocument("$in", ids))).ToListAsync(cancellationToken);
             foreach (var anchorDocument in anchorDocuments)
             {
                 if (TryRead(anchorDocument, ReadAnchor, out var anchor))
@@ -769,11 +774,17 @@ internal sealed class AnchorStore
         };
 
     /// <summary>
+    /// Finds documents as raw documents in a session, see <see cref="FindRaw"/>.
+    /// </summary>
+    private static IFindFluent<BsonDocument, RawBsonDocument> Find(IMongoCollection<BsonDocument> collection, IClientSessionHandle? session, BsonDocument filter)
+        => (session is null ? collection.Find(filter) : collection.Find(session, filter)).As<RawBsonDocument>();
+
+    /// <summary>
     /// Finds documents as raw documents, so a document that repeats an element name reaches the strict readers, which
     /// reject it, instead of failing the driver's deserialization.
     /// </summary>
     private static IFindFluent<BsonDocument, RawBsonDocument> FindRaw(IMongoCollection<BsonDocument> collection, BsonDocument filter)
-        => collection.Find(filter).As<RawBsonDocument>();
+        => Find(collection, null, filter);
 
     /// <summary>
     /// Finds a top-level standard UUID of 16 bytes by comparing names as bytes, or returns <c>null</c>.

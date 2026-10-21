@@ -14,6 +14,21 @@ using NUnit.Framework;
 public class CheckpointClassMapRegistrationTests
 {
     [Test]
+    public void WithEventStore_ConsumerCheckpointClassMapMappingChainHash_ThrowsUnderProtection()
+    {
+        BsonClassMap.RegisterClassMap<CheckpointDocument<ChainHashCheckpointAggregate>>(cm =>
+        {
+            cm.AutoMap();
+            cm.MapMember(c => c.ChainHash).SetElementName(CheckpointDocument<ChainHashCheckpointAggregate>.ChainHashElementName);
+        });
+
+        var act = () => new MongoBuilder(new ServiceCollection()).WithEventStore<ChainHashCheckpointAggregate>(es => es.WithEvent<ChainHashCheckpointEvent>()
+                                                                                                                       .WithIntegrityProtection());
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*registered before the event store*");
+    }
+
+    [Test]
     public void WithEventStore_ConsumerCheckpointClassMapUnderProtection_ThrowsAndRegistersNothing()
     {
         BsonClassMap.RegisterClassMap<CheckpointDocument<ConsumerCheckpointAggregate>>();
@@ -69,4 +84,11 @@ public sealed class ReusedCheckpointAggregate : Aggregate;
 public sealed class ReusedCheckpointEvent : Event<ReusedCheckpointAggregate>
 {
     public override void Execute(ReusedCheckpointAggregate aggregate) { }
+}
+
+public sealed class ChainHashCheckpointAggregate : Aggregate;
+
+public sealed class ChainHashCheckpointEvent : Event<ChainHashCheckpointAggregate>
+{
+    public override void Execute(ChainHashCheckpointAggregate aggregate) { }
 }

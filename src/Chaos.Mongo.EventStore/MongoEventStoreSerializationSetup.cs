@@ -14,6 +14,12 @@ using System.Collections.Concurrent;
 /// </summary>
 public static class MongoEventStoreSerializationSetup
 {
+    /// <summary>
+    /// Guards the ownership check and the registration of a checkpoint class map with its ownership record, so a
+    /// concurrent registration of the same aggregate sees either no class map or an owned one.
+    /// </summary>
+    private static readonly Object CheckpointClassMapLock = new();
+
     private static readonly GuidSerializer GuidStandardSerializer = new(GuidRepresentation.Standard);
 
     /// <summary>
@@ -193,17 +199,20 @@ public static class MongoEventStoreSerializationSetup
         // Register CheckpointDocument<TAggregate>. The chain hash is mapped regardless of whether protection is enabled,
         // so a protected store can reuse a class map registered for an unprotected one.
         var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
-        if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
+        lock (CheckpointClassMapLock)
         {
-            BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
+            if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
             {
-                cm.AutoMap();
-                cm.MapIdMember(c => c.Id);
-                cm.MapMember(c => c.ChainHash)
-                  .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
-                  .SetIgnoreIfNull(true);
-            });
-            OwnCheckpointClassMaps.TryAdd(checkpointDocumentType, true);
+                BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
+                {
+                    cm.AutoMap();
+                    cm.MapIdMember(c => c.Id);
+                    cm.MapMember(c => c.ChainHash)
+                      .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
+                      .SetIgnoreIfNull(true);
+                });
+                OwnCheckpointClassMaps.TryAdd(checkpointDocumentType, true);
+            }
         }
     }
 
@@ -284,11 +293,14 @@ public static class MongoEventStoreSerializationSetup
         where TAggregate : class, IAggregate, new()
     {
         var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
-        if (!options.IntegrityProtectionEnabled ||
-            !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
-            OwnCheckpointClassMaps.ContainsKey(checkpointDocumentType))
+        lock (CheckpointClassMapLock)
         {
-            return;
+            if (!options.IntegrityProtectionEnabled ||
+                !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
+                OwnCheckpointClassMaps.ContainsKey(checkpointDocumentType))
+            {
+                return;
+            }
         }
 
         throw new InvalidOperationException(
