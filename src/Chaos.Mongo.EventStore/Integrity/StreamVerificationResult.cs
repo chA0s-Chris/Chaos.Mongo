@@ -6,6 +6,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The result of verifying the hash chain of an event stream. Equality compares the verdict: the first broken version,
 /// its failure and the unrecorded erasures, not the per-version details.
 /// </summary>
+/// <remarks>
+/// Records of the integrity API that hold byte arrays, such as <see cref="VerifiedEvent"/>, compare those arrays by
+/// reference, as records do; compare hashes and digests with <c>SequenceEqual</c>.
+/// </remarks>
 /// <param name="FirstBrokenVersion">The first version whose verification failed, or <c>null</c> when the stream is intact.</param>
 /// <param name="Failure">Why the first broken version failed, or <c>null</c> when the stream is intact.</param>
 /// <param name="UnrecordedErasures">
@@ -21,12 +25,12 @@ public sealed record StreamVerificationResult(
     /// Gets a value indicating whether the stream was compared with its leaves in completed anchors and the sealing
     /// anchors were looked up; <c>false</c> when anchors are not configured.
     /// </summary>
-    public Boolean AnchorCoverageChecked { get; internal init; }
+    public Boolean AnchorCoverageChecked { get; init; }
 
     /// <summary>
     /// Gets the integrity data of every version verified before the chain ended or broke, in version order.
     /// </summary>
-    public IReadOnlyList<VerifiedEvent> Events { get; internal init; } = [];
+    public IReadOnlyList<VerifiedEvent> Events { get; init; } = [];
 
     /// <summary>
     /// Gets a value indicating whether the stream's hash chain is intact.
@@ -38,7 +42,7 @@ public sealed record StreamVerificationResult(
     /// <see cref="IntegritySealMode.Retroactive"/>. They are informational: a legitimate gap in protection and a suffix
     /// re-sealed after tampering look the same until anchors tell them apart. They do not affect <see cref="IsIntact"/>.
     /// </summary>
-    public IReadOnlyList<Int64> SealModeTransitions { get; internal init; } = [];
+    public IReadOnlyList<Int64> SealModeTransitions { get; init; } = [];
 
     /// <summary>
     /// Gets a result describing an intact stream without unrecorded erasures.

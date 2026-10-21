@@ -388,12 +388,14 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 | Method                                          | Description                                            | Default             |
 |-------------------------------------------------|--------------------------------------------------------|---------------------|
 | `WithEvent<TEvent>(string? discriminator)`      | Registers an event type with optional discriminator    | Class name          |
+| `WithEvent<TEvent>(string? discriminator, Action<EventRegistrationBuilder<TAggregate, TEvent>> configure)` | Registers an event type and marks its personal data for [tamper evidence](#tamper-evidence) | Class name |
 | `WithCollectionPrefix(string prefix)`           | Sets collection name prefix                            | Aggregate type name |
 | `WithCheckpoints(int interval)`                 | Enables checkpoints at specified interval              | Disabled            |
 | `WithBulkWriteOptimization()`                   | Opts into the MongoDB 8+ client bulk-write append path | Disabled            |
 | `WithMaxAppendRetries(int retries)`             | Additional attempts of a store-assigned append that conflicts with concurrent writers | 3 |
 | `WithEventsCollectionSuffix(string suffix)`     | Sets events collection suffix                          | `_Events`           |
 | `WithCheckpointCollectionSuffix(string suffix)` | Sets checkpoint collection suffix                      | `_Checkpoints`      |
+| `WithIntegrityProtection(Action<IntegrityProtectionBuilder<TAggregate>>? configure)` | Enables [tamper evidence](#tamper-evidence) for the aggregate type | Disabled |
 
 When bulk-write optimization is enabled, EventStore validates the connected server version before using the optimized
 append path. If the server is older than MongoDB 8.0, append operations fail with a clear error instead of silently
@@ -495,7 +497,8 @@ For an aggregate configured with prefix `"Orders"`:
 | `Orders_IntegrityState` | Progress of the retroactive sealing sweep (with [tamper evidence](#tamper-evidence)) |
 
 With [tamper evidence](#tamper-evidence) anchoring, the module-level collections `IntegrityAnchors`, `IntegrityAnchorLeaves`,
-`IntegrityAnchorEvidence` and `IntegrityAnchorEvidenceChunks` are added once for all aggregate types.
+`IntegrityAnchorEvidence`, `IntegrityAnchorEvidenceChunks` and `IntegrityChangeStreamState` (the change stream's resume
+position) are added once for all aggregate types.
 
 ## Working with Events
 
@@ -868,6 +871,7 @@ The goal is tamper *evidence*, not prevention: anyone with write access to the d
 | Deleting the newest events of a stream, or a whole stream | Comparison with completed anchors, for anchored versions |
 | Rewriting or rolling back a stream consistently | Comparison with completed anchors, for anchored versions |
 | Backdating events | Anchors: an event existed no later than the token time of the first anchor that covers it |
+| Deleting or changing anchor leaves, also together with the streams they cover | Anchor-chain verification, which recomputes every anchor's Merkle root from its leaves |
 | Deleting the newest anchors together with the streams they cover | Only against a trusted head kept outside the database |
 | Changing a read model or checkpoint | Derived-data verification, by replay and compare |
 | Erasing personal data without an erasure record | Stream verification reports it, without breaking the chain |
@@ -879,6 +883,7 @@ Limitations:
 - Retroactively sealed events are protected since the anchor that first covers them, never since their creation. Before that anchor, an attacker who strips `_integrity` from a suffix of a stream can have it re-sealed; the `Append` → `Retroactive` transition this leaves is reported as an informational finding.
 - The completion hook should replicate every anchor to WORM storage. Its sequence number and digest serve as the trusted head against which deleting the newest anchors becomes detectable.
 - Renaming an aggregate class keeps its chains verifiable, because the genesis value uses the stored type name, but anchor leaves record the name configured when they were anchored, so the anchor coverage splits between the old and the new name.
+- Removing the confirming CRLs of a confirmed or revoked token is detected, but removing them together with resetting its stored revocation status is not. Replicate anchors and their evidence to WORM storage.
 - Integrity of data outside MongoDB, such as blobs in object storage, is not covered. Include content hashes in your events.
 
 ### Enabling Protection
@@ -914,6 +919,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithIntegrityAnchoring(anchoring => anchoring
         .WithRfc3161TimestampAuthority("qualified-tsa", new Uri("https://tsa.example/timestamp"), tsa =>
         {
+            // On .NET 8, use new X509Certificate2("tsa-root.cer").
             tsa.TrustedRoots.Add(X509CertificateLoader.LoadCertificateFromFile("tsa-root.cer"));
             tsa.PolicyId = "1.2.3.4.5";
             tsa.HttpClientFactory = sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("tsa");
@@ -931,9 +937,17 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         }));
 ```
 
-- **Choosing a timestamp authority.** Use an authority whose tokens a court accepts, typically an eIDAS-qualified one, and configure its trusted roots and policy. No authority is configured by default, so anchoring causes no data flow or cost until you add one. Several authorities stamp each anchor for redundancy, for example in case one loses its qualified status; `WithMinimumTimestampTokens` sets how many valid tokens an anchor needs to complete. Authorities with an API other than RFC 3161 over HTTP are added with `WithTimestampAuthority` and must return RFC 3161 tokens.
+- **Choosing a timestamp authority.** Use an authority whose tokens a court accepts, typically an eIDAS-qualified one, and configure its trusted roots and policy. Configure the roots explicitly rather than relying on the system trust store: verification compares the chain it builds with the chain stored with the token, and a trust store that changed over the years may lead to another path, for example through a cross-signed root, so a genuine token would no longer verify. No authority is configured by default, so anchoring causes no data flow or cost until you add one. Several authorities stamp each anchor for redundancy, for example in case one loses its qualified status; `WithMinimumTimestampTokens` sets how many valid tokens an anchor needs to complete. Authorities with an API other than RFC 3161 over HTTP are added with `WithTimestampAuthority` and must return RFC 3161 tokens.
 - **Choosing the interval.** The interval (default 5 minutes) bounds both the window in which unanchored events are unprotected and the gap between `CreatedUtc` and the proven time. One timestamp is requested per interval regardless of event volume, about 8,600 per month at the default; intervals without changes request none.
-- **Failures** of an authority never block appends: anchoring retries, and an anchor delay beyond the threshold is reported through logging and the `Chaos.Mongo.EventStore.Integrity` meter.
+- **Failures** of an authority never block appends: anchoring retries, and an anchor delay beyond the threshold is reported through logging and the `Chaos.Mongo.EventStore.Integrity` meter, whose instruments are:
+
+  | Instrument | Type | Measures |
+  |---|---|---|
+  | `chaos.mongo.eventstore.anchoring.delay` | Histogram (s) | Age of the oldest unanchored candidate after a run. |
+  | `chaos.mongo.eventstore.anchoring.delay_exceeded` | Counter | Runs after which the anchor delay exceeded its threshold. |
+  | `chaos.mongo.eventstore.anchoring.revocation_confirmation_delay` | Histogram (s) | Age of the oldest token whose revocation status is unconfirmed. |
+  | `chaos.mongo.eventstore.anchoring.revocation_confirmation_delay_exceeded` | Counter | Runs after which the revocation confirmation delay exceeded its threshold. |
+  | `chaos.mongo.eventstore.anchoring.revoked_timestamps` | Counter | Tokens whose chain a confirming CRL lists as revoked at or before the token's time. |
 - **Revocation confirmation.** The CRLs captured when a token is issued usually predate it. After a grace period (default 24 hours, `WithRevocationGracePeriod`), later anchoring runs fetch CRLs issued after the token's time and store them with the token. Tokens still unconfirmed beyond a threshold (default 72 hours, `WithRevocationConfirmationDelayThreshold`) are reported like the anchor delay. A token whose chain turns out to be revoked at or before its time is no evidence; its anchor's events stay protected by the next anchor, from that anchor's time.
 - **Evidence collections.** Tokens, certificate chains and CRLs are stored once per distinct content in `IntegrityAnchorEvidence` and `IntegrityAnchorEvidenceChunks`, referenced by hash from the anchors in `IntegrityAnchors`; leaves and their inclusion proofs are stored in `IntegrityAnchorLeaves`. Evidence is only ever inserted, so the anchoring role needs no `update` or `remove` on it.
 
@@ -962,24 +976,28 @@ var derived = await integrity.VerifyDerivedDataAsync(documentId);           // r
 
 await foreach (var finding in integrity.CheckCompletenessAsync(trustedHead)) // every event of the type anchored?
 {
-    // Unanchored, StreamDeleted, StreamTruncated, RetroactivelyProtected, Unsealed, AnchorChainBroken
+    // Unanchored, StreamDeleted, StreamTruncated, RetroactivelyProtected, Unsealed, MalformedEvent, AnchorChainBroken
 }
 ```
 
-- `VerifyStreamAsync` recomputes the chain from the stored bytes, reports the first broken version, and returns every version's hash, previous hash, seal mode, sealing anchor and personal-data status. An intact chain is also compared with the stream's leaves in completed anchors. The per-version data is held in memory.
+- `VerifyStreamAsync` recomputes the chain from the stored bytes, reports the first broken version, and returns every version's hash, previous hash, seal mode, sealing anchor and personal-data status. An intact chain is also compared with the stream's leaves in completed anchors, whose inclusion proofs are checked. The per-version data is held in memory. Result equality compares the verdict; compare hashes with `SequenceEqual`, because records compare byte arrays by reference.
 - `VerifyEventAnchorAsync` verifies the chain up to the anchored version, the leaf and its Merkle inclusion proof, the anchor digest and every stored token: its signature, imprint, certificate chain at the token's time and its revocation status, recomputed from the stored CRLs, whose signatures are verified, rather than read from the stored status.
-- `CheckCompletenessAsync` is an audit operation over all streams of the type; its cost grows with events and leaves. It verifies the chain of anchors first, optionally against a trusted head.
-- `IAnchorVerifier.VerifyAnchorChainAsync` verifies the chain of anchors of all types.
+- `VerifyDerivedDataAsync` reads the stream, the read model and the checkpoints in one snapshot session, which needs MongoDB 5.0 or later, so concurrent appends cause no false reports. It compares the states without `CreatedUtc`, which records the append time and cannot be derived from the events, and reports in `CreationTimeConsistent` whether the read model and the checkpoints agree on it.
+- `CheckCompletenessAsync` is an audit operation over all streams of the type; its cost grows with events and leaves, and its memory with the largest stream and the number of completed anchors, about 8,600 small entries per month at the default interval. It verifies the chain of anchors first, optionally against a trusted head, and reports event documents whose identifier or version cannot be read as `MalformedEvent`.
+- `IAnchorVerifier.VerifyAnchorChainAsync` verifies the chain of anchors of all types: sequence numbers, digests, and every anchor's Merkle root recomputed from its stored leaves.
 
 Tokens are only valid when their authority's roots are trusted. The roots of RFC 3161 authorities configured for anchoring are trusted automatically; custom authorities, and containers that only verify, configure them with `WithIntegrityVerification`:
 
 ```csharp
 services.AddMongo(auditConnectionString, "myDatabase")
-    .WithEventStore<DocumentAggregate>(eventStore => eventStore /* same registration */.WithIntegrityProtection())
+    .WithEventStore<DocumentAggregate>(eventStore => eventStore /* same registration */
+        .WithIntegrityProtection(protection => protection.WithoutSealingSweep()))
     .WithIntegrityVerification(verification => verification
         .WithTimestampAuthorityTrust("qualified-tsa", trust => trust.TrustedRoots.Add(tsaRoot))
         .WithRevocationGracePeriod(TimeSpan.FromHours(24)));
 ```
+
+A container with read-only credentials must not seal, so it registers no sealing sweep with `WithoutSealingSweep()`; `GetSealingStatusAsync` still reports the progress of the sweep elsewhere. When it uses anchor collections with other names, `WithAnchorCollections` names them; in a container that also anchors, the names must match the anchoring configuration.
 
 Only CRLs of issuers whose certificates are part of the stored chain can be verified. A token whose chain points to an indirect CRL issuer stays unconfirmed; it is still valid evidence.
 
@@ -994,7 +1012,7 @@ await eraser.ErasePersonalDataAsync(documentId, new ErasureRequest("GDPR-2026-00
 In one transaction, erasure sets the selected values to `null`, removes their salts, appends a `PersonalDataErased<TAggregate>` event that records them and the reference, and rebuilds the read model and the affected checkpoints by replay. The chain and every anchor stay verifiable, and verification distinguishes recorded erasures from values nulled without a record. The reference must not contain personal data itself.
 
 - **Replay contract.** Event `Execute` implementations must handle `null` in marked members, because replay keeps working on erased events. Read-model fields written outside `Execute` are reset by an erasure.
-- **Event streams** returned by `GetEventStream` contain the `PersonalDataErased<TAggregate>` event; it is observational and changes no state.
+- **Event streams** returned by `GetEventStream` contain the `PersonalDataErased<TAggregate>` event; it is observational and changes no state. Only the eraser appends it: `AppendEventsAsync` rejects one created elsewhere, so no erasure record can be forged through the event store.
 - Mapping a data subject to its streams, and erasing from backups, outbox messages, external blobs and logs, remain the application's responsibility.
 
 ### MongoDB Roles
@@ -1003,10 +1021,11 @@ Grant least privilege:
 
 | Role | Permissions |
 |---|---|
-| Application | `insert` and `find` on the events collection; the usual permissions on the read-model and checkpoint collections. |
-| Retroactive sealing | Temporarily `update` on the events collection. |
+| Application | `insert` and `find` on the events collection; the usual permissions on the read-model and checkpoint collections; while the sealing sweep runs in it, `insert`, `update` and `find` on `{Prefix}_IntegrityState` and the distributed lock collection. A container with `WithoutSealingSweep()` needs none of these. |
+| Retroactive sealing | The sweep's permissions above, and temporarily `update` on the events collection. |
 | Anchoring | `changeStream` and `find` on the database; `insert`, `update`, `remove` and `find` on `IntegrityAnchors`, `IntegrityAnchorLeaves`, `IntegrityChangeStreamState` and the distributed lock collection; `insert` and `find` on the evidence collections. |
-| Erasure | `update` on the events, read-model and checkpoint collections, with separate credentials. |
+| Erasure | The application's permissions on the events, read-model and checkpoint collections, and `update` on the events collection, with separate credentials. |
+| Verification | `find` on the events, read-model and checkpoint collections and on the anchor and evidence collections. |
 
 MongoDB roles cannot restrict `update` to documents without `_integrity`, so sealing needs it temporarily:
 
@@ -1025,7 +1044,7 @@ Erasure permanently needs `update`. Run it in a separate process or tool, or a s
 | `MongoDuplicateEventException`  | Event with same ID already exists                                                                      | Safe to ignore (idempotent)           |
 | `MongoEventValidationException` | Event preconditions not met, or an observational event has no preceding state-changing event          | Fix the event data or aggregate state |
 | `MongoEventStoreException`      | The stream contains events but the aggregate's read model is missing                                   | Restore or rebuild the read model     |
-| `ArgumentException`             | Invalid input (empty events, mixed aggregates, mixed unset and explicit versions, versions below 1, version gaps, non-sequential batches) | Fix caller code                       |
+| `ArgumentException`             | Invalid input (empty events, mixed aggregates, mixed unset and explicit versions, versions below 1, version gaps, non-sequential batches, a `PersonalDataErased<TAggregate>` event not created by the eraser) | Fix caller code                       |
 
 ```csharp
 try

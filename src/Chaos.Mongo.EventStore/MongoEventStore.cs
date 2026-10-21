@@ -637,6 +637,15 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         if (eventList.Count == 0)
             throw new ArgumentException("At least one event is required.", nameof(events));
 
+        // A forged erasure event would document erasures that never happened; only the eraser appends one.
+        if (eventList.Any(e => e is PersonalDataErased<TAggregate> { CreatedByEraser: false }))
+        {
+            throw new ArgumentException(
+                $"{nameof(PersonalDataErased<TAggregate>)} events are appended only by {nameof(IPersonalDataEraser<TAggregate>)}." +
+                $"{nameof(IPersonalDataEraser<TAggregate>.ErasePersonalDataAsync)}.",
+                nameof(events));
+        }
+
         var now = DateTime.UtcNow;
         PrepareEvents(eventList, _aggregateTypeName, now);
 

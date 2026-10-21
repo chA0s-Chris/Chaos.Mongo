@@ -94,21 +94,22 @@ public static class MongoBuilderExtensions
                                               options,
                                               sp.GetService<AnchorVerifier>(),
                                               sp.GetService<TimeProvider>() ?? TimeProvider.System));
+            // Without the sweep, the integrity service still reads the sealing state through a sweep it never runs.
             builder.Services.AddSingleton<IEventStoreIntegrity<TAggregate>>(sp => new EventStoreIntegrity<TAggregate>(
                                                                                 sp.GetRequiredService<EventStreamVerifier<TAggregate>>(),
                                                                                 sp.GetRequiredService<DerivedDataVerifier<TAggregate>>(),
                                                                                 sp.GetRequiredService<CompletenessChecker<TAggregate>>(),
-                                                                                sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+                                                                                options.SealingSweepEnabled
+                                                                                    ? sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()
+                                                                                    : CreateSealingSweep(sp, options)));
 
             // Retroactively seal events stored without integrity data
-            builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
-                                              sp.GetRequiredService<IMongoHelper>(),
-                                              options,
-                                              sp.GetService<TimeProvider>() ?? TimeProvider.System,
-                                              sp.GetService<ILogger<EventStreamSealingSweep<TAggregate>>>() ??
-                                              NullLogger<EventStreamSealingSweep<TAggregate>>.Instance));
-            builder.Services.AddHostedService(sp => new EventStreamSealingHostedService<TAggregate>(
-                                                  sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+            if (options.SealingSweepEnabled)
+            {
+                builder.Services.AddSingleton(sp => CreateSealingSweep(sp, options));
+                builder.Services.AddHostedService(sp => new EventStreamSealingHostedService<TAggregate>(
+                                                      sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+            }
         }
 
         return builder;
@@ -271,6 +272,13 @@ public static class MongoBuilderExtensions
         services.AddSingleton(sp => new AnchorVerifier(sp.GetRequiredService<IMongoHelper>(), anchoring, verification));
         services.AddSingleton<IAnchorVerifier>(sp => sp.GetRequiredService<AnchorVerifier>());
     }
+
+    private static EventStreamSealingSweep<TAggregate> CreateSealingSweep<TAggregate>(IServiceProvider services, MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+        => new(services.GetRequiredService<IMongoHelper>(),
+               options,
+               services.GetService<TimeProvider>() ?? TimeProvider.System,
+               services.GetService<ILogger<EventStreamSealingSweep<TAggregate>>>() ?? NullLogger<EventStreamSealingSweep<TAggregate>>.Instance);
 
     /// <summary>
     /// Returns the instance registered for <typeparamref name="T"/>, registering a new one first if needed. Shared

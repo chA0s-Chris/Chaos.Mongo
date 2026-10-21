@@ -3,9 +3,9 @@
 namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
-/// A completed anchor as passed to the completion hook: its stored fields and its tokens with their evidence, without
-/// its leaves; it is resolved through <see cref="AnchorEvidenceResolver"/>. A hook that needs the leaves, for example
-/// to replicate them to WORM storage, streams them through <see cref="AnchorLeafReader"/>.
+/// A completed anchor as passed to the completion hook: its stored fields and its tokens with their evidence resolved
+/// from the evidence store, without its leaves. A hook that needs the leaves, for example to replicate them to WORM
+/// storage, streams them through <see cref="AnchorLeafReader"/>.
 /// The revocation status of its tokens is usually still unconfirmed: the CRLs that confirm it are issued at least a grace
 /// period after the tokens' time and are added to the stored anchor later.
 /// </summary>

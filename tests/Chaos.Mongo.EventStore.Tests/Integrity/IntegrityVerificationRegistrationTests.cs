@@ -6,6 +6,7 @@ using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integration;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using MongoDB.Driver;
 using NUnit.Framework;
 
@@ -92,6 +93,25 @@ public class IntegrityVerificationRegistrationTests
         chunkSize.Should().Throw<ArgumentOutOfRangeException>();
         interval.Should().Throw<ArgumentOutOfRangeException>();
         retryDelay.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public void WithIntegrityProtection_WithoutSealingSweep_RegistersNoSweepButKeepsVerification()
+    {
+        var withSweep = CreateBuilder().Services;
+        var withoutSweep = new ServiceCollection().AddLogging()
+                                                  .AddMongo(MongoUrl.Create("mongodb://localhost:27017"), configure: options => options.DefaultDatabase = "test")
+                                                  .WithEventStore<LedgerAggregate>(es => es.WithEvent<LedgerEntryRecordedEvent>("LedgerEntryRecorded")
+                                                                                           .WithCollectionPrefix("Ledgers")
+                                                                                           .WithIntegrityProtection(protection => protection.WithoutSealingSweep()))
+                                                  .Services;
+        using var provider = withoutSweep.BuildServiceProvider();
+
+        withoutSweep.Count(s => s.ServiceType == typeof(IHostedService)).Should().Be(withSweep.Count(s => s.ServiceType == typeof(IHostedService)) - 1);
+        withoutSweep.Should().NotContain(s => s.ServiceType == typeof(EventStreamSealingSweep<LedgerAggregate>));
+        withSweep.Should().Contain(s => s.ServiceType == typeof(EventStreamSealingSweep<LedgerAggregate>));
+        provider.GetRequiredService<MongoEventStoreOptions<LedgerAggregate>>().SealingSweepEnabled.Should().BeFalse();
+        provider.GetRequiredService<IEventStoreIntegrity<LedgerAggregate>>().Should().NotBeNull();
     }
 
     [Test]

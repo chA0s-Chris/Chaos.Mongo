@@ -12,6 +12,16 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </remarks>
 public sealed class ErasureRequest
 {
+    /// <summary>
+    /// Creates a request.
+    /// </summary>
+    /// <param name="reference">The reference recorded with the erasure, for example a ticket number, without personal data.</param>
+    /// <param name="versions">The versions of the events to erase from, or <c>null</c> for every event of the stream.</param>
+    /// <param name="paths">The dotted element paths to erase, or <c>null</c> for every recorded path.</param>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="reference"/> is empty, <paramref name="versions"/> or <paramref name="paths"/> is
+    /// empty, or a path is empty.
+    /// </exception>
     public ErasureRequest(String reference, IReadOnlyCollection<Int64>? versions = null, IReadOnlyCollection<String>? paths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reference);

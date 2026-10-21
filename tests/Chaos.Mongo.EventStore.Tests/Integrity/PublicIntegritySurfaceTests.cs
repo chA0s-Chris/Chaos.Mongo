@@ -66,22 +66,42 @@ public class PublicIntegritySurfaceTests
             bases.Add(baseType);
         }
 
-        bases.AddRange(type.GetInterfaces().Where(i => i.IsPublic && !i.Namespace!.StartsWith("System", StringComparison.Ordinal)));
-        return bases.Count == 0 ? String.Empty : " : " + String.Join(", ", bases.Select(Name));
+        bases.AddRange(type.GetInterfaces().Where(i => i.IsPublic && i.Namespace?.StartsWith("System", StringComparison.Ordinal) == false));
+        return bases.Count == 0 ? String.Empty : " : " + String.Join(", ", bases.Select(b => Name(b)));
     }
 
-    private static IEnumerable<String> DescribeMembers(Type type, Func<MemberInfo, Boolean>? include = null)
+    /// <summary>
+    /// Formats a parameter's default value as a C# literal.
+    /// </summary>
+    private static String DefaultValue(ParameterInfo parameter)
+        => parameter.DefaultValue switch
+        {
+            null => parameter.ParameterType.IsValueType && Nullable.GetUnderlyingType(parameter.ParameterType) is null ? "default" : "null",
+            String text => $"\"{text}\"",
+            Boolean flag => flag ? "true" : "false",
+            Enum value => $"{Name(value.GetType())}.{value}",
+            var value => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "null"
+        };
+
+    private static IEnumerable<String> DescribeMembers(Type type)
     {
         const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
-        foreach (var member in type.GetMembers(flags).Where(m => include?.Invoke(m) ?? true))
+        var nullability = new NullabilityInfoContext();
+        foreach (var member in type.GetMembers(flags))
         {
             var description = member switch
             {
-                ConstructorInfo constructor => $"ctor({Parameters(constructor)})",
+                ConstructorInfo constructor => $"ctor({Parameters(constructor, nullability)})",
                 MethodInfo { IsSpecialName: true } => null,
-                MethodInfo method => $"{(method.IsStatic ? "static " : "")}{Name(method.ReturnType)} {method.Name}{GenericArguments(method)}({Parameters(method)})",
-                PropertyInfo property => $"{Name(property.PropertyType)} {property.Name} {{ {Accessors(property)} }}",
-                FieldInfo field => $"{(field.IsLiteral ? "const " : field.IsStatic ? "static " : "")}{Name(field.FieldType)} {field.Name}",
+                MethodInfo method => $"{Modifiers(method)}{Name(method.ReturnType, nullability.Create(method.ReturnParameter))} {method.Name}{GenericArguments(method)}" +
+                                     $"({Parameters(method, nullability)})",
+                PropertyInfo property => $"{(property.IsDefined(typeof(RequiredMemberAttribute)) ? "required " : "")}" +
+                                         $"{Name(property.PropertyType, nullability.Create(property))} {property.Name} {{ {Accessors(property)} }}",
+                FieldInfo { IsLiteral: true } field when type.IsEnum =>
+                    $"{field.Name} = {Convert.ToInt64(field.GetRawConstantValue(), System.Globalization.CultureInfo.InvariantCulture)}",
+                FieldInfo { IsSpecialName: true } => null,
+                FieldInfo field => $"{(field.IsLiteral ? "const " : field.IsStatic ? "static " : "")}{Name(field.FieldType, nullability.Create(field))} {field.Name}" +
+                                   $"{(field.IsLiteral ? " = " + Literal(field.GetRawConstantValue()) : "")}",
                 _ => null
             };
             if (description is not null)
@@ -97,6 +117,9 @@ public class PublicIntegritySurfaceTests
                                                            .Where(t => t.Namespace == typeof(IEventStoreIntegrity<>).Namespace)
                                                            .Append(typeof(EventRegistrationBuilder<,>))
                                                            .Append(typeof(IntegrityProtectionBuilder<>))
+                                                           .Append(typeof(MongoBuilderExtensions))
+                                                           .Append(typeof(MongoEventStoreBuilder<>))
+                                                           .Append(typeof(MongoEventStoreOptions<>))
                                                            .OrderBy(t => t.FullName, StringComparer.Ordinal);
         foreach (var type in integrityTypes)
         {
@@ -106,45 +129,70 @@ public class PublicIntegritySurfaceTests
                 yield return member;
             }
         }
-
-        var integrityMembers = new Dictionary<Type, String[]>
-        {
-            [typeof(MongoBuilderExtensions)] = ["WithIntegrityAnchoring", "WithIntegrityVerification"],
-            [typeof(MongoEventStoreBuilder<>)] = ["WithIntegrityProtection", "WithEvent"],
-            [typeof(MongoEventStoreOptions<>)] = ["IntegrityProtectionEnabled", "SealingChunkSize", "SealingSweepInterval", "SealingSweepRetryDelay"]
-        };
-        foreach (var (type, names) in integrityMembers.OrderBy(pair => pair.Key.FullName, StringComparer.Ordinal))
-        {
-            yield return $"{Kind(type)} {Name(type)} (integrity members)";
-            foreach (var member in DescribeMembers(type, m => names.Contains(m.Name)).Order(StringComparer.Ordinal))
-            {
-                yield return member;
-            }
-        }
     }
 
     private static String GenericArguments(MethodInfo method)
-        => method.IsGenericMethodDefinition ? $"<{String.Join(", ", method.GetGenericArguments().Select(Name))}>" : String.Empty;
+        => method.IsGenericMethodDefinition ? $"<{String.Join(", ", method.GetGenericArguments().Select(a => Name(a)))}>" : String.Empty;
 
     private static String Kind(Type type)
-        => type.IsInterface ? "interface" : type.IsEnum ? "enum" : type.IsValueType ? "struct" : type.IsAbstract && type.IsSealed ? "static class" : "class";
+        => type.IsInterface ? "interface" :
+            type.IsEnum ? "enum" :
+            type.IsValueType ? "struct" :
+            type.IsAbstract && type.IsSealed ? "static class" :
+            type.IsSealed ? "sealed class" :
+            type.IsAbstract ? "abstract class" : "class";
 
-    private static String Name(Type type)
+    private static String Literal(Object? value)
+        => value switch
+        {
+            null => "null",
+            String text => $"\"{text}\"",
+            _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "null"
+        };
+
+    private static String Modifiers(MethodInfo method)
+        => method.IsStatic ? "static " :
+            method.DeclaringType is { IsInterface: false } && method.IsAbstract ? "abstract " :
+            method.IsVirtual && !method.IsFinal && method.DeclaringType is { IsInterface: false } ? "virtual " : "";
+
+    /// <summary>
+    /// Names a type as C# writes it, with <c>?</c> for nullable value types and, when nullability information is given,
+    /// for nullable references.
+    /// </summary>
+    private static String Name(Type type, NullabilityInfo? nullability = null)
     {
+        if (type is { IsByRef: true } && type.GetElementType() is { } referenced)
+        {
+            return Name(referenced, nullability?.ElementType ?? nullability) + "&";
+        }
+
+        if (Nullable.GetUnderlyingType(type) is { } underlying)
+        {
+            return Name(underlying, nullability?.GenericTypeArguments.FirstOrDefault()) + "?";
+        }
+
+        var suffix = !type.IsValueType && nullability is { ReadState: NullabilityState.Nullable } ? "?" : "";
+        if (type is { IsArray: true } && type.GetElementType() is { } element)
+        {
+            return Name(element, nullability?.ElementType) + "[]" + suffix;
+        }
+
         if (type.IsGenericParameter)
         {
-            return type.Name;
+            return type.Name + suffix;
         }
 
-        var name = type.IsNested ? $"{Name(type.DeclaringType!)}.{type.Name}" : type.Name;
+        var name = type.DeclaringType is { } declaringType ? $"{Name(declaringType)}.{type.Name}" : type.Name;
         if (!type.IsGenericType)
         {
-            return name;
+            return name + suffix;
         }
 
-        return $"{name[..name.IndexOf('`')]}<{String.Join(", ", type.GetGenericArguments().Select(Name))}>";
+        var arguments = type.GetGenericArguments()
+                            .Select((argument, index) => Name(argument, nullability is { GenericTypeArguments.Length: > 0 } ? nullability.GenericTypeArguments[index] : null));
+        return $"{name[..name.IndexOf('`')]}<{String.Join(", ", arguments)}>{suffix}";
     }
 
-    private static String Parameters(MethodBase method)
-        => String.Join(", ", method.GetParameters().Select(p => $"{Name(p.ParameterType)} {p.Name}{(p.HasDefaultValue ? " = " + (p.DefaultValue ?? "null") : "")}"));
+    private static String Parameters(MethodBase method, NullabilityInfoContext nullability)
+        => String.Join(", ", method.GetParameters().Select(p => $"{Name(p.ParameterType, nullability.Create(p))} {p.Name}{(p.HasDefaultValue ? " = " + DefaultValue(p) : "")}"));
 }

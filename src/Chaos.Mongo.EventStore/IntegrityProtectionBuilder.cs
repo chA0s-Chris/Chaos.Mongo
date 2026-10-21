@@ -56,4 +56,16 @@ public sealed class IntegrityProtectionBuilder<TAggregate> where TAggregate : cl
         _options.SealingSweepRetryDelay = retryDelay;
         return this;
     }
+
+    /// <summary>
+    /// Registers no sealing sweep, for a container that must not write, such as a verification-only container with
+    /// read-only database permissions. Appends still seal events; events stored without integrity data stay unsealed
+    /// until a container with the sweep seals them. The sealing status can still be read.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    public IntegrityProtectionBuilder<TAggregate> WithoutSealingSweep()
+    {
+        _options.SealingSweepEnabled = false;
+        return this;
+    }
 }

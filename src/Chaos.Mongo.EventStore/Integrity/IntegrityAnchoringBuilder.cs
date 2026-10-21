@@ -136,11 +136,7 @@ public sealed class IntegrityAnchoringBuilder
             throw new ArgumentException($"The timestamp authority name '{name}' is used more than once.", nameof(name));
         }
 
-        var options = new Rfc3161TimestampAuthorityOptions
-        {
-            Name = name,
-            Uri = uri
-        };
+        var options = new Rfc3161TimestampAuthorityOptions(name, uri);
         configure?.Invoke(options);
         _rfc3161Authorities.Add(options);
         _authorities.Add(serviceProvider => new Rfc3161TimestampAuthority(options, serviceProvider));

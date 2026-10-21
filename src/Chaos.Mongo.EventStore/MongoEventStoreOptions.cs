@@ -85,6 +85,12 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     public Int32 SealingChunkSize { get; internal set; } = 1000;
 
     /// <summary>
+    /// Gets a value indicating whether the background sealing sweep is registered for a protected aggregate type.
+    /// Defaults to <c>true</c>; see <see cref="IntegrityProtectionBuilder{TAggregate}.WithoutSealingSweep"/>.
+    /// </summary>
+    public Boolean SealingSweepEnabled { get; internal set; } = true;
+
+    /// <summary>
     /// Gets the delay between two passes of the background sealing sweep. Defaults to 24 hours.
     /// </summary>
     public TimeSpan SealingSweepInterval { get; internal set; } = TimeSpan.FromHours(24);

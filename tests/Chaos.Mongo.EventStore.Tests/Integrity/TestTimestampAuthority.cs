@@ -380,10 +380,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                                      Action<Rfc3161TimestampAuthorityOptions>? configure = null,
                                                      TimeProvider? timeProvider = null)
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions(name, TimestampUri)
         {
-            Name = name,
-            Uri = TimestampUri,
             HttpClientFactory = _ => new HttpClient(this, false),
             RevocationMode = X509RevocationMode.NoCheck
         };

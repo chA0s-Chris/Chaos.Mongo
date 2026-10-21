@@ -552,7 +552,8 @@ internal sealed class PersonalDataEraser<TAggregate> : IPersonalDataEraser<TAggr
         {
             AggregateId = aggregateId,
             Reference = request.Reference,
-            Entries = entries
+            Entries = entries,
+            CreatedByEraser = true
         };
 
         await _store.AppendEventsAsync(
