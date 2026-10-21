@@ -35,5 +35,11 @@ internal enum CompletenessFindingKind
     /// <summary>
     /// Events of a stream carry no integrity data.
     /// </summary>
-    Unsealed
+    Unsealed,
+
+    /// <summary>
+    /// An event document's aggregate identifier or version cannot be read, so the event cannot be assigned to a
+    /// stream; the finding carries whichever of them is readable.
+    /// </summary>
+    MalformedEvent
 }

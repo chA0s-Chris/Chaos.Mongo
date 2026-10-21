@@ -83,6 +83,19 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_DeletedStreamWithItsLeaves_ReportsBrokenAnchorChain()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var aggregateId = await AnchorNewStreamAsync(context, 2);
+        await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId));
+        await GetStore(context).Leaves.DeleteManyAsync(new BsonDocument("AggregateId", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)));
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().ContainSingle().Which.AnchorChain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.LeafSetMismatch, 0));
+    }
+
+    [Test]
     public async Task CheckAsync_FullyAnchoredStreams_ReportsNothing()
     {
         var context = await CreateAnchoredContextAsync();
@@ -90,6 +103,29 @@ public class CompletenessCheckIntegrationTests
         await AnchorNewStreamAsync(context, 1);
 
         (await CheckAsync(context)).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task CheckAsync_MalformedEvents_AreReported()
+    {
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification());
+        var withStringVersion = await context.AppendStreamAsync(2);
+        var withOtherGuidRepresentation = await context.AppendStreamAsync(1);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(withStringVersion, 2),
+                                            Builders<BsonDocument>.Update.Set("Version", "2"));
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(withOtherGuidRepresentation, 1),
+                                            Builders<BsonDocument>.Update.Set("AggregateId",
+                                                                              new BsonBinaryData(withOtherGuidRepresentation.ToByteArray(true),
+                                                                                                 BsonBinarySubType.Binary)));
+
+        var findings = await CheckAsync(context);
+
+        findings.Where(f => f.Kind == CompletenessFindingKind.MalformedEvent)
+                .Should().BeEquivalentTo([
+                    new CompletenessFinding(CompletenessFindingKind.MalformedEvent, withStringVersion, null, null, null, null, null, null),
+                    new CompletenessFinding(CompletenessFindingKind.MalformedEvent, null, 1, 1, null, null, null, null)
+                ]);
+        findings.Should().Contain(f => f.Kind == CompletenessFindingKind.Unanchored && f.AggregateId == withStringVersion && f.LastVersion == 1);
     }
 
     [Test]
@@ -114,6 +150,35 @@ public class CompletenessCheckIntegrationTests
                                                                                     TimeSpan.FromHours(3),
                                                                                     null,
                                                                                     null));
+    }
+
+    [Test]
+    public async Task CheckAsync_OrderOfStoredIdentifiers_FindsDeletedStreamBetweenLiveStreams()
+    {
+        // MongoDB orders standard UUIDs by their RFC 9562 bytes, the order the walk merges in. The little-endian bytes
+        // of Guid.ToByteArray() order these identifiers the other way round, so a walk in that order would misplace
+        // the deleted stream between the live ones.
+        var first = Guid.Parse("00000001-0000-0000-0000-000000000000");
+        var deleted = Guid.Parse("00000100-0000-0000-0000-000000000000");
+        var last = Guid.Parse("00010000-0000-0000-0000-000000000000");
+        first.ToByteArray().AsSpan().SequenceCompareTo(last.ToByteArray()).Should().BePositive();
+        var context = await CreateAnchoredContextAsync();
+        foreach (var aggregateId in new[]
+                 {
+                     last,
+                     deleted,
+                     first
+                 })
+        {
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1)]);
+            await RunUntilAnchoredAsync(context, aggregateId, 1);
+        }
+
+        await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(deleted));
+
+        var findings = await CheckAsync(context);
+
+        findings.Select(f => (f.Kind, f.AggregateId)).Should().Equal((CompletenessFindingKind.StreamDeleted, deleted));
     }
 
     [Test]

@@ -13,9 +13,11 @@ using System.Runtime.CompilerServices;
 /// <remarks>
 /// An explicit audit operation: it walks the streams in aggregate identifier order, reading each event's version,
 /// seal mode and creation time through a projection, and merges this walk with the type's leaves in completed anchors,
-/// so leaves without events reveal deleted streams. Its cost grows with events and leaves; findings are streamed, so
-/// memory stays bounded by the largest stream. The chain of anchors is verified first, because deleted-stream detection
-/// relies on it.
+/// so leaves without events reveal deleted streams. Its cost grows with events and leaves. Findings are streamed, so
+/// memory grows with the largest stream and with the number of completed anchors, which are held as one small entry
+/// each, about 8,600 per month at the default anchoring interval. The chain of anchors is verified first, because
+/// deleted-stream detection relies on it. Event documents whose aggregate identifier or version cannot be read are
+/// reported as <see cref="CompletenessFindingKind.MalformedEvent"/>.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, IAggregate, new()
@@ -66,9 +68,17 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         await using var leaves = new LeafReader(anchors.Store.StreamLeavesOfTypeAsync(_aggregateTypeName, cancellationToken), completedAnchors);
         await leaves.InitializeAsync();
         var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var malformedEvents = new List<CompletenessFinding>();
 
-        await foreach (var (aggregateId, events) in ReadStreamsAsync(cancellationToken))
+        await foreach (var (aggregateId, events) in ReadStreamsAsync(malformedEvents, cancellationToken))
         {
+            foreach (var finding in malformedEvents)
+            {
+                yield return finding;
+            }
+
+            malformedEvents.Clear();
+
             // Streams that only appear in leaves come first in identifier order: every event of them was deleted.
             while (leaves.Current is { } leaf && GuidOrder.Compare(leaf.AggregateId, aggregateId) < 0)
             {
@@ -83,6 +93,11 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
             {
                 yield return finding;
             }
+        }
+
+        foreach (var finding in malformedEvents)
+        {
+            yield return finding;
         }
 
         while (leaves.Current is { } remaining)
@@ -191,18 +206,27 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         return ranges;
     }
 
-    private static EventSummary? ReadSummary(BsonDocument document, out Guid aggregateId)
+    /// <summary>
+    /// Reads a projected event. Its readable aggregate identifier and version are returned even when the other one
+    /// cannot be read, so a malformed event can be reported with them.
+    /// </summary>
+    /// <returns>The event, or <c>null</c> when its aggregate identifier or version cannot be read.</returns>
+    private static EventSummary? ReadSummary(BsonDocument document, out Guid? aggregateId, out Int64? version)
     {
-        aggregateId = Guid.Empty;
-        if (!document.TryGetValue(EventDocumentFields<TAggregate>.AggregateId, out var id) ||
-            id is not BsonBinaryData { SubType: BsonBinarySubType.UuidStandard } binary ||
-            !document.TryGetValue(EventDocumentFields<TAggregate>.Version, out var versionValue) ||
-            !versionValue.IsNumeric)
+        aggregateId = document.TryGetValue(EventDocumentFields<TAggregate>.AggregateId, out var id) &&
+                      id is BsonBinaryData { SubType: BsonBinarySubType.UuidStandard } binary
+            ? binary.ToGuid(GuidRepresentation.Standard)
+            : null;
+        version = document.TryGetValue(EventDocumentFields<TAggregate>.Version, out var versionValue) &&
+                  StoredVersion.TryRead(versionValue, out var storedVersion) &&
+                  storedVersion >= 1
+            ? storedVersion
+            : null;
+        if (aggregateId is null || version is not { } eventVersion)
         {
             return null;
         }
 
-        aggregateId = binary.ToGuid(GuidRepresentation.Standard);
         var integrity = document.GetValue(EventIntegrityChain.ElementName, BsonNull.Value) as BsonDocument;
         IntegritySealMode? sealMode = integrity is not null &&
                                       integrity.TryGetValue(nameof(EventIntegrity.SealMode), out var mode) &&
@@ -213,14 +237,16 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         DateTime? createdUtc = document.TryGetValue(EventDocumentFields<TAggregate>.CreatedUtc, out var created) && created is BsonDateTime date
             ? date.ToUniversalTime()
             : null;
-        return new EventSummary(versionValue.ToInt64(), integrity is not null, sealMode, createdUtc);
+        return new EventSummary(eventVersion, integrity is not null, sealMode, createdUtc);
     }
 
     /// <summary>
     /// Reads the events of the aggregate type in identifier and version order and yields them grouped by stream.
-    /// Documents whose identifier or version cannot be read are skipped.
+    /// Documents whose identifier or version cannot be read are left out of the streams and added to
+    /// <paramref name="malformedEvents"/> as findings before the stream read after them is yielded.
     /// </summary>
-    private async IAsyncEnumerable<(Guid AggregateId, List<EventSummary> Events)> ReadStreamsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<(Guid AggregateId, List<EventSummary> Events)> ReadStreamsAsync(List<CompletenessFinding> malformedEvents,
+                                                                                                   [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var projection = new BsonDocument
         {
@@ -247,8 +273,9 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         {
             foreach (var document in cursor.Current)
             {
-                if (ReadSummary(document, out var aggregateId) is not { } summary)
+                if (ReadSummary(document, out var readId, out var readVersion) is not { } summary || readId is not { } aggregateId)
                 {
+                    malformedEvents.Add(new CompletenessFinding(CompletenessFindingKind.MalformedEvent, readId, readVersion, readVersion, null, null, null, null));
                     continue;
                 }
 
