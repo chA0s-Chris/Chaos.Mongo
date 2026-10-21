@@ -22,6 +22,12 @@ public class TamperEvidenceVectorTests
 {
     private const Int32 ChunkedIncrement = 7;
     private const Int32 ChunkedLength = (2 * AnchorEvidenceStore.ChunkSize) + 123;
+
+    /// <summary>
+    /// A prime below 256, so the pattern does not repeat at chunk boundaries and every chunk differs.
+    /// </summary>
+    private const Int32 ChunkedModulus = 251;
+
     private const Int32 ChunkedMultiplier = 31;
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
@@ -50,7 +56,7 @@ public class TamperEvidenceVectorTests
 
     /// <summary>
     /// Builds the deterministic chunked evidence vector: an item longer than two chunks whose byte <c>i</c> is
-    /// <c>(i * 31 + 7) mod 256</c>, with its hash and the hashes of its chunks.
+    /// <c>(i * 31 + 7) mod 251</c>, with its hash and the hashes of its chunks.
     /// </summary>
     public static JsonObject BuildChunkedEvidenceVector()
     {
@@ -66,6 +72,7 @@ public class TamperEvidenceVectorTests
             ["length"] = ChunkedLength,
             ["multiplier"] = ChunkedMultiplier,
             ["increment"] = ChunkedIncrement,
+            ["modulus"] = ChunkedModulus,
             ["chunkSize"] = AnchorEvidenceStore.ChunkSize,
             ["hash"] = Hex(SHA256.HashData(item)),
             ["chunkHashes"] = chunkHashes
@@ -241,7 +248,7 @@ public class TamperEvidenceVectorTests
         var item = new Byte[ChunkedLength];
         for (var index = 0; index < item.Length; index++)
         {
-            item[index] = (Byte)(((index * ChunkedMultiplier) + ChunkedIncrement) % 256);
+            item[index] = (Byte)(((index * ChunkedMultiplier) + ChunkedIncrement) % ChunkedModulus);
         }
 
         return item;

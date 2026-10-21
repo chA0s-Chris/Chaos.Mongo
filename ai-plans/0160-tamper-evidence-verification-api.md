@@ -104,7 +104,7 @@ The work stays one issue because the format freeze, the verification semantics, 
   - Revoked entries are matched with #181's rule: issuer and serial number, using the earlier of `revocationDate` and `invalidityDate`, with `certificateHold` treated as revoked.
   - The grace period comes from the verification configuration (see above). It only guards the conclusion that nothing is revoked, so a revoking CRL issued any time after the token's time decides.
   - Certificates of indirect CRL issuers are not captured (#158), so their CRLs are unverifiable, and tokens that depend on them stay unconfirmed. The documentation names this limitation.
-- The OpenSSL check of the stamping-time and confirming CRLs (`-crl_check_all` at the token's time) remains part of the independent procedure, in the specification and the reference verifier.
+- The independent procedure checks confirming CRL signatures with `openssl crl -CAfile` and applies the revocation rule to their entries, because OpenSSL rejects a CRL issued after `-attime`.
 - Without a trusted head, deleting the newest anchors together with the streams they cover is undetectable. The documentation states this and recommends replicating anchors through the completion hook.
 - Anchor-chain verification is module-level, like anchoring itself. Stream and event verification are per aggregate type.
 
