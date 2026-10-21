@@ -13,7 +13,8 @@ internal enum AnchorChainFailure
     SequenceGap,
 
     /// <summary>
-    /// The anchor document cannot be read or uses an unsupported format.
+    /// The anchor document cannot be read or uses an unsupported format, or the anchor awaits its timestamps although
+    /// a later anchor exists.
     /// </summary>
     MalformedAnchor,
 
@@ -35,5 +36,11 @@ internal enum AnchorChainFailure
     /// <summary>
     /// The anchor at the sequence number of the trusted head has a different digest.
     /// </summary>
-    TrustedHeadMismatch
+    TrustedHeadMismatch,
+
+    /// <summary>
+    /// The anchor's stored leaves are missing, damaged or do not recompute its Merkle root, so leaves were deleted or
+    /// changed, for example together with the streams they cover.
+    /// </summary>
+    LeafSetMismatch
 }

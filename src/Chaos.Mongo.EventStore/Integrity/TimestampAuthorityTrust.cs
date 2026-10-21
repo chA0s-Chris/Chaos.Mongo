@@ -19,5 +19,10 @@ internal sealed class TimestampAuthorityTrust
     /// Gets the roots the authority's certificate chains must lead to. When empty, the system trust store is used, as
     /// when tokens are received.
     /// </summary>
+    /// <remarks>
+    /// Configure the authority's roots explicitly. Verification compares the chain it builds with the chain stored when
+    /// the token was received, and the system trust store changes over the years: a chain built later may take another
+    /// path, for example through a cross-signed root, so a genuine token would no longer verify.
+    /// </remarks>
     public X509Certificate2Collection TrustedRoots { get; } = [];
 }

@@ -31,7 +31,13 @@ public class StoredTimestampVerifierTests
         var authority = CreateAuthority(new TestTimestampAuthority([]));
         var (timestamp, digest) = await StampAsync(authority);
 
-        var result = StoredTimestampVerifier.Verify(timestamp, digest, Trust(authority), GracePeriod);
+        var result = StoredTimestampVerifier.Verify(timestamp with
+                                                    {
+                                                        RevocationStatus = TimestampRevocationStatus.Confirmed
+                                                    },
+                                                    digest,
+                                                    Trust(authority),
+                                                    GracePeriod);
 
         result.IsValid.Should().BeTrue();
         result.RevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed);
@@ -124,6 +130,34 @@ public class StoredTimestampVerifierTests
     }
 
     [Test]
+    public async Task Verify_DeltaCrl_StaysUnconfirmed()
+    {
+        var authority = CreateAuthority();
+        var (timestamp, digest) = await StampAsync(authority);
+        var lateEnough = timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1);
+        Byte[] baseCrlNumber = [0x02, 0x01, 0x01];
+
+        var delta = StoredTimestampVerifier.Verify(timestamp with
+                                                   {
+                                                       ConfirmingRevocationLists = [authority.BuildCrlWithExtensions(lateEnough, ("2.5.29.27", true, baseCrlNumber))]
+                                                   },
+                                                   digest,
+                                                   Trust(authority),
+                                                   GracePeriod);
+        var complete = StoredTimestampVerifier.Verify(timestamp with
+                                                      {
+                                                          ConfirmingRevocationLists = [authority.BuildCrlWithExtensions(lateEnough, ("2.5.29.20", false, baseCrlNumber))]
+                                                      },
+                                                      digest,
+                                                      Trust(authority),
+                                                      GracePeriod);
+
+        delta.IsValid.Should().BeTrue();
+        delta.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        complete.RevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed);
+    }
+
+    [Test]
     public async Task Verify_MalformedStoredCertificate_IsInvalid()
     {
         var authority = CreateAuthority();
@@ -213,6 +247,28 @@ public class StoredTimestampVerifierTests
 
         result.IsValid.Should().BeFalse();
         result.Failure.Should().Contain("stored certificate chain differs");
+    }
+
+    [Test]
+    [TestCase("Confirmed")]
+    [TestCase("Revoked")]
+    public async Task Verify_StoredStatusWithoutConfirmingCrls_IsInvalid(String storedStatusName)
+    {
+        var storedStatus = Enum.Parse<TimestampRevocationStatus>(storedStatusName);
+        var authority = CreateAuthority();
+        var (timestamp, digest) = await StampAsync(authority);
+
+        var result = StoredTimestampVerifier.Verify(timestamp with
+                                                    {
+                                                        RevocationStatus = storedStatus
+                                                    },
+                                                    digest,
+                                                    Trust(authority),
+                                                    GracePeriod);
+
+        result.IsValid.Should().BeFalse();
+        result.Failure.Should().Contain("confirming CRLs are missing");
+        result.StoredRevocationStatus.Should().Be(storedStatus);
     }
 
     [Test]

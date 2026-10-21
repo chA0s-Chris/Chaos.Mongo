@@ -8,6 +8,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 internal sealed class IntegrityVerificationBuilder
 {
     private readonly IntegrityAnchoringOptions _anchoring;
+    private String[]? _anchorCollections;
 
     internal IntegrityVerificationBuilder(IntegrityVerificationOptions options, IntegrityAnchoringOptions anchoring)
     {
@@ -24,7 +25,8 @@ internal sealed class IntegrityVerificationBuilder
 
     /// <summary>
     /// Sets the names of the collections that hold the anchors, their leaves and their evidence, when they differ from
-    /// the defaults. In a container that also anchors, the anchoring configuration uses the same names.
+    /// the defaults. In a container that also anchors, the anchoring configuration must use the same names; the
+    /// registration fails otherwise, so verification cannot redirect where anchors are written.
     /// </summary>
     /// <param name="anchors">The anchors collection.</param>
     /// <param name="leaves">The anchor leaves collection.</param>
@@ -38,10 +40,7 @@ internal sealed class IntegrityVerificationBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(leaves);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidence);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidenceChunks);
-        _anchoring.AnchorsCollectionName = anchors;
-        _anchoring.AnchorLeavesCollectionName = leaves;
-        _anchoring.AnchorEvidenceCollectionName = evidence;
-        _anchoring.AnchorEvidenceChunksCollectionName = evidenceChunks;
+        _anchorCollections = [anchors, leaves, evidence, evidenceChunks];
         return this;
     }
 
@@ -79,5 +78,42 @@ internal sealed class IntegrityVerificationBuilder
         }
 
         return this;
+    }
+
+    /// <summary>
+    /// Applies the configured anchor collection names, when any, to the anchoring options shared with a later anchoring
+    /// configuration.
+    /// </summary>
+    internal void ApplyAnchorCollections()
+    {
+        if (_anchorCollections is not [var anchors, var leaves, var evidence, var evidenceChunks])
+        {
+            return;
+        }
+
+        _anchoring.AnchorsCollectionName = anchors;
+        _anchoring.AnchorLeavesCollectionName = leaves;
+        _anchoring.AnchorEvidenceCollectionName = evidence;
+        _anchoring.AnchorEvidenceChunksCollectionName = evidenceChunks;
+    }
+
+    /// <summary>
+    /// Ensures that the configured anchor collection names, when any, are those of the anchoring configuration.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when the names differ.</exception>
+    internal void EnsureAnchorCollectionsMatch()
+    {
+        String[] configured =
+        [
+            _anchoring.AnchorsCollectionName,
+            _anchoring.AnchorLeavesCollectionName,
+            _anchoring.AnchorEvidenceCollectionName,
+            _anchoring.AnchorEvidenceChunksCollectionName
+        ];
+        if (_anchorCollections is { } names && !names.SequenceEqual(configured, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException("The anchor collections configured for integrity verification differ from those of integrity anchoring; " +
+                                                "configure the same names for both.");
+        }
     }
 }

@@ -72,7 +72,8 @@ internal sealed class Rfc3161TimestampAuthorityOptions
 
     /// <summary>
     /// Gets the roots the token's chain must end in. When empty, the operating system's trust store is used;
-    /// qualified authorities often chain to roots outside it.
+    /// qualified authorities often chain to roots outside it. Explicit roots also keep stored tokens verifiable, because
+    /// a chain built later from a changed trust store may take another path than the stored one.
     /// </summary>
     public X509Certificate2Collection TrustedRoots { get; } = [];
 

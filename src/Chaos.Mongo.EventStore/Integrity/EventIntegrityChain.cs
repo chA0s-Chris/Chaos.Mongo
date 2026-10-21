@@ -163,13 +163,20 @@ internal static class EventIntegrityChain
     /// Reads stored integrity data. Malformed data, for example after tampering, yields <c>false</c>
     /// instead of an exception, so callers can report it like any other integrity failure.
     /// </summary>
+    /// <remarks>
+    /// Every member must have the BSON type the format writes: <c>FormatVersion</c> a 32-bit integer,
+    /// <c>Algorithm</c> and <c>SealMode</c> strings, <c>PreviousHash</c> and <c>Hash</c> generic binary data (subtype
+    /// <c>0x00</c>), and <c>PersonalData</c>, when present, an array of documents with a string <c>Path</c>, a generic
+    /// binary <c>Commitment</c> and, unless erased, a generic binary <c>Salt</c>. A value the serializer could convert,
+    /// such as a numeric seal mode, is malformed, so every verifier reads the same data.
+    /// </remarks>
     /// <param name="value">The value of the <c>_integrity</c> element.</param>
     /// <param name="integrity">The integrity data when it could be read.</param>
     /// <returns><c>true</c> when the value is well-formed integrity data; otherwise <c>false</c>.</returns>
     public static Boolean TryRead(BsonValue value, [NotNullWhen(true)] out EventIntegrity? integrity)
     {
         integrity = null;
-        if (value is not BsonDocument document)
+        if (value is not BsonDocument document || !HasFormatTypes(document))
         {
             return false;
         }
@@ -184,4 +191,22 @@ internal static class EventIntegrityChain
             return false;
         }
     }
+
+    private static Boolean HasFormatTypes(BsonDocument document)
+        => document.GetValue(nameof(EventIntegrity.FormatVersion), BsonNull.Value) is BsonInt32 &&
+           document.GetValue(nameof(EventIntegrity.Algorithm), BsonNull.Value) is BsonString &&
+           IsGenericBinary(document.GetValue(nameof(EventIntegrity.PreviousHash), BsonNull.Value)) &&
+           IsGenericBinary(document.GetValue(nameof(EventIntegrity.Hash), BsonNull.Value)) &&
+           document.GetValue(nameof(EventIntegrity.SealMode), BsonNull.Value) is BsonString &&
+           (!document.TryGetValue(nameof(EventIntegrity.PersonalData), out var personalData) ||
+            (personalData is BsonArray commitments && commitments.All(IsCommitment)));
+
+    private static Boolean IsCommitment(BsonValue value)
+        => value is BsonDocument commitment &&
+           commitment.GetValue(nameof(PersonalDataCommitment.Path), BsonNull.Value) is BsonString &&
+           IsGenericBinary(commitment.GetValue(nameof(PersonalDataCommitment.Commitment), BsonNull.Value)) &&
+           (!commitment.TryGetValue(nameof(PersonalDataCommitment.Salt), out var salt) || IsGenericBinary(salt));
+
+    private static Boolean IsGenericBinary(BsonValue value)
+        => value is BsonBinaryData { SubType: BsonBinarySubType.Binary };
 }

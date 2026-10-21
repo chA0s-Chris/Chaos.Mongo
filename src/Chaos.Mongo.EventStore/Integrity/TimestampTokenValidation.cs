@@ -299,10 +299,11 @@ internal static class TimestampTokenValidation
     }
 
     /// <summary>
-    /// Requires the signing certificate to be reserved for timestamping (RFC 3161, section 2.3) and, when it carries a
-    /// key usage extension, to permit signatures (RFC 5280, section 4.2.1.3). Both extensions are decoded on first
-    /// access, so an undecodable one fails the check here. A certificate must not carry an extension more than once
-    /// (RFC 5280, section 4.2); the extension accessors would read only one instance.
+    /// Requires the signing certificate to be reserved for timestamping by a critical extended key usage extension
+    /// (RFC 3161, section 2.3) and, when it carries a key usage extension, to permit signatures (RFC 5280, section
+    /// 4.2.1.3). Both extensions are decoded on first access, so an undecodable one fails the check here. A certificate
+    /// must not carry an extension more than once (RFC 5280, section 4.2); the extension accessors would read only one
+    /// instance.
     /// </summary>
     /// <param name="signer">The signing certificate.</param>
     /// <exception cref="TimestampTokenValidationException">Thrown when the check fails.</exception>
@@ -317,12 +318,10 @@ internal static class TimestampTokenValidation
 
         List<String?> purposes;
         X509KeyUsageFlags? keyUsages;
+        var purposeExtension = signer.Extensions.OfType<X509EnhancedKeyUsageExtension>().FirstOrDefault();
         try
         {
-            purposes = signer.Extensions.OfType<X509EnhancedKeyUsageExtension>()
-                             .SelectMany(extension => extension.EnhancedKeyUsages.Cast<Oid>())
-                             .Select(purpose => purpose.Value)
-                             .ToList();
+            purposes = purposeExtension?.EnhancedKeyUsages.Cast<Oid>().Select(purpose => purpose.Value).ToList() ?? [];
             keyUsages = signer.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault()?.KeyUsages;
         }
         catch (CryptographicException ex)
@@ -333,6 +332,11 @@ internal static class TimestampTokenValidation
         if (purposes.Count == 0 || purposes.Any(purpose => purpose != TimeStampingPurposeOid))
         {
             throw new TimestampTokenValidationException("the signing certificate's extended key usage must contain only id-kp-timeStamping.");
+        }
+
+        if (purposeExtension is { Critical: false })
+        {
+            throw new TimestampTokenValidationException("the signing certificate's extended key usage extension must be critical.");
         }
 
         if (keyUsages is { } usages && (usages & (X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation)) == 0)

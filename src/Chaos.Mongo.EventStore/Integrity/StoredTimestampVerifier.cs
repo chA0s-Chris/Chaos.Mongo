@@ -11,12 +11,22 @@ using System.Security.Cryptography.X509Certificates;
 /// Verifies a timestamp token stored on an anchor, long after it was received.
 /// </summary>
 /// <remarks>
-/// The token passes the same checks as on receipt (<see cref="TimestampTokenValidation"/>), except the nonce, which
-/// only binds the token to its request, and the comparison with the local clock, which only applies while stamping.
-/// The chain is built at the token's time from the stored certificates without online revocation checks. Its revocation
-/// status is recomputed from the stored confirming CRLs instead of read from the stored status: each counts only for the
-/// distribution point it was captured for, when its signature verifies against its issuer's certificate in the stored
-/// chain and it was issued at least the grace period after the token's time.
+///     <para>
+///     The token passes the same checks as on receipt (<see cref="TimestampTokenValidation"/>), except the nonce, which
+///     only binds the token to its request, and the comparison with the local clock, which only applies while stamping.
+///     The chain is built at the token's time from the stored certificates without online revocation checks. Its
+///     revocation status is recomputed from the stored confirming CRLs instead of read from the stored status: each
+///     counts only for the distribution point it was captured for, when it is a complete CRL for that point
+///     (<see cref="CertificateRevocationListScope"/>), its signature verifies against its issuer's certificate in the
+///     stored chain and it was issued at least the grace period after the token's time. A token whose stored status is
+///     confirmed or revoked but that stores no confirming CRL although its chain names distribution points is invalid,
+///     because its revocation evidence was removed.
+///     </para>
+///     <para>
+///     Verification compares the chain it builds with the stored chain. With the system trust store, the chain built
+///     years later may take another path, for example through a cross-signed root, so configure the authority's roots
+///     explicitly in <see cref="TimestampAuthorityTrust.TrustedRoots"/>.
+///     </para>
 /// </remarks>
 internal static class StoredTimestampVerifier
 {
@@ -59,6 +69,11 @@ internal static class StoredTimestampVerifier
             }
 
             var tokenTime = token.TokenInfo.Timestamp;
+            if (RevocationEvidenceRemoved(timestamp))
+            {
+                return Invalid(timestamp, TimestampRevocationStatus.Unconfirmed, "the stored revocation status is confirmed or revoked, but its confirming CRLs are missing.");
+            }
+
             var status = RecomputeRevocationStatus(timestamp, storedCertificates, tokenTime, gracePeriod);
             return status == TimestampRevocationStatus.Revoked
                 ? Invalid(timestamp, status, "a certificate of the token's chain is revoked at or before the token's time.")
@@ -97,7 +112,9 @@ internal static class StoredTimestampVerifier
         try
         {
             var header = CertificateRevocationListHeader.Decode(crl);
-            if (!header.Issuer.Span.SequenceEqual(expectedIssuer) || header.ThisUpdate < issuedNotBefore)
+            if (!header.Issuer.Span.SequenceEqual(expectedIssuer) ||
+                header.ThisUpdate < issuedNotBefore ||
+                !CertificateRevocationListScope.IsCompleteFor(crl, source.Locations))
             {
                 return false;
             }
@@ -155,6 +172,29 @@ internal static class StoredTimestampVerifier
         }
 
         return confirmed ? TimestampRevocationStatus.Confirmed : TimestampRevocationStatus.Unconfirmed;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a token's stored status records confirming CRLs that are no longer stored. A
+    /// status recorded without CRLs, such as one confirmed through an indirect CRL issuer, still stores them; only an
+    /// empty list for a chain that names distribution points shows that they were removed.
+    /// </summary>
+    private static Boolean RevocationEvidenceRemoved(AnchorTimestamp timestamp)
+    {
+        if (timestamp.RevocationStatus is not (TimestampRevocationStatus.Confirmed or TimestampRevocationStatus.Revoked) ||
+            timestamp.ConfirmingRevocationLists.Count > 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            return TimestampTokenValidation.GetCrlSources(timestamp.CertificateChain).Count > 0;
+        }
+        catch (TimestampTokenValidationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

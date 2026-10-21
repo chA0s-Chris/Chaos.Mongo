@@ -149,6 +149,10 @@ public static class MongoBuilderExtensions
         var anchoring = new IntegrityAnchoringBuilder(options);
         configure(anchoring);
         anchoring.Validate();
+        if (builder.Services.FirstOrDefault(s => s.ServiceType == typeof(IntegrityVerificationBuilder))?.ImplementationInstance is IntegrityVerificationBuilder configured)
+        {
+            configured.EnsureAnchorCollectionsMatch();
+        }
 
         // The trust settings of RFC 3161 authorities also apply when their stored tokens are verified.
         var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
@@ -219,7 +223,17 @@ public static class MongoBuilderExtensions
         var verificationBuilder = new IntegrityVerificationBuilder(verification, GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services));
         configure?.Invoke(verificationBuilder);
 
-        // Registered only to detect a second configuration.
+        // Verification must not redirect where an anchoring configuration writes.
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityAnchoringService)))
+        {
+            verificationBuilder.EnsureAnchorCollectionsMatch();
+        }
+        else
+        {
+            verificationBuilder.ApplyAnchorCollections();
+        }
+
+        // Registered to detect a second configuration and an anchoring configuration with other collections.
         builder.Services.AddSingleton(verificationBuilder);
         AddAnchorVerifier(builder.Services);
         return builder;

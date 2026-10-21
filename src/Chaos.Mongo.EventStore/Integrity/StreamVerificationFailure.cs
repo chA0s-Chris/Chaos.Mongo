@@ -61,5 +61,11 @@ internal enum StreamVerificationFailure
     /// The stored hash of a version that a completed anchor covers differs from the anchor's leaf, so the stream was
     /// rewritten or rolled back.
     /// </summary>
-    AnchoredHashMismatch
+    AnchoredHashMismatch,
+
+    /// <summary>
+    /// A leaf of the stream in a completed anchor does not prove its inclusion in the anchor's Merkle root, so the
+    /// leaf was changed.
+    /// </summary>
+    AnchoredLeafInvalid
 }

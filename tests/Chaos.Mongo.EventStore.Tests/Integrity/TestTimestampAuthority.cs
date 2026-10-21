@@ -60,7 +60,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// <paramref name="duplicateKeyUsage"/> the signer carries its key usage extension twice, and with an alternative
     /// TSA name its subject alternative names extension carries <paramref name="rawAlternativeNames"/> when given.
     /// The CA's CRL lists <paramref name="revokedCertificates"/> revoked certificates, about 28 bytes each, so tests
-    /// can capture large CRLs.
+    /// can capture large CRLs. With <paramref name="nonCriticalPurpose"/> the signer's extended key usage extension is
+    /// not critical.
     /// </summary>
     public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                   Byte[]? rawCrlDistributionPoints = null,
@@ -73,7 +74,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   Boolean duplicateKeyUsage = false,
                                   Byte[]? rawAlternativeNames = null,
                                   Int32? rsaKeySize = null,
-                                  Int32 revokedCertificates = 0)
+                                  Int32 revokedCertificates = 0,
+                                  Boolean nonCriticalPurpose = false)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
@@ -105,7 +107,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                 purposes.Add(new Oid(CodeSigningPurposeOid));
             }
 
-            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(purposes, true));
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(purposes, !nonCriticalPurpose));
         }
 
         if (alternativeTsaName)
@@ -251,6 +253,55 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
+    /// week, that carries exactly the given CRL extensions.
+    /// </summary>
+    public Byte[] BuildCrlWithExtensions(DateTimeOffset thisUpdate, params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
+    {
+        var tbs = new AsnWriter(AsnEncodingRules.DER);
+        using (tbs.PushSequence())
+        {
+            tbs.WriteInteger(1);
+            WriteEcdsaWithSha256(tbs);
+            tbs.WriteEncodedValue(Root.SubjectName.RawData);
+            tbs.WriteUtcTime(thisUpdate);
+            tbs.WriteUtcTime(thisUpdate.AddDays(7));
+            if (extensions.Length > 0)
+            {
+                using (tbs.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+                using (tbs.PushSequence())
+                {
+                    foreach (var (oid, critical, value) in extensions)
+                    {
+                        using (tbs.PushSequence())
+                        {
+                            tbs.WriteObjectIdentifier(oid);
+                            if (critical)
+                            {
+                                tbs.WriteBoolean(true);
+                            }
+
+                            tbs.WriteOctetString(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        var tbsBytes = tbs.Encode();
+        using var key = Root.GetECDsaPrivateKey() ?? throw new InvalidOperationException("The test root has no ECDSA private key.");
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            writer.WriteEncodedValue(tbsBytes);
+            WriteEcdsaWithSha256(writer);
+            writer.WriteBitString(key.SignData(tbsBytes, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence));
+        }
+
+        return writer.Encode();
+    }
+
+    /// <summary>
     /// Encodes an unsigned CRL of the authority's CA issued at <paramref name="thisUpdate"/> without a next update; CRL
     /// signatures are not verified.
     /// </summary>
@@ -272,14 +323,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
 
         return writer.Encode();
-
-        static void WriteEcdsaWithSha256(AsnWriter writer)
-        {
-            using (writer.PushSequence())
-            {
-                writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
-            }
-        }
     }
 
     /// <summary>
@@ -415,6 +458,14 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         {
             Content = new ByteArrayContent(content ?? [])
         };
+
+    private static void WriteEcdsaWithSha256(AsnWriter writer)
+    {
+        using (writer.PushSequence())
+        {
+            writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
+        }
+    }
 
     private Byte[] CreateResponse(Byte[] query)
     {

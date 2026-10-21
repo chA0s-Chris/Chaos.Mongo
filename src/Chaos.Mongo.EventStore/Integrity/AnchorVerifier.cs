@@ -59,8 +59,13 @@ internal sealed class AnchorVerifier
 
     /// <summary>
     /// Verifies the chain of anchors: committed sequence numbers must be contiguous from 1, each anchor's previous
-    /// digest must equal its predecessor's digest, and each digest must recompute from its stored fields.
+    /// digest must equal its predecessor's digest, each digest must recompute from its stored fields, and each Merkle
+    /// root must recompute from the anchor's stored leaves. Only the newest anchor may still await its timestamps.
     /// </summary>
+    /// <remarks>
+    /// Recomputing the roots authenticates the stored leaves, which stream verification compares streams with, so
+    /// deleting or changing leaves together with the streams they cover is detected.
+    /// </remarks>
     /// <param name="trustedHead">
     /// An anchor kept outside the database that the chain must contain unchanged, or <c>null</c> to check consistency
     /// only.
@@ -78,6 +83,7 @@ internal sealed class AnchorVerifier
         var expectedSequence = 1L;
         var previousDigest = FirstPreviousDigest;
         Byte[]? trustedSequenceDigest = null;
+        var previousAwaitsTimestamps = false;
         await foreach (var document in Store.ReadCommittedAnchorDocumentsAsync(cancellationToken))
         {
             if (!AnchorStore.TryRead(document, AnchorStore.ReadAnchor, out var anchor))
@@ -90,7 +96,14 @@ internal sealed class AnchorVerifier
                 return Broken(expectedSequence, AnchorChainFailure.SequenceGap);
             }
 
-            if (anchor.FormatVersion != AnchorEncoding.FormatVersion ||
+            // No anchor is created while one awaits its timestamps, so only the newest anchor can await them.
+            if (previousAwaitsTimestamps)
+            {
+                return new AnchorChainVerificationResult(expectedSequence - 1, AnchorChainFailure.MalformedAnchor, expectedSequence - 2);
+            }
+
+            if (anchor.Status is not (AnchorStatus.AwaitingTimestamp or AnchorStatus.Completed) ||
+                anchor.FormatVersion != AnchorEncoding.FormatVersion ||
                 !String.Equals(anchor.HashAlgorithm, AnchorEncoding.HashAlgorithmName, StringComparison.Ordinal) ||
                 anchor.AnchorDigest.Length != AnchorEncoding.HashLength)
             {
@@ -107,12 +120,18 @@ internal sealed class AnchorVerifier
                 return Broken(expectedSequence, AnchorChainFailure.AnchorDigestMismatch);
             }
 
+            if (!await RecomputesRootAsync(anchor, cancellationToken))
+            {
+                return Broken(expectedSequence, AnchorChainFailure.LeafSetMismatch);
+            }
+
             if (anchor.Sequence == trustedHead?.Sequence)
             {
                 trustedSequenceDigest = anchor.AnchorDigest;
             }
 
             previousDigest = anchor.AnchorDigest;
+            previousAwaitsTimestamps = anchor.Status == AnchorStatus.AwaitingTimestamp;
             expectedSequence++;
         }
 
@@ -134,6 +153,19 @@ internal sealed class AnchorVerifier
         AnchorChainVerificationResult Broken(Int64 sequence, AnchorChainFailure failure)
             => new(sequence, failure, expectedSequence - 1);
     }
+
+    /// <summary>
+    /// Computes the Merkle leaf hash of a stored leaf, whose chain hash must have the length of a SHA-256 hash.
+    /// </summary>
+    internal static Byte[] HashLeaf(AnchorLeaf leaf)
+        => MerkleTree.HashLeaf(AnchorEncoding.EncodeLeaf(new AnchorCandidate(leaf.AggregateType, leaf.AggregateId, leaf.Version, leaf.Hash, default)));
+
+    /// <summary>
+    /// Verifies that a stored leaf proves its inclusion in its anchor's Merkle root.
+    /// </summary>
+    internal static Boolean ProvesInclusion(AnchorLeaf leaf, AnchorRecord anchor)
+        => leaf.Hash.Length == AnchorEncoding.HashLength &&
+           MerkleTree.VerifyInclusion(HashLeaf(leaf), leaf.Index, anchor.LeafCount, leaf.Proof, anchor.MerkleRoot);
 
     private static Boolean RecomputesDigest(AnchorRecord anchor)
     {
@@ -161,6 +193,36 @@ internal sealed class AnchorVerifier
         return items;
     }
 
+    /// <summary>
+    /// Recomputes an anchor's Merkle root from its stored leaves: exactly <see cref="AnchorRecord.LeafCount"/> readable
+    /// leaves with the indexes from 0 that carry the anchor's sequence number.
+    /// </summary>
+    private async Task<Boolean> RecomputesRootAsync(AnchorRecord anchor, CancellationToken cancellationToken)
+    {
+        if (anchor.LeafCount < 1)
+        {
+            return false;
+        }
+
+        // The stored leaf count is not trusted to size the list.
+        var leafHashes = new List<Byte[]>();
+        await foreach (var document in Store.ReadLeafDocumentsAsync(anchor.Id, cancellationToken))
+        {
+            if (leafHashes.Count == anchor.LeafCount ||
+                !AnchorStore.TryRead(document, AnchorStore.ReadLeaf, out var leaf) ||
+                leaf.Index != leafHashes.Count ||
+                leaf.AnchorSequence != anchor.Sequence ||
+                leaf.Hash.Length != AnchorEncoding.HashLength)
+            {
+                return false;
+            }
+
+            leafHashes.Add(HashLeaf(leaf));
+        }
+
+        return leafHashes.Count == anchor.LeafCount && MerkleTree.Build(leafHashes).Root.AsSpan().SequenceEqual(anchor.MerkleRoot);
+    }
+
     private async Task<TimestampVerificationResult> VerifyTimestampAsync(AnchorTimestampReference reference,
                                                                          Byte[] anchorDigest,
                                                                          CancellationToken cancellationToken)
@@ -180,12 +242,13 @@ internal sealed class AnchorVerifier
                 ConfirmingRevocationLists = await ReadAllAsync(reference.ConfirmingRevocationListHashes, cancellationToken)
             };
         }
-        catch (AnchorEvidenceException ex)
+        catch (Exception ex) when (ex is AnchorEvidenceException or ArgumentException)
         {
+            // A reference that is not a SHA-256 hash cannot address stored evidence.
             return new TimestampVerificationResult(reference.Authority,
                                                    reference.TimestampUtc,
                                                    false,
-                                                   ex.Message,
+                                                   ex is AnchorEvidenceException ? ex.Message : "The timestamp references malformed evidence.",
                                                    TimestampRevocationStatus.Unconfirmed,
                                                    reference.RevocationStatus);
         }

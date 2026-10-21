@@ -42,6 +42,29 @@ public class IntegrityVerificationRegistrationTests
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WithIntegrityVerification_AnchorCollectionsOfAnchoring_AreAccepted(Boolean verificationFirst)
+    {
+        var builder = CreateBuilder();
+        Action<IntegrityVerificationBuilder> verification = v => v.WithAnchorCollections("A", "L", "E", "C");
+        Action<IntegrityAnchoringBuilder> anchoring = a =>
+        {
+            a.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
+            a.Options.AnchorsCollectionName = "A";
+            a.Options.AnchorLeavesCollectionName = "L";
+            a.Options.AnchorEvidenceCollectionName = "E";
+            a.Options.AnchorEvidenceChunksCollectionName = "C";
+        };
+
+        var act = () => (verificationFirst
+            ? builder.WithIntegrityVerification(verification).WithIntegrityAnchoring(anchoring)
+            : builder.WithIntegrityAnchoring(anchoring).WithIntegrityVerification(verification)).Services.BuildServiceProvider().Dispose();
+
+        act.Should().NotThrow();
+    }
+
+    [Test]
     public void WithIntegrityVerification_CalledTwice_ThrowsInvalidOperationException()
     {
         var builder = CreateBuilder().WithIntegrityVerification();
@@ -68,6 +91,29 @@ public class IntegrityVerificationRegistrationTests
 
         gracePeriod.Should().Throw<ArgumentOutOfRangeException>();
         collections.Should().Throw<ArgumentException>();
+    }
+
+    [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WithIntegrityVerification_OtherAnchorCollectionsThanAnchoring_ThrowsInvalidOperationException(Boolean verificationFirst)
+    {
+        var builder = CreateBuilder();
+        Action<IntegrityVerificationBuilder> verification = v => v.WithAnchorCollections("A", "L", "E", "C");
+        Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
+        if (verificationFirst)
+        {
+            builder.WithIntegrityVerification(verification);
+            anchoring += a => a.Options.AnchorsCollectionName = "Other";
+        }
+        else
+        {
+            builder.WithIntegrityAnchoring(anchoring);
+        }
+
+        var act = () => _ = verificationFirst ? builder.WithIntegrityAnchoring(anchoring) : builder.WithIntegrityVerification(verification);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*anchor collections*");
     }
 
     [Test]

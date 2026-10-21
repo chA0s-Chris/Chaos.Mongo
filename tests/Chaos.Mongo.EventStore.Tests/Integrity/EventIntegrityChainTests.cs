@@ -7,9 +7,29 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using NUnit.Framework;
+using System.Globalization;
 
 public class EventIntegrityChainTests
 {
+    private static readonly TestCaseData[] UnexpectedMemberTypes =
+    [
+        Case("FormatVersion", new BsonInt64(1)),
+        Case("FormatVersion", new BsonDouble(1)),
+        Case("FormatVersion", new BsonString("1")),
+        Case("Algorithm", new BsonInt32(256)),
+        Case("PreviousHash", new BsonBinaryData(new Byte[32], BsonBinarySubType.UserDefined)),
+        Case("PreviousHash", new BsonString("hash")),
+        Case("Hash", new BsonBinaryData(new Byte[32], BsonBinarySubType.OldBinary)),
+        Case("SealMode", new BsonInt32(0)),
+        Case("PersonalData", BsonNull.Value),
+        Case("PersonalData", new BsonDocument()),
+        Case("PersonalData.0", new BsonString("Name")),
+        Case("PersonalData.0.Path", new BsonInt32(1)),
+        Case("PersonalData.0.Commitment", new BsonBinaryData(new Byte[32], BsonBinarySubType.UserDefined)),
+        Case("PersonalData.0.Salt", BsonNull.Value),
+        Case("PersonalData.0.Salt", new BsonString("salt"))
+    ];
+
     [Test]
     public void ComputeGenesis_DifferentAggregateIds_ReturnsDifferentValues()
     {
@@ -274,6 +294,41 @@ public class EventIntegrityChainTests
         result.Should().BeTrue();
         integrity.Should().BeEquivalentTo(sealedIntegrity);
     }
+
+    [Test]
+    [TestCaseSource(nameof(UnexpectedMemberTypes))]
+    public void TryRead_UnexpectedMemberType_ReturnsFalse(String path, BsonValue value)
+    {
+        var document = EventIntegrityChain.Seal(new BsonDocument("Name", "Alice").ToBson(), ["Name"], new Byte[32], IntegritySealMode.Append)
+                                          .ToBsonDocument();
+        EventIntegrityChain.TryRead(document, out _).Should().BeTrue();
+        var segments = path.Split('.');
+        BsonValue parent = document;
+        foreach (var segment in segments[..^1])
+        {
+            parent = parent is BsonArray array ? array[Int32.Parse(segment, CultureInfo.InvariantCulture)] : parent[segment];
+        }
+
+        if (parent is BsonArray items)
+        {
+            items[Int32.Parse(segments[^1], CultureInfo.InvariantCulture)] = value;
+        }
+        else
+        {
+            parent[segments[^1]] = value;
+        }
+
+        var result = EventIntegrityChain.TryRead(document, out var integrity);
+
+        result.Should().BeFalse();
+        integrity.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Creates a test case named after the path and the BSON type, because NUnit cannot display every BSON value.
+    /// </summary>
+    private static TestCaseData Case(String path, BsonValue value)
+        => new TestCaseData(path, value).SetArgDisplayNames(path, value is BsonBinaryData binary ? $"Binary {binary.SubType}" : value.BsonType.ToString());
 
     private static String ToHex(Byte[] value) => Convert.ToHexString(value).ToLowerInvariant();
 }

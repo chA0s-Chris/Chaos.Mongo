@@ -389,23 +389,33 @@ internal sealed class AnchorStore
         var documents = await Leaves.Find(StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
                                     .Sort(StreamLeavesSort())
                                     .ToListAsync(cancellationToken);
-        var anchors = new Dictionary<Guid, AnchorRecord?>();
-        var leaves = new List<CompletedStreamLeaf>();
+        var streamLeaves = new List<AnchorLeaf>(documents.Count);
         foreach (var document in documents)
         {
-            if (!TryRead(document, ReadLeaf, out var leaf))
+            if (TryRead(document, ReadLeaf, out var leaf))
             {
-                continue;
+                streamLeaves.Add(leaf);
             }
+        }
 
-            if (!anchors.TryGetValue(leaf.AnchorId, out var anchor))
+        var anchors = new Dictionary<Guid, AnchorRecord>();
+        if (streamLeaves.Count > 0)
+        {
+            var ids = new BsonArray(streamLeaves.Select(leaf => leaf.AnchorId).Distinct().Select(ToBson));
+            var anchorDocuments = await Anchors.Find(new BsonDocument("_id", new BsonDocument("$in", ids))).ToListAsync(cancellationToken);
+            foreach (var anchorDocument in anchorDocuments)
             {
-                var anchorDocument = await Anchors.Find(new BsonDocument("_id", ToBson(leaf.AnchorId))).FirstOrDefaultAsync(cancellationToken);
-                anchor = anchorDocument is not null && TryRead(anchorDocument, ReadAnchor, out var read) ? read : null;
-                anchors[leaf.AnchorId] = anchor;
+                if (TryRead(anchorDocument, ReadAnchor, out var anchor))
+                {
+                    anchors[anchor.Id] = anchor;
+                }
             }
+        }
 
-            if (anchor is { Status: AnchorStatus.Completed } && anchor.Sequence == leaf.AnchorSequence)
+        var leaves = new List<CompletedStreamLeaf>();
+        foreach (var leaf in streamLeaves)
+        {
+            if (anchors.TryGetValue(leaf.AnchorId, out var anchor) && anchor.Status == AnchorStatus.Completed && anchor.Sequence == leaf.AnchorSequence)
             {
                 leaves.Add(new CompletedStreamLeaf(leaf, anchor));
             }
@@ -582,6 +592,18 @@ internal sealed class AnchorStore
                         cancellationToken);
 
     /// <summary>
+    /// Reads the leaf documents of an anchor in leaf order without parsing them, so the verification of the chain of
+    /// anchors can report damaged leaves.
+    /// </summary>
+    /// <param name="anchorId">The anchor identifier.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The leaf documents.</returns>
+    public IAsyncEnumerable<BsonDocument> ReadLeafDocumentsAsync(Guid anchorId, CancellationToken cancellationToken)
+        => ReadAllAsync(Leaves.Find(new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
+                        document => document,
+                        cancellationToken);
+
+    /// <summary>
     /// Reads the leaves of an anchor in leaf order.
     /// </summary>
     public async Task<IReadOnlyList<AnchorLeaf>> ReadLeavesAsync(Guid anchorId, CancellationToken cancellationToken)
@@ -669,12 +691,13 @@ internal sealed class AnchorStore
                document[IndexField].ToInt32(),
                document[AggregateTypeField].AsString,
                document[AggregateIdField].AsGuid,
-               document[VersionField].ToInt64(),
+               ReadLeafVersion(document[VersionField]),
                document[HashField].AsByteArray,
                ReadBinaries(document["Proof"]));
 
     /// <summary>
-    /// Reads a stored document without throwing on documents whose elements are missing or have unexpected types.
+    /// Reads a stored document without throwing on documents whose elements are missing or have unexpected types,
+    /// including identifiers stored with another GUID representation.
     /// </summary>
     internal static Boolean TryRead<T>(BsonDocument document, Func<BsonDocument, T> read, [NotNullWhen(true)] out T? value) where T : class
     {
@@ -683,7 +706,8 @@ internal sealed class AnchorStore
             value = read(document);
             return true;
         }
-        catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or FormatException or ArgumentException or OverflowException)
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or InvalidOperationException or FormatException or ArgumentException or
+                                         OverflowException)
         {
             value = null;
             return false;
@@ -732,6 +756,14 @@ internal sealed class AnchorStore
                document["FailureCount"].ToInt32(),
                document["LastFailure"].AsString,
                document["LastFailureUtc"].ToUniversalTime());
+
+    /// <summary>
+    /// Reads a leaf's version; only whole numbers from 1 are versions.
+    /// </summary>
+    private static Int64 ReadLeafVersion(BsonValue value)
+        => StoredVersion.TryRead(value, out var version) && version >= 1
+            ? version
+            : throw new FormatException("A leaf version must be a whole number of at least 1.");
 
     private static DateTime? ReadOptionalTime(BsonDocument document, String field)
         => document.GetValue(field, BsonNull.Value).IsBsonNull ? null : document[field].ToUniversalTime();

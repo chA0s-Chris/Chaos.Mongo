@@ -4,7 +4,6 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
-using System.Globalization;
 
 /// <summary>
 /// Verifies the hash chain of an event stream by recomputing it from the raw stored documents, compares it with the
@@ -62,8 +61,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             return Failed(EventAnchorFailure.LeafHashMismatch, []);
         }
 
-        var leafHash = MerkleTree.HashLeaf(AnchorEncoding.EncodeLeaf(new AnchorCandidate(_aggregateTypeName, aggregateId, leaf.Version, anchoredHash, default)));
-        if (!MerkleTree.VerifyInclusion(leafHash, leaf.Index, anchor.LeafCount, leaf.Proof, anchor.MerkleRoot))
+        if (!AnchorVerifier.ProvesInclusion(leaf, anchor))
         {
             return Failed(EventAnchorFailure.InclusionProofInvalid, []);
         }
@@ -84,8 +82,9 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// Recomputes the hash chain of a stream and reports the first broken version. For every verified version it
-    /// returns the integrity data and the sealing anchor. For an intact stream it also compares the stream with its
-    /// leaves in completed anchors and reports erased values that no later erasure event of the stream records.
+    /// returns the integrity data and the sealing anchor. For an intact stream it also checks the inclusion proofs of
+    /// its leaves in completed anchors, compares the stream with them, and reports erased values that no later erasure
+    /// event of the stream records.
     /// </summary>
     /// <remarks>
     /// A consistent chain does not reveal deleted newest events or a deleted stream, because the remaining events still
@@ -183,7 +182,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         {
             if (entryValue is not BsonDocument entry ||
                 !entry.TryGetValue(PersonalDataErasureEntry.VersionElement, out var versionValue) ||
-                !TryReadVersion(versionValue, out var version) ||
+                !StoredVersion.TryRead(versionValue, out var version) ||
                 version >= erasureVersion ||
                 !entry.TryGetValue(PersonalDataErasureEntry.PathsElement, out var pathsValue) ||
                 pathsValue is not BsonArray paths)
@@ -202,22 +201,24 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
-    /// Compares an intact chain with the stream's leaves in completed anchors: an anchored version that no longer
-    /// exists reveals truncation, and an anchored version whose stored hash differs from its leaf reveals a rewritten or
-    /// rolled-back stream.
+    /// Compares an intact chain with the stream's leaves in completed anchors: a leaf that does not prove its inclusion
+    /// in its anchor's root was changed, an anchored version that no longer exists reveals truncation, and an anchored
+    /// version whose stored hash differs from its leaf reveals a rewritten or rolled-back stream.
     /// </summary>
     /// <returns>The lowest broken version and why, or <c>null</c> when every anchored version matches.</returns>
     private static (Int64 Version, StreamVerificationFailure Failure)? CompareWithLeaves(IReadOnlyList<ScannedEvent> events,
                                                                                          IReadOnlyList<CompletedStreamLeaf> leaves)
     {
         (Int64 Version, StreamVerificationFailure Failure)? first = null;
-        foreach (var (leaf, _) in leaves)
+        foreach (var (leaf, anchor) in leaves)
         {
-            (Int64 Version, StreamVerificationFailure Failure)? finding = leaf.Version > events.Count
-                ? (events.Count + 1, StreamVerificationFailure.AnchoredVersionMissing)
-                : !events[(Int32)(leaf.Version - 1)].Hash.AsSpan().SequenceEqual(leaf.Hash)
-                    ? (leaf.Version, StreamVerificationFailure.AnchoredHashMismatch)
-                    : null;
+            (Int64 Version, StreamVerificationFailure Failure)? finding = !AnchorVerifier.ProvesInclusion(leaf, anchor)
+                ? (leaf.Version, StreamVerificationFailure.AnchoredLeafInvalid)
+                : leaf.Version > events.Count
+                    ? (events.Count + 1, StreamVerificationFailure.AnchoredVersionMissing)
+                    : !events[(Int32)(leaf.Version - 1)].Hash.AsSpan().SequenceEqual(leaf.Hash)
+                        ? (leaf.Version, StreamVerificationFailure.AnchoredHashMismatch)
+                        : null;
             if (finding is { } found && (first is null || found.Version < first.Value.Version))
             {
                 first = found;
@@ -237,34 +238,6 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                  .Where((e, index) => e.SealMode == IntegritySealMode.Retroactive && events[index].SealMode == IntegritySealMode.Append)
                  .Select(e => e.Version)
                  .ToList();
-
-    /// <summary>
-    /// Reads a stored version without throwing on tampered values. Only whole numbers within the
-    /// <see cref="Int64"/> range are versions.
-    /// </summary>
-    private static Boolean TryReadVersion(BsonValue value, out Int64 version)
-    {
-        // 2^63, the first double above Int64.MaxValue.
-        const Double int64Limit = 9223372036854775808d;
-
-        switch (value)
-        {
-            case BsonInt32 int32:
-                version = int32.Value;
-                return true;
-            case BsonInt64 int64:
-                version = int64.Value;
-                return true;
-            case BsonDouble { Value: var number } when Double.IsInteger(number) && number >= -int64Limit && number < int64Limit:
-                version = (Int64)number;
-                return true;
-            case BsonDecimal128 decimal128:
-                return Int64.TryParse(decimal128.Value.ToString(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out version);
-            default:
-                version = 0;
-                return false;
-        }
-    }
 
     /// <summary>
     /// Verifies one event chained from an expected previous hash.
@@ -364,7 +337,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                 {
                     var expectedVersion = scan.Events.Count + 1L;
                     if (!rawDocument.TryGetValue(versionElement, out var versionValue) ||
-                        !TryReadVersion(versionValue, out var version) ||
+                        !StoredVersion.TryRead(versionValue, out var version) ||
                         version != expectedVersion)
                     {
                         return scan.Break(expectedVersion, StreamVerificationFailure.VersionGap);
@@ -434,7 +407,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                 using (rawDocument)
                 {
                     if (!rawDocument.TryGetValue(versionElement, out var versionValue) ||
-                        !TryReadVersion(versionValue, out var version) ||
+                        !StoredVersion.TryRead(versionValue, out var version) ||
                         version != expectedVersion ||
                         !rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue))
                     {
