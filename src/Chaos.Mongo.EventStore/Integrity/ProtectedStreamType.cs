@@ -14,7 +14,7 @@ internal abstract class ProtectedStreamType
     public abstract String AggregateIdElement { get; }
 
     /// <summary>
-    /// Gets the aggregate type name, as used for the genesis value of the chain.
+    /// Gets the aggregate type name, as used in anchor candidates and leaves.
     /// </summary>
     public abstract String AggregateTypeName { get; }
 

@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// A sealed stream head that an anchor has to cover.
 /// </summary>
-/// <param name="AggregateType">The aggregate type name, as used for the genesis value of the chain.</param>
+/// <param name="AggregateType">The aggregate type name, as used in anchor candidates and leaves.</param>
 /// <param name="AggregateId">The aggregate identifier.</param>
 /// <param name="Version">The sealed version.</param>
 /// <param name="Hash">The hash of <paramref name="Version"/>.</param>
