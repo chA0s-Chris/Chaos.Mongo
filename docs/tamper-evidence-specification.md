@@ -27,6 +27,8 @@ This document defines, at byte level, the evidence that `Chaos.Mongo.EventStore`
 - `uuid(id)` is the 16 bytes of a UUID in RFC 9562 order: the bytes of BSON binary subtype `0x04`.
 - BSON follows the [BSON specification 1.1](https://bsonspec.org/spec.html). "Raw bytes" are the bytes as stored, never decoded and re-encoded: re-encoding can change types, for example `int64` to `int32`.
 - Element names are the names written by Chaos.Mongo. Element names of consumer events follow the consumer's class maps and play no role here except for personal-data paths.
+- Where a type is listed for an element, the element must have exactly that type; readers must not convert types, so every verifier reads the same data. A document of the anchor collections that repeats an element name, at any depth, is malformed.
+- *MongoDB order* is the order of an ascending MongoDB sort on an element: a missing element, `null` and an empty array first, then numbers by value (int32, int64, double and decimal128 alike, NaN first), then every other type; a non-empty array sorts by its smallest element. Elements that sort alike keep their stored order.
 
 ## Event Documents
 
@@ -55,7 +57,7 @@ Each event is one document of the events collection, `{prefix}_Events`. The elem
 
 Each `PersonalData` entry holds `Path` (string, a dotted element path), `Salt` (binary `0x00`, 32 bytes; absent once the value is erased) and `Commitment` (binary `0x00`, 32 bytes). Readers ignore unknown elements of `_integrity` and of its entries.
 
-Every listed element must have exactly the listed type: `FormatVersion` an int32, not an int64 or a double; binary elements subtype `0x00`; `SealMode` a string, not a number. An erased `Salt` is absent; a `null` or otherwise typed `Salt` makes the integrity data malformed. Readers must not convert types, so every verifier reads the same data.
+Every listed element must have exactly the listed type: `FormatVersion` an int32, not an int64 or a double; binary elements subtype `0x00`; `SealMode` the string `"Append"` or `"Retroactive"` exactly, not a number. An erased `Salt` is absent; a `null` or otherwise typed `Salt` makes the integrity data malformed, and so does an element name that `_integrity` or one of its entries repeats, or a string that is not valid UTF-8.
 
 `_integrity` is the last element of an appended event. A retroactively sealed event gets it appended by `$set` on a document without it, which leaves every other byte unchanged.
 
@@ -100,12 +102,12 @@ Hash    = SHA-256(Canonical ‖ Binding ‖ PreviousHash ‖ Mode)
 
 ## Verifying a Stream
 
-Read the stream's events in version order and keep the expected previous hash, starting at the genesis value. For each expected version, in this order, the first failing check breaks the stream at that version:
+Read the stream's events, the documents whose `AggregateId` is the stream's, in MongoDB order of `Version`, and keep the expected previous hash, starting at the genesis value. A document whose `Version` is missing or not a version therefore breaks the stream at version 1 when it sorts before the numbers, and after the last readable version otherwise. For each expected version, in this order, the first failing check breaks the stream at that version:
 
 | Failure | Check |
 |---|---|
 | `VersionGap` | The next event has the expected version. |
-| `MissingAggregateType` | Version 1 stores `AggregateType` as a string. |
+| `MissingAggregateType` | Version 1 stores `AggregateType` as a string of valid UTF-8. |
 | `NotSealed` | The event has `_integrity`. |
 | `MalformedIntegrity` | `_integrity` is a document with every required element of its exact type and a defined seal mode, and `PersonalData`, if present, is an array of entries of their exact types. |
 | `UnsupportedFormat` | `FormatVersion` is 1 and `Algorithm` is `"SHA-256"`. |
@@ -114,13 +116,13 @@ Read the stream's events in version order and keep the expected previous hash, s
 | `HashMismatch` | The recomputed chain hash equals `Hash`. |
 | `PersonalDataMismatch` or `ErasedPersonalDataPresent` | Every value with a salt matches its commitment, and every value without a salt is `null`; the first entry in recorded order that fails decides which. |
 
-The verified event's `Hash` becomes the next expected previous hash. A stream is intact when no check fails.
+The verified event's `Hash` becomes the next expected previous hash. A stream is intact when no check fails. A broken stream reports the events verified before the break, with their seal-mode transitions and personal-data statuses; unrecorded erasures are reported only for an intact stream.
 
 **Erasure records.** The erasure event has the discriminator `Chaos.Mongo.EventStore.PersonalDataErased` and holds `Reference` (string) and `Entries`, an array of `{ Version, Paths }`. Its records are trusted once its own hash verified, and only for versions below its own. A recorded value without a salt is *erased with a record* when a later erasure event lists its version and path, and *erased without a record* otherwise. Unrecorded erasures do not break the chain; they are reported.
 
 **Seal-mode transitions.** A version whose seal mode is `Retroactive` while its predecessor's is `Append` is reported as an informational finding. It is either a legitimate gap in protection or a suffix re-sealed after tampering; only anchors tell them apart.
 
-**Truncation and rewrites.** A consistent chain does not reveal deleted newest events or a deleted stream. An intact chain is compared with each of the stream's leaves in completed anchors, in anchor sequence order. A leaf whose inclusion proof does not lead to its anchor's root breaks it at the leaf's version (`AnchoredLeafInvalid`); an anchored version that no longer exists breaks it at the first missing version (`AnchoredVersionMissing`); an anchored version whose stored hash differs from the leaf's breaks it at that version (`AnchoredHashMismatch`). The lowest of these versions is reported, the first leaf's on a tie. A deleted stream whose leaves were deleted with it has no leaves to compare with; the chain of anchors reveals it.
+**Truncation and rewrites.** A consistent chain does not reveal deleted newest events or a deleted stream. The verified events are compared with the stream's leaves: the leaf documents with the stream's `AggregateType` (a string) and `AggregateId` and a numeric `Version` of at least 1. A leaf that cannot be read, or that belongs to a committed anchor (one with `Sequence`) that cannot be read, breaks the stream at its `Version`, or at version 1 when that is not an integer (`AnchoredLeafInvalid`). Leaves of missing or uncommitted anchors are ignored: they belong to discarded attempts. The leaves of completed anchors with the leaf's sequence number are compared in anchor sequence order: a leaf whose inclusion proof does not lead to its anchor's root breaks the stream at the leaf's version (`AnchoredLeafInvalid`); an anchored version that no longer exists breaks it at the first missing version (`AnchoredVersionMissing`); an anchored version whose stored hash differs from the leaf's breaks it at that version (`AnchoredHashMismatch`). The lowest of these versions is reported, the first leaf's on a tie. When the chain itself breaks, only leaves below the break are compared, and an earlier finding replaces the chain's, so a re-sealed prefix shows at its anchored version. A deleted stream whose leaves were deleted with it has no leaves to compare with; the chain of anchors reveals it. Readable leaves are authenticated only by recomputing the anchor roots, so stream verification is complete only together with verifying the chain of anchors.
 
 ## Anchors
 
@@ -140,16 +142,19 @@ Leaf = int32be(len(utf8(AggregateType))) ‖ utf8(AggregateType) ‖ uuid(Aggreg
 
 | Element | Type | Meaning |
 |---|---|---|
-| `_id` | binary `0x04` | The anchor identifier. |
-| `Status` | string | `"AwaitingTimestamp"` or `"Completed"`. Only completed anchors are evidence. |
-| `Sequence` | int64 | The position in the chain of anchors, contiguous from 1. |
+| `_id` | binary `0x04`, 16 bytes | The anchor identifier. |
+| `Status` | string | `"AwaitingTimestamp"` or `"Completed"` for a valid committed anchor; `"Preparing"` and `"Discarded"` are readable but invalid there. Only completed anchors are evidence. |
+| `Sequence` | int64 (int32 accepted) | The position in the chain of anchors, contiguous from 1. |
 | `FormatVersion` | int32 | `1`. |
 | `HashAlgorithm` | string | `"SHA-256"`. |
 | `PreviousDigest` | binary `0x00`, 32 bytes | The previous anchor's digest; 32 zero bytes for the first anchor. |
 | `MerkleRoot` | binary `0x00`, 32 bytes | The root over the leaves. |
 | `AnchorDigest` | binary `0x00`, 32 bytes | The digest the timestamp tokens cover. |
 | `LeafCount` | int32 | The number of leaves. |
-| `Timestamps` | array of documents | The timestamp entries, see [Timestamp Tokens](#timestamp-tokens). |
+| `PeriodStartUtc`, `PeriodEndUtc`, `OldestCandidateUtc`, `CreatedUtc` | date | Operational times; they play no role in verification. |
+| `CompletedUtc` | date or `null`, optional | When the anchor completed. |
+| `Timestamps` | array of documents, optional | The timestamp entries, see [Timestamp Tokens](#timestamp-tokens); absent means none. |
+| `AuthorityFailures` | array of documents, optional | Failed authority requests: `Authority` (string), `FailureCount` (int32), `LastFailure` (string), `LastFailureUtc` (date). |
 
 Anchors without `Sequence` are attempts that never committed and are ignored.
 
@@ -159,21 +164,21 @@ Anchors without `Sequence` are attempts that never committed and are ignored.
 AnchorDigest = SHA-256(int32be(FormatVersion) ‖ int64be(Sequence) ‖ PreviousDigest ‖ MerkleRoot)
 ```
 
-**Chain of anchors.** Sorted by `Sequence`, the first failing check breaks the chain at that sequence number:
+**Chain of anchors.** In MongoDB order of `Sequence`, the first failing check breaks the chain at that sequence number:
 
 | Failure | Check |
 |---|---|
-| `MalformedAnchor` | The document has the elements above with their types and a standard UUID `_id`. |
+| `MalformedAnchor` | The document has the elements above with their types, including those of its timestamp entries. |
 | `SequenceGap` | The sequence numbers are contiguous from 1. |
 | `MalformedAnchor` | The previous anchor is completed: no anchor is created while one awaits its timestamps, so only the newest may await them. The failure names the previous anchor. |
-| `MalformedAnchor` | `Status` is `"AwaitingTimestamp"` or `"Completed"`, `FormatVersion` is 1, `HashAlgorithm` is `"SHA-256"` and `AnchorDigest` has 32 bytes. |
+| `MalformedAnchor` | `Status` is `"AwaitingTimestamp"` or `"Completed"`, and `"Completed"` when a trusted head is given and the sequence number is at most the head's; `FormatVersion` is 1, `HashAlgorithm` is `"SHA-256"` and `AnchorDigest` has 32 bytes. |
 | `PreviousDigestMismatch` | `PreviousDigest` equals the predecessor's `AnchorDigest`. |
 | `AnchorDigestMismatch` | `AnchorDigest` recomputes. |
 | `LeafSetMismatch` | The anchor's stored leaves recompute its `MerkleRoot`: exactly `LeafCount` (at least 1) readable leaf documents whose `AnchorId` is the anchor's `_id`, with the indexes 0 to `LeafCount − 1`, the anchor's sequence number and 32-byte hashes. |
 
-A trusted head — the sequence number and digest of an anchor kept outside the database, for example in WORM storage fed by the completion hook — must then be present unchanged (`TrustedHeadMissing`, `TrustedHeadMismatch`). Recomputing the roots authenticates the leaves that stream verification compares streams with, so deleting or changing leaves together with the streams they cover is detected.
+A trusted head — the sequence number and digest of an anchor kept outside the database, for example in WORM storage fed by the completion hook — must then be present unchanged (`TrustedHeadMissing`, `TrustedHeadMismatch`). The completion hook only sees completed anchors, so every anchor up to the head must be completed; otherwise setting an anchor back to awaiting its timestamps would hide its leaves from stream verification. Without a trusted head, the newest anchor's status is not authenticated. Recomputing the roots authenticates the leaves that stream verification compares streams with, so deleting or changing leaves together with the streams they cover is detected.
 
-**Leaf documents.** Each holds `AnchorId` and `AggregateId` (binary `0x04`), `AnchorSequence`, `Index` (the zero-based position among the sorted leaves), `AggregateType`, `Version` (a whole number of at least 1), `Hash` and `Proof`, an array of the inclusion proof's 32-byte hashes. A leaf that cannot be read is skipped. A leaf counts only when its anchor exists, is completed and has the same sequence number.
+**Leaf documents.** Each holds `AnchorId` and `AggregateId` (binary `0x04`, 16 bytes), `AnchorSequence` (int64, int32 accepted), `Index` (int32, the zero-based position among the sorted leaves), `AggregateType` (string), `Version` (int64, int32 accepted, at least 1), `Hash` (binary `0x00`) and `Proof` (an array of binary `0x00`, the inclusion proof's hashes). A leaf counts only when its anchor exists, is completed and has the same sequence number; how unreadable leaves count is defined for the leaf set above and for streams in [Verifying a Stream](#verifying-a-stream).
 
 **Coverage.** An event of version `v` is anchored by the completed anchor with the lowest sequence number that has a leaf for its stream with a version at or above `v`; the chain from `v` to that version links the event to the leaf. For a retroactively sealed event, this anchor is the time since which it is protected, not its creation.
 
@@ -184,7 +189,7 @@ Timestamp tokens, certificates and CRLs are stored once per distinct content in 
 - An item of at most 4,194,304 bytes is stored inline: `{ _id: SHA-256(item), Length: int32, Data: binary }`.
 - A larger item is split into chunks of 4,194,304 bytes, the last one shorter: `{ _id: SHA-256(item), Length: int32, ChunkCount: int32 }`, with one document per chunk in `IntegrityAnchorEvidenceChunks`: `{ _id: { Hash: SHA-256(item), Index: int32 }, Data: binary }`.
 
-An item is the concatenation of its chunks in index order; its length and SHA-256 must match. Missing or mismatching evidence makes the token that references it invalid.
+The `_id` of an item and the `Hash` of a chunk identifier are binary `0x00`; a chunk identifier holds exactly `Hash` and `Index`, in this order. `Length` and `ChunkCount` are int32; an int64 or integral double in the int32 range is accepted. A document without `Data` is chunked: it must be longer than one chunk and have exactly as many chunks as its length needs, `ChunkCount = ⌈Length / 4,194,304⌉`, so a tampered count cannot make reading unbounded. An item is the concatenation of its chunks in index order; its length and SHA-256 must match. Missing, malformed or mismatching evidence makes the token that references it invalid.
 
 ## Timestamp Tokens
 
@@ -193,26 +198,31 @@ Each entry of an anchor's `Timestamps` references one RFC 3161 token by hash:
 | Element | Type | Meaning |
 |---|---|---|
 | `Authority` | string | The authority name. |
-| `TokenHash` | binary | The token: a DER `TimeStampToken`, CMS `SignedData` over a `TSTInfo`. |
-| `CertificateChainHashes` | array of binary | The DER certificates from the signing certificate to the root, in order. |
-| `CertificateRevocationListHashes` | array of binary | The CRLs captured at stamping time. They must resolve like every referenced item; their content plays no role in verification. |
+| `TokenHash` | binary `0x00` | The token: a DER `TimeStampToken`, CMS `SignedData` over a `TSTInfo`. |
+| `CertificateChainHashes` | array of binary `0x00` | The DER certificates from the signing certificate to the root, in order. |
+| `CertificateRevocationListHashes` | array of binary `0x00` | The CRLs captured at stamping time. They must resolve like every referenced item; their content plays no role in verification. |
 | `TimestampUtc` | date | The token's `genTime`, truncated to milliseconds. |
-| `RevocationStatus` | string | `"Unconfirmed"`, `"Confirmed"` or `"Revoked"`, as last recorded. Verifiers recompute it and only report the stored one. |
-| `ConfirmingRevocationListHashes` | array of binary | The CRLs that confirm the chain's revocation status, see [Revocation](#revocation). |
+| `ObtainedUtc` | date | When the token was obtained; it plays no role in verification. |
+| `RevocationStatus` | string | `"Unconfirmed"`, `"Confirmed"` or `"Revoked"`, as last recorded. Verifiers recompute it and check it for consistency, see [Revocation](#revocation). |
+| `ConfirmingRevocationListHashes` | array of binary `0x00`, optional | The CRLs that confirm the chain's revocation status, see [Revocation](#revocation); absent means none. |
+| `RevocationStatusUtc`, `ConfirmationNotBeforeUtc` | date or `null`, optional | Operational times. |
+| `ConfirmationFailureCount` | int32, optional | Failed confirmation attempts; when positive, `LastConfirmationFailure` (string) and `LastConfirmationFailureUtc` (date) are present. |
 
 A token is valid evidence for an anchor when:
 
-1. Its message imprint names `hashAlgorithm` id-sha256 with `hashedMessage` equal to the `AnchorDigest` itself (the digest is not hashed again), and its signature and signing-certificate attribute (`ESSCertID` or `ESSCertIDv2`) verify.
-2. Its signed content is exactly one `TSTInfo`, it has exactly one signer, and it carries no countersignature.
-3. The signing certificate's extended key usage extension is critical and contains only `id-kp-timeStamping`, its key usage, if present, permits signatures, and it carries no extension twice.
-4. A `tsa` name in the token corresponds to a subject name of the signing certificate.
-5. It is signed with SHA-256 or stronger and an RSA key of at least 2048 or an ECDSA key of at least 256 bits; MD2, MD4, MD5 and SHA-1 are rejected for the digest and the signature algorithm.
-6. When a policy is required for the authority, it is issued under that policy.
-7. Its `genTime`, truncated to milliseconds, equals `TimestampUtc`.
-8. The chain built from the stored certificates is a valid chain to a trusted root at `genTime` and equals the stored chain.
-9. Every referenced evidence item resolves: the token, the stored chain, the stamping-time CRLs and the confirming CRLs.
-10. Its stored `RevocationStatus` is not `"Confirmed"` or `"Revoked"` while `ConfirmingRevocationListHashes` is empty although the chain names distribution points: such confirming CRLs were removed.
-11. Its chain is not revoked at or before `genTime`, see below.
+1. Its message imprint names `hashAlgorithm` id-sha256, with absent or `NULL` parameters, and a `hashedMessage` equal to the `AnchorDigest` itself (the digest is not hashed again), and its signature and signing-certificate attribute (`ESSCertID` or `ESSCertIDv2`) verify.
+2. It is DER-encoded: definite lengths in their shortest form, and no universal type but `SEQUENCE` and `SET` in constructed form, also inside the `TSTInfo`.
+3. Its signed content is exactly one `TSTInfo`, it has exactly one signer, and it carries no countersignature.
+4. The signing certificate's extended key usage extension is critical and contains only `id-kp-timeStamping`, its key usage, if present, permits `digitalSignature` or `nonRepudiation` and nothing else, and it carries no extension twice.
+5. A `tsa` name in the token corresponds to a subject name of the signing certificate.
+6. MD2, MD4, MD5 and SHA-1 are rejected for its digest and signature algorithms, and an RSA signing key has at least 2048 bits and an ECDSA key at least 256; other key types are not size-checked.
+7. When a policy is required for the authority, it is issued under that policy.
+8. Its `genTime`, truncated to milliseconds, equals `TimestampUtc`.
+9. The chain built from the stored certificates is a valid chain to a trusted root at `genTime` and equals the stored chain, which therefore starts with the signing certificate, names each next certificate's subject as its issuer and ends with a trusted root.
+10. The chain's CRL distribution points are well formed, and a certificate that names distribution points names one with an HTTP or HTTPS location that covers all reasons, see [Revocation](#revocation).
+11. Every referenced evidence item resolves: the token, the stored chain, the stamping-time CRLs and the confirming CRLs.
+12. Its stored revocation evidence is consistent: a stored `RevocationStatus` of `"Confirmed"` or `"Revoked"` requires, for every source that names its issuer, a confirming CRL that counts for it and was issued after `genTime`, see [Revocation](#revocation). Anchoring records these statuses only from such CRLs, so removing, substituting or partly removing them shows.
+13. Its chain is not revoked at or before `genTime`, see below.
 
 Trust settings are per authority name: the trusted roots and, optionally, the required policy. A token of an authority without trust settings is not valid.
 
@@ -222,20 +232,26 @@ An anchor is verified when its digest recomputes and at least one of its tokens 
 
 The CRLs captured at stamping time are usually issued before the token's time and show no revocation after their issue. The confirming CRLs close that gap: they are issued at least a grace period after the token's time (24 hours unless configured otherwise).
 
-**Ordering.** For each non-root certificate of the chain, in chain order, and each of its CRL distribution points with an HTTP or HTTPS location, in extension order, there is one source: its locations and the issuer its CRL must come from — the certificate's issuer, or none when the point names a CRL issuer. A point covers all reasons when it has no `reasons` field or its `ReasonFlags` set bits 1 to 8 (bit 0 is unused). Locations are compared in normalized form: lower-case scheme and host, no default port, `/` for an empty path, and dot segments removed. Sources with the same locations (joined by spaces) and issuer are listed once. A certificate that names distribution points, but none with an HTTP location covering all reasons, has no valid sources; the token is then *Unconfirmed*. `ConfirmingRevocationListHashes` holds one CRL per source, in this order.
+**Sources.** For each non-root certificate of the chain and each of its CRL distribution points with an HTTP or HTTPS location, there is one source: its locations, the issuer its CRL must come from — the certificate's issuer, or none when the point names a CRL issuer — and whether a CA certificate (basic constraints with `cA` set) names it. Sources with the same locations (joined by spaces) and issuer are listed once, and such a source counts as named by a CA certificate when any of them is. A point covers all reasons when it has no `reasons` field or its `ReasonFlags` set bits 1 to 8 (bit 0 is unused). A certificate that names distribution points, but none with an HTTP location covering all reasons, or whose distribution points are malformed, makes the token invalid, as anchoring rejects such tokens.
+
+**Locations** are compared in normalized form, computed on the text as written: drop the fragment and the user information, lower-case the scheme and the host (an IPv6 host keeps its brackets), drop the port when it is the scheme's default, make an empty path `/`, remove dot segments (RFC 3986, section 5.2.4), and keep the rest of the path and the query as written. A location that is not `http` or `https`, has no host or has a port that is not a decimal number is no location.
+
+The confirming CRLs are matched with the sources by content, not by position: they may be stored in any order, and one CRL may count for several sources.
 
 **A confirming CRL counts** for its source when all of the following hold:
 
 - The source names its issuer, and the CRL's `issuer` equals it. A CRL of an indirect CRL issuer cannot be verified, because the issuer's certificate is not stored.
 - Its `thisUpdate` is at or after `genTime` plus the grace period.
-- It is a complete CRL for the source: it carries no `deltaCRLIndicator`, no extension twice and no critical extension other than `issuingDistributionPoint` and `cRLNumber`; an `issuingDistributionPoint`, if present, sets none of `onlySomeReasons`, `onlyContainsCACerts`, `onlyContainsAttributeCerts` and `indirectCRL`, and its `distributionPoint` is a full name that names one of the source's locations.
-- Its signature verifies against the certificate of its issuer in the stored chain, under the same policy as tokens: the signature algorithms in the signed part and outside it are equal and are RSA with PKCS #1 v1.5 padding or ECDSA, each with SHA-256, SHA-384 or SHA-512, or RSASSA-PSS with an explicit SHA-2 hash, MGF1 with the same hash, a salt as long as the hash and the default trailer; the issuer's key is an RSA key of at least 2048 or an ECDSA key of at least 256 bits.
+- It is a complete CRL for the source: it carries no `deltaCRLIndicator`, no extension twice and no critical extension other than `issuingDistributionPoint` and `cRLNumber`; an `issuingDistributionPoint`, if present, sets none of `onlySomeReasons`, `onlyContainsCACerts`, `onlyContainsAttributeCerts` and `indirectCRL`, sets `onlyContainsUserCerts` only for a source no CA certificate names, and its `distributionPoint`, if present, is a full name that names one of the source's locations.
+- Its signature verifies against the certificate of its issuer in the stored chain, whose key usage, if present, permits `cRLSign`, under the same policy as tokens: the signature algorithms in the signed part and outside it are equal and are RSA with PKCS #1 v1.5 padding (parameters `NULL` or absent) or ECDSA (no parameters), each with SHA-256, SHA-384 or SHA-512, or RSASSA-PSS with an explicit SHA-2 hash, MGF1 with the same hash, a salt as long as the hash and the default trailer, in this order; the signature value has no unused bits; the issuer's key is an RSA key of at least 2048 or an ECDSA key of at least 256 bits.
 
 **Revocation status.**
 
-- *Revoked* when a CRL that counts has an entry revoking a non-root certificate of the chain at or before `genTime`: same serial number, an issuer the entry names (the CRL issuer unless a `certificateIssuer` extension names others; a `certificateIssuer` without a `directoryName` leaves the issuer unknown, so the entry matches by serial number alone), and the earlier of `revocationDate` and `invalidityDate` at or before `genTime`; `certificateHold` counts as revoked, `removeFromCRL` lifts it. A revoked token is invalid; its anchor's evidence degrades to the next anchor's time.
-- *Confirmed* when a CRL counts for every source, or the chain names no distribution points.
+- *Revoked* when a CRL that counts for a source has an entry revoking a non-root certificate of the chain at or before `genTime`: same serial number, an issuer the entry names (the CRL issuer unless a `certificateIssuer` extension names others, for this and every following entry; a `certificateIssuer` without a `directoryName` leaves the issuer unknown, so the entry matches by serial number alone), and the earlier of `revocationDate` and `invalidityDate` at or before `genTime`; `certificateHold` counts as revoked, `removeFromCRL` lifts it. Unknown entry extensions are ignored; of a repeated known one, the last applies. A revoked token is invalid; its anchor's evidence degrades to the next anchor's time.
+- *Confirmed* when a CRL counts for every source, or the chain has no sources and no confirming CRL is stored.
 - *Unconfirmed* otherwise. An unconfirmed token is still valid.
+
+**Consistency.** A stored status of `"Confirmed"` or `"Revoked"` is consistent when every source that names its issuer has a confirming CRL that counts for it, applying the rules above with "issued after `genTime`" in place of the grace period, so a verification grace period longer than the anchoring one causes no false report. An inconsistent token is invalid.
 
 ## Verifying Independently
 
@@ -251,23 +267,23 @@ and likewise `IntegrityAnchors`, `IntegrityAnchorLeaves`, `IntegrityAnchorEviden
 python3 tools/tamper-evidence-verifier/verify.py check --events evidence/app/Orders_Events.bson --aggregate-type Order --aggregate-id 0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e01 --anchors evidence/app/IntegrityAnchors.bson --leaves evidence/app/IntegrityAnchorLeaves.bson --evidence evidence/app/IntegrityAnchorEvidence.bson --evidence-chunks evidence/app/IntegrityAnchorEvidenceChunks.bson --trusted-root qualified-tsa=tsa-root.pem --policy qualified-tsa=0.4.0.2023.1.1 --trusted-head 1042:<AnchorDigest in hex>
 ```
 
-`--trusted-root NAME=PEM` trusts a root for the tokens of one authority, a plain `--trusted-root PEM` for every authority; `--policy NAME=OID` requires a policy for an authority's tokens, and `--trusted-head SEQUENCE:DIGEST` checks the chain of anchors against a head kept outside the database. Unreadable input files are reported as `{"error": …}` with exit code 2; single documents that cannot be read are listed under `malformed` and treated as missing.
+`--trusted-root NAME=PEM` trusts a root for the tokens of one authority, a plain `--trusted-root PEM` for every authority; `--policy NAME=OID` requires a policy for an authority's tokens, `--trusted-head SEQUENCE:DIGEST` checks the chain of anchors against a head kept outside the database, and `--grace-hours` sets the grace period of confirming CRLs. These options, `--leaves` and the evidence files need `--anchors`; without it only the stream is verified. Unreadable input files and invalid options are reported with exit code 2; single documents that cannot be read are listed under `malformed` and treated as missing.
 
-It verifies the stream, its anchored leaves and inclusion proofs, the chain of anchors with the leaf sets and the anchor digests from the raw bytes. It checks the token's structure, policy and algorithms itself and verifies each token with OpenSSL, writing the token, the stored chain as PEM and the trusted roots to files:
+It verifies the stream, its anchored leaves and inclusion proofs, the chain of anchors with the leaf sets and the anchor digests from the raw bytes. It checks the token's encoding, structure, imprint algorithm, policy, algorithms, key sizes, signing-certificate usages and the stored chain's structure itself, and verifies each token with OpenSSL, writing the token, the stored chain as PEM and the trusted roots to files:
 
 ```bash
 openssl ts -verify -digest <AnchorDigest in hex> -in token.der -token_in -CAfile roots.pem -untrusted chain.pem -attime <genTime in Unix seconds>
 openssl crl -inform DER -in confirming.der -CAfile issuer.pem -noout
 ```
 
-The first command checks the imprint, the signature, the signing-certificate attribute, the critical timestamping usage and the chain at the token's time; the second the signature of a confirming CRL. OpenSSL rejects a CRL issued after `-attime`, so confirming CRLs are not passed to `openssl ts -verify`: the verifier checks their signatures separately and applies the scope and revocation rules above to them. Two checks are left to the library: whether a `tsa` name in the token corresponds to the signing certificate, and whether the chain OpenSSL builds equals the stored chain.
+The first command checks the imprint bytes, the signature, the signing-certificate attribute and the chain at the token's time; the second the signature of a confirming CRL. With `-digest`, OpenSSL compares only the imprint bytes, not their hash algorithm, and it ignores unknown extended key usages, so the verifier checks both itself. OpenSSL rejects a CRL issued after `-attime`, so confirming CRLs are not passed to `openssl ts -verify`: the verifier checks their signatures separately and applies the scope and revocation rules above to them. Two checks are left to the library: whether a `tsa` name in the token corresponds to the signing certificate, and whether the chain OpenSSL builds equals the stored chain; the verifier checks the stored chain's structure instead: it starts with the token's signer, links each certificate to its issuer and ends with a trusted root.
 
 **Test vectors.** [`spec/tamper-evidence/v1`](../spec/tamper-evidence/v1) holds:
 
 - `streams.bson` with `streams.json`: raw events of appended, personal-data (with recorded and unrecorded erasures), retroactively sealed, tampered and renamed streams, with their genesis values and expected verification results.
 - `merkle.json`: trees of one to seven leaves with their encoded leaves, roots and inclusion proofs.
 - `anchors.bson`, `leaves.bson`, `evidence.bson`, `tsa-root.pem` with `anchors.json`: two chained anchors with their digests and sample tokens of a test authority, one confirmed by a confirming CRL and one unconfirmed.
-- `evidence-chunked.json`: an item longer than two chunks, defined by its length and byte `i = (i × 31 + 7) mod 251`, with its hash and chunk hashes; 251 is prime, so every chunk differs and their order is pinned. The item is generated, not committed.
+- `evidence-chunked.json`: an item longer than two chunks, defined by its length, byte `i` being `(i × 31 + 7) mod 251`, with its hash and chunk hashes; 251 is prime, so every chunk differs and their order is pinned. The item is generated, not committed.
 
 ```bash
 python3 tools/tamper-evidence-verifier/verify.py vectors spec/tamper-evidence/v1
@@ -280,4 +296,6 @@ python3 tools/tamper-evidence-verifier/verify.py vectors spec/tamper-evidence/v1
 - **`CreatedUtc` is asserted by the caller.** The trustworthy time bound is the token time of the anchor that covers an event.
 - **Renaming an aggregate class** keeps chains verifiable, because the genesis value uses the stored type name, but leaves are recorded under the type name configured at anchoring, so coverage splits between the old and the new name.
 - **Indirect CRL issuers** cannot be verified, so tokens whose chains depend on them stay unconfirmed.
-- **Revocation evidence can be deleted with its record.** Removing the confirming CRLs of a confirmed or revoked token is detected, but removing them together with resetting the stored status to `"Unconfirmed"` is not. Replicate anchors and their evidence to WORM storage when the revocation status matters.
+- **Reason-limited distribution points** are sources too, but a CRL of such a point is never complete, so chains whose certificates name them stay unconfirmed.
+- **CRLs issued after a certificate expired** may no longer list it, as RFC 5280 permits, so a confirming CRL issued long after the token's time can miss a revocation.
+- **Revocation evidence can be deleted with its record.** Removing, substituting or partly removing the confirming CRLs of a confirmed or revoked token is detected, but removing them together with resetting the stored status to `"Unconfirmed"` is not. Replicate anchors and their evidence to WORM storage when the revocation status matters.

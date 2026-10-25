@@ -303,7 +303,25 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// minimally encoded.
     /// </summary>
     public Byte[] BuildCrlWithEncodedSerialNumber(DateTimeOffset thisUpdate, Byte[] encodedSerialNumber)
-        => BuildSignedCrl(thisUpdate, [(encodedSerialNumber, thisUpdate.AddDays(-1))], []);
+        => BuildSignedCrl(thisUpdate, [(encodedSerialNumber, thisUpdate.AddDays(-1), [])], []);
+
+    /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
+    /// week, that lists the given entries with exactly their entry extensions and carries exactly the given CRL
+    /// extensions.
+    /// </summary>
+    public Byte[] BuildCrlWithEntries(DateTimeOffset thisUpdate,
+                                      IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt, (String Oid, Byte[] Value)[] Extensions)> revoked,
+                                      params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
+        => BuildSignedCrl(thisUpdate,
+                          revoked.Select(entry =>
+                                 {
+                                     var serialNumber = new AsnWriter(AsnEncodingRules.DER);
+                                     serialNumber.WriteIntegerUnsigned(entry.SerialNumber);
+                                     return (serialNumber.Encode(), entry.RevokedAt, entry.Extensions);
+                                 })
+                                 .ToList(),
+                          extensions);
 
     /// <summary>
     /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
@@ -319,15 +337,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public Byte[] BuildCrlWithExtensions(DateTimeOffset thisUpdate,
                                          IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt)> revoked,
                                          params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
-        => BuildSignedCrl(thisUpdate,
-                          revoked.Select(entry =>
-                                 {
-                                     var serialNumber = new AsnWriter(AsnEncodingRules.DER);
-                                     serialNumber.WriteIntegerUnsigned(entry.SerialNumber);
-                                     return (serialNumber.Encode(), entry.RevokedAt);
-                                 })
-                                 .ToList(),
-                          extensions);
+        => BuildCrlWithEntries(thisUpdate, revoked.Select(entry => (entry.SerialNumber, entry.RevokedAt, Array.Empty<(String Oid, Byte[] Value)>())).ToList(), extensions);
 
     /// <summary>
     /// Encodes an unsigned CRL of the authority's CA issued at <paramref name="thisUpdate"/> without a next update; CRL
@@ -536,7 +546,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// Builds a CRL of the authority's CA, signed by its root, with entries whose serial numbers are given encoded.
     /// </summary>
     private Byte[] BuildSignedCrl(DateTimeOffset thisUpdate,
-                                  IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt)> revoked,
+                                  IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt, (String Oid, Byte[] Value)[] Extensions)> revoked,
                                   (String Oid, Boolean Critical, Byte[] Value)[] extensions)
     {
         var tbs = new AsnWriter(AsnEncodingRules.DER);
@@ -551,12 +561,26 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             {
                 using (tbs.PushSequence())
                 {
-                    foreach (var (serialNumber, revokedAt) in revoked)
+                    foreach (var (serialNumber, revokedAt, entryExtensions) in revoked)
                     {
                         using (tbs.PushSequence())
                         {
                             tbs.WriteEncodedValue(serialNumber);
                             tbs.WriteUtcTime(revokedAt);
+                            if (entryExtensions.Length > 0)
+                            {
+                                using (tbs.PushSequence())
+                                {
+                                    foreach (var (oid, value) in entryExtensions)
+                                    {
+                                        using (tbs.PushSequence())
+                                        {
+                                            tbs.WriteObjectIdentifier(oid);
+                                            tbs.WriteOctetString(value);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

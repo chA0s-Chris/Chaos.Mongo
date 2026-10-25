@@ -131,15 +131,32 @@ public class TamperEvidenceVectorTests
     public static String Hex(ReadOnlySpan<Byte> bytes) => Convert.ToHexString(bytes).ToLowerInvariant();
 
     [Test]
-    public void ChunkedEvidenceVector_IsReproducedByTheLibrary()
-        => JsonNode.DeepEquals(ReadJson("evidence-chunked.json"), BuildChunkedEvidenceVector()).Should().BeTrue();
+    public void BuildMerkleVectors_LibraryTrees_MatchCommittedVectors()
+        => JsonNode.DeepEquals(ReadJson("merkle.json"), BuildMerkleVectors()).Should().BeTrue();
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
-    public void MerkleVectors_AreReproducedByTheLibrary()
-        => JsonNode.DeepEquals(ReadJson("merkle.json"), BuildMerkleVectors()).Should().BeTrue();
+    public async Task StoreAsync_ChunkedEvidenceVector_ReproducesCommittedHashesAndChunks()
+    {
+        var context = await CreateContextAsync();
+        var store = new AnchorEvidenceStore(context.MongoHelper, new IntegrityAnchoringOptions());
+        var expected = ReadJson("evidence-chunked.json");
+        var item = ChunkedItem();
+
+        var hash = await store.StoreAsync(item, CancellationToken.None);
+        var read = await store.ReadAsync(hash, CancellationToken.None);
+        var chunks = await store.Chunks.Find(new BsonDocument($"_id.{AnchorEvidenceStore.HashField}", new BsonBinaryData(hash)))
+                                .Sort(new BsonDocument($"_id.{AnchorEvidenceStore.IndexField}", 1))
+                                .ToListAsync();
+
+        JsonNode.DeepEquals(expected, BuildChunkedEvidenceVector()).Should().BeTrue();
+        Hex(hash).Should().Be(expected["hash"]?.GetValue<String>());
+        read.Should().Equal(item);
+        chunks.Select(chunk => Hex(SHA256.HashData(chunk[AnchorEvidenceStore.DataField].AsByteArray)))
+              .Should().Equal((expected["chunkHashes"]?.AsArray() ?? []).Select(node => node?.GetValue<String>()));
+    }
 
     [TearDown]
     public async Task TearDown()
@@ -217,6 +234,29 @@ public class TamperEvidenceVectorTests
     }
 
     /// <summary>
+    /// Inserts the raw documents of a vector file into a collection.
+    /// </summary>
+    internal static async Task LoadAsync(LedgerStoreContext context, String collectionName, String file)
+    {
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(VectorDirectory, file));
+        var documents = new List<RawBsonDocument>();
+        for (var offset = 0; offset < bytes.Length;)
+        {
+            var length = BitConverter.ToInt32(bytes, offset);
+            documents.Add(new RawBsonDocument(bytes.AsSpan(offset, length).ToArray()));
+            offset += length;
+        }
+
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(collectionName).InsertManyAsync(documents);
+    }
+
+    /// <summary>
+    /// Reads a JSON vector file.
+    /// </summary>
+    internal static JsonNode ReadJson(String file)
+        => JsonNode.Parse(File.ReadAllText(Path.Combine(VectorDirectory, file))) ?? throw new InvalidDataException($"The vector file {file} is empty.");
+
+    /// <summary>
     /// Serializes a stream verification result in the vector format the reference verifier reports.
     /// </summary>
     internal static JsonObject ToJson(StreamVerificationResult result)
@@ -253,23 +293,6 @@ public class TamperEvidenceVectorTests
 
         return item;
     }
-
-    private static async Task LoadAsync(LedgerStoreContext context, String collectionName, String file)
-    {
-        var bytes = await File.ReadAllBytesAsync(Path.Combine(VectorDirectory, file));
-        var documents = new List<RawBsonDocument>();
-        for (var offset = 0; offset < bytes.Length;)
-        {
-            var length = BitConverter.ToInt32(bytes, offset);
-            documents.Add(new RawBsonDocument(bytes.AsSpan(offset, length).ToArray()));
-            offset += length;
-        }
-
-        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(collectionName).InsertManyAsync(documents);
-    }
-
-    private static JsonNode ReadJson(String file)
-        => JsonNode.Parse(File.ReadAllText(Path.Combine(VectorDirectory, file))) ?? throw new InvalidDataException($"The vector file {file} is empty.");
 
     private async Task<LedgerStoreContext> CreateContextAsync(Action<MongoBuilder>? configureMongo = null)
     {

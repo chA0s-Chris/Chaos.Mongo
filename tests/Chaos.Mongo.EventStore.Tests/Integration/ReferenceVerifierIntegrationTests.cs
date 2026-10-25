@@ -10,7 +10,9 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Diagnostics;
+using System.Formats.Asn1;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Testcontainers.MongoDb;
@@ -22,10 +24,49 @@ using Testcontainers.MongoDb;
 /// </summary>
 public class ReferenceVerifierIntegrationTests
 {
+    private const String CertificateIssuerOid = "2.5.29.29";
+    private const String InvalidityDateOid = "2.5.29.24";
+    private const String IssuingDistributionPointOid = "2.5.29.28";
+    private const String ReasonCodeOid = "2.5.29.21";
     private readonly List<LedgerStoreContext> _contexts = [];
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
     private String _directory;
+
+    [Test]
+    [TestCase("--trusted-head", "1:00")]
+    [TestCase("--policy", "test-tsa=1.2.3.4")]
+    [TestCase("--grace-hours", "48")]
+    public async Task Check_AnchorOptionWithoutAnchors_IsAUsageError(String option, String value)
+    {
+        var (code, _, error) = await RunProcessAsync([
+            "check", "--events", Path.Combine(_directory, "events.bson"), "--aggregate-type", nameof(LedgerAggregate),
+            "--aggregate-id", Guid.NewGuid().ToString(), option, value
+        ]);
+
+        code.Should().Be(2);
+        error.Should().Contain("need --anchors");
+    }
+
+    [Test]
+    public async Task Check_ChunkCountNotMatchingTheLength_IsInvalidLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var store = new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>());
+        var hash = await store.StoreAsync(RandomNumberGenerator.GetBytes(AnchorEvidenceStore.ChunkSize + 1), CancellationToken.None);
+        await store.Evidence.UpdateOneAsync(new BsonDocument("_id", new BsonBinaryData(hash)),
+                                            Builders<BsonDocument>.Update.Set(AnchorEvidenceStore.ChunkCountField, 1_000_000));
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
+                                                       Builders<BsonDocument>.Update.Push("Timestamps.0.CertificateRevocationListHashes", new BsonBinaryData(hash)));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        code.Should().Be(1);
+        library.IsValid.Should().BeFalse();
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("malformed");
+    }
 
     [Test]
     public async Task Check_ChunkedStampingTimeEvidence_IsResolvedFromItsChunks()
@@ -55,6 +96,43 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    [TestCase("revokedBeforeTokenTime", false, nameof(TimestampRevocationStatus.Revoked))]
+    [TestCase("revokedAfterTokenTime", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("invalidBeforeTokenTime", false, nameof(TimestampRevocationStatus.Revoked))]
+    [TestCase("invalidityDateRepeated", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("removedFromCrl", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("otherCertificateIssuer", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("certificateIssuerWithoutDirectoryName", false, nameof(TimestampRevocationStatus.Revoked))]
+    [TestCase("unknownEntryExtensionWithEmptyValue", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("issuingPointOfOtherLocation", true, nameof(TimestampRevocationStatus.Unconfirmed))]
+    [TestCase("issuingPointOfEquivalentLocation", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("onlyUserCertificates", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("unknownCriticalExtension", true, nameof(TimestampRevocationStatus.Unconfirmed))]
+    public async Task Check_ConfirmingCrlCase_MatchesTheLibrary(String crlCase, Boolean valid, String revocationStatus)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var tokenTime = new DateTimeOffset(anchor["Timestamps"][0]["TimestampUtc"].ToUniversalTime());
+        var hash = await new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>())
+            .StoreAsync(BuildConfirmingCrl(_testAuthorities[0], crlCase, tokenTime), CancellationToken.None);
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
+                                                       Builders<BsonDocument>.Update.Set("Timestamps.0.ConfirmingRevocationListHashes",
+                                                                                         new BsonArray
+                                                                                         {
+                                                                                             new BsonBinaryData(hash)
+                                                                                         }));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+        var timestamp = report["anchors"]?[0]?["timestamps"]?[0];
+
+        (library.IsValid, library.RevocationStatus.ToString()).Should().Be((valid, revocationStatus), library.Failure);
+        (timestamp?["valid"]?.GetValue<Boolean>(), timestamp?["revocationStatus"]?.GetValue<String>()).Should().Be((valid, revocationStatus), report.ToJsonString());
+        code.Should().Be(valid ? 0 : 1);
+    }
+
+    [Test]
     [TestCase(false)]
     [TestCase(true)]
     public async Task Check_ConfirmingCrl_CountsOnlyWhenComplete(Boolean deltaCrl)
@@ -81,6 +159,52 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    [TestCase("unset", 1)]
+    [TestCase("string", 3)]
+    public async Task Check_EventWithoutReadableVersion_BreaksWhereTheLibraryBreaks(String change, Int64 brokenVersion)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var version = change == "unset" ? 2 : 3;
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),
+                                            change == "unset"
+                                                ? Builders<BsonDocument>.Update.Unset("Version")
+                                                : Builders<BsonDocument>.Update.Set("Version", version.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        code.Should().Be(1);
+        library.Should().Be(StreamVerificationResult.Broken(brokenVersion, StreamVerificationFailure.VersionGap));
+        (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.VersionGap));
+        (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(brokenVersion);
+    }
+
+    [Test]
+    public async Task Check_EvidenceNotMatchingItsHash_IsInvalidLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        await new AnchorEvidenceStore(context.MongoHelper, options).Evidence.UpdateOneAsync(new BsonDocument("_id", anchor["Timestamps"][0]["TokenHash"]),
+                                                                                            Builders<BsonDocument>.Update.Set(AnchorEvidenceStore.DataField,
+                                                                                                new BsonBinaryData(new Byte[]
+                                                                                                {
+                                                                                                    1,
+                                                                                                    2,
+                                                                                                    3
+                                                                                                })));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        code.Should().Be(1);
+        library.IsValid.Should().BeFalse();
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("does not match its hash");
+    }
+
+    [Test]
     public async Task Check_GarbageToken_ReportsMalformedToken()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -102,6 +226,18 @@ public class ReferenceVerifierIntegrationTests
 
         code.Should().Be(1);
         (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().StartWith("malformed token");
+    }
+
+    [Test]
+    [TestCase("0")]
+    [TestCase("nan")]
+    [TestCase("1e300")]
+    public async Task Check_GraceHoursNotAPositiveDuration_IsAUsageError(String hours)
+    {
+        var (code, _, error) = await RunProcessAsync([.. CheckArguments(Guid.NewGuid()), "--grace-hours", hours]);
+
+        code.Should().Be(2);
+        error.Should().Contain("--grace-hours");
     }
 
     [Test]
@@ -189,17 +325,43 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
-    public async Task Check_StoredStatusWithoutConfirmingCrls_IsInvalid()
+    public async Task Check_StoredChainWithoutItsRoot_IsInvalidLikeTheLibrary()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
         await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
-                                                       Builders<BsonDocument>.Update.Set("Timestamps.0.RevocationStatus", nameof(TimestampRevocationStatus.Revoked)));
+                                                       Builders<BsonDocument>.Update.PopLast("Timestamps.0.CertificateChainHashes"));
 
         await DumpAsync(context);
         var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
 
         code.Should().Be(1);
-        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("confirming CRLs are missing");
+        library.IsValid.Should().BeFalse();
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("trusted root");
+    }
+
+    [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Check_StoredStatusWithoutItsConfirmingCrls_IsInvalidLikeTheLibrary(Boolean substitutedByStampingTimeCrl)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var update = Builders<BsonDocument>.Update.Set("Timestamps.0.RevocationStatus", nameof(TimestampRevocationStatus.Revoked));
+        if (substitutedByStampingTimeCrl)
+        {
+            var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+            update = update.Set("Timestamps.0.ConfirmingRevocationListHashes", anchor["Timestamps"][0]["CertificateRevocationListHashes"]);
+        }
+
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, update);
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        code.Should().Be(1);
+        library.Failure.Should().Contain("inconsistent");
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("inconsistent");
     }
 
     [Test]
@@ -251,6 +413,24 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    public async Task Check_TrustedHeadOfAnchorAwaitingTimestamps_ReportsMalformedAnchorLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var digest = (await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync())[AnchorStore.AnchorDigestField].AsByteArray;
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
+                                                       Builders<BsonDocument>.Update.Set(AnchorStore.StatusField, nameof(AnchorStatus.AwaitingTimestamp)));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync([.. CheckArguments(aggregateId), "--trusted-head", $"1:{TamperEvidenceVectorTests.Hex(digest)}"]);
+        var library = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync(new TrustedAnchorHead(1, digest));
+
+        code.Should().Be(1);
+        library.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.MalformedAnchor, 0));
+        (report["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.MalformedAnchor));
+        (report["anchorChain"]?["firstBrokenSequence"]?.GetValue<Int64>()).Should().Be(1);
+    }
+
+    [Test]
     public async Task Check_TrustedHead_IsRequiredUnchanged()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -267,6 +447,54 @@ public class ReferenceVerifierIntegrationTests
         (other["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.TrustedHeadMismatch));
         laterCode.Should().Be(1);
         (later["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.TrustedHeadMissing));
+    }
+
+    [Test]
+    public async Task Check_UnreadableStreamLeaf_ReportsAnchoredLeafInvalidLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        await GetStore(context).Leaves.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("Hash", "not binary data"));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        code.Should().Be(1);
+        library.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
+        (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.AnchoredLeafInvalid));
+        (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(3);
+        (report["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.LeafSetMismatch));
+    }
+
+    [Test]
+    public async Task Check_VectorStreamsTamperedFurther_ReportLikeTheLibrary()
+    {
+        var context = await LedgerStoreContext.CreateAsync(_container);
+        _contexts.Add(context);
+        await TamperEvidenceVectorTests.LoadAsync(context, context.Options.EventsCollectionName, "streams.bson");
+        foreach (var (aggregateId, version) in new[]
+                 {
+                     (TamperEvidenceVectorGenerator.RetroactiveStream, 4),
+                     (TamperEvidenceVectorGenerator.PersonalDataStream, 3)
+                 })
+        {
+            await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),
+                                                Builders<BsonDocument>.Update.Set("Amount", new Decimal128(1000m)));
+        }
+
+        await DumpCollectionAsync(context, context.Options.EventsCollectionName, "events.bson");
+        var verifier = context.CreateVerifier();
+        foreach (var stream in TamperEvidenceVectorTests.ReadJson("streams.json")["streams"]?.AsArray() ?? [])
+        {
+            var aggregateId = Guid.Parse(stream?["aggregateId"]?.GetValue<String>() ?? String.Empty);
+            var (_, report) = await RunVerifierAsync([
+                "check", "--events", Path.Combine(_directory, "events.bson"), "--aggregate-type", nameof(LedgerAggregate),
+                "--aggregate-id", aggregateId.ToString()
+            ]);
+            var library = TamperEvidenceVectorTests.ToJson(await verifier.VerifyStreamAsync(aggregateId));
+
+            JsonNode.DeepEquals(report["stream"], library).Should().BeTrue($"{stream?["name"]}: {report["stream"]?.ToJsonString()} vs {library.ToJsonString()}");
+        }
     }
 
     [SetUp]
@@ -303,12 +531,76 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
-    public async Task Vectors_PassTheReferenceVerifier()
+    public async Task Vectors_CommittedVectors_PassTheReferenceVerifier()
     {
         var (code, report) = await RunVerifierAsync(["vectors", TamperEvidenceVectorTests.VectorDirectory]);
 
         code.Should().Be(0, report.ToJsonString());
         (report["failures"] as JsonArray).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Builds a confirming CRL of the test authority's CA, issued after the grace period, for a named case.
+    /// </summary>
+    private static Byte[] BuildConfirmingCrl(TestTimestampAuthority authority, String crlCase, DateTimeOffset tokenTime)
+    {
+        var thisUpdate = tokenTime.AddHours(25);
+        return crlCase switch
+        {
+            "revokedBeforeTokenTime" => Entry(tokenTime.AddHours(-1)),
+            "revokedAfterTokenTime" => Entry(tokenTime.AddHours(1)),
+            "invalidBeforeTokenTime" => Entry(tokenTime.AddHours(1), (InvalidityDateOid, EncodeGeneralizedTime(tokenTime.AddHours(-1)))),
+            "invalidityDateRepeated" => Entry(tokenTime.AddHours(1),
+                                              (InvalidityDateOid, EncodeGeneralizedTime(tokenTime.AddHours(-1))),
+                                              (InvalidityDateOid, EncodeGeneralizedTime(tokenTime.AddHours(2)))),
+            "removedFromCrl" => Entry(tokenTime.AddHours(-1), (ReasonCodeOid, [0x0A, 0x01, 0x08])),
+            "otherCertificateIssuer" => Entry(tokenTime.AddHours(-1), (CertificateIssuerOid, EncodeCertificateIssuer(TestTimestampAuthority.OtherIssuerName))),
+            "certificateIssuerWithoutDirectoryName" => Entry(tokenTime.AddHours(-1), (CertificateIssuerOid, EncodeCertificateIssuer(null))),
+            "unknownEntryExtensionWithEmptyValue" => Entry(tokenTime.AddHours(1), ("1.2.3.4", [])),
+            "issuingPointOfOtherLocation" => authority.BuildCrlWithExtensions(
+                thisUpdate,
+                (IssuingDistributionPointOid, true, TestTimestampAuthority.EncodeIssuingDistributionPoint(new Uri("http://tsa.test/other.crl")))),
+            "issuingPointOfEquivalentLocation" => authority.BuildCrlWithExtensions(
+                thisUpdate,
+                (IssuingDistributionPointOid, true, TestTimestampAuthority.EncodeIssuingDistributionPoint(new Uri("HTTP://TSA.test:80/mirror/./ca.crl")))),
+            "onlyUserCertificates" => authority.BuildCrlWithExtensions(thisUpdate, (IssuingDistributionPointOid, true, [0x30, 0x03, 0x81, 0x01, 0xFF])),
+            "unknownCriticalExtension" => authority.BuildCrlWithExtensions(thisUpdate, ("1.2.3.4", true, [0x05, 0x00])),
+            _ => throw new ArgumentOutOfRangeException(nameof(crlCase), crlCase, null)
+        };
+
+        Byte[] Entry(DateTimeOffset revokedAt, params (String Oid, Byte[] Value)[] extensions)
+            => authority.BuildCrlWithEntries(thisUpdate, [(authority.SigningCertificate.SerialNumberBytes.ToArray(), revokedAt, extensions)]);
+    }
+
+    /// <summary>
+    /// Encodes the GeneralNames of a certificateIssuer entry extension: a directory name, or a DNS name without one.
+    /// </summary>
+    private static Byte[] EncodeCertificateIssuer(String? directoryName)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            if (directoryName is null)
+            {
+                writer.WriteCharacterString(UniversalTagNumber.IA5String, "ca.test", new Asn1Tag(TagClass.ContextSpecific, 2));
+            }
+            else
+            {
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 4, true)))
+                {
+                    writer.WriteEncodedValue(new X500DistinguishedName(directoryName).RawData);
+                }
+            }
+        }
+
+        return writer.Encode();
+    }
+
+    private static Byte[] EncodeGeneralizedTime(DateTimeOffset time)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        writer.WriteGeneralizedTime(time, true);
+        return writer.Encode();
     }
 
     private static AnchorStore GetStore(LedgerStoreContext context) => context.ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
@@ -342,19 +634,7 @@ public class ReferenceVerifierIntegrationTests
         Assert.Ignore(message);
     }
 
-    private static async Task RunUntilAnchoredAsync(LedgerStoreContext context, Guid aggregateId, Int64 version)
-    {
-        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
-        var store = context.ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while ((await store.FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
-        {
-            Assert.That(DateTime.UtcNow, Is.LessThan(deadline), "The stream was not anchored within the timeout.");
-            await run.RunAsync();
-        }
-    }
-
-    private static async Task<(Int32 ExitCode, JsonNode Report)> RunVerifierAsync(IEnumerable<String> arguments)
+    private static async Task<(Int32 ExitCode, String Output, String Error)> RunProcessAsync(IEnumerable<String> arguments)
     {
         var startInfo = new ProcessStartInfo("python3")
         {
@@ -372,10 +652,16 @@ public class ReferenceVerifierIntegrationTests
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
+        return (process.ExitCode, await output, await error);
+    }
+
+    private static async Task<(Int32 ExitCode, JsonNode Report)> RunVerifierAsync(IEnumerable<String> arguments)
+    {
+        var (exitCode, output, error) = await RunProcessAsync(arguments);
         JsonNode? report;
         try
         {
-            report = JsonNode.Parse(await output);
+            report = JsonNode.Parse(output);
         }
         catch (JsonException)
         {
@@ -383,8 +669,15 @@ public class ReferenceVerifierIntegrationTests
         }
 
         return report is null
-            ? throw new InvalidDataException($"The reference verifier printed no JSON report (exit code {process.ExitCode}): {await error}")
-            : (process.ExitCode, report);
+            ? throw new InvalidDataException($"The reference verifier printed no JSON report (exit code {exitCode}): {error}")
+            : (exitCode, report);
+    }
+
+    private static async Task<TimestampVerificationResult> VerifyTimestampWithLibraryAsync(LedgerStoreContext context)
+    {
+        var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
+        var anchor = AnchorStore.ReadAnchor(await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync());
+        return (await verifier.VerifyAnchorAsync(anchor)).Timestamps[0];
     }
 
     private String[] CheckArguments(Guid aggregateId)
@@ -402,8 +695,8 @@ public class ReferenceVerifierIntegrationTests
         ];
 
     /// <summary>
-    /// Creates a protected store that anchors with a test authority, writes the authority's root to <c>root.pem</c>,
-    /// and anchors a stream of three events with personal data.
+    /// Creates a protected store that anchors with a test authority and trusts its root for verification, writes the
+    /// root to <c>root.pem</c>, and anchors a stream of three events with personal data.
     /// </summary>
     private async Task<(LedgerStoreContext Context, Guid AggregateId)> CreateAnchoredStreamAsync()
     {
@@ -412,10 +705,13 @@ public class ReferenceVerifierIntegrationTests
         var context = await LedgerStoreContext.CreateAsync(
             _container,
             personalData: true,
-            configureMongo: mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())));
+            configureMongo: mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()))
+                                          .WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
+                                                                         "test-tsa",
+                                                                         trust => trust.TrustedRoots.Add(testAuthority.Root))));
         _contexts.Add(context);
         var aggregateId = await context.AppendStreamAsync(3);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         await File.WriteAllTextAsync(Path.Combine(_directory, "root.pem"), testAuthority.Root.ExportCertificatePem());
         return (context, aggregateId);
     }
@@ -435,13 +731,18 @@ public class ReferenceVerifierIntegrationTests
                      (options.AnchorEvidenceChunksCollectionName, "evidence-chunks.bson")
                  })
         {
-            await using var output = File.Create(Path.Combine(_directory, file));
-            foreach (var document in await context.MongoHelper.Database.GetCollection<RawBsonDocument>(collection).Find(FilterDefinition<RawBsonDocument>.Empty).ToListAsync())
+            await DumpCollectionAsync(context, collection, file);
+        }
+    }
+
+    private async Task DumpCollectionAsync(LedgerStoreContext context, String collection, String file)
+    {
+        await using var output = File.Create(Path.Combine(_directory, file));
+        foreach (var document in await context.MongoHelper.Database.GetCollection<RawBsonDocument>(collection).Find(FilterDefinition<RawBsonDocument>.Empty).ToListAsync())
+        {
+            using (document)
             {
-                using (document)
-                {
-                    await output.WriteAsync(document.ToBson());
-                }
+                await output.WriteAsync(document.ToBson());
             }
         }
     }
