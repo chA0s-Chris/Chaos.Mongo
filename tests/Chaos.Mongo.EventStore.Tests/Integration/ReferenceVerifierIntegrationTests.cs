@@ -82,6 +82,47 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    [TestCase("selectingArray", nameof(StreamVerificationFailure.VersionGap))]
+    [TestCase("personalDataArray", null)]
+    [TestCase("timestampsArray", null)]
+    public async Task Check_ArrayElementNameNotValidUtf8_IsIgnoredLikeTheLibrary(String place, String? failure)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        switch (place)
+        {
+            case "selectingArray":
+                // A document without a version that MongoDB selects through the array, so it sorts first.
+                var selected = new BsonDocument("AggregateId", new BsonArray
+                {
+                    new BsonBinaryData(aggregateId, GuidRepresentation.Standard)
+                }).ToBson();
+                selected[selected.AsSpan().IndexOf([(Byte)0x05, (Byte)'0', (Byte)0x00]) + 1] = 0xFF;
+                await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(selected));
+                break;
+            case "personalDataArray":
+                var bytes = await context.ReadRawEventAsync(aggregateId, 1);
+                bytes[bytes.AsSpan().IndexOf("PersonalData\0"u8) + "PersonalData\0"u8.Length + 4 + 1] = 0xFF;
+                await ReplaceRawEventAsync(context, aggregateId, 1, bytes);
+                break;
+            default:
+                var anchors = context.MongoHelper.Database.GetCollection<RawBsonDocument>(GetStore(context).Anchors.CollectionNamespace.CollectionName);
+                var anchor = await anchors.Find(FilterDefinition<RawBsonDocument>.Empty).SingleAsync();
+                var anchorBytes = anchor.ToBson();
+                anchorBytes[anchorBytes.AsSpan().IndexOf("Timestamps\0"u8) + "Timestamps\0"u8.Length + 4 + 1] = 0xFF;
+                await anchors.DeleteOneAsync(new BsonDocument("_id", anchor["_id"]));
+                await anchors.InsertOneAsync(new RawBsonDocument(anchorBytes));
+                break;
+        }
+
+        await DumpAsync(context);
+        var (_, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        stream.Failure?.ToString().Should().Be(failure);
+        await AssertReportMatchesLibraryAsync(context, aggregateId, report);
+    }
+
+    [Test]
     [TestCase("eventAggregateId")]
     [TestCase("leafVersion")]
     [TestCase("leafAggregateType")]
@@ -192,6 +233,7 @@ public class ReferenceVerifierIntegrationTests
     [TestCase("issuingPointOfEquivalentLocation", true, nameof(TimestampRevocationStatus.Confirmed))]
     [TestCase("onlyUserCertificates", true, nameof(TimestampRevocationStatus.Confirmed))]
     [TestCase("unknownCriticalExtension", true, nameof(TimestampRevocationStatus.Unconfirmed))]
+    [TestCase("nonMinimalSerialNumber", true, nameof(TimestampRevocationStatus.Unconfirmed))]
     public async Task Check_ConfirmingCrlCase_MatchesTheLibrary(String crlCase, Boolean valid, String revocationStatus)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -296,6 +338,47 @@ public class ReferenceVerifierIntegrationTests
         library.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
         (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.MalformedIntegrity));
         (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(2);
+    }
+
+    [Test]
+    [TestCase("skippedEntryWithUndecodableName", null)]
+    [TestCase("uuidOfFifteenBytes", nameof(StreamVerificationFailure.MalformedIntegrity))]
+    public async Task Check_ErasureEntry_IsReadLikeTheLibrary(String entry, String? failure)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("TICKET-1", [1], ["Memo"]));
+        var document = await context.FindEventAsync(aggregateId, 4);
+        // An entry for a version at or above the erasure event's is skipped after its version was read, so its later
+        // names are never decoded; every item of the entries is read, so a UUID of another length is rejected.
+        document[PersonalDataErased<LedgerAggregate>.EntriesElement].AsBsonArray.Add(entry == "uuidOfFifteenBytes"
+                                                                                         ? new BsonBinaryData(new Byte[15])
+                                                                                         : new BsonDocument
+                                                                                         {
+                                                                                             { "Version", 5L },
+                                                                                             { "x", 1 }
+                                                                                         });
+        var bytes = document.ToBson();
+        if (entry == "uuidOfFifteenBytes")
+        {
+            Byte[] item = [0x0F, 0x00, 0x00, 0x00, 0x00, .. new Byte[15]];
+            bytes[bytes.AsSpan().IndexOf(item) + 4] = (Byte)BsonBinarySubType.UuidStandard;
+        }
+        else
+        {
+            bytes[bytes.AsSpan().IndexOf([(Byte)0x10, (Byte)'x', (Byte)0x00]) + 1] = 0xFF;
+        }
+
+        var integrity = LedgerStoreContext.ReadIntegrity(document);
+        EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(bytes, EventIntegrityChain.ElementName), integrity.PreviousHash, integrity.SealMode)
+                           .CopyTo(bytes, bytes.AsSpan().IndexOf(integrity.Hash));
+        await ReplaceRawEventAsync(context, aggregateId, 4, bytes);
+
+        await DumpAsync(context);
+        var (_, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        stream.Failure?.ToString().Should().Be(failure);
+        await AssertReportMatchesLibraryAsync(context, aggregateId, report);
     }
 
     [Test]
@@ -577,6 +660,32 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    [TestCase("highTagNumber", true)]
+    [TestCase("emptyCountersignature", false)]
+    public async Task Check_TokenWithAddedUnsignedAttribute_IsJudgedLikeTheLibrary(String attribute, Boolean valid)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var evidence = new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>());
+        var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var token = await evidence.ReadAsync(anchor["Timestamps"][0]["TokenHash"].AsByteArray, CancellationToken.None);
+        // Unsigned attributes are not covered by the signature, so anyone storing the token can add them: one holding a
+        // value with tag number 31, which DER encodes in the high-tag-number form, or a countersignature without signers.
+        Byte[] added = attribute == "highTagNumber"
+            ? [0x30, 0x0C, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x31, 0x05, 0x30, 0x03, 0x9F, 0x1F, 0x00]
+            : [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x06, 0x31, 0x00];
+        var hash = await evidence.StoreAsync(WithUnsignedAttribute(token, added), CancellationToken.None);
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
+                                                       Builders<BsonDocument>.Update.Set("Timestamps.0.TokenHash", new BsonBinaryData(hash)));
+
+        await DumpAsync(context);
+        var (_, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        library.IsValid.Should().Be(valid, library.Failure);
+        (report["anchors"]?[0]?["timestamps"]?[0]?["valid"]?.GetValue<Boolean>()).Should().Be(valid, report.ToJsonString());
+    }
+
+    [Test]
     [TestCase("test-tsa", null, null)]
     [TestCase("other-tsa", null, "no trust settings")]
     [TestCase("test-tsa", "1.2.3.4", "policy")]
@@ -637,6 +746,51 @@ public class ReferenceVerifierIntegrationTests
         (other["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.TrustedHeadMismatch));
         laterCode.Should().Be(1);
         (later["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.TrustedHeadMissing));
+    }
+
+    [Test]
+    [TestCase("integrityString", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
+    [TestCase("integrityRepeatedName", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
+    [TestCase("anchorString", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
+    public async Task Check_UnknownElementThatCannotBeRead_MakesTheDocumentMalformedLikeTheLibrary(String place, String streamFailure, String? chainFailure)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        // Unknown elements are ignored, but the documents read as a whole must be readable at any depth.
+        BsonValue unknown = place == "integrityRepeatedName"
+            ? new BsonDocument
+            {
+                AllowDuplicateNames = true
+            }.Add("a", 1).Add("a", 2)
+            : "x";
+        if (place == "anchorString")
+        {
+            var anchors = context.MongoHelper.Database.GetCollection<RawBsonDocument>(GetStore(context).Anchors.CollectionNamespace.CollectionName);
+            var anchor = (await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync()).Add("Note", unknown);
+            await anchors.DeleteOneAsync(new BsonDocument("_id", anchor["_id"]));
+            await anchors.InsertOneAsync(new RawBsonDocument(WithUndecodableNote(anchor.ToBson())));
+        }
+        else
+        {
+            var document = await context.FindEventAsync(aggregateId, 2);
+            document[EventIntegrityChain.ElementName].AsBsonDocument.Add("Note", unknown);
+            var bytes = document.ToBson();
+            await ReplaceRawEventAsync(context, aggregateId, 2, place == "integrityString" ? WithUndecodableNote(bytes) : bytes);
+        }
+
+        await DumpAsync(context);
+        var (_, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var chain = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync();
+
+        (stream.Failure?.ToString(), chain.Failure?.ToString()).Should().Be((streamFailure, chainFailure));
+        await AssertReportMatchesLibraryAsync(context, aggregateId, report);
+
+        static Byte[] WithUndecodableNote(Byte[] bytes)
+        {
+            Byte[] note = [0x02, .. "Note"u8, 0x00, 0x02, 0x00, 0x00, 0x00, (Byte)'x', 0x00];
+            bytes[bytes.AsSpan().IndexOf(note) + note.Length - 2] = 0xFF;
+            return bytes;
+        }
     }
 
     [Test]
@@ -752,6 +906,19 @@ public class ReferenceVerifierIntegrationTests
     }
 
     /// <summary>
+    /// Requires the reference verifier's report to state the library's stream and anchor-chain verdicts.
+    /// </summary>
+    private static async Task AssertReportMatchesLibraryAsync(LedgerStoreContext context, Guid aggregateId, JsonNode report)
+    {
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var chain = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync();
+        (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64?>(), report["stream"]?["failure"]?.GetValue<String?>())
+            .Should().Be((stream.FirstBrokenVersion, stream.Failure?.ToString()), report.ToJsonString());
+        (report["anchorChain"]?["firstBrokenSequence"]?.GetValue<Int64?>(), report["anchorChain"]?["failure"]?.GetValue<String?>())
+            .Should().Be((chain.FirstBrokenSequence, chain.Failure?.ToString()), report.ToJsonString());
+    }
+
+    /// <summary>
     /// Builds a confirming CRL of the test authority's CA, issued after the grace period, for a named case.
     /// </summary>
     private static Byte[] BuildConfirmingCrl(TestTimestampAuthority authority, String crlCase, DateTimeOffset tokenTime)
@@ -779,6 +946,7 @@ public class ReferenceVerifierIntegrationTests
                 (IssuingDistributionPointOid, true, TestTimestampAuthority.EncodeIssuingDistributionPoint(new Uri("HTTP://TSA.test:80/mirror/./ca.crl")))),
             "onlyUserCertificates" => authority.BuildCrlWithExtensions(thisUpdate, (IssuingDistributionPointOid, true, [0x30, 0x03, 0x81, 0x01, 0xFF])),
             "unknownCriticalExtension" => authority.BuildCrlWithExtensions(thisUpdate, ("1.2.3.4", true, [0x05, 0x00])),
+            "nonMinimalSerialNumber" => authority.BuildCrlWithEncodedSerialNumber(thisUpdate, [0x02, 0x02, 0x00, 0x01]),
             _ => throw new ArgumentOutOfRangeException(nameof(crlCase), crlCase, null)
         };
 
@@ -818,6 +986,15 @@ public class ReferenceVerifierIntegrationTests
     }
 
     private static AnchorStore GetStore(LedgerStoreContext context) => context.ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
+
+    /// <summary>
+    /// Replaces a stored event by the given raw bytes.
+    /// </summary>
+    private static async Task ReplaceRawEventAsync(LedgerStoreContext context, Guid aggregateId, Int64 version, Byte[] bytes)
+    {
+        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version));
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(bytes));
+    }
 
     private static void RequireTool(String tool, String argument)
     {
@@ -910,6 +1087,75 @@ public class ReferenceVerifierIntegrationTests
         var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
         var anchor = AnchorStore.ReadAnchor(await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync());
         return (await verifier.VerifyAnchorAsync(anchor)).Timestamps[0];
+    }
+
+    /// <summary>
+    /// Adds an encoded attribute to the unsigned attributes of a token's signer, keeping everything else as stored.
+    /// </summary>
+    private static Byte[] WithUnsignedAttribute(Byte[] token, Byte[] attribute)
+    {
+        var contentInfo = new AsnReader(token, AsnEncodingRules.DER).ReadSequence();
+        var contentType = contentInfo.ReadEncodedValue();
+        var signedData = contentInfo.ReadSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)).ReadSequence();
+        var signedDataParts = new List<ReadOnlyMemory<Byte>>();
+        while (signedData.HasData)
+        {
+            signedDataParts.Add(signedData.ReadEncodedValue());
+        }
+
+        var signerInfo = new AsnReader(signedDataParts[^1], AsnEncodingRules.DER).ReadSetOf().ReadSequence();
+        var signerParts = new List<ReadOnlyMemory<Byte>>();
+        while (signerInfo.HasData)
+        {
+            signerParts.Add(signerInfo.ReadEncodedValue());
+        }
+
+        var unsignedTag = new Asn1Tag(TagClass.ContextSpecific, 1, true);
+        var attributes = new List<ReadOnlyMemory<Byte>>();
+        if (Asn1Tag.Decode(signerParts[^1].Span, out _).HasSameClassAndValue(unsignedTag))
+        {
+            var existing = new AsnReader(signerParts[^1], AsnEncodingRules.DER).ReadSetOf(unsignedTag);
+            while (existing.HasData)
+            {
+                attributes.Add(existing.ReadEncodedValue());
+            }
+
+            signerParts.RemoveAt(signerParts.Count - 1);
+        }
+
+        attributes.Add(attribute);
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            writer.WriteEncodedValue(contentType.Span);
+            using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+            using (writer.PushSequence())
+            {
+                foreach (var part in signedDataParts.Take(signedDataParts.Count - 1))
+                {
+                    writer.WriteEncodedValue(part.Span);
+                }
+
+                using (writer.PushSetOf())
+                using (writer.PushSequence())
+                {
+                    foreach (var part in signerParts)
+                    {
+                        writer.WriteEncodedValue(part.Span);
+                    }
+
+                    using (writer.PushSetOf(unsignedTag))
+                    {
+                        foreach (var encoded in attributes)
+                        {
+                            writer.WriteEncodedValue(encoded.Span);
+                        }
+                    }
+                }
+            }
+        }
+
+        return writer.Encode();
     }
 
     private String[] CheckArguments(Guid aggregateId)

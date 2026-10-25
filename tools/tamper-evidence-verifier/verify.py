@@ -197,21 +197,55 @@ def get_binary(document, name, subtype):
 
 
 def array_items(array):
-    return [(bson_type, value) for _, bson_type, value, _, _ in elements(array)]
+    """The items of an array in stored order. Their element names are neither decoded nor compared, as MongoDB and the
+    .NET driver ignore them."""
+    return [(bson_type, value) for _, bson_type, value, _, _ in raw_elements(array)]
 
 
-def has_distinct_names(document, nested=False, depth=0):
-    """Whether no two elements of a document share a name, and with nested also none of its embedded documents and
-    arrays, as the .NET driver requires when it reads a document. Nesting beyond MongoDB's limit counts as malformed."""
+def check_value(bson_type, value):
+    """Raises ValueError for a value the .NET driver refuses to read: a string, JavaScript code or symbol that is not
+    terminated or not valid UTF-8, a regular expression or DBPointer whose strings are not valid UTF-8, a boolean other
+    than 0x00 or 0x01, a binary of subtype 0x03 or 0x04 that is not 16 bytes long, or a binary of subtype 0x02 whose
+    inner length does not match."""
+    if bson_type in (T_STRING, 0x0D, 0x0E, 0x0C):
+        if len(value) < 5 or value[struct.unpack_from("<i", value, 0)[0] + 3] != 0:
+            raise BsonError("a string is not terminated")
+        value[4:struct.unpack_from("<i", value, 0)[0] + 3].decode("utf-8")
+    elif bson_type == 0x0B:
+        for part in value[:-1].split(b"\x00"):
+            part.decode("utf-8")
+    elif bson_type == 0x0F:
+        check_value(T_STRING, value[4:4 + 4 + struct.unpack_from("<i", value, 4)[0]])
+    elif bson_type == T_BOOLEAN and value not in (b"\x00", b"\x01"):
+        raise BsonError("a boolean is neither 0x00 nor 0x01")
+    elif bson_type == T_BINARY:
+        if value[4] in (0x03, SUBTYPE_UUID) and len(value) != 5 + 16:
+            raise BsonError("a UUID is not 16 bytes long")
+        if value[4] == 0x02 and (len(value) < 9 or struct.unpack_from("<i", value, 5)[0] != len(value) - 9):
+            raise BsonError("old binary data has an inner length that does not match")
+
+
+def is_readable(document, depth=0, is_array=False):
+    """Whether the .NET driver reads a document as a whole: no element name repeats in it or in its embedded documents
+    (array element names aside), every name is valid UTF-8 and every value at any depth passes check_value. Nesting
+    beyond MongoDB's limit counts as unreadable."""
     if depth > MAX_BSON_DEPTH:
         return False
     names = set()
-    for name, bson_type, value, _, _ in elements(document):
-        if name in names:
-            return False
-        names.add(name)
-        if nested and bson_type in (T_DOCUMENT, T_ARRAY) and not has_distinct_names(value, True, depth + 1):
-            return False
+    try:
+        for name, bson_type, value, _, _ in raw_elements(document):
+            if not is_array:
+                name = name.decode("utf-8")
+                if name in names:
+                    return False
+                names.add(name)
+            check_value(bson_type, value)
+            if bson_type in (T_DOCUMENT, T_ARRAY) and not is_readable(value, depth + 1, bson_type == T_ARRAY):
+                return False
+            if bson_type == 0x0F and not is_readable(value[8 + struct.unpack_from("<i", value, 4)[0]:], depth + 1):
+                return False
+    except PARSE_ERRORS:
+        return False
     return True
 
 
@@ -380,9 +414,9 @@ def read_integrity(value):
     """Reads an _integrity document; returns None when it is malformed. Every element must have exactly the type the
     format writes: FormatVersion int32, Algorithm and SealMode strings, the hashes, commitments and salts binary
     subtype 0x00, PersonalData an array of documents with a string Path. An erased salt is absent, not null. The document
-    and each entry must not repeat an element name."""
+    and each entry must not repeat an element name, and the document must be readable as a whole (is_readable)."""
     try:
-        if not has_distinct_names(value):
+        if not is_readable(value):
             return None
         integrity = {
             "FormatVersion": get(value, "FormatVersion", T_INT32),
@@ -402,7 +436,7 @@ def read_integrity(value):
                 return None
             entries = []
             for bson_type, entry in array_items(personal_data[1]):
-                if bson_type != T_DOCUMENT or not has_distinct_names(entry):
+                if bson_type != T_DOCUMENT:
                     return None
                 path = get(entry, "Path", T_STRING)
                 commitment = get_binary(entry, "Commitment", SUBTYPE_GENERIC)
@@ -468,33 +502,49 @@ def verify_event(document, previous_hash):
     return None, integrity, statuses
 
 
+def read_items(array):
+    """The items of an array, each of which must pass check_value, as the library reads every item when it enumerates an
+    array; embedded documents are read only where they are used."""
+    items = array_items(array)
+    for bson_type, value in items:
+        check_value(bson_type, value)
+    return items
+
+
 def is_erasure_event(document):
+    """Whether an event is the erasure event by its discriminator. Every item of a discriminator array is read."""
     found = first(document, "_t")
     if found is None:
         return False
     bson_type, value = found
+    check_value(bson_type, value)
     if bson_type == T_STRING:
         return decode(bson_type, value) == ERASURE_DISCRIMINATOR
     if bson_type == T_ARRAY:
-        items = array_items(value)
+        items = read_items(value)
         return bool(items) and items[-1][0] == T_STRING and decode(*items[-1]) == ERASURE_DISCRIMINATOR
     return False
 
 
 def erasure_records(document, erasure_version):
+    """The (version, path) records of an erasure event below its version. Every item of Entries is read, and of each
+    entry the Version, then, only when the entry is used, every item of its Paths; a value that cannot be read raises
+    ValueError."""
     records = set()
     found = first(document, "Entries")
     if found is None or found[0] != T_ARRAY:
         return records
-    for bson_type, entry in array_items(found[1]):
+    for bson_type, entry in read_items(found[1]):
         if bson_type != T_DOCUMENT:
             continue
         version_element = first(entry, "Version")
-        paths = first(entry, "Paths")
         version = as_version(*version_element) if version_element else None
-        if version is None or version >= erasure_version or paths is None or paths[0] != T_ARRAY:
+        if version is None or version >= erasure_version:
             continue
-        for path_type, path in array_items(paths[1]):
+        paths = first(entry, "Paths")
+        if paths is None or paths[0] != T_ARRAY:
+            continue
+        for path_type, path in read_items(paths[1]):
             if path_type == T_STRING:
                 records.add((version, decode(path_type, path)))
     return records
@@ -750,9 +800,9 @@ def read_timestamp(entry):
 
 def read_anchor(document):
     """Reads an anchor document with the exact types the library writes and reads; returns None when it is malformed,
-    which includes a repeated element name."""
+    which includes a document that is not readable as a whole (is_readable)."""
     try:
-        if not has_distinct_names(document, True):
+        if not is_readable(document):
             return None
         anchor = {
             "Id": uuid_element(document, "_id"),
@@ -781,9 +831,9 @@ def read_anchor(document):
 
 def read_leaf(document):
     """Reads a leaf document with the exact types the library writes and reads; returns None when it is malformed. The
-    version is a whole number of at least 1."""
+    version is a whole number of at least 1. The document must be readable as a whole (is_readable)."""
     try:
-        if not has_distinct_names(document, True):
+        if not is_readable(document):
             return None
         leaf = {
             "AnchorId": uuid_element(document, "AnchorId"),
@@ -909,16 +959,16 @@ def evidence_int(document, name):
 
 class Evidence:
     """Content-addressed evidence: items by SHA-256, inline or split into chunks of EVIDENCE_CHUNK_SIZE bytes. An item
-    is found by its generic-binary _id, a chunk by an _id of exactly Hash and Index in this order. Documents that cannot
-    be read or repeat an element name are skipped and listed in malformed; an item whose document is malformed counts as
-    missing."""
+    is found by its generic-binary _id, a chunk by an _id of exactly Hash and Index in this order. Documents that are
+    not readable as a whole (is_readable) are skipped and listed in malformed; an item whose document is malformed counts
+    as missing."""
 
     def __init__(self, evidence_documents, chunk_documents):
         self.items, self.chunks, self.malformed = {}, {}, []
         for index, document in enumerate(evidence_documents):
             try:
-                if not has_distinct_names(document, True):
-                    raise Malformed("the document repeats an element name")
+                if not is_readable(document):
+                    raise Malformed("the document cannot be read as a whole")
                 item_hash = get_binary(document, "_id", SUBTYPE_GENERIC)
                 if item_hash is not None:
                     self.items.setdefault(item_hash, document)
@@ -926,8 +976,8 @@ class Evidence:
                 self.malformed.append({"collection": "evidence", "index": index, "error": str(error)})
         for index, document in enumerate(chunk_documents):
             try:
-                if not has_distinct_names(document, True):
-                    raise Malformed("the document repeats an element name")
+                if not is_readable(document):
+                    raise Malformed("the document cannot be read as a whole")
                 chunk_id = get(document, "_id", T_DOCUMENT)
                 parts = [(name, bson_type, value) for name, bson_type, value, _, _ in elements(chunk_id)] if chunk_id is not None else []
                 if [name for name, _, _ in parts] == ["Hash", "Index"] and parts[0][1] == T_BINARY and parts[0][2][4] == SUBTYPE_GENERIC:
@@ -1020,13 +1070,28 @@ class InvalidSources(ValueError):
 
 
 def der_read(data, position=0):
-    """Reads one DER value: returns (tag, content start, content end, value end). Only single-byte tags and minimal
-    definite lengths are accepted."""
+    """Reads one DER value: returns (tag, content start, content end, value end). Only minimal tags and minimal definite
+    lengths are accepted. A single-byte tag is returned as that byte; a tag number of 31 or more, in the high-tag-number
+    form, as the first byte plus the number shifted left by 8 bits, so the class and constructed bits stay in place and
+    no such tag equals a single-byte one."""
     tag = data[position]
+    position += 1
     if tag & 0x1F == 0x1F:
-        raise ValueError("multi-byte DER tags are not supported")
-    length = data[position + 1]
-    start = position + 2
+        number, count = 0, 0
+        while True:
+            byte = data[position]
+            position += 1
+            count += 1
+            if (count == 1 and byte == 0x80) or count > 4:
+                raise ValueError("the DER tag is not minimal")
+            number = (number << 7) | (byte & 0x7F)
+            if not byte & 0x80:
+                break
+        if number < 0x1F:
+            raise ValueError("the DER tag is not minimal")
+        tag |= number << 8
+    length = data[position]
+    start = position + 1
     if length & 0x80:
         count = length & 0x7F
         encoded = data[start:start + count]
@@ -1380,6 +1445,9 @@ def crl_fields(crl):
             parts = der_children(crl, entry[1], entry[2])
             if entry[0] != 0x30 or len(parts) not in (2, 3) or parts[0][0] != 0x02:
                 raise ValueError("malformed CRL entry")
+            serial = crl[parts[0][1]:parts[0][2]]
+            if not serial or (len(serial) > 1 and (serial[0], serial[1] >> 7) in ((0x00, 0), (0xFF, 1))):
+                raise ValueError("a CRL entry's serial number is not a minimal DER integer")
             revocation_date = der_time(crl, *parts[1][:3])
             invalidity_date, removed = None, False
             if len(parts) == 3:
