@@ -50,8 +50,12 @@ ANCHOR_STATUSES = ("Preparing", "AwaitingTimestamp", "Completed", "Discarded")
 REVOCATION_STATUSES = ("Unconfirmed", "Confirmed", "Revoked")
 OPENSSL_TIMEOUT_SECONDS = 60
 
-# Errors that malformed BSON or DER input raises while it is parsed; UnicodeDecodeError is a ValueError.
-PARSE_ERRORS = (ValueError, struct.error, IndexError)
+# Errors that malformed BSON or DER input raises while it is parsed; UnicodeDecodeError is a ValueError. RecursionError
+# backs up the nesting limits below for input files that MongoDB itself would not have stored.
+PARSE_ERRORS = (ValueError, struct.error, IndexError, RecursionError)
+# The deepest nesting accepted: MongoDB's limit for documents, and a bound far above real tokens for DER.
+MAX_BSON_DEPTH = 100
+MAX_DER_DEPTH = 64
 
 
 def sha256(*parts):
@@ -93,8 +97,9 @@ def _value_size(buffer, bson_type, position):
     raise BsonError(f"unknown BSON type 0x{bson_type:02x}")
 
 
-def elements(document):
-    """Yields (name, type, value bytes, element start, element end) for the top-level elements of a document."""
+def raw_elements(document):
+    """Yields (name bytes, type, value bytes, element start, element end) for the top-level elements of a document,
+    without decoding the names."""
     length = struct.unpack_from("<i", document, 0)[0]
     if length != len(document) or length < 5 or document[-1] != 0:
         raise BsonError("document length does not match")
@@ -102,16 +107,21 @@ def elements(document):
     while document[position] != 0:
         bson_type = document[position]
         name_end = _cstring_end(document, position + 1)
-        name = document[position + 1:name_end].decode("utf-8")
         value_start = name_end + 1
         value_size = _value_size(document, bson_type, value_start)
         value_end = value_start + value_size
         if value_size < 0 or value_end > length - 1:
             raise BsonError("element exceeds the document")
-        yield name, bson_type, document[value_start:value_end], position, value_end
+        yield document[position + 1:name_end], bson_type, document[value_start:value_end], position, value_end
         position = value_end
     if position != length - 1:
         raise BsonError("trailing bytes in document")
+
+
+def elements(document):
+    """Yields (name, type, value bytes, element start, element end) for the top-level elements of a document."""
+    for name, bson_type, value, start, end in raw_elements(document):
+        yield name.decode("utf-8"), bson_type, value, start, end
 
 
 def first(document, name):
@@ -119,6 +129,35 @@ def first(document, name):
         if element_name == name:
             return bson_type, value
     return None
+
+
+def first_raw(document, name):
+    """Like first, but compares the names as bytes, as MongoDB's query and sort engine does, so a name elsewhere in the
+    document that is not valid UTF-8 does not matter."""
+    target = name.encode("utf-8")
+    for element_name, bson_type, value, _, _ in raw_elements(document):
+        if element_name == target:
+            return bson_type, value
+    return None
+
+
+def query_values(found):
+    """The values a MongoDB equality or range query compares for an element: the element itself and, for an array, each
+    of its items. A document whose array holds the queried value is therefore selected, and then fails to read."""
+    if found is None:
+        return []
+    return [found] + (array_items(found[1]) if found[0] == T_ARRAY else [])
+
+
+def selects_uuid(document, name, expected):
+    """Whether a query for a standard UUID on an element selects the document."""
+    return any(bson_type == T_BINARY and value[4] == SUBTYPE_UUID and value[5:] == expected for bson_type, value in query_values(first_raw(document, name)))
+
+
+def selects_string(document, name, expected):
+    """Whether a query for a string on an element selects the document."""
+    target = expected.encode("utf-8")
+    return any(bson_type == T_STRING and value[4:-1] == target for bson_type, value in query_values(first_raw(document, name)))
 
 
 def decode(bson_type, value):
@@ -160,15 +199,17 @@ def array_items(array):
     return [(bson_type, value) for _, bson_type, value, _, _ in elements(array)]
 
 
-def has_distinct_names(document, nested=False):
+def has_distinct_names(document, nested=False, depth=0):
     """Whether no two elements of a document share a name, and with nested also none of its embedded documents and
-    arrays, as the .NET driver requires when it reads a document."""
+    arrays, as the .NET driver requires when it reads a document. Nesting beyond MongoDB's limit counts as malformed."""
+    if depth > MAX_BSON_DEPTH:
+        return False
     names = set()
     for name, bson_type, value, _, _ in elements(document):
         if name in names:
             return False
         names.add(name)
-        if nested and bson_type in (T_DOCUMENT, T_ARRAY) and not has_distinct_names(value, True):
+        if nested and bson_type in (T_DOCUMENT, T_ARRAY) and not has_distinct_names(value, True, depth + 1):
             return False
     return True
 
@@ -190,10 +231,10 @@ def decimal128_value(value):
     return decimal.Decimal(sign * coefficient).scaleb(exponent - 6176, decimal.Context(prec=40))
 
 
-def sort_key(found):
+def sort_key(found, in_array=False):
     """The position of an element value, or of a missing one (None), in MongoDB's ascending sort: missing, null and
     empty arrays before numbers, numbers by value with NaN first, every other type after them, and a non-empty array
-    by its smallest element. Ties keep the input order."""
+    by its smallest element, in which a nested array counts as an array. Ties keep the input order."""
     if found is None:
         return (1,)
     bson_type, value = found
@@ -202,8 +243,9 @@ def sort_key(found):
     if bson_type in (T_NULL, 0x06):
         return (1,)
     if bson_type == T_ARRAY:
-        items = array_items(value)
-        return min((sort_key(item) for item in items), default=(1,))
+        if in_array:
+            return (3,)
+        return min((sort_key(item, True) for item in array_items(value)), default=(1,))
     if bson_type in (T_INT32, T_INT64, T_DOUBLE, T_DECIMAL128):
         number = decimal128_value(value) if bson_type == T_DECIMAL128 else decode(bson_type, value)
         if number is None or number != number:
@@ -460,7 +502,7 @@ def erasure_records(document, erasure_version):
 def read_version(document):
     """The version of an event document, or None when it is missing, not a version or the document is malformed."""
     try:
-        found = first(document, "Version")
+        found = first_raw(document, "Version")
         return as_version(*found) if found else None
     except PARSE_ERRORS:
         return None
@@ -468,9 +510,19 @@ def read_version(document):
 
 def version_sort_key(document):
     try:
-        return sort_key(first(document, "Version"))
+        return sort_key(first_raw(document, "Version"))
     except PARSE_ERRORS:
         return (3,)
+
+
+def has_readable_names(document):
+    """Whether every top-level element name of a document is valid UTF-8."""
+    try:
+        for _ in elements(document):
+            pass
+        return True
+    except PARSE_ERRORS:
+        return False
 
 
 def compare_with_leaves(events, leaves, first_unreadable, broken_version):
@@ -524,6 +576,8 @@ def verify_stream(documents, aggregate_id, leaves=None, first_unreadable=None):
         return report
 
     for expected, document in enumerate(ordered, start=1):
+        if not has_readable_names(document):
+            return finish(expected, "MalformedIntegrity")
         if read_version(document) != expected:
             return finish(expected, "VersionGap")
         try:
@@ -754,14 +808,16 @@ def proves_inclusion(leaf, anchor):
 
 
 def leaf_documents_by_anchor(leaf_documents):
-    """Groups leaf documents by the standard-UUID anchor identifier they name; others belong to no anchor."""
+    """Groups leaf documents by the standard-UUID anchor identifiers a query for an anchor's leaves selects them by,
+    including the UUIDs in an AnchorId array; others belong to no anchor."""
     groups = {}
     for document in leaf_documents:
         try:
-            anchor_id = get_binary(document, "AnchorId", SUBTYPE_UUID)
+            anchor_ids = {value[5:] for bson_type, value in query_values(first_raw(document, "AnchorId"))
+                          if bson_type == T_BINARY and value[4] == SUBTYPE_UUID and len(value) == 5 + 16}
         except PARSE_ERRORS:
-            anchor_id = None
-        if anchor_id is not None:
+            anchor_ids = set()
+        for anchor_id in anchor_ids:
             groups.setdefault(anchor_id, []).append(document)
     return groups
 
@@ -835,16 +891,19 @@ def verify_anchor_chain(anchor_documents, leaf_documents, trusted_head=None):
 # --- Evidence -------------------------------------------------------------------------------------------------------
 
 
-def evidence_int(document, name):
-    """An evidence length or count, read as .NET's ToInt32 reads it: an int32, or an int64 or integral double in its
-    range."""
-    found = first(document, name)
+def int32_value(found, name):
+    """A stored 32-bit integer: an int32, or an int64 or integral double within the int32 range."""
     if found is None or found[0] not in (T_INT32, T_INT64, T_DOUBLE):
         raise Malformed(f"{name} is missing or not a number")
     number = decode(*found)
     if number != number or not -2 ** 31 <= number < 2 ** 31 or number != int(number):
         raise Malformed(f"{name} is not a 32-bit integer")
     return int(number)
+
+
+def evidence_int(document, name):
+    """An evidence length or count, which the library reads as int32_value does."""
+    return int32_value(first(document, name), name)
 
 
 class Evidence:
@@ -870,9 +929,8 @@ class Evidence:
                     raise Malformed("the document repeats an element name")
                 chunk_id = get(document, "_id", T_DOCUMENT)
                 parts = [(name, bson_type, value) for name, bson_type, value, _, _ in elements(chunk_id)] if chunk_id is not None else []
-                if ([name for name, _, _ in parts] == ["Hash", "Index"] and parts[0][1] == T_BINARY and parts[0][2][4] == SUBTYPE_GENERIC and
-                        parts[1][1] in (T_INT32, T_INT64)):
-                    self.chunks.setdefault((parts[0][2][5:], decode(parts[1][1], parts[1][2])), document)
+                if [name for name, _, _ in parts] == ["Hash", "Index"] and parts[0][1] == T_BINARY and parts[0][2][4] == SUBTYPE_GENERIC:
+                    self.chunks.setdefault((parts[0][2][5:], int32_value(parts[1][1:], "Index")), document)
             except PARSE_ERRORS as error:
                 self.malformed.append({"collection": "evidenceChunks", "index": index, "error": str(error)})
 
@@ -998,14 +1056,16 @@ def der_only(data, tag):
     return data[start:end]
 
 
-def require_der(data, start=0, end=None):
+def require_der(data, start=0, end=None, depth=0):
     """Requires the values from start to end to use only definite minimal lengths and to encode no universal type but
-    SEQUENCE and SET as constructed, as the library requires of a token."""
+    SEQUENCE and SET as constructed, as the library requires of a token, nested no deeper than MAX_DER_DEPTH."""
+    if depth > MAX_DER_DEPTH:
+        raise ValueError("the DER values are nested too deeply")
     for tag, content_start, content_end, _, _ in der_children(data, start, len(data) if end is None else end):
         if tag & 0x20:
             if tag & 0xC0 == 0 and tag not in (0x30, 0x31):
                 raise ValueError("a universal primitive type is encoded as constructed")
-            require_der(data, content_start, content_end)
+            require_der(data, content_start, content_end, depth + 1)
 
 
 def decode_oid(content):
@@ -1077,7 +1137,9 @@ def normalize_uri(text):
     """Normalizes an HTTP or HTTPS location as the specification defines, on the text as written: the fragment and user
     information are dropped, the scheme and host lower-cased with an IPv6 host keeping its brackets, a default port
     dropped, an empty path made '/' and dot segments removed; the rest of the path and the query stay as written.
-    Returns None for other locations."""
+    A location counts only when its host consists of ASCII letters, digits, hyphens and dots, or is a bracketed IPv6
+    literal of hexadecimal digits, colons and dots, and its port, if any, is a decimal number of at most 65535. Returns
+    None for other locations."""
     text = text.split("#", 1)[0]
     scheme_end = text.find("://")
     if scheme_end < 0:
@@ -1098,11 +1160,11 @@ def normalize_uri(text):
         host, port = authority[:close + 1], authority[close + 2:] if close + 1 < len(authority) else ""
     else:
         host, _, port = authority.partition(":")
-    if not host:
+    if not (re.fullmatch(r"\[[0-9A-Fa-f:.]+\]", host) or re.fullmatch(r"[A-Za-z0-9.-]+", host)):
         return None
     port_suffix = ""
     if port:
-        if not re.fullmatch(r"[0-9]+", port) or int(port) > 2 ** 31 - 1:
+        if not re.fullmatch(r"[0-9]+", port) or int(port) > 65535:
             return None
         port_suffix = "" if int(port) == default_port else f":{int(port)}"
     query_start = path_and_query.find("?")
@@ -1230,7 +1292,8 @@ def distribution_points(fields):
 
 def crl_sources(chain):
     """The CRL sources of a chain's non-root certificates in chain and extension order, each listed once:
-    {locations, issuer (None for an indirect CRL issuer), fromCa}. Raises InvalidSources when a certificate names
+    {locations, issuer (None for an indirect CRL issuer), fromCa, fromEndEntity}, the last two telling whether a CA or
+    an end-entity certificate names it. Raises InvalidSources when a certificate names
     distribution points, but none with an HTTP location covers all reasons, and ValueError for malformed ones."""
     sources, keys = [], {}
     for certificate in chain[:-1]:
@@ -1244,9 +1307,10 @@ def crl_sources(chain):
             key = (" ".join(locations), (issuer or b"").hex())
             if key in keys:
                 sources[keys[key]]["fromCa"] |= from_ca
+                sources[keys[key]]["fromEndEntity"] |= not from_ca
             else:
                 keys[key] = len(sources)
-                sources.append({"locations": locations, "issuer": issuer, "fromCa": from_ca})
+                sources.append({"locations": locations, "issuer": issuer, "fromCa": from_ca, "fromEndEntity": not from_ca})
     return sources
 
 
@@ -1330,10 +1394,11 @@ def crl_fields(crl):
     return issuer, this_update, entries, extensions
 
 
-def issuing_point_covers(value, locations, from_ca):
+def issuing_point_covers(value, locations, from_ca, from_end_entity):
     """Whether an issuing distribution point leaves a CRL complete for a source: its distribution point, if any, is a
-    full name with one of the locations, onlyContainsUserCerts is not set for a source of a CA certificate, and none of
-    onlyContainsCACerts, onlySomeReasons, indirectCRL and onlyContainsAttributeCerts is set."""
+    full name with one of the locations, onlyContainsUserCerts is not set for a source a CA certificate names,
+    onlyContainsCACerts not for one an end-entity certificate names, and none of onlySomeReasons, indirectCRL and
+    onlyContainsAttributeCerts is set."""
     tag, start, end = der_single(value)
     if tag != 0x30:
         raise ValueError("malformed issuing distribution point")
@@ -1355,7 +1420,8 @@ def issuing_point_covers(value, locations, from_ca):
         return False
 
     only_user_certificates = flag(0x81)
-    restricted = (only_user_certificates and from_ca) | flag(0x82)
+    only_ca_certificates = flag(0x82)
+    restricted = (only_user_certificates and from_ca) or (only_ca_certificates and from_end_entity)
     if index < len(parts) and parts[index][0] == 0x83:
         restricted, index = True, index + 1
     restricted |= flag(0x84)
@@ -1374,7 +1440,7 @@ def crl_complete_for(extensions, source):
             return False
         seen.add(oid)
         if oid == OID_ISSUING_DISTRIBUTION_POINT:
-            if not issuing_point_covers(value, source["locations"], source["fromCa"]):
+            if not issuing_point_covers(value, source["locations"], source["fromCa"], source["fromEndEntity"]):
                 return False
         elif oid != OID_CRL_NUMBER and critical:
             return False
@@ -1598,6 +1664,7 @@ class Revocation:
     def __init__(self, chain, sources, lists, directory):
         self.chain, self.sources, self.directory = chain, sources, directory
         self.chain_fields = [certificate_fields(certificate) for certificate in chain]
+        self.stored_lists = len(lists)
         self.lists, self.signatures = [], {}
         for crl in lists:
             try:
@@ -1639,19 +1706,28 @@ class Revocation:
                    for fields in self.chain_fields[:-1] for serial, revoked_from, issuers, removed in entries)
 
     def status(self, token_time, grace):
-        covered, entries = self.evaluate(later(token_time, grace))
+        """Revoked when a CRL issued after the token's time revokes a certificate of the chain at or before it, whatever
+        the grace period: it only guards the conclusion that nothing is revoked. Confirmed when CRLs issued at least the
+        grace period after the token's time count for every source, or there are no sources and no stored CRL."""
+        _, entries = self.evaluate(token_time + datetime.timedelta(microseconds=1))
         if self.revoked(entries, token_time):
             return "Revoked"
-        confirmed = all(covered) if self.sources else not self.lists
+        covered, _ = self.evaluate(later(token_time, grace))
+        confirmed = all(covered) if self.sources else self.stored_lists == 0
         return "Confirmed" if confirmed else "Unconfirmed"
 
-    def inconsistent(self, stored_status, token_time):
-        """Whether a stored status of Confirmed or Revoked lacks the CRLs it was recorded from: a source that names its
-        issuer has no CRL that counts for it issued after the token's time. The grace period plays no role."""
-        if stored_status not in ("Confirmed", "Revoked"):
-            return False
+    def inconsistency(self, stored_status, token_time):
+        """Why a stored status of Confirmed or Revoked lacks the CRLs it was recorded from, or None. It applies to a
+        token whose status is not Revoked: a stored Revoked then lacks its revoking CRL, and a stored Confirmed lacks
+        a CRL issued after the token's time for a source that names its issuer. The grace period plays no role."""
+        if stored_status == "Revoked":
+            return "the stored status is revoked, but no stored CRL issued after the token's time revokes a certificate of its chain"
+        if stored_status != "Confirmed":
+            return None
         covered, _ = self.evaluate(token_time + datetime.timedelta(microseconds=1))
-        return any(source["issuer"] is not None and not covered[index] for index, source in enumerate(self.sources))
+        if any(source["issuer"] is not None and not covered[index] for index, source in enumerate(self.sources)):
+            return "the stored status is confirmed, but confirming CRLs are missing for a distribution point"
+        return None
 
 
 def verify_timestamp(entry, evidence, digest, trust, grace):
@@ -1732,12 +1808,13 @@ def verify_timestamp(entry, evidence, digest, trust, grace):
         if code != 0 or "Verification: OK" not in output:
             return invalid("openssl ts -verify failed: " + output.strip().splitlines()[-1] if output.strip() else "openssl ts -verify failed")
         revocation = Revocation(chain, sources, confirming, directory)
-        if revocation.inconsistent(entry["RevocationStatus"], token_time):
-            return invalid("the stored revocation evidence is inconsistent: the stored status is confirmed or revoked, but confirming CRLs are missing "
-                           "for a distribution point")
         report["revocationStatus"] = revocation.status(token_time, grace)
-    if report["revocationStatus"] == "Revoked":
-        return invalid("a certificate of the token's chain is revoked at or before the token's time")
+        if report["revocationStatus"] == "Revoked":
+            return invalid("a certificate of the token's chain is revoked at or before the token's time")
+        inconsistency = revocation.inconsistency(entry["RevocationStatus"], token_time)
+        if inconsistency is not None:
+            report["revocationStatus"] = "Unconfirmed"
+            return invalid(f"the stored revocation evidence is inconsistent: {inconsistency}")
     report["valid"] = True
     return report
 
@@ -1753,11 +1830,12 @@ def verify_anchor(anchor, evidence, trust, grace):
 
 
 def stream_documents(documents, aggregate_id, malformed=None):
-    """The documents of one stream. Documents that cannot be read are skipped and listed in malformed."""
+    """The documents of one stream, as the library's query selects them, including a document whose AggregateId array
+    holds the identifier. Documents that cannot be read are skipped and listed in malformed."""
     selected = []
     for index, document in enumerate(documents):
         try:
-            if get_binary(document, "AggregateId", SUBTYPE_UUID) == aggregate_id:
+            if selects_uuid(document, "AggregateId", aggregate_id):
                 selected.append(document)
         except PARSE_ERRORS as error:
             if malformed is not None:
@@ -1767,13 +1845,12 @@ def stream_documents(documents, aggregate_id, malformed=None):
 
 def stream_leaf_version(document, aggregate_type, aggregate_id):
     """The version of a leaf document that the library counts among a stream's leaves, as its query selects them: the
-    stream's aggregate type and identifier and a numeric Version of at least 1. An integer version is returned as
-    stored, any other as 1; None for leaves of other streams."""
+    stream's aggregate type and identifier and a numeric Version of at least 1, each also matched by an array that
+    holds such a value. An integer version is returned as stored, any other as 1; None for leaves of other streams."""
     try:
-        found = first(document, "Version")
-        key = sort_key(found) if found is not None and found[0] != T_ARRAY else None
-        if (key is None or key[:2] != (2, 1) or key[2] < 1 or get(document, "AggregateType", T_STRING) != aggregate_type or
-                get_binary(document, "AggregateId", SUBTYPE_UUID) != aggregate_id):
+        found = first_raw(document, "Version")
+        if (not any(sort_key(value)[:2] == (2, 1) and sort_key(value)[2] >= 1 for value in query_values(found) if value[0] != T_ARRAY) or
+                not selects_string(document, "AggregateType", aggregate_type) or not selects_uuid(document, "AggregateId", aggregate_id)):
             return None
         return max(1, decode(*found)) if found[0] in (T_INT32, T_INT64) else 1
     except PARSE_ERRORS:

@@ -49,6 +49,56 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    [TestCase("eventAggregateId")]
+    [TestCase("leafVersion")]
+    [TestCase("leafAggregateType")]
+    [TestCase("leafAnchorId")]
+    public async Task Check_ArrayValuedSelectionElement_ReportsLikeTheLibrary(String change)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var leaves = GetStore(context).Leaves;
+        var leaf = await leaves.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+
+        BsonArray Wrap(String name) => new()
+        {
+            leaf[name]
+        };
+
+        if (change == "eventAggregateId")
+        {
+            var copy = (await context.Events.Find(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3)).SingleAsync()).DeepClone().AsBsonDocument;
+            copy["_id"] = new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard);
+            copy["AggregateId"] = new BsonArray
+            {
+                copy["AggregateId"]
+            };
+            copy["Version"] = 99L;
+            await context.Events.InsertOneAsync(copy);
+        }
+        else
+        {
+            var name = change switch
+            {
+                "leafVersion" => "Version",
+                "leafAggregateType" => "AggregateType",
+                _ => AnchorStore.AnchorIdField
+            };
+            await leaves.UpdateOneAsync(new BsonDocument("_id", leaf["_id"]), Builders<BsonDocument>.Update.Set(name, Wrap(name)));
+        }
+
+        await DumpAsync(context);
+        var (_, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var chain = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync();
+
+        stream.IsIntact.Should().BeFalse();
+        (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>(), report["stream"]?["failure"]?.GetValue<String>())
+            .Should().Be((stream.FirstBrokenVersion, stream.Failure?.ToString()), report.ToJsonString());
+        (report["anchorChain"]?["firstBrokenSequence"]?.GetValue<Int64?>(), report["anchorChain"]?["failure"]?.GetValue<String?>())
+            .Should().Be((chain.FirstBrokenSequence, chain.Failure?.ToString()), report.ToJsonString());
+    }
+
+    [Test]
     public async Task Check_ChunkCountNotMatchingTheLength_IsInvalidLikeTheLibrary()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -98,6 +148,7 @@ public class ReferenceVerifierIntegrationTests
     [Test]
     [TestCase("revokedBeforeTokenTime", false, nameof(TimestampRevocationStatus.Revoked))]
     [TestCase("revokedAfterTokenTime", true, nameof(TimestampRevocationStatus.Confirmed))]
+    [TestCase("revokedIssuedWithinGracePeriod", false, nameof(TimestampRevocationStatus.Revoked))]
     [TestCase("invalidBeforeTokenTime", false, nameof(TimestampRevocationStatus.Revoked))]
     [TestCase("invalidityDateRepeated", true, nameof(TimestampRevocationStatus.Confirmed))]
     [TestCase("removedFromCrl", true, nameof(TimestampRevocationStatus.Confirmed))]
@@ -159,6 +210,60 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    public async Task Check_DeeplyNestedAnchorDocument_ReportsMalformedAnchorInsteadOfFailing()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        await DumpAsync(context);
+        var nested = new Byte[]
+        {
+            5,
+            0,
+            0,
+            0,
+            0
+        };
+        for (var depth = 0; depth < 2000; depth++)
+        {
+            // { "0": nested } as an array value.
+            Byte[] body = [0x04, (Byte)'0', 0x00, .. nested, 0x00];
+            nested = [.. BitConverter.GetBytes(body.Length + 4), .. body];
+        }
+
+        Byte[] fields = [0x12, .. "Sequence"u8, 0x00, .. BitConverter.GetBytes(2L), 0x04, .. "Deep"u8, 0x00, .. nested, 0x00];
+        await using (var anchors = File.Open(Path.Combine(_directory, "anchors.bson"), FileMode.Append))
+        {
+            Byte[] document = [.. BitConverter.GetBytes(fields.Length + 4), .. fields];
+            await anchors.WriteAsync(document);
+        }
+
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+
+        code.Should().Be(1);
+        (report["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.MalformedAnchor));
+        (report["anchorChain"]?["firstBrokenSequence"]?.GetValue<Int64>()).Should().Be(2);
+    }
+
+    [Test]
+    public async Task Check_ElementNameNotValidUtf8_ReportsMalformedIntegrityLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var bytes = await context.ReadRawEventAsync(aggregateId, 2);
+        Byte[] name = [0x03, .. "Counterparty"u8, 0x00];
+        bytes[bytes.AsSpan().IndexOf(name) + 1] = 0xFF;
+        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2));
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(bytes));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        code.Should().Be(1);
+        library.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
+        (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.MalformedIntegrity));
+        (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(2);
+    }
+
+    [Test]
     [TestCase("unset", 1)]
     [TestCase("string", 3)]
     public async Task Check_EventWithoutReadableVersion_BreaksWhereTheLibraryBreaks(String change, Int64 brokenVersion)
@@ -178,6 +283,31 @@ public class ReferenceVerifierIntegrationTests
         library.Should().Be(StreamVerificationResult.Broken(brokenVersion, StreamVerificationFailure.VersionGap));
         (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.VersionGap));
         (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(brokenVersion);
+    }
+
+    [Test]
+    [TestCase("string")]
+    [TestCase("fraction")]
+    public async Task Check_EvidenceLengthOfAnotherType_IsInvalidLikeTheLibrary(String type)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var evidence = new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>()).Evidence;
+        var filter = new BsonDocument("_id", anchor["Timestamps"][0]["TokenHash"]);
+        var length = (await evidence.Find(filter).SingleAsync())[AnchorEvidenceStore.LengthField].AsInt32;
+        await evidence.UpdateOneAsync(filter,
+                                      Builders<BsonDocument>.Update.Set(AnchorEvidenceStore.LengthField,
+                                                                        type == "string"
+                                                                            ? (BsonValue)length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                                                                            : length + 0.5));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        code.Should().Be(1);
+        library.IsValid.Should().BeFalse();
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("malformed");
     }
 
     [Test]
@@ -450,6 +580,28 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    public async Task Check_UnreadableConfirmingCrlWithoutSources_IsUnconfirmedLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync(new TestTimestampAuthority([]));
+        var hash = await new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>())
+            .StoreAsync("not a CRL"u8.ToArray(), CancellationToken.None);
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
+                                                       Builders<BsonDocument>.Update.Set("Timestamps.0.ConfirmingRevocationListHashes",
+                                                                                         new BsonArray
+                                                                                         {
+                                                                                             new BsonBinaryData(hash)
+                                                                                         }));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        code.Should().Be(0, report.ToJsonString());
+        library.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        (report["anchors"]?[0]?["timestamps"]?[0]?["revocationStatus"]?.GetValue<String>()).Should().Be(nameof(TimestampRevocationStatus.Unconfirmed));
+    }
+
+    [Test]
     public async Task Check_UnreadableStreamLeaf_ReportsAnchoredLeafInvalidLikeTheLibrary()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -549,6 +701,8 @@ public class ReferenceVerifierIntegrationTests
         {
             "revokedBeforeTokenTime" => Entry(tokenTime.AddHours(-1)),
             "revokedAfterTokenTime" => Entry(tokenTime.AddHours(1)),
+            "revokedIssuedWithinGracePeriod" => authority.BuildCrlWithEntries(tokenTime.AddHours(1),
+                                                                              [(authority.SigningCertificate.SerialNumberBytes.ToArray(), tokenTime.AddHours(-1), [])]),
             "invalidBeforeTokenTime" => Entry(tokenTime.AddHours(1), (InvalidityDateOid, EncodeGeneralizedTime(tokenTime.AddHours(-1)))),
             "invalidityDateRepeated" => Entry(tokenTime.AddHours(1),
                                               (InvalidityDateOid, EncodeGeneralizedTime(tokenTime.AddHours(-1))),
@@ -698,9 +852,9 @@ public class ReferenceVerifierIntegrationTests
     /// Creates a protected store that anchors with a test authority and trusts its root for verification, writes the
     /// root to <c>root.pem</c>, and anchors a stream of three events with personal data.
     /// </summary>
-    private async Task<(LedgerStoreContext Context, Guid AggregateId)> CreateAnchoredStreamAsync()
+    private async Task<(LedgerStoreContext Context, Guid AggregateId)> CreateAnchoredStreamAsync(TestTimestampAuthority? authority = null)
     {
-        var testAuthority = new TestTimestampAuthority();
+        var testAuthority = authority ?? new TestTimestampAuthority();
         _testAuthorities.Add(testAuthority);
         var context = await LedgerStoreContext.CreateAsync(
             _container,
