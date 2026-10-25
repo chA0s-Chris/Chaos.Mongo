@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Errors;
+using System.Globalization;
 
 public class LedgerAggregate : Aggregate
 {
@@ -13,6 +14,11 @@ public class LedgerAggregate : Aggregate
 
 public class LedgerEntryRecordedEvent : Event<LedgerAggregate>
 {
+    /// <summary>
+    /// The category of an entry whose replay records the aggregate's creation date as a memo.
+    /// </summary>
+    public const String RecordsCreationDateCategory = "records-creation-date";
+
     /// <summary>
     /// The category of an entry whose replay fails once its memo is erased.
     /// </summary>
@@ -34,7 +40,7 @@ public class LedgerEntryRecordedEvent : Event<LedgerAggregate>
 
         aggregate.Balance += Amount;
         aggregate.EntryCount++;
-        aggregate.Memos.Add(Memo);
+        aggregate.Memos.Add(Details.Category == RecordsCreationDateCategory ? aggregate.CreatedUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : Memo);
     }
 }
 

@@ -6,7 +6,6 @@ using Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
-using System.Collections.Concurrent;
 
 /// <summary>
 /// Handles BsonClassMap registration for aggregates and events, including discriminator configuration
@@ -25,9 +24,9 @@ public static class MongoEventStoreSerializationSetup
     /// <summary>
     /// The checkpoint class maps the event store registered itself. Class maps are process-global, so later
     /// registrations, for example in a separate container, reuse them, while a class map registered by a consumer is
-    /// rejected under protection.
+    /// rejected under protection. Read and written only under <see cref="CheckpointClassMapLock"/>.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, Boolean> OwnCheckpointClassMaps = new();
+    private static readonly HashSet<Type> OwnCheckpointClassMaps = [];
 
     /// <summary>
     /// Ensures a <see cref="GuidSerializer"/> with <see cref="GuidRepresentation.Standard"/> is registered globally.
@@ -211,7 +210,7 @@ public static class MongoEventStoreSerializationSetup
                       .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
                       .SetIgnoreIfNull(true);
                 });
-                OwnCheckpointClassMaps.TryAdd(checkpointDocumentType, true);
+                OwnCheckpointClassMaps.Add(checkpointDocumentType);
             }
         }
     }
@@ -297,7 +296,7 @@ public static class MongoEventStoreSerializationSetup
         {
             if (!options.IntegrityProtectionEnabled ||
                 !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
-                OwnCheckpointClassMaps.ContainsKey(checkpointDocumentType))
+                OwnCheckpointClassMaps.Contains(checkpointDocumentType))
             {
                 return;
             }

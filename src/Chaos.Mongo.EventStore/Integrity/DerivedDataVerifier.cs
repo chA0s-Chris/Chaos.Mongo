@@ -42,8 +42,10 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
     /// Every read happens in one snapshot session, so appends and erasures that commit during the check do not show
     /// as differences; snapshot reads need MongoDB 5.0 or later and must finish within the server's snapshot history
     /// window. The replay never starts from a checkpoint, because checkpoints are the data under test. The creation
-    /// time is not derivable from the events, because it records when the first event was appended, so the states are
-    /// compared without it, and <see cref="DerivedDataVerificationResult.CreationTimeConsistent"/> reports whether the
+    /// time is not derivable from the events, because it records when the first event was appended, so the replay
+    /// starts with the stored read model's creation time, as the rebuild after an erasure does, or with the earliest
+    /// checkpoint's when the read model is missing; the states are compared without it, and
+    /// <see cref="DerivedDataVerificationResult.CreationTimeConsistent"/> reports whether the
     /// read model and the checkpoints agree on it. The comparison uses the serialized documents, so it does not depend
     /// on equality members of the aggregate.
     /// </remarks>
@@ -84,7 +86,7 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
         var checkpointsByVersion = checkpoints.Where(c => c.Version is not null)
                                               .GroupBy(c => c.Version.GetValueOrDefault())
                                               .ToDictionary(group => group.Key, group => group.First().Document);
-        var replay = await ReplayAsync(aggregateId, session, checkpointsByVersion, cancellationToken);
+        var replay = await ReplayAsync(aggregateId, StoredCreationTime(readModel, checkpointDocuments), session, checkpointsByVersion, cancellationToken);
 
         var readModelStatus = (readModel, replay.HasState) switch
         {
@@ -93,8 +95,14 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
             _ => DocumentsMatch(WithIdFirst(replay.State), readModel, replay.Version, replay.Revision) ? ReadModelStatus.Matches : ReadModelStatus.Differs
         };
 
+        var hashes = new Dictionary<Int64, Byte[]>();
+        foreach (var verified in stream.Events)
+        {
+            hashes.TryAdd(verified.Version, verified.Hash);
+        }
+
         var results = checkpoints.Select(checkpoint => new CheckpointVerification(checkpoint.Version.GetValueOrDefault(),
-                                                                                  VerifyHash(checkpoint.Document, checkpoint.Version.GetValueOrDefault(), stream),
+                                                                                  VerifyHash(checkpoint.Document, checkpoint.Version.GetValueOrDefault(), hashes),
                                                                                   checkpoint.Version is { } version &&
                                                                                   replay.CheckpointStates.GetValueOrDefault(version)))
                                  .ToList();
@@ -166,15 +174,26 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
             ? value.ToInt64()
             : null;
 
-    private static CheckpointHashStatus VerifyHash(BsonDocument checkpoint, Int64 version, StreamVerificationResult stream)
+    /// <summary>
+    /// Gets the creation time replay starts with: the stored read model's, or the earliest checkpoint state's when the
+    /// read model is missing, or the default when neither records one.
+    /// </summary>
+    private static DateTime StoredCreationTime(BsonDocument? readModel, IEnumerable<BsonDocument> checkpoints)
+    {
+        var createdUtcElement = ElementNameOf(nameof(IAggregate.CreatedUtc));
+        var stateElement = CheckpointElement(nameof(CheckpointDocument<TAggregate>.State));
+        var source = readModel ?? checkpoints.Select(checkpoint => checkpoint.GetValue(stateElement, BsonNull.Value)).OfType<BsonDocument>().FirstOrDefault();
+        return source?.GetValue(createdUtcElement, BsonNull.Value) is BsonDateTime createdUtc ? createdUtc.ToUniversalTime() : default;
+    }
+
+    private static CheckpointHashStatus VerifyHash(BsonDocument checkpoint, Int64 version, Dictionary<Int64, Byte[]> hashes)
     {
         if (!checkpoint.TryGetValue(CheckpointDocument<TAggregate>.ChainHashElementName, out var recorded))
         {
             return CheckpointHashStatus.Unverifiable;
         }
 
-        var verified = stream.Events.FirstOrDefault(e => e.Version == version);
-        return recorded is BsonBinaryData { Bytes: var hash } && verified is not null && verified.Hash.AsSpan().SequenceEqual(hash)
+        return recorded is BsonBinaryData { Bytes: var hash } && hashes.TryGetValue(version, out var verified) && verified.AsSpan().SequenceEqual(hash)
             ? CheckpointHashStatus.Matches
             : CheckpointHashStatus.Mismatch;
     }
@@ -195,17 +214,19 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
-    /// Replays the state-changing events from the stream start and compares the state with each checkpoint when the
-    /// replay reaches its version.
+    /// Replays the state-changing events from the stream start, beginning with the given creation time, and compares
+    /// the state with each checkpoint when the replay reaches its version.
     /// </summary>
     private async Task<Replay> ReplayAsync(Guid aggregateId,
+                                           DateTime createdUtc,
                                            IClientSessionHandle session,
                                            Dictionary<Int64, BsonDocument> checkpoints,
                                            CancellationToken cancellationToken)
     {
         var aggregate = new TAggregate
         {
-            Id = aggregateId
+            Id = aggregateId,
+            CreatedUtc = createdUtc
         };
 
         var eventFilter = Builders<Event<TAggregate>>.Filter;
