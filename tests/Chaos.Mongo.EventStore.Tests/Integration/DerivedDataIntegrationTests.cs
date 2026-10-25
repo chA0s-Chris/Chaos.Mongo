@@ -281,6 +281,28 @@ public class DerivedDataIntegrationTests
         result.IsConsistent.Should().BeTrue();
     }
 
+    [Test]
+    public async Task VerifyAsync_SecondCheckpointWithReorderedIdentifier_IsComparedOnItsOwn()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        var original = (await context.ReadRawCheckpointsAsync(aggregateId))[0];
+        var forged = new BsonDocument
+        {
+            { "_id", new BsonDocument(original["_id"].AsBsonDocument.Elements.Reverse()) }
+        };
+        forged.AddRange(original.Elements.Where(element => element.Name != "_id"));
+        forged["State"]["Balance"] = new Decimal128(1000m);
+        await GetCheckpoints(context).InsertOneAsync(forged);
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        result.Checkpoints.Should().HaveCount(3);
+        result.Checkpoints.Where(c => c.Version == 2).Select(c => c.StateMatches).Should().BeEquivalentTo([true, false]);
+        result.Checkpoints.Should().OnlyContain(c => c.HashStatus == CheckpointHashStatus.Matches);
+        result.IsConsistent.Should().BeFalse();
+    }
+
     /// <summary>
     /// Appends a stream one event per batch, so every multiple of the checkpoint interval gets a checkpoint.
     /// </summary>

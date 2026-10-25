@@ -83,9 +83,11 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
                                                     .ToListAsync(cancellationToken);
         var checkpoints = checkpointDocuments.Select(document => (Version: ReadCheckpointVersion(document), Document: document)).ToList();
 
+        // Every stored document is compared: a second document at a version, for example with its identifier's fields
+        // in another order, must not share the first one's result.
         var checkpointsByVersion = checkpoints.Where(c => c.Version is not null)
                                               .GroupBy(c => c.Version.GetValueOrDefault())
-                                              .ToDictionary(group => group.Key, group => group.First().Document);
+                                              .ToDictionary(group => group.Key, group => group.Select(c => c.Document).ToList());
         var replay = await ReplayAsync(aggregateId, StoredCreationTime(readModel, checkpointDocuments), session, checkpointsByVersion, cancellationToken);
 
         var readModelStatus = (readModel, replay.HasState) switch
@@ -103,8 +105,7 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
 
         var results = checkpoints.Select(checkpoint => new CheckpointVerification(checkpoint.Version.GetValueOrDefault(),
                                                                                   VerifyHash(checkpoint.Document, checkpoint.Version.GetValueOrDefault(), hashes),
-                                                                                  checkpoint.Version is { } version &&
-                                                                                  replay.CheckpointStates.GetValueOrDefault(version)))
+                                                                                  replay.CheckpointStates.GetValueOrDefault(checkpoint.Document)))
                                  .ToList();
         return new DerivedDataVerificationResult(stream, readModelStatus, results, CreationTimesAgree(readModel, checkpointDocuments));
     }
@@ -215,12 +216,12 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// Replays the state-changing events from the stream start, beginning with the given creation time, and compares
-    /// the state with each checkpoint when the replay reaches its version.
+    /// the state with each checkpoint document when the replay reaches its version.
     /// </summary>
     private async Task<Replay> ReplayAsync(Guid aggregateId,
                                            DateTime createdUtc,
                                            IClientSessionHandle session,
-                                           Dictionary<Int64, BsonDocument> checkpoints,
+                                           Dictionary<Int64, List<BsonDocument>> checkpoints,
                                            CancellationToken cancellationToken)
     {
         var aggregate = new TAggregate
@@ -237,7 +238,7 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
                                        .SortBy(e => e.Version)
                                        .ToListAsync(cancellationToken);
 
-        var checkpointStates = new Dictionary<Int64, Boolean>();
+        var checkpointStates = new Dictionary<BsonDocument, Boolean>(ReferenceEqualityComparer.Instance);
         var hasState = false;
         foreach (var @event in events)
         {
@@ -252,9 +253,13 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
             aggregate.Revision = @event.Revision;
             hasState = true;
 
-            if (checkpoints.TryGetValue(@event.Version, out var checkpoint))
+            if (checkpoints.TryGetValue(@event.Version, out var documents))
             {
-                checkpointStates[@event.Version] = MatchesCheckpoint(aggregate.ToBsonDocument(), checkpoint, aggregate.Version, aggregate.Revision);
+                var state = aggregate.ToBsonDocument();
+                foreach (var checkpoint in documents)
+                {
+                    checkpointStates[checkpoint] = MatchesCheckpoint(state, checkpoint, aggregate.Version, aggregate.Revision);
+                }
             }
         }
 
@@ -263,7 +268,7 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// The state replayed from the stream start with its version and revision, whether any state-changing event was
-    /// replayed, and whether each checkpoint's state matched when the replay reached its version.
+    /// replayed, and whether each checkpoint document's state matched when the replay reached its version.
     /// </summary>
-    private sealed record Replay(BsonDocument State, Boolean HasState, Int64 Version, Int64 Revision, Dictionary<Int64, Boolean> CheckpointStates);
+    private sealed record Replay(BsonDocument State, Boolean HasState, Int64 Version, Int64 Revision, Dictionary<BsonDocument, Boolean> CheckpointStates);
 }
