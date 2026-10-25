@@ -571,6 +571,28 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    public async Task VerifyStreamAsync_ErasureEntryTheReaderRejects_ReportsMalformedIntegrity()
+    {
+        var context = await CreateContextAsync(personalData: true);
+        var aggregateId = await context.AppendStreamAsync(3);
+        await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("TICKET-1", [1], ["Memo"]));
+        var document = await context.FindEventAsync(aggregateId, 4);
+        document[PersonalDataErased<LedgerAggregate>.EntriesElement].AsBsonArray.Add(new BsonBinaryData(new Byte[15]));
+        var bytes = document.ToBson();
+        // The driver writes no UUID of another length, so the item's subtype is changed to UUID in place.
+        Byte[] item = [0x0F, 0x00, 0x00, 0x00, 0x00, .. new Byte[15]];
+        bytes[bytes.AsSpan().IndexOf(item) + 4] = (Byte)BsonBinarySubType.UuidStandard;
+        var integrity = LedgerStoreContext.ReadIntegrity(document);
+        EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(bytes, EventIntegrityChain.ElementName), integrity.PreviousHash, integrity.SealMode)
+                           .CopyTo(bytes, bytes.AsSpan().IndexOf(integrity.Hash));
+        await ReplaceRawEventAsync(context, aggregateId, 4, bytes);
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(4, StreamVerificationFailure.MalformedIntegrity));
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_IntegrityHashStoredAsOldBinary_ReportsMalformedIntegrity()
     {
         var context = await CreateContextAsync();

@@ -404,9 +404,10 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                             CollectErasureRecords(rawDocument, expectedVersion, recordedErasures);
                         }
                     }
-                    catch (DecoderFallbackException)
+                    catch (Exception ex) when (ex is DecoderFallbackException or FormatException)
                     {
-                        // A raw document decodes strings on access, so a discriminator or path that is not valid UTF-8 surfaces here.
+                        // A raw document decodes values on access, so a discriminator, entry or path that is not valid UTF-8,
+                        // or a value the reader rejects, such as a UUID that is not 16 bytes long, surfaces here.
                         return scan.Break(expectedVersion, StreamVerificationFailure.MalformedIntegrity);
                     }
 
