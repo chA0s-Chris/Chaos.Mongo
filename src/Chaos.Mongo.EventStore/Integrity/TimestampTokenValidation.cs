@@ -130,7 +130,8 @@ internal static class TimestampTokenValidation
                                            Convert.ToHexString(source.Issuer ?? [])))
                        .Select(group => group.First() with
                        {
-                           FromCaCertificate = group.Any(source => source.FromCaCertificate)
+                           FromCaCertificate = group.Any(source => source.FromCaCertificate),
+                           FromEndEntityCertificate = group.Any(source => source.FromEndEntityCertificate)
                        })
                        .ToList();
 
@@ -423,7 +424,11 @@ internal static class TimestampTokenValidation
         }
 
         var fromCaCertificate = certificate.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault() is { CertificateAuthority: true };
-        return points.Select(point => new CrlSource(point.Locations, point.NamesCrlIssuer ? null : certificate.IssuerName.RawData, fromCaCertificate)).ToList();
+        return points.Select(point => new CrlSource(point.Locations,
+                                                    point.NamesCrlIssuer ? null : certificate.IssuerName.RawData,
+                                                    fromCaCertificate,
+                                                    !fromCaCertificate))
+                     .ToList();
     }
 
     /// <summary>

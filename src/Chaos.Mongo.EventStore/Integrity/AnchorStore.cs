@@ -6,6 +6,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 /// <summary>
 /// Reads and writes anchor and leaf documents.
@@ -308,7 +309,7 @@ internal sealed class AnchorStore
             { "_id", ToBson(anchorId) },
             { SequenceField, new BsonDocument("$exists", true) }
         };
-        var document = await Anchors.Find(filter).FirstOrDefaultAsync(cancellationToken);
+        var document = await FindRaw(Anchors, filter).FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ReadAnchor(document);
     }
 
@@ -318,9 +319,9 @@ internal sealed class AnchorStore
     /// </summary>
     public async Task<AnchorRecord?> FindAwaitingTimestampAsync(CancellationToken cancellationToken)
     {
-        var document = await Anchors.Find(new BsonDocument(StatusField, nameof(AnchorStatus.AwaitingTimestamp)))
-                                    .Sort(new BsonDocument(SequenceField, 1))
-                                    .FirstOrDefaultAsync(cancellationToken);
+        var document = await FindRaw(Anchors, new BsonDocument(StatusField, nameof(AnchorStatus.AwaitingTimestamp)))
+                             .Sort(new BsonDocument(SequenceField, 1))
+                             .FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ReadAnchor(document);
     }
 
@@ -402,9 +403,9 @@ internal sealed class AnchorStore
                                                                                                          Int64 minimumVersion,
                                                                                                          CancellationToken cancellationToken)
     {
-        using var cursor = await Leaves.Find(StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
-                                       .Sort(StreamLeavesSort())
-                                       .ToCursorAsync(cancellationToken);
+        using var cursor = await FindRaw(Leaves, StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
+                                 .Sort(StreamLeavesSort())
+                                 .ToCursorAsync(cancellationToken);
         while (await cursor.MoveNextAsync(cancellationToken))
         {
             foreach (var document in cursor.Current)
@@ -414,7 +415,7 @@ internal sealed class AnchorStore
                     return (null, true);
                 }
 
-                var anchorDocument = await Anchors.Find(new BsonDocument("_id", ToBson(leaf.AnchorId))).FirstOrDefaultAsync(cancellationToken);
+                var anchorDocument = await FindRaw(Anchors, new BsonDocument("_id", ToBson(leaf.AnchorId))).FirstOrDefaultAsync(cancellationToken);
                 if (anchorDocument is null || !anchorDocument.Contains(SequenceField))
                 {
                     continue;
@@ -440,14 +441,14 @@ internal sealed class AnchorStore
     /// </summary>
     public async Task<AnchorRecord?> FindFirstUnnotifiedAsync(CancellationToken cancellationToken)
     {
-        var document = await Anchors.Find(new BsonDocument
-                                    {
-                                        { StatusField, nameof(AnchorStatus.Completed) },
-                                        { NotifiedField, false }
-                                    })
-                                    .Sort(new BsonDocument(SequenceField, 1))
-                                    .Limit(1)
-                                    .FirstOrDefaultAsync(cancellationToken);
+        var document = await FindRaw(Anchors, new BsonDocument
+                             {
+                                 { StatusField, nameof(AnchorStatus.Completed) },
+                                 { NotifiedField, false }
+                             })
+                             .Sort(new BsonDocument(SequenceField, 1))
+                             .Limit(1)
+                             .FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ReadAnchor(document);
     }
 
@@ -456,10 +457,10 @@ internal sealed class AnchorStore
     /// </summary>
     public async Task<AnchorRecord?> FindLatestCommittedAsync(CancellationToken cancellationToken)
     {
-        var document = await Anchors.Find(new BsonDocument(SequenceField, new BsonDocument("$exists", true)))
-                                    .Sort(new BsonDocument(SequenceField, -1))
-                                    .Limit(1)
-                                    .FirstOrDefaultAsync(cancellationToken);
+        var document = await FindRaw(Anchors, new BsonDocument(SequenceField, new BsonDocument("$exists", true)))
+                             .Sort(new BsonDocument(SequenceField, -1))
+                             .Limit(1)
+                             .FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ReadAnchor(document);
     }
 
@@ -499,7 +500,7 @@ internal sealed class AnchorStore
     /// uncommitted attempts are included; callers check the anchor.
     /// </summary>
     public IAsyncEnumerable<AnchorLeaf> FindStreamLeavesAsync(String aggregateType, Guid aggregateId, Int64 minimumVersion, CancellationToken cancellationToken)
-        => ReadAllAsync(Leaves.Find(StreamLeavesFilter(aggregateType, aggregateId, minimumVersion)).Sort(StreamLeavesSort()),
+        => ReadAllAsync(FindRaw(Leaves, StreamLeavesFilter(aggregateType, aggregateId, minimumVersion)).Sort(StreamLeavesSort()),
                         ReadLeaf,
                         cancellationToken);
 
@@ -530,10 +531,10 @@ internal sealed class AnchorStore
             { AuthorityField, new BsonDocument("$in", new BsonArray(authorities)) },
             { ConfirmationNotBeforeField, new BsonDocument("$not", new BsonDocument("$gt", utcNow)) }
         }));
-        var documents = await Anchors.Find(filter)
-                                     .Sort(new BsonDocument(SequenceField, 1))
-                                     .Limit(maximumAnchors)
-                                     .ToListAsync(cancellationToken);
+        var documents = await FindRaw(Anchors, filter)
+                              .Sort(new BsonDocument(SequenceField, 1))
+                              .Limit(maximumAnchors)
+                              .ToListAsync(cancellationToken);
         return documents.SelectMany(ReadUnconfirmedTimestamps)
                         .Where(timestamp => (timestamp.TimestampUtc <= dueUtc) &&
                                             authorities.Contains(timestamp.Authority) &&
@@ -597,8 +598,8 @@ internal sealed class AnchorStore
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The anchor documents.</returns>
     public IAsyncEnumerable<BsonDocument> ReadCommittedAnchorDocumentsAsync(CancellationToken cancellationToken)
-        => ReadAllAsync(Anchors.Find(new BsonDocument(SequenceField, new BsonDocument("$exists", true)))
-                               .Sort(new BsonDocument(SequenceField, 1)),
+        => ReadAllAsync(FindRaw(Anchors, new BsonDocument(SequenceField, new BsonDocument("$exists", true)))
+                            .Sort(new BsonDocument(SequenceField, 1)),
                         document => document,
                         cancellationToken);
 
@@ -610,7 +611,7 @@ internal sealed class AnchorStore
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The leaf documents.</returns>
     public IAsyncEnumerable<BsonDocument> ReadLeafDocumentsAsync(Guid anchorId, CancellationToken cancellationToken)
-        => ReadAllAsync(Leaves.Find(new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
+        => ReadAllAsync(FindRaw(Leaves, new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
                         document => document,
                         cancellationToken);
 
@@ -619,9 +620,9 @@ internal sealed class AnchorStore
     /// </summary>
     public async Task<IReadOnlyList<AnchorLeaf>> ReadLeavesAsync(Guid anchorId, CancellationToken cancellationToken)
     {
-        var documents = await Leaves.Find(new BsonDocument(AnchorIdField, ToBson(anchorId)))
-                                    .Sort(new BsonDocument(IndexField, 1))
-                                    .ToListAsync(cancellationToken);
+        var documents = await FindRaw(Leaves, new BsonDocument(AnchorIdField, ToBson(anchorId)))
+                              .Sort(new BsonDocument(IndexField, 1))
+                              .ToListAsync(cancellationToken);
         return documents.Select(ReadLeaf).ToList();
     }
 
@@ -638,9 +639,9 @@ internal sealed class AnchorStore
     /// <returns>The stream's leaves.</returns>
     public async Task<StreamLeaves> ReadStreamLeavesAsync(String aggregateType, Guid aggregateId, Int64 minimumVersion, CancellationToken cancellationToken)
     {
-        var documents = await Leaves.Find(StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
-                                    .Sort(StreamLeavesSort())
-                                    .ToListAsync(cancellationToken);
+        var documents = await FindRaw(Leaves, StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
+                              .Sort(StreamLeavesSort())
+                              .ToListAsync(cancellationToken);
         Int64? firstUnreadable = null;
         var streamLeaves = new List<AnchorLeaf>(documents.Count);
         foreach (var document in documents)
@@ -660,7 +661,7 @@ internal sealed class AnchorStore
         if (streamLeaves.Count > 0)
         {
             var ids = new BsonArray(streamLeaves.Select(leaf => leaf.AnchorId).Distinct().Select(ToBson));
-            var anchorDocuments = await Anchors.Find(new BsonDocument("_id", new BsonDocument("$in", ids))).ToListAsync(cancellationToken);
+            var anchorDocuments = await FindRaw(Anchors, new BsonDocument("_id", new BsonDocument("$in", ids))).ToListAsync(cancellationToken);
             foreach (var anchorDocument in anchorDocuments)
             {
                 if (TryRead(anchorDocument, ReadAnchor, out var anchor))
@@ -736,7 +737,7 @@ internal sealed class AnchorStore
     /// Streams the leaves of an anchor in leaf order.
     /// </summary>
     public IAsyncEnumerable<AnchorLeaf> StreamLeavesAsync(Guid anchorId, CancellationToken cancellationToken)
-        => ReadAllAsync(Leaves.Find(new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
+        => ReadAllAsync(FindRaw(Leaves, new BsonDocument(AnchorIdField, ToBson(anchorId))).Sort(new BsonDocument(IndexField, 1)),
                         ReadLeaf,
                         cancellationToken);
 
@@ -745,7 +746,7 @@ internal sealed class AnchorStore
     /// the BSON type the store writes; integers stored as 32-bit where a 64-bit one is written are accepted.
     /// </summary>
     internal static AnchorRecord ReadAnchor(BsonDocument document)
-        => new(ReadGuid(document["_id"]),
+        => new(ReadGuid(StoredDocuments.WithDistinctNames(document)["_id"]),
                ReadEnum<AnchorStatus>(document[StatusField]),
                ReadInt64(document[SequenceField]),
                ReadInt32(document["FormatVersion"]),
@@ -766,7 +767,7 @@ internal sealed class AnchorStore
     /// Reads a leaf document with the BSON types the store writes; its version must be at least 1.
     /// </summary>
     internal static AnchorLeaf ReadLeaf(BsonDocument document)
-        => new(ReadGuid(document[AnchorIdField]),
+        => new(ReadGuid(StoredDocuments.WithDistinctNames(document)[AnchorIdField]),
                ReadInt64(document[AnchorSequenceField]),
                ReadInt32(document[IndexField]),
                ReadString(document[AggregateTypeField]),
@@ -787,7 +788,7 @@ internal sealed class AnchorStore
             return true;
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or InvalidOperationException or FormatException or ArgumentException or
-                                         OverflowException or NotSupportedException)
+                                         OverflowException or NotSupportedException or DecoderFallbackException)
         {
             value = null;
             return false;
@@ -802,6 +803,13 @@ internal sealed class AnchorStore
         };
 
     /// <summary>
+    /// Finds documents as raw documents, so a document that repeats an element name reaches the strict readers, which
+    /// reject it, instead of failing the driver's deserialization.
+    /// </summary>
+    private static IFindFluent<BsonDocument, RawBsonDocument> FindRaw(IMongoCollection<BsonDocument> collection, BsonDocument filter)
+        => collection.Find(filter).As<RawBsonDocument>();
+
+    /// <summary>
     /// Matches anchors with at least one timestamp entry whose revocation status is unconfirmed.
     /// </summary>
     private static BsonDocument HasUnconfirmedTimestamp()
@@ -810,7 +818,7 @@ internal sealed class AnchorStore
     private static FormatException Malformed(BsonValue value, String expected)
         => new($"A stored element is a {value.BsonType}, not {expected}.");
 
-    private static async IAsyncEnumerable<T> ReadAllAsync<T>(IFindFluent<BsonDocument, BsonDocument> find,
+    private static async IAsyncEnumerable<T> ReadAllAsync<T>(IFindFluent<BsonDocument, RawBsonDocument> find,
                                                              Func<BsonDocument, T> read,
                                                              [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -904,7 +912,7 @@ internal sealed class AnchorStore
     /// Reads the unconfirmed timestamp entries of an anchor document.
     /// </summary>
     private static IEnumerable<UnconfirmedTimestamp> ReadUnconfirmedTimestamps(BsonDocument anchor)
-        => ReadDocuments(anchor[TimestampsField])
+        => ReadDocuments(StoredDocuments.WithDistinctNames(anchor)[TimestampsField])
            .Where(entry => entry[RevocationStatusField] is BsonString { Value: nameof(TimestampRevocationStatus.Unconfirmed) })
            .Select(entry => new UnconfirmedTimestamp(ReadGuid(anchor["_id"]),
                                                      ReadInt64(anchor[SequenceField]),

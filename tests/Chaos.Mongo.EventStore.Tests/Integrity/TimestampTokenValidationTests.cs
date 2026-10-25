@@ -24,8 +24,8 @@ public class TimestampTokenValidationTests
         var caSources = TimestampTokenValidation.GetCrlSources([caCertificate]);
         var signerSources = TimestampTokenValidation.GetCrlSources([authority.SigningCertificate]);
 
-        caSources.Should().ContainSingle().Which.FromCaCertificate.Should().BeTrue();
-        signerSources.Should().OnlyContain(source => !source.FromCaCertificate).And.NotBeEmpty();
+        caSources.Should().ContainSingle().Which.Should().Match<CrlSource>(source => source.FromCaCertificate && !source.FromEndEntityCertificate);
+        signerSources.Should().OnlyContain(source => !source.FromCaCertificate && source.FromEndEntityCertificate).And.NotBeEmpty();
     }
 
     [Test]

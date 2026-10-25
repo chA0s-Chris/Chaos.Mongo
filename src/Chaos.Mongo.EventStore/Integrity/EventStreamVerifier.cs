@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Text;
 
 /// <summary>
 /// Verifies the hash chain of an event stream by recomputing it from the raw stored documents, compares it with the
@@ -180,10 +181,6 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                    .ToList();
     }
 
-    /// <summary>
-    /// Reads the <c>(Version, Path)</c> records of an erasure event from its raw document. Only records of earlier
-    /// versions document an erasure. Entries that do not have the pinned shape are ignored.
-    /// </summary>
     private static void CollectErasureRecords(RawBsonDocument erasureEvent, Int64 erasureVersion, HashSet<UnrecordedErasure> recordedErasures)
     {
         if (!erasureEvent.TryGetValue(PersonalDataErased<TAggregate>.EntriesElement, out var entriesValue) ||
@@ -256,6 +253,28 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                  .Where((e, index) => e.SealMode == IntegritySealMode.Retroactive && events[index].SealMode == IntegritySealMode.Append)
                  .Select(e => e.Version)
                  .ToList();
+
+    /// <summary>
+    /// Reads the <c>(Version, Path)</c> records of an erasure event from its raw document. Only records of earlier
+    /// versions document an erasure. Entries that do not have the pinned shape are ignored.
+    /// </summary>
+    /// <summary>
+    /// Gets a value indicating whether every top-level element name of an event document is valid UTF-8. A raw document
+    /// decodes names on access, so an invalid one would otherwise surface as an exception during a later lookup.
+    /// </summary>
+    private static Boolean HasReadableNames(RawBsonDocument document)
+    {
+        try
+        {
+            foreach (var _ in document.Names) { }
+
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Verifies one event chained from an expected previous hash.
@@ -354,6 +373,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                 using (rawDocument)
                 {
                     var expectedVersion = scan.Events.Count + 1L;
+                    if (!HasReadableNames(rawDocument))
+                    {
+                        return scan.Break(expectedVersion, StreamVerificationFailure.MalformedIntegrity);
+                    }
+
                     if (!rawDocument.TryGetValue(versionElement, out var versionValue) ||
                         !StoredVersion.TryRead(versionValue, out var version) ||
                         version != expectedVersion)
@@ -379,15 +403,24 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                         return scan.Break(expectedVersion, check.Failure ?? StreamVerificationFailure.MalformedIntegrity);
                     }
 
-                    scan.Events.Add(new ScannedEvent(expectedVersion, integrity.Hash, integrity.PreviousHash, integrity.SealMode, check.PersonalData));
-
                     // The erasure event is identified by its reserved discriminator; its records are trusted once its own hash verified.
-                    if (rawDocument.TryGetValue(discriminatorElement, out var discriminator) &&
-                        EventDocumentFields<TAggregate>.IsErasureEvent(discriminator))
+                    var recordedErasures = new HashSet<UnrecordedErasure>();
+                    try
                     {
-                        CollectErasureRecords(rawDocument, expectedVersion, scan.RecordedErasures);
+                        if (rawDocument.TryGetValue(discriminatorElement, out var discriminator) &&
+                            EventDocumentFields<TAggregate>.IsErasureEvent(discriminator))
+                        {
+                            CollectErasureRecords(rawDocument, expectedVersion, recordedErasures);
+                        }
+                    }
+                    catch (DecoderFallbackException)
+                    {
+                        // A raw document decodes strings on access, so a discriminator or path that is not valid UTF-8 surfaces here.
+                        return scan.Break(expectedVersion, StreamVerificationFailure.MalformedIntegrity);
                     }
 
+                    scan.Events.Add(new ScannedEvent(expectedVersion, integrity.Hash, integrity.PreviousHash, integrity.SealMode, check.PersonalData));
+                    scan.RecordedErasures.UnionWith(recordedErasures);
                     previousHash = integrity.Hash;
                 }
             }
@@ -424,7 +457,8 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             {
                 using (rawDocument)
                 {
-                    if (!rawDocument.TryGetValue(versionElement, out var versionValue) ||
+                    if (!HasReadableNames(rawDocument) ||
+                        !rawDocument.TryGetValue(versionElement, out var versionValue) ||
                         !StoredVersion.TryRead(versionValue, out var version) ||
                         version != expectedVersion ||
                         !rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue))

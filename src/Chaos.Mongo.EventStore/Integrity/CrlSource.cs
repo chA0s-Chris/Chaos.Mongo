@@ -11,4 +11,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="FromCaCertificate">
 /// Whether a CA certificate names the point, so a CRL limited to end-entity certificates does not cover it.
 /// </param>
-internal sealed record CrlSource(IReadOnlyList<Uri> Locations, Byte[]? Issuer, Boolean FromCaCertificate);
+/// <param name="FromEndEntityCertificate">
+/// Whether an end-entity certificate names the point, so a CRL limited to CA certificates does not cover it.
+/// </param>
+internal sealed record CrlSource(IReadOnlyList<Uri> Locations, Byte[]? Issuer, Boolean FromCaCertificate, Boolean FromEndEntityCertificate);

@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using System.Security.Cryptography;
+using System.Text;
 
 /// <summary>
 /// Stores the tokens, certificates and CRLs of anchor timestamps once per distinct content, addressed by their
@@ -69,14 +70,15 @@ internal sealed class AnchorEvidenceStore
     public async Task<Byte[]> ReadAsync(Byte[] hash, CancellationToken cancellationToken)
     {
         ValidateHash(hash);
-        var document = await Evidence.Find(new BsonDocument("_id", new BsonBinaryData(hash))).FirstOrDefaultAsync(cancellationToken) ??
+        // Read raw, so a document that repeats an element name is reported as malformed instead of failing the read.
+        var document = await Evidence.Find(new BsonDocument("_id", new BsonBinaryData(hash))).As<RawBsonDocument>().FirstOrDefaultAsync(cancellationToken) ??
                        throw new AnchorEvidenceException(hash, "it is missing.");
         var (length, inline, chunkCount) = Decode(hash, () =>
         {
-            var storedLength = document[LengthField].ToInt32();
+            var storedLength = StoredDocuments.ReadInt32(StoredDocuments.WithDistinctNames(document)[LengthField]);
             return document.TryGetValue(DataField, out var value)
                 ? (storedLength, value.AsByteArray, 0)
-                : (storedLength, (Byte[]?)null, document[ChunkCountField].ToInt32());
+                : (storedLength, (Byte[]?)null, StoredDocuments.ReadInt32(document[ChunkCountField]));
         });
         // A chunked item is longer than one chunk and has exactly as many chunks as its length needs, so a tampered count
         // cannot make the read unbounded.
@@ -162,7 +164,7 @@ internal sealed class AnchorEvidenceStore
             return decode();
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or InvalidOperationException or FormatException or OverflowException or
-                                         NotSupportedException)
+                                         NotSupportedException or DecoderFallbackException)
         {
             throw new AnchorEvidenceException(hash, "its stored document is malformed.", ex);
         }
@@ -197,13 +199,16 @@ internal sealed class AnchorEvidenceStore
         }
 
         var ids = new BsonArray(Enumerable.Range(0, chunkCount).Select(index => ChunkId(hash, index)));
-        var chunks = await Chunks.Find(new BsonDocument("_id", new BsonDocument("$in", ids))).ToListAsync(cancellationToken);
+        var chunks = await Chunks.Find(new BsonDocument("_id", new BsonDocument("$in", ids))).As<RawBsonDocument>().ToListAsync(cancellationToken);
         if (chunks.Count != chunkCount)
         {
             throw new AnchorEvidenceException(hash, $"{chunkCount - chunks.Count} of its {chunkCount} chunks are missing.");
         }
 
-        var ordered = Decode(hash, () => chunks.OrderBy(chunk => chunk["_id"][IndexField].ToInt32()).Select(chunk => chunk[DataField].AsByteArray).ToList());
+        var ordered = Decode(hash, () => chunks.Select(StoredDocuments.WithDistinctNames)
+                                               .OrderBy(chunk => StoredDocuments.ReadInt32(chunk["_id"][IndexField]))
+                                               .Select(chunk => chunk[DataField].AsByteArray)
+                                               .ToList());
         if (ordered.Sum(chunk => (Int64)chunk.Length) != length)
         {
             throw new AnchorEvidenceException(hash, "its stored content does not match its hash.");

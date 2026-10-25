@@ -15,9 +15,11 @@ using System.Security.Cryptography.X509Certificates;
 ///     only binds the token to its request, and the comparison with the local clock, which only applies while stamping.
 ///     The chain is built at the token's time from the stored certificates without online revocation checks. Its
 ///     revocation status is recomputed from the stored confirming CRLs instead of read from the stored status, by the
-///     rule of <see cref="RevocationEvidence"/> with CRLs issued at least the grace period after the token's time. A
-///     token whose stored status is confirmed or revoked is invalid when its stored CRLs do not confirm every
-///     distribution point whose issuer is in the chain, because its revocation evidence was removed or replaced. A
+///     rule of <see cref="RevocationEvidence"/>: revoked when a CRL issued after the token's time revokes a certificate
+///     of the chain at or before it, confirmed when CRLs issued at least the grace period after the token's time
+///     confirm every distribution point. A token whose stored status is confirmed while its stored CRLs do not confirm
+///     every distribution point whose issuer is in the chain, or revoked while no stored CRL revokes, is invalid,
+///     because its revocation evidence was removed or replaced. A
 ///     stored status of unconfirmed can be set by anyone with write access, so treat tokens that stay unconfirmed
 ///     beyond the confirmation delay threshold as suspicious. The token must be DER-encoded.
 ///     </para>
@@ -68,17 +70,14 @@ internal static class StoredTimestampVerifier
             }
 
             var tokenTime = token.TokenInfo.Timestamp;
-            if (StoredStatusInconsistent(timestamp, storedCertificates, tokenTime))
+            var status = RecomputeRevocationStatus(timestamp, storedCertificates, tokenTime, gracePeriod);
+            if (status == TimestampRevocationStatus.Revoked)
             {
-                return Invalid(timestamp,
-                               TimestampRevocationStatus.Unconfirmed,
-                               "the stored revocation evidence is inconsistent: the stored status is confirmed or revoked, but confirming CRLs are missing " +
-                               "for a distribution point.");
+                return Invalid(timestamp, status, "a certificate of the token's chain is revoked at or before the token's time.");
             }
 
-            var status = RecomputeRevocationStatus(timestamp, storedCertificates, tokenTime, gracePeriod);
-            return status == TimestampRevocationStatus.Revoked
-                ? Invalid(timestamp, status, "a certificate of the token's chain is revoked at or before the token's time.")
+            return FindInconsistency(timestamp, storedCertificates, tokenTime) is { } inconsistency
+                ? Invalid(timestamp, TimestampRevocationStatus.Unconfirmed, $"the stored revocation evidence is inconsistent: {inconsistency}")
                 : new TimestampVerificationResult(timestamp.Authority, timestamp.TimestampUtc, true, null, status, timestamp.RevocationStatus);
         }
         catch (CryptographicException)
@@ -94,12 +93,52 @@ internal static class StoredTimestampVerifier
         }
     }
 
+    /// <summary>
+    /// Finds why a stored status of confirmed or revoked lacks the evidence it was recorded from. Anchoring records
+    /// confirmed only when, for every distribution point whose issuer's certificate is in the chain, a stored CRL from
+    /// that issuer is complete for it, verifies, and was issued after the token's time; and revoked only when such a CRL
+    /// revokes a certificate of the chain at or before the token's time. A removed, substituted or partially removed CRL
+    /// therefore shows. The grace period is not part of the check, so a verification grace period longer than the
+    /// anchoring one causes no false report; points of indirect CRL issuers are exempt, because their CRLs cannot be
+    /// verified. Revoked tokens are reported before this check, so a stored revoked status reaching it lacks its CRL.
+    /// </summary>
+    /// <returns>Why the stored evidence is inconsistent, or <c>null</c> when it is consistent.</returns>
+    private static String? FindInconsistency(AnchorTimestamp timestamp, X509Certificate2Collection chain, DateTimeOffset tokenTime)
+    {
+        if (timestamp.RevocationStatus == TimestampRevocationStatus.Revoked)
+        {
+            return "the stored status is revoked, but no stored CRL issued after the token's time revokes a certificate of its chain.";
+        }
+
+        if (timestamp.RevocationStatus != TimestampRevocationStatus.Confirmed)
+        {
+            return null;
+        }
+
+        IReadOnlyList<CrlSource> sources;
+        try
+        {
+            sources = TimestampTokenValidation.GetCrlSources(timestamp.CertificateChain);
+        }
+        catch (TimestampTokenValidationException)
+        {
+            return null;
+        }
+
+        var evaluation = RevocationEvidence.Evaluate(sources, timestamp.ConfirmingRevocationLists, chain, tokenTime.AddTicks(1));
+        return sources.Where((source, index) => source.Issuer is not null && !evaluation.Covered[index]).Any()
+            ? "the stored status is confirmed, but confirming CRLs are missing for a distribution point."
+            : null;
+    }
+
     private static TimestampVerificationResult Invalid(AnchorTimestamp timestamp, TimestampRevocationStatus status, String failure)
         => new(timestamp.Authority, timestamp.TimestampUtc, false, failure, status, timestamp.RevocationStatus);
 
     /// <summary>
     /// Recomputes the revocation status of the stored chain at the token's time from the stored confirming CRLs, matched
-    /// with the chain's distribution points by content.
+    /// with the chain's distribution points by content. A CRL issued after the token's time that revokes a certificate
+    /// at or before it decides, whatever the grace period and whether other points are confirmed: the grace period
+    /// only guards the conclusion that nothing is revoked.
     /// </summary>
     private static TimestampRevocationStatus RecomputeRevocationStatus(AnchorTimestamp timestamp,
                                                                        X509Certificate2Collection chain,
@@ -117,45 +156,14 @@ internal static class StoredTimestampVerifier
         }
 
         var lists = timestamp.ConfirmingRevocationLists;
-        var evaluation = RevocationEvidence.Evaluate(sources, lists, chain, tokenTime + gracePeriod);
-
-        // A verified CRL that revokes a certificate of the chain decides, even when other points are unconfirmed.
-        if (RevocationEvidence.FindRevoked(chain, evaluation.Entries, tokenTime) is not null)
+        if (RevocationEvidence.FindRevoked(chain, RevocationEvidence.Evaluate(sources, lists, chain, tokenTime.AddTicks(1)).Entries, tokenTime) is not null)
         {
             return TimestampRevocationStatus.Revoked;
         }
 
+        var evaluation = RevocationEvidence.Evaluate(sources, lists, chain, tokenTime + gracePeriod);
         var confirmed = sources.Count > 0 ? evaluation.Covered.All(covered => covered) : lists.Count == 0;
         return confirmed ? TimestampRevocationStatus.Confirmed : TimestampRevocationStatus.Unconfirmed;
-    }
-
-    /// <summary>
-    /// Gets a value indicating whether a stored status of confirmed or revoked lacks the evidence it was recorded from:
-    /// for a distribution point whose issuer's certificate is in the chain, no stored CRL from that issuer is complete
-    /// for it, verifies, and was issued after the token's time. Anchoring records such a status only from CRLs that
-    /// meet this, so a removed, substituted or partially removed CRL shows. The grace period is not part of the check,
-    /// so a verification grace period longer than the anchoring one causes no false report; points of indirect CRL
-    /// issuers are exempt, because their CRLs cannot be verified.
-    /// </summary>
-    private static Boolean StoredStatusInconsistent(AnchorTimestamp timestamp, X509Certificate2Collection chain, DateTimeOffset tokenTime)
-    {
-        if (timestamp.RevocationStatus is not (TimestampRevocationStatus.Confirmed or TimestampRevocationStatus.Revoked))
-        {
-            return false;
-        }
-
-        IReadOnlyList<CrlSource> sources;
-        try
-        {
-            sources = TimestampTokenValidation.GetCrlSources(timestamp.CertificateChain);
-        }
-        catch (TimestampTokenValidationException)
-        {
-            return false;
-        }
-
-        var evaluation = RevocationEvidence.Evaluate(sources, timestamp.ConfirmingRevocationLists, chain, tokenTime.AddTicks(1));
-        return sources.Where((source, index) => source.Issuer is not null && !evaluation.Covered[index]).Any();
     }
 
     /// <summary>

@@ -88,7 +88,7 @@ internal static class RevocationEvidence
             var header = CertificateRevocationListHeader.Decode(crl);
             if (!header.Issuer.Span.SequenceEqual(expectedIssuer) ||
                 header.ThisUpdate < issuedNotBefore ||
-                !CertificateRevocationListScope.IsCompleteFor(crl, source.Locations, source.FromCaCertificate))
+                !CertificateRevocationListScope.IsCompleteFor(crl, source.Locations, source.FromCaCertificate, source.FromEndEntityCertificate))
             {
                 return false;
             }

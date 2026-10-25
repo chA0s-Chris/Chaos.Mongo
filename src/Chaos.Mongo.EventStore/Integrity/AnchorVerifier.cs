@@ -64,10 +64,13 @@ internal sealed class AnchorVerifier
     /// with a trusted head, every anchor up to it must be completed.
     /// </summary>
     /// <remarks>
-    /// Recomputing the roots authenticates the stored leaves, which stream verification compares streams with, so
-    /// deleting or changing leaves together with the streams they cover is detected. The status of the newest anchor is
-    /// not covered by its digest, so without a trusted head it is not authenticated. The cost grows with the stored
-    /// leaves.
+    /// Recomputing the roots binds the stored leaves to the anchor digests, which stream verification compares streams
+    /// with, so deleting or changing leaves together with the streams they cover is detected unless the digests are
+    /// recomputed as well. Digests and roots involve no secret, so the chain proves consistency, not authenticity: an
+    /// anchor is authentic up to a trusted head, whose digest is kept outside the database, and otherwise only through
+    /// its timestamp tokens, which <see cref="VerifyAnchorAsync"/> verifies. Anchors after the trusted head, or all
+    /// anchors without one, may have been rebuilt or appended consistently by someone with write access. The status of
+    /// the newest anchor is not covered by its digest either. The cost grows with the stored leaves.
     /// </remarks>
     /// <param name="trustedHead">
     /// An anchor kept outside the database that the chain must contain unchanged, or <c>null</c> to check consistency

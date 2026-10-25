@@ -314,6 +314,54 @@ public class StoredTimestampVerifierTests
     }
 
     [Test]
+    public async Task Verify_StoredRevokedWithCompleteCrlsThatDoNotRevoke_IsInconsistent()
+    {
+        var authority = CreateAuthority();
+        var (timestamp, digest) = await StampAsync(authority);
+        var complete = authority.BuildCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+
+        var result = StoredTimestampVerifier.Verify(timestamp with
+                                                    {
+                                                        ConfirmingRevocationLists = [complete],
+                                                        RevocationStatus = TimestampRevocationStatus.Revoked
+                                                    },
+                                                    digest,
+                                                    Trust(authority),
+                                                    GracePeriod);
+
+        result.IsValid.Should().BeFalse();
+        result.Failure.Should().Contain("inconsistent").And.Contain("no stored CRL");
+    }
+
+    [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Verify_StoredRevokedWithRevokingCrlForOnePointOnly_IsRevoked(Boolean issuedWithinGracePeriod)
+    {
+        var authority = CreateAuthority(new TestTimestampAuthority(rawCrlDistributionPoints: TestTimestampAuthority.EncodeDistributionPoints(
+                                                                       TestTimestampAuthority.CrlUri,
+                                                                       TestTimestampAuthority.CrlMirrorUri)));
+        var (timestamp, digest) = await StampAsync(authority);
+        var issued = timestamp.TimestampUtc + (issuedWithinGracePeriod ? TimeSpan.FromMinutes(1) : GracePeriod + TimeSpan.FromMinutes(1));
+        var revoking = authority.BuildCrlWithExtensions(issued,
+                                                        [(authority.SigningCertificate.SerialNumberBytes.ToArray(), timestamp.TimestampUtc.AddMinutes(-1))],
+                                                        ("2.5.29.28", true, TestTimestampAuthority.EncodeIssuingDistributionPoint(TestTimestampAuthority.CrlMirrorUri)));
+
+        var result = StoredTimestampVerifier.Verify(timestamp with
+                                                    {
+                                                        ConfirmingRevocationLists = [revoking],
+                                                        RevocationStatus = TimestampRevocationStatus.Revoked
+                                                    },
+                                                    digest,
+                                                    Trust(authority),
+                                                    GracePeriod);
+
+        result.IsValid.Should().BeFalse();
+        result.RevocationStatus.Should().Be(TimestampRevocationStatus.Revoked);
+        result.Failure.Should().Contain("revoked at or before");
+    }
+
+    [Test]
     [TestCase("substituted")]
     [TestCase("partiallyRemoved")]
     [TestCase("complete")]
@@ -367,7 +415,7 @@ public class StoredTimestampVerifierTests
                                                     GracePeriod);
 
         result.IsValid.Should().BeFalse();
-        result.Failure.Should().Contain("confirming CRLs are missing");
+        result.Failure.Should().Contain("inconsistent");
         result.StoredRevocationStatus.Should().Be(storedStatus);
     }
 

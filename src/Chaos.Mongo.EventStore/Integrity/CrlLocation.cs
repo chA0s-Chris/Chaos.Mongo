@@ -13,10 +13,13 @@ using System.Globalization;
 /// The rule works on the URI as written, without .NET's escaping rules, so other implementations can follow it exactly:
 /// the scheme and host are lower-cased, an IPv6 host keeps its brackets, user information, the fragment and a default
 /// port are dropped, an empty path becomes <c>/</c>, dot segments are removed (RFC 3986, section 5.2.4), and the path
-/// and query are otherwise kept as written.
+/// and query are otherwise kept as written. A location counts only when its host consists of ASCII letters, digits,
+/// hyphens and dots, or is a bracketed IPv6 literal, and its port, if any, is a decimal number of at most 65535.
 /// </remarks>
 internal static class CrlLocation
 {
+    private const Int32 MaximumPort = 65535;
+
     /// <summary>
     /// Normalizes a location.
     /// </summary>
@@ -70,7 +73,7 @@ internal static class CrlLocation
             port = colon < 0 ? String.Empty : authority[(colon + 1)..];
         }
 
-        if (host.Length == 0)
+        if (!IsHost(host))
         {
             return null;
         }
@@ -78,7 +81,7 @@ internal static class CrlLocation
         var portSuffix = String.Empty;
         if (port.Length > 0)
         {
-            if (!Int32.TryParse(port, NumberStyles.None, CultureInfo.InvariantCulture, out var number))
+            if (!Int32.TryParse(port, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number > MaximumPort)
             {
                 return null;
             }
@@ -91,6 +94,15 @@ internal static class CrlLocation
         var query = queryStart < 0 ? String.Empty : pathAndQuery[queryStart..];
         return $"{scheme}://{host.ToLowerInvariant()}{portSuffix}{RemoveDotSegments(path.Length == 0 ? "/" : path)}{query}";
     }
+
+    /// <summary>
+    /// Gets a value indicating whether a host is a name of ASCII letters, digits, hyphens and dots, or a bracketed IPv6
+    /// literal of hexadecimal digits, colons and dots.
+    /// </summary>
+    private static Boolean IsHost(String host)
+        => host.StartsWith('[')
+            ? host.Length > 2 && host[1..^1].All(character => Char.IsAsciiHexDigit(character) || character is ':' or '.')
+            : host.Length > 0 && host.All(character => Char.IsAsciiLetterOrDigit(character) || character is '-' or '.');
 
     /// <summary>
     /// Removes the dot segments of an absolute path as RFC 3986, section 5.2.4, describes.

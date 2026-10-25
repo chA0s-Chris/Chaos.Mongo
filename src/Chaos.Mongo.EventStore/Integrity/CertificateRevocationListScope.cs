@@ -35,10 +35,16 @@ internal static class CertificateRevocationListScope
     /// </summary>
     /// <param name="crl">The DER-encoded CRL.</param>
     /// <param name="locations">The locations of the distribution point the CRL was captured for.</param>
-    /// <param name="fromCaCertificate">Whether a CA certificate names the point.</param>
+    /// <param name="fromCaCertificate">
+    /// Whether a CA certificate names the point; a CRL limited to end-entity certificates then
+    /// does not cover it.
+    /// </param>
+    /// <param name="fromEndEntityCertificate">
+    /// Whether an end-entity certificate names the point; a CRL limited to CA certificates then does not cover it.
+    /// </param>
     /// <returns><c>true</c> when the CRL is complete for the point.</returns>
     /// <exception cref="AsnContentException">Thrown when the data is not exactly one DER-encoded CRL.</exception>
-    public static Boolean IsCompleteFor(ReadOnlyMemory<Byte> crl, IReadOnlyList<Uri> locations, Boolean fromCaCertificate)
+    public static Boolean IsCompleteFor(ReadOnlyMemory<Byte> crl, IReadOnlyList<Uri> locations, Boolean fromCaCertificate, Boolean fromEndEntityCertificate)
     {
         ArgumentNullException.ThrowIfNull(locations);
 
@@ -71,7 +77,7 @@ internal static class CertificateRevocationListScope
             var complete = oid switch
             {
                 DeltaCrlIndicatorOid => false,
-                IssuingDistributionPointOid => IssuingDistributionPointCovers(value, locations, fromCaCertificate),
+                IssuingDistributionPointOid => IssuingDistributionPointCovers(value, locations, fromCaCertificate, fromEndEntityCertificate),
                 CrlNumberOid => true,
                 _ => !critical
             };
@@ -93,7 +99,10 @@ internal static class CertificateRevocationListScope
     /// </c>
     /// .
     /// </summary>
-    private static Boolean IssuingDistributionPointCovers(ReadOnlyMemory<Byte> value, IReadOnlyList<Uri> locations, Boolean fromCaCertificate)
+    private static Boolean IssuingDistributionPointCovers(ReadOnlyMemory<Byte> value,
+                                                          IReadOnlyList<Uri> locations,
+                                                          Boolean fromCaCertificate,
+                                                          Boolean fromEndEntityCertificate)
     {
         var reader = new AsnReader(value, AsnEncodingRules.DER);
         var point = reader.ReadSequence();
@@ -106,7 +115,7 @@ internal static class CertificateRevocationListScope
         }
 
         var restricted = ReadFlag(point, OnlyUserCertificatesTag) && fromCaCertificate;
-        restricted |= ReadFlag(point, OnlyCaCertificatesTag);
+        restricted |= ReadFlag(point, OnlyCaCertificatesTag) && fromEndEntityCertificate;
         if (point.HasData && point.PeekTag().HasSameClassAndValue(OnlySomeReasonsTag))
         {
             point.ReadBitString(out _, OnlySomeReasonsTag);

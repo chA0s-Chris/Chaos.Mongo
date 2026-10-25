@@ -22,6 +22,20 @@ public class CertificateRevocationListScopeTests
     public void DisposeAuthority() => _authority.Dispose();
 
     [Test]
+    [TestCase(1, false, true, true)]
+    [TestCase(1, true, false, false)]
+    [TestCase(1, true, true, false)]
+    [TestCase(2, true, false, true)]
+    [TestCase(2, false, true, false)]
+    [TestCase(2, true, true, false)]
+    public void IsCompleteFor_CertificateTypeRestriction_CoversOnlyPointsOfThatType(Int32 field, Boolean fromCaCertificate, Boolean fromEndEntityCertificate, Boolean expected)
+    {
+        var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, Point(TestTimestampAuthority.CrlUri, field));
+
+        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], fromCaCertificate, fromEndEntityCertificate).Should().Be(expected);
+    }
+
+    [Test]
     [TestCase("delta", false)]
     [TestCase("unknownCritical", false)]
     [TestCase("duplicate", false)]
@@ -60,7 +74,7 @@ public class CertificateRevocationListScopeTests
         };
         var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, crlExtensions);
 
-        var result = CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlMirrorUri, TestTimestampAuthority.CrlUri], false);
+        var result = CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlMirrorUri, TestTimestampAuthority.CrlUri], false, true);
 
         result.Should().Be(expected);
     }
@@ -70,7 +84,7 @@ public class CertificateRevocationListScopeTests
     {
         var crl = _authority.BuildCrl(DateTimeOffset.UtcNow, null, ([1, 2, 3], DateTimeOffset.UtcNow.AddDays(-1)));
 
-        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], false).Should().BeTrue();
+        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], false, true).Should().BeTrue();
     }
 
     [Test]
@@ -80,7 +94,7 @@ public class CertificateRevocationListScopeTests
     {
         var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, (IssuingDistributionPointOid, true, EncodePoint(new Uri(spelling))));
 
-        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], false).Should().BeTrue();
+        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], false, true).Should().BeTrue();
     }
 
     [Test]
@@ -91,19 +105,9 @@ public class CertificateRevocationListScopeTests
             1,
             2,
             3
-        }, [TestTimestampAuthority.CrlUri], false);
+        }, [TestTimestampAuthority.CrlUri], false, true);
 
         act.Should().Throw<AsnContentException>();
-    }
-
-    [Test]
-    [TestCase(false, true)]
-    [TestCase(true, false)]
-    public void IsCompleteFor_OnlyUserCertificates_DoesNotCoverPointOfCaCertificate(Boolean fromCaCertificate, Boolean expected)
-    {
-        var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, Point(TestTimestampAuthority.CrlUri, 1));
-
-        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], fromCaCertificate).Should().Be(expected);
     }
 
     /// <summary>
