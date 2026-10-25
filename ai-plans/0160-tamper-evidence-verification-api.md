@@ -117,7 +117,7 @@ The work stays one issue because the format freeze, the verification semantics, 
 
 ### Completeness check (Layer 4)
 
-- An explicit audit operation per aggregate type. It walks the streams in `AggregateId` order, reading each event's version, seal mode and `CreatedUtc` through a projection on the `(AggregateId, Version)` index. It merges this walk with the completed leaves of the type, so leaves without events reveal deleted streams. Its cost grows with events and leaves. Findings are streamed (`IAsyncEnumerable`), so memory stays bounded.
+- An explicit audit operation per aggregate type. It walks the streams in `AggregateId` order, reading each event's version, seal mode and `CreatedUtc` through a projection on the `(AggregateId, Version)` index. It merges this walk with the completed leaves of the type, so leaves without events reveal deleted streams. Its cost grows with events and leaves. Findings are streamed (`IAsyncEnumerable`), so memory grows only with the largest stream and with the number of completed anchors, held as one small entry each.
 - The age of the oldest unanchored event is based on `CreatedUtc`, which is caller-supplied. The documentation says so, and points to the anchoring delay alert (#158) as the trustworthy operational signal.
 
 ### Specification and reference verifier (Layer 5)

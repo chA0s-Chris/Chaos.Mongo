@@ -106,6 +106,34 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_MalformedEventAfterDeletedStream_ReportsFindingsInIdentifierOrder()
+    {
+        var deleted = Guid.Parse("00000001-0000-0000-0000-000000000000");
+        var malformed = Guid.Parse("00000002-0000-0000-0000-000000000000");
+        var context = await CreateAnchoredContextAsync();
+        foreach (var aggregateId in new[]
+                 {
+                     deleted,
+                     malformed
+                 })
+        {
+            await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1), LedgerStoreContext.CreateEntry(aggregateId, 2)]);
+            await context.RunUntilAnchoredAsync(aggregateId, 2);
+        }
+
+        await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(deleted));
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(malformed, 2),
+                                            Builders<BsonDocument>.Update.Set("Version", "2"));
+
+        var findings = await CheckAsync(context);
+
+        findings.Select(f => (f.Kind, f.AggregateId))
+                .Should().Equal((CompletenessFindingKind.StreamDeleted, deleted),
+                                (CompletenessFindingKind.MalformedEvent, malformed),
+                                (CompletenessFindingKind.StreamTruncated, malformed));
+    }
+
+    [Test]
     public async Task CheckAsync_MalformedEvents_AreReported()
     {
         var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification());
@@ -153,6 +181,25 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_NewestAnchorDeletedWithItsLeavesAndStream_ReportsMissingTrustedHead()
+    {
+        var context = await CreateAnchoredContextAsync();
+        await AnchorNewStreamAsync(context);
+        var newest = await AnchorNewStreamAsync(context, 2);
+        var store = GetStore(context);
+        var head = AnchorStore.ReadAnchor(await store.Anchors.Find(new BsonDocument(AnchorStore.SequenceField, 2L)).SingleAsync());
+        await store.Anchors.DeleteOneAsync(new BsonDocument(AnchorStore.SequenceField, 2L));
+        await store.Leaves.DeleteManyAsync(new BsonDocument(AnchorStore.AnchorIdField, new BsonBinaryData(head.Id, GuidRepresentation.Standard)));
+        await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(newest));
+
+        var withoutHead = await CheckAsync(context);
+        var withHead = await CheckAsync(context, new TrustedAnchorHead(2, head.AnchorDigest));
+
+        withoutHead.Should().BeEmpty("without a trusted head the shortened chain is consistent");
+        withHead.Should().ContainSingle().Which.AnchorChain.Should().Be(new AnchorChainVerificationResult(2, AnchorChainFailure.TrustedHeadMissing, 1));
+    }
+
+    [Test]
     public async Task CheckAsync_OrderOfStoredIdentifiers_FindsDeletedStreamBetweenLiveStreams()
     {
         // MongoDB orders standard UUIDs by their RFC 9562 bytes, the order the walk merges in. The little-endian bytes
@@ -171,7 +218,7 @@ public class CompletenessCheckIntegrationTests
                  })
         {
             await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 1)]);
-            await RunUntilAnchoredAsync(context, aggregateId, 1);
+            await context.RunUntilAnchoredAsync(aggregateId, 1);
         }
 
         await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(deleted));
@@ -205,10 +252,10 @@ public class CompletenessCheckIntegrationTests
         var context = await CreateAnchoredContextAsync(databaseName);
         var aggregateId = await unprotected.AppendStreamAsync(3);
         await context.Sweep.RunPassAsync();
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         var anchor = (await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1)).Anchor;
         await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
-        await RunUntilAnchoredAsync(context, aggregateId, 4);
+        await context.RunUntilAnchoredAsync(aggregateId, 4);
 
         var findings = await CheckAsync(context);
 
@@ -220,6 +267,24 @@ public class CompletenessCheckIntegrationTests
                                                                                     null,
                                                                                     anchor,
                                                                                     null));
+    }
+
+    [Test]
+    public async Task CheckAsync_UnanchoredEventsCreatedOutOfOrder_ReportsAgeOfTheOldest()
+    {
+        var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(), timeProvider: new FakeTimeProvider(now));
+        var aggregateId = Guid.NewGuid();
+        await context.Store.AppendEventsAsync([
+            LedgerStoreContext.CreateEntry(aggregateId, 1, createdUtc: now.UtcDateTime.AddHours(-1)),
+            LedgerStoreContext.CreateEntry(aggregateId, 2, createdUtc: now.UtcDateTime.AddHours(-3))
+        ]);
+
+        var finding = (await CheckAsync(context)).Should().ContainSingle().Subject;
+
+        finding.Kind.Should().Be(CompletenessFindingKind.Unanchored);
+        finding.FirstVersion.Should().Be(1);
+        finding.Age.Should().Be(TimeSpan.FromHours(3));
     }
 
     [Test]
@@ -268,10 +333,10 @@ public class CompletenessCheckIntegrationTests
         _testAuthorities.Clear();
     }
 
-    private static async Task<List<CompletenessFinding>> CheckAsync(LedgerStoreContext context)
+    private static async Task<List<CompletenessFinding>> CheckAsync(LedgerStoreContext context, TrustedAnchorHead? trustedHead = null)
     {
         var findings = new List<CompletenessFinding>();
-        await foreach (var finding in context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync())
+        await foreach (var finding in context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync(trustedHead))
         {
             findings.Add(finding);
         }
@@ -281,25 +346,10 @@ public class CompletenessCheckIntegrationTests
 
     private static AnchorStore GetStore(LedgerStoreContext context) => context.ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
 
-    private static async Task RunUntilAnchoredAsync(LedgerStoreContext context, Guid aggregateId, Int64 version)
-    {
-        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while ((await GetStore(context).FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                Assert.Fail("The version was not anchored within the timeout.");
-            }
-
-            await run.RunAsync();
-        }
-    }
-
     private async Task<Guid> AnchorNewStreamAsync(LedgerStoreContext context, Int32 eventCount = 1)
     {
         var aggregateId = await context.AppendStreamAsync(eventCount);
-        await RunUntilAnchoredAsync(context, aggregateId, eventCount);
+        await context.RunUntilAnchoredAsync(aggregateId, eventCount);
         return aggregateId;
     }
 

@@ -17,7 +17,9 @@ using System.Runtime.CompilerServices;
 /// memory grows with the largest stream and with the number of completed anchors, which are held as one small entry
 /// each, about 8,600 per month at the default anchoring interval. The chain of anchors is verified first, because
 /// deleted-stream detection relies on it. Event documents whose aggregate identifier or version cannot be read are
-/// reported as <see cref="CompletenessFindingKind.MalformedEvent"/>.
+/// reported as <see cref="CompletenessFindingKind.MalformedEvent"/> where the walk meets them, and otherwise count as
+/// missing: a stream whose anchored head is such a document is also reported as truncated, or as deleted when none of
+/// its events can be read.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, IAggregate, new()
@@ -50,7 +52,18 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
     /// consistency only.
     /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The findings: a broken chain of anchors first, then the findings of each stream in identifier order.</returns>
+    /// <returns>
+    /// The findings: a broken chain of anchors first, then the findings of each stream in identifier order. A malformed
+    /// event document comes where the walk meets it, which for a readable identifier is among the findings of its
+    /// stream.
+    /// </returns>
+    /// <remarks>
+    /// The check reads the events and the leaves through two server cursors at the pace the findings are consumed. A
+    /// consumer that pauses for longer than the server's cursor timeout, 10 minutes by default, or a long run of
+    /// streams without leaves, during which the leaf cursor is not read, can let a cursor expire, and the check then
+    /// fails with a
+    /// <see cref="MongoCursorNotFoundException"/>; consume the findings promptly and run the check again in that case.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when anchors are not configured.</exception>
     public async IAsyncEnumerable<CompletenessFinding> CheckAsync(TrustedAnchorHead? trustedHead = null,
                                                                   [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -68,19 +81,11 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         await using var leaves = new LeafReader(anchors.Store.StreamLeavesOfTypeAsync(_aggregateTypeName, cancellationToken), completedAnchors);
         await leaves.InitializeAsync();
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var malformedEvents = new List<CompletenessFinding>();
 
-        await foreach (var (aggregateId, events) in ReadStreamsAsync(malformedEvents, cancellationToken))
+        await foreach (var item in WalkEventsAsync(cancellationToken))
         {
-            foreach (var finding in malformedEvents)
-            {
-                yield return finding;
-            }
-
-            malformedEvents.Clear();
-
             // Streams that only appear in leaves come first in identifier order: every event of them was deleted.
-            while (leaves.Current is { } leaf && GuidOrder.Compare(leaf.AggregateId, aggregateId) < 0)
+            while (item.AggregateId is { } aggregateId && leaves.Current is { } leaf && GuidOrder.Compare(leaf.AggregateId, aggregateId) < 0)
             {
                 foreach (var finding in CheckStream(leaf.AggregateId, [], await leaves.TakeStreamAsync(leaf.AggregateId), now))
                 {
@@ -88,16 +93,18 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
                 }
             }
 
-            var streamLeaves = leaves.Current?.AggregateId == aggregateId ? await leaves.TakeStreamAsync(aggregateId) : [];
-            foreach (var finding in CheckStream(aggregateId, events, streamLeaves, now))
+            if (item.Malformed is { } malformed)
+            {
+                yield return malformed;
+                continue;
+            }
+
+            var streamId = item.AggregateId.GetValueOrDefault();
+            var streamLeaves = leaves.Current?.AggregateId == streamId ? await leaves.TakeStreamAsync(streamId) : [];
+            foreach (var finding in CheckStream(streamId, item.Events, streamLeaves, now))
             {
                 yield return finding;
             }
-        }
-
-        foreach (var finding in malformedEvents)
-        {
-            yield return finding;
         }
 
         while (leaves.Current is { } remaining)
@@ -161,7 +168,8 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
 
         if (events.FirstOrDefault(e => e.Version > anchoredVersion) is { } firstUnanchored)
         {
-            var age = firstUnanchored.CreatedUtc is { } createdUtc ? now - createdUtc : (TimeSpan?)null;
+            var oldest = events.Where(e => e.Version > anchoredVersion).Min(e => e.CreatedUtc);
+            var age = oldest is { } createdUtc ? now - createdUtc : (TimeSpan?)null;
             yield return new CompletenessFinding(CompletenessFindingKind.Unanchored, aggregateId, firstUnanchored.Version, head, head, age, null, null);
         }
 
@@ -241,12 +249,11 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
-    /// Reads the events of the aggregate type in identifier and version order and yields them grouped by stream.
-    /// Documents whose identifier or version cannot be read are left out of the streams and added to
-    /// <paramref name="malformedEvents"/> as findings before the stream read after them is yielded.
+    /// Reads the events of the aggregate type in identifier and version order and yields them grouped by stream, and
+    /// each document whose identifier or version cannot be read as a finding where the walk meets it, so nothing is
+    /// buffered beyond the current stream.
     /// </summary>
-    private async IAsyncEnumerable<(Guid AggregateId, List<EventSummary> Events)> ReadStreamsAsync(List<CompletenessFinding> malformedEvents,
-                                                                                                   [EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<WalkItem> WalkEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var projection = new BsonDocument
         {
@@ -273,16 +280,20 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         {
             foreach (var document in cursor.Current)
             {
-                if (ReadSummary(document, out var readId, out var readVersion) is not { } summary || readId is not { } aggregateId)
+                var summary = ReadSummary(document, out var readId, out var readVersion);
+                if (currentId is { } id && readId is { } nextId && id != nextId)
                 {
-                    malformedEvents.Add(new CompletenessFinding(CompletenessFindingKind.MalformedEvent, readId, readVersion, readVersion, null, null, null, null));
-                    continue;
+                    yield return new WalkItem(id, events, null);
+                    currentId = null;
+                    events = [];
                 }
 
-                if (currentId is { } id && id != aggregateId)
+                if (summary is null || readId is not { } aggregateId)
                 {
-                    yield return (id, events);
-                    events = [];
+                    yield return new WalkItem(readId,
+                                              [],
+                                              new CompletenessFinding(CompletenessFindingKind.MalformedEvent, readId, readVersion, readVersion, null, null, null, null));
+                    continue;
                 }
 
                 currentId = aggregateId;
@@ -292,7 +303,7 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
 
         if (currentId is { } last)
         {
-            yield return (last, events);
+            yield return new WalkItem(last, events, null);
         }
     }
 
@@ -368,4 +379,10 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
     /// A leaf of a stream in a completed anchor.
     /// </summary>
     private sealed record StreamLeaf(Int64 Version, AnchorReference Anchor);
+
+    /// <summary>
+    /// An item of the event walk: a complete stream with its events, or a malformed event document with its readable
+    /// aggregate identifier, if any.
+    /// </summary>
+    private sealed record WalkItem(Guid? AggregateId, List<EventSummary> Events, CompletenessFinding? Malformed);
 }

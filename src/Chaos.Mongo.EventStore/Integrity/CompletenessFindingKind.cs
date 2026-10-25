@@ -39,7 +39,8 @@ internal enum CompletenessFindingKind
 
     /// <summary>
     /// An event document's aggregate identifier or version cannot be read, so the event cannot be assigned to a
-    /// stream; the finding carries whichever of them is readable.
+    /// stream; the finding carries whichever of them is readable. Such an event counts as missing, so its stream may
+    /// also be reported as truncated or deleted.
     /// </summary>
     MalformedEvent
 }

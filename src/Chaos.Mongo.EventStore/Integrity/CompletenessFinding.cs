@@ -11,9 +11,13 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="LastVersion">
 /// The last version the finding concerns; for a deleted or truncated stream, the highest anchored version.
 /// </param>
-/// <param name="HeadVersion">The stream's current head version, or <c>0</c> when no event is left.</param>
+/// <param name="HeadVersion">
+/// The stream's current head version, or <c>0</c> when no event is left; <c>null</c> for a broken chain of anchors and a
+/// malformed event.
+/// </param>
 /// <param name="Age">
-/// For unanchored events, the age of the oldest of them, from its <c>CreatedUtc</c>, which the caller supplied.
+/// For unanchored events, the age of the oldest of them by <c>CreatedUtc</c>, which the caller supplied, or <c>null</c>
+/// when none of them records one; <c>null</c> for other findings.
 /// </param>
 /// <param name="Anchor">
 /// For retroactively sealed events, the anchor they are protected since; for a deleted or truncated stream, the anchor
