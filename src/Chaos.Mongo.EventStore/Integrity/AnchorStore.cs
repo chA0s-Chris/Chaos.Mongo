@@ -769,9 +769,9 @@ internal sealed class AnchorStore
     /// <returns>The leaves.</returns>
     public async IAsyncEnumerable<AnchorLeaf> StreamLeavesOfTypeAsync(String aggregateType, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        using var cursor = await Leaves.Find(new BsonDocument(AggregateTypeField, aggregateType))
-                                       .Sort(StreamLeavesSort())
-                                       .ToCursorAsync(cancellationToken);
+        using var cursor = await FindRaw(Leaves, new BsonDocument(AggregateTypeField, aggregateType))
+                                 .Sort(StreamLeavesSort())
+                                 .ToCursorAsync(cancellationToken);
         while (await cursor.MoveNextAsync(cancellationToken))
         {
             foreach (var document in cursor.Current)

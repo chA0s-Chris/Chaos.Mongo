@@ -106,6 +106,27 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_LeafRepeatingAnElementName_ReportsBrokenAnchorChainInsteadOfFailing()
+    {
+        var context = await CreateAnchoredContextAsync();
+        await AnchorNewStreamAsync(context, 2);
+        var leaves = GetStore(context).Leaves;
+        var leaf = await leaves.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var repeated = new BsonDocument
+        {
+            AllowDuplicateNames = true
+        };
+        repeated.AddRange(leaf);
+        repeated.Add("Hash", leaf["Hash"]);
+        await leaves.DeleteOneAsync(new BsonDocument("_id", leaf["_id"]));
+        await leaves.Database.GetCollection<RawBsonDocument>(leaves.CollectionNamespace.CollectionName).InsertOneAsync(new RawBsonDocument(repeated.ToBson()));
+
+        var findings = await CheckAsync(context);
+
+        findings[0].AnchorChain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.LeafSetMismatch, 0));
+    }
+
+    [Test]
     public async Task CheckAsync_MalformedEventAfterDeletedStream_ReportsFindingsInIdentifierOrder()
     {
         var deleted = Guid.Parse("00000001-0000-0000-0000-000000000000");

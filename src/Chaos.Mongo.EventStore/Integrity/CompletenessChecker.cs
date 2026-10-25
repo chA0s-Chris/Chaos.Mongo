@@ -19,7 +19,10 @@ using System.Runtime.CompilerServices;
 /// deleted-stream detection relies on it. Event documents whose aggregate identifier or version cannot be read are
 /// reported as <see cref="CompletenessFindingKind.MalformedEvent"/> where the walk meets them, and otherwise count as
 /// missing: a stream whose anchored head is such a document is also reported as truncated, or as deleted when none of
-/// its events can be read.
+/// its events can be read. Coverage counts the stored completed anchors without verifying their timestamp tokens: the
+/// chain of anchors proves their consistency, and a trusted head their authenticity up to it. Anchors after the trusted
+/// head, or all anchors without one, may have been appended consistently by someone with write access, which would
+/// hide unanchored events; <c>VerifyEventAnchorAsync</c> verifies the tokens that authenticate an anchor.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, IAggregate, new()
