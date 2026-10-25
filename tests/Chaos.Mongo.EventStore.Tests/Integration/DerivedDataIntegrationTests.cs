@@ -143,6 +143,51 @@ public class DerivedDataIntegrationTests
     }
 
     [Test]
+    [TestCase("versionNaN")]
+    [TestCase("versionFraction")]
+    [TestCase("revisionNaN")]
+    public async Task VerifyAsync_CheckpointNumberOfAnotherKind_IsReportedWithoutTruncatingOrFailing(String change)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        var original = (await context.ReadRawCheckpointsAsync(aggregateId))[0];
+        var forged = original.DeepClone().AsBsonDocument;
+        if (change == "revisionNaN")
+        {
+            forged["Revision"] = new BsonDecimal128(Decimal128.QNaN);
+        }
+        else
+        {
+            forged["_id"]["Version"] = change == "versionNaN" ? new BsonDecimal128(Decimal128.QNaN) : new BsonDouble(2.5);
+        }
+
+        // A fraction is stored beside the original, so its copied state and hash would match version 2 if truncated.
+        if (change != "versionFraction")
+        {
+            await GetCheckpoints(context).DeleteOneAsync(new BsonDocument("_id", original["_id"]));
+        }
+
+        await GetCheckpoints(context).InsertOneAsync(forged);
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        CheckpointVerification[] expected = change switch
+        {
+            "versionNaN" => [new CheckpointVerification(0, CheckpointHashStatus.Mismatch, false), new CheckpointVerification(4, CheckpointHashStatus.Matches, true)],
+            "versionFraction" =>
+            [
+                new CheckpointVerification(2, CheckpointHashStatus.Matches, true),
+                new CheckpointVerification(0, CheckpointHashStatus.Mismatch, false),
+                new CheckpointVerification(4, CheckpointHashStatus.Matches, true)
+            ],
+            _ => [new CheckpointVerification(2, CheckpointHashStatus.Matches, false), new CheckpointVerification(4, CheckpointHashStatus.Matches, true)]
+        };
+
+        result.IsConsistent.Should().BeFalse();
+        result.Checkpoints.Should().Equal(expected);
+    }
+
+    [Test]
     public async Task VerifyAsync_CheckpointWithoutChainHash_IsUnverifiableButConsistent()
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
@@ -215,6 +260,29 @@ public class DerivedDataIntegrationTests
             result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Mismatch, false),
                                               new CheckpointVerification(4, CheckpointHashStatus.Matches, true));
         }
+    }
+
+    [Test]
+    public async Task VerifyAsync_EventThatNoLongerDeserializes_StopsReplayAndReportsIt()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        // The memo becomes a number and the chain is recomputed, so the stream stays intact but the event cannot be read.
+        var document = await context.FindEventAsync(aggregateId, 4);
+        document[MemoPath] = 5;
+        var integrity = LedgerStoreContext.ReadIntegrity(document);
+        document[EventIntegrityChain.ElementName]["Hash"] =
+            new BsonBinaryData(EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(document.ToBson(), EventIntegrityChain.ElementName),
+                                                               integrity.PreviousHash,
+                                                               integrity.SealMode));
+        await context.Events.ReplaceOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 4), document);
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        result.Stream.IsIntact.Should().BeTrue();
+        result.ReadModel.Should().Be(ReadModelStatus.Differs);
+        result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Matches, true),
+                                          new CheckpointVerification(4, CheckpointHashStatus.Mismatch, false));
     }
 
     [Test]

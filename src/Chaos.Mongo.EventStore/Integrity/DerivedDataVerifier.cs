@@ -49,8 +49,12 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
     /// <see cref="DerivedDataVerificationResult.CreationTimeConsistent"/> reports whether the
     /// read model and the checkpoints agree on it. The comparison uses the serialized documents, so it does not depend
     /// on equality members of the aggregate. A stored read model that cannot be read, for example because it repeats an
-    /// element name, is reported as <see cref="ReadModelStatus.Differs"/>, and such a checkpoint as a mismatch of its
-    /// hash and state.
+    /// element name, is reported as <see cref="ReadModelStatus.Differs"/>, and such a checkpoint, or one whose version
+    /// is not an integer, as a mismatch of its hash and state. The chain does not show whether an event still
+    /// deserializes, for example after a field's type was changed and the chain recomputed, or after an event type was
+    /// removed: replay then stops at that event, the read model is reported as
+    /// <see cref="ReadModelStatus.Differs"/>, or as <see cref="ReadModelStatus.Missing"/> when none is stored, and
+    /// checkpoints the replay did not reach as state mismatches.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
@@ -103,6 +107,7 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
 
         var readModelStatus = (readModel, replay.HasState) switch
         {
+            _ when replay.Stopped => storedReadModel is null ? ReadModelStatus.Missing : ReadModelStatus.Differs,
             (null, _) when storedReadModel is not null => ReadModelStatus.Differs,
             (null, false) => ReadModelStatus.Matches,
             (null, true) => ReadModelStatus.Missing,
@@ -115,11 +120,10 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
             hashes.TryAdd(verified.Version, verified.Hash);
         }
 
-        // A checkpoint document that cannot be read counts as a mismatch of its hash and state.
-        var results = checkpoints.Select(checkpoint => checkpoint.Document is { } document
-                                             ? new CheckpointVerification(checkpoint.Version.GetValueOrDefault(),
-                                                                          VerifyHash(document, checkpoint.Version.GetValueOrDefault(), hashes),
-                                                                          replay.CheckpointStates.GetValueOrDefault(document))
+        // A checkpoint document that cannot be read, or whose version cannot be read, counts as a mismatch of its hash
+        // and state.
+        var results = checkpoints.Select(checkpoint => (checkpoint.Document, checkpoint.Version) is ({ } document, { } version)
+                                             ? new CheckpointVerification(version, VerifyHash(document, version, hashes), replay.CheckpointStates.GetValueOrDefault(document))
                                              : new CheckpointVerification(checkpoint.Version.GetValueOrDefault(), CheckpointHashStatus.Mismatch, false))
                                  .ToList();
         return new DerivedDataVerificationResult(stream, readModelStatus, results, CreationTimesAgree(readModel, checkpointDocuments));
@@ -179,15 +183,19 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
            stored is BsonDocument storedState &&
            DocumentsMatch(state, storedState, version, revision) &&
            (checkpoint.TryGetValue(CheckpointElement(nameof(CheckpointDocument<TAggregate>.Revision)), out var storedRevision)
-               ? storedRevision.IsNumeric && storedRevision.ToInt64() == revision
+               ? StoredVersion.TryRead(storedRevision, out var storedRevisionValue) && storedRevisionValue == revision
                : LegacyRevision.Of(0, version) == revision);
 
+    /// <summary>
+    /// Reads a checkpoint's version with the strict rules for stored versions, or <c>null</c>: a value such as a
+    /// fraction or a Decimal128 is no version, rather than one truncated or rejected by a lenient conversion.
+    /// </summary>
     private static Int64? ReadCheckpointVersion(BsonDocument checkpoint)
         => checkpoint.TryGetValue("_id", out var id) &&
            id is BsonDocument idDocument &&
            idDocument.TryGetValue(CheckpointIdElement(nameof(CheckpointId.Version)), out var value) &&
-           value.IsNumeric
-            ? value.ToInt64()
+           StoredVersion.TryRead(value, out var version)
+            ? version
             : null;
 
     /// <summary>
@@ -277,17 +285,30 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
         };
 
         var eventFilter = Builders<Event<TAggregate>>.Filter;
-        var events = await _mongoHelper.Database.GetCollection<Event<TAggregate>>(_options.EventsCollectionName)
-                                       .Find(session,
-                                             eventFilter.Eq(e => e.AggregateId, aggregateId) &
-                                             EventDocumentFields<TAggregate>.ExcludeObservationalEvents(_options.ObservationalEventDiscriminators))
-                                       .SortBy(e => e.Version)
-                                       .ToListAsync(cancellationToken);
+        // Read raw and deserialize one event at a time, so an event that no longer deserializes stops the replay
+        // instead of failing the check.
+        var storedEvents = await _mongoHelper.Database.GetCollection<Event<TAggregate>>(_options.EventsCollectionName)
+                                             .Find(session,
+                                                   eventFilter.Eq(e => e.AggregateId, aggregateId) &
+                                                   EventDocumentFields<TAggregate>.ExcludeObservationalEvents(_options.ObservationalEventDiscriminators))
+                                             .SortBy(e => e.Version)
+                                             .As<RawBsonDocument>()
+                                             .ToListAsync(cancellationToken);
 
         var checkpointStates = new Dictionary<BsonDocument, Boolean>(ReferenceEqualityComparer.Instance);
         var hasState = false;
-        foreach (var @event in events)
+        foreach (var storedEvent in storedEvents)
         {
+            Event<TAggregate> @event;
+            try
+            {
+                @event = BsonSerializer.Deserialize<Event<TAggregate>>(storedEvent);
+            }
+            catch (Exception ex) when (ex is FormatException or BsonException or InvalidOperationException or DecoderFallbackException)
+            {
+                return new Replay(aggregate.ToBsonDocument(), hasState, aggregate.Version, aggregate.Revision, checkpointStates, true);
+            }
+
             if (@event is ObservationalEvent<TAggregate>)
             {
                 continue;
@@ -309,12 +330,19 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
             }
         }
 
-        return new Replay(aggregate.ToBsonDocument(), hasState, aggregate.Version, aggregate.Revision, checkpointStates);
+        return new Replay(aggregate.ToBsonDocument(), hasState, aggregate.Version, aggregate.Revision, checkpointStates, false);
     }
 
     /// <summary>
     /// The state replayed from the stream start with its version and revision, whether any state-changing event was
-    /// replayed, and whether each checkpoint document's state matched when the replay reached its version.
+    /// replayed, whether each checkpoint document's state matched when the replay reached its version, and whether
+    /// the replay stopped at an event that could not be deserialized.
     /// </summary>
-    private sealed record Replay(BsonDocument State, Boolean HasState, Int64 Version, Int64 Revision, Dictionary<BsonDocument, Boolean> CheckpointStates);
+    private sealed record Replay(
+        BsonDocument State,
+        Boolean HasState,
+        Int64 Version,
+        Int64 Revision,
+        Dictionary<BsonDocument, Boolean> CheckpointStates,
+        Boolean Stopped);
 }
