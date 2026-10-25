@@ -44,6 +44,30 @@ public class TimestampTokenValidationTests
     }
 
     [Test]
+    [TestCase(40, false)]
+    [TestCase(70, true)]
+    public void RequireDer_NestedSequences_RejectsNestingBeyondTheLimit(Int32 depth, Boolean rejected)
+    {
+        Byte[] value = [0x05, 0x00];
+        for (var level = 0; level < depth; level++)
+        {
+            Byte[] length = value.Length < 0x80 ? [(Byte)value.Length] : [0x81, (Byte)value.Length];
+            value = [0x30, .. length, .. value];
+        }
+
+        var act = () => TimestampTokenValidation.RequireDer(value);
+
+        if (rejected)
+        {
+            act.Should().Throw<TimestampTokenValidationException>().WithMessage("*DER*");
+        }
+        else
+        {
+            act.Should().NotThrow();
+        }
+    }
+
+    [Test]
     public void ValidateSigner_CriticalTimestampingPurpose_Passes()
     {
         using var authority = new TestTimestampAuthority();

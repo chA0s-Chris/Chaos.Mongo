@@ -75,10 +75,12 @@ internal sealed class AnchorEvidenceStore
                        throw new AnchorEvidenceException(hash, "it is missing.");
         var (length, inline, chunkCount) = Decode(hash, () =>
         {
-            var storedLength = StoredDocuments.ReadInt32(StoredDocuments.WithDistinctNames(document)[LengthField]);
-            return document.TryGetValue(DataField, out var value)
-                ? (storedLength, value.AsByteArray, 0)
-                : (storedLength, (Byte[]?)null, StoredDocuments.ReadInt32(document[ChunkCountField]));
+            var stored = StoredDocuments.Prepare(document);
+            var storedLength = StoredDocuments.ReadInt32(stored[LengthField]);
+            (Int32 Length, Byte[]? Inline, Int32 ChunkCount) decoded = stored.TryGetValue(DataField, out var value)
+                ? (storedLength, ReadData(value), 0)
+                : (storedLength, null, StoredDocuments.ReadInt32(stored[ChunkCountField]));
+            return decoded;
         });
         // A chunked item is longer than one chunk and has exactly as many chunks as its length needs, so a tampered count
         // cannot make the read unbounded.
@@ -154,9 +156,6 @@ internal sealed class AnchorEvidenceStore
             { IndexField, index }
         };
 
-    /// <summary>
-    /// Reads fields of a stored document, reporting a missing field or one of another type as malformed evidence.
-    /// </summary>
     private static T Decode<T>(Byte[] hash, Func<T> decode)
     {
         try
@@ -182,6 +181,17 @@ internal sealed class AnchorEvidenceStore
         }
     }
 
+    /// <summary>
+    /// Reads fields of a stored document, reporting a missing field or one of another type as malformed evidence.
+    /// </summary>
+    /// <summary>
+    /// Reads stored item data, which is generic binary data (subtype 0x00).
+    /// </summary>
+    private static Byte[] ReadData(BsonValue value)
+        => value is BsonBinaryData { SubType: BsonBinarySubType.Binary } data
+            ? data.Bytes
+            : throw new FormatException($"Stored evidence data is a {value.BsonType}, not generic binary data.");
+
     private static void ValidateHash(Byte[] hash)
     {
         ArgumentNullException.ThrowIfNull(hash);
@@ -205,9 +215,9 @@ internal sealed class AnchorEvidenceStore
             throw new AnchorEvidenceException(hash, $"{chunkCount - chunks.Count} of its {chunkCount} chunks are missing.");
         }
 
-        var ordered = Decode(hash, () => chunks.Select(StoredDocuments.WithDistinctNames)
+        var ordered = Decode(hash, () => chunks.Select(StoredDocuments.Prepare)
                                                .OrderBy(chunk => StoredDocuments.ReadInt32(chunk["_id"][IndexField]))
-                                               .Select(chunk => chunk[DataField].AsByteArray)
+                                               .Select(chunk => ReadData(chunk[DataField]))
                                                .ToList());
         if (ordered.Sum(chunk => (Int64)chunk.Length) != length)
         {

@@ -26,6 +26,12 @@ internal static class TimestampTokenValidation
     public const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
 
     private const String EcPublicKeyOid = "1.2.840.10045.2.1";
+
+    /// <summary>
+    /// The deepest DER nesting a token may have, far beyond real tokens; the specification states the same bound.
+    /// </summary>
+    private const Int32 MaximumDerDepth = 64;
+
     private const Int32 MinimumEcKeySize = 256;
     private const Int32 MinimumRsaKeySize = 2048;
     private const String RsaPssPublicKeyOid = "1.2.840.113549.1.1.10";
@@ -208,9 +214,9 @@ internal static class TimestampTokenValidation
         => WeakSignatureAlgorithmOids.Contains(signatureAlgorithmOid);
 
     /// <summary>
-    /// Requires a token to be exactly one DER value: definite, minimal lengths throughout and no constructed encoding of
-    /// a string type, also inside the signed <c>TSTInfo</c>. The CMS decoder accepts BER, which an independent
-    /// verification of the stored bytes may not.
+    /// Requires a token to be exactly one DER value: definite, minimal lengths throughout, no constructed encoding of a
+    /// string type and no constructed value nested 64 or more levels deep, also inside the signed <c>TSTInfo</c>. The
+    /// CMS decoder accepts BER, which an independent verification of the stored bytes may not.
     /// </summary>
     /// <param name="token">The encoded token.</param>
     /// <exception cref="TimestampTokenValidationException">Thrown when the token is not DER.</exception>
@@ -435,12 +441,18 @@ internal static class TimestampTokenValidation
     /// Checks one encoded DER value and, for a constructed one, each of its children. Universal string and bit string
     /// types must be primitive in DER.
     /// </summary>
-    private static void RequireDerValue(ReadOnlyMemory<Byte> encoded)
+    private static void RequireDerValue(ReadOnlyMemory<Byte> encoded, Int32 depth = 0)
     {
         var tag = Asn1Tag.Decode(encoded.Span, out _);
         if (!tag.IsConstructed)
         {
             return;
+        }
+
+        // Unsigned attributes are not covered by the signature, so deep nesting there must not cost the verifiers.
+        if (depth >= MaximumDerDepth)
+        {
+            throw new AsnContentException($"DER values are nested deeper than {MaximumDerDepth} levels.");
         }
 
         if (tag.TagClass == TagClass.Universal && tag.TagValue is not ((Int32)UniversalTagNumber.Sequence or (Int32)UniversalTagNumber.Set))
@@ -452,7 +464,7 @@ internal static class TimestampTokenValidation
         var children = new AsnReader(encoded.Slice(contentOffset, contentLength), AsnEncodingRules.DER);
         while (children.HasData)
         {
-            RequireDerValue(children.ReadEncodedValue());
+            RequireDerValue(children.ReadEncodedValue(), depth + 1);
         }
     }
 }

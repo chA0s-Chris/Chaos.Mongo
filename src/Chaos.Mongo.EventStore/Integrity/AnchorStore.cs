@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
+using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -416,7 +417,7 @@ internal sealed class AnchorStore
                 }
 
                 var anchorDocument = await FindRaw(Anchors, new BsonDocument("_id", ToBson(leaf.AnchorId))).FirstOrDefaultAsync(cancellationToken);
-                if (anchorDocument is null || !anchorDocument.Contains(SequenceField))
+                if (anchorDocument is null || !HasElement(anchorDocument, SequenceField))
                 {
                     continue;
                 }
@@ -652,7 +653,7 @@ internal sealed class AnchorStore
                 continue;
             }
 
-            var version = document.TryGetValue(VersionField, out var value) && value is BsonInt64 or BsonInt32 ? Math.Max(1, value.ToInt64()) : 1;
+            var version = UnreadableLeafVersion(document);
             firstUnreadable = Math.Min(firstUnreadable ?? version, version);
         }
 
@@ -668,7 +669,7 @@ internal sealed class AnchorStore
                 {
                     anchors[anchor.Id] = anchor;
                 }
-                else if (anchorDocument.Contains(SequenceField))
+                else if (HasElement(anchorDocument, SequenceField))
                 {
                     unreadableAnchors.Add(ReadGuid(anchorDocument["_id"]));
                 }
@@ -746,35 +747,13 @@ internal sealed class AnchorStore
     /// the BSON type the store writes; integers stored as 32-bit where a 64-bit one is written are accepted.
     /// </summary>
     internal static AnchorRecord ReadAnchor(BsonDocument document)
-        => new(ReadGuid(StoredDocuments.WithDistinctNames(document)["_id"]),
-               ReadEnum<AnchorStatus>(document[StatusField]),
-               ReadInt64(document[SequenceField]),
-               ReadInt32(document["FormatVersion"]),
-               ReadString(document["HashAlgorithm"]),
-               ReadBinary(document["PreviousDigest"]),
-               ReadBinary(document["MerkleRoot"]),
-               ReadBinary(document[AnchorDigestField]),
-               ReadInt32(document["LeafCount"]),
-               ReadDate(document["PeriodStartUtc"]),
-               ReadDate(document["PeriodEndUtc"]),
-               ReadDate(document["OldestCandidateUtc"]),
-               ReadDocuments(document.GetValue(TimestampsField, new BsonArray())).Select(ReadTimestamp).ToList(),
-               ReadDocuments(document.GetValue(AuthorityFailuresField, new BsonArray())).Select(ReadFailure).ToList(),
-               ReadDate(document["CreatedUtc"]),
-               ReadOptionalTime(document, CompletedField));
+        => ReadPreparedAnchor(StoredDocuments.Prepare(document));
 
     /// <summary>
     /// Reads a leaf document with the BSON types the store writes; its version must be at least 1.
     /// </summary>
     internal static AnchorLeaf ReadLeaf(BsonDocument document)
-        => new(ReadGuid(StoredDocuments.WithDistinctNames(document)[AnchorIdField]),
-               ReadInt64(document[AnchorSequenceField]),
-               ReadInt32(document[IndexField]),
-               ReadString(document[AggregateTypeField]),
-               ReadGuid(document[AggregateIdField]),
-               ReadLeafVersion(document[VersionField]),
-               ReadBinary(document[HashField]),
-               ReadBinaries(document["Proof"]));
+        => ReadPreparedLeaf(StoredDocuments.Prepare(document));
 
     /// <summary>
     /// Reads a stored document without throwing on documents whose elements are missing or have unexpected types,
@@ -808,6 +787,13 @@ internal sealed class AnchorStore
     /// </summary>
     private static IFindFluent<BsonDocument, RawBsonDocument> FindRaw(IMongoCollection<BsonDocument> collection, BsonDocument filter)
         => collection.Find(filter).As<RawBsonDocument>();
+
+    /// <summary>
+    /// Gets a value indicating whether a raw document has a top-level element, comparing names as bytes, so a name
+    /// elsewhere in the document that is not valid UTF-8 does not matter.
+    /// </summary>
+    private static Boolean HasElement(RawBsonDocument document, String name)
+        => StoredDocuments.FindTopLevelElement(document.ToBson(), name) is not null;
 
     /// <summary>
     /// Matches anchors with at least one timestamp entry whose revocation status is unconfirmed.
@@ -890,6 +876,45 @@ internal sealed class AnchorStore
     private static DateTime? ReadOptionalTime(BsonDocument document, String field)
         => document.GetValue(field, BsonNull.Value) is var value && value.IsBsonNull ? null : ReadDate(value);
 
+    private static AnchorRecord ReadPreparedAnchor(BsonDocument document)
+        => new(ReadGuid(document["_id"]),
+               ReadEnum<AnchorStatus>(document[StatusField]),
+               ReadInt64(document[SequenceField]),
+               ReadInt32(document["FormatVersion"]),
+               ReadString(document["HashAlgorithm"]),
+               ReadBinary(document["PreviousDigest"]),
+               ReadBinary(document["MerkleRoot"]),
+               ReadBinary(document[AnchorDigestField]),
+               ReadInt32(document["LeafCount"]),
+               ReadDate(document["PeriodStartUtc"]),
+               ReadDate(document["PeriodEndUtc"]),
+               ReadDate(document["OldestCandidateUtc"]),
+               ReadDocuments(document.GetValue(TimestampsField, new BsonArray())).Select(ReadTimestamp).ToList(),
+               ReadDocuments(document.GetValue(AuthorityFailuresField, new BsonArray())).Select(ReadFailure).ToList(),
+               ReadDate(document["CreatedUtc"]),
+               ReadOptionalTime(document, CompletedField));
+
+    private static AnchorLeaf ReadPreparedLeaf(BsonDocument document)
+        => new(ReadGuid(document[AnchorIdField]),
+               ReadInt64(document[AnchorSequenceField]),
+               ReadInt32(document[IndexField]),
+               ReadString(document[AggregateTypeField]),
+               ReadGuid(document[AggregateIdField]),
+               ReadLeafVersion(document[VersionField]),
+               ReadBinary(document[HashField]),
+               ReadBinaries(document["Proof"]));
+
+    private static IEnumerable<UnconfirmedTimestamp> ReadPreparedUnconfirmedTimestamps(BsonDocument anchor)
+        => ReadDocuments(anchor[TimestampsField])
+           .Where(entry => entry[RevocationStatusField] is BsonString { Value: nameof(TimestampRevocationStatus.Unconfirmed) })
+           .Select(entry => new UnconfirmedTimestamp(ReadGuid(anchor["_id"]),
+                                                     ReadInt64(anchor[SequenceField]),
+                                                     ReadString(entry[AuthorityField]),
+                                                     ReadBinary(entry[TokenHashField]),
+                                                     ReadBinaries(entry[CertificateChainHashesField]),
+                                                     ReadDate(entry[TimestampUtcField]),
+                                                     ReadOptionalTime(entry, ConfirmationNotBeforeField)));
+
     private static String ReadString(BsonValue value)
         => value is BsonString text ? text.Value : throw Malformed(value, "a string");
 
@@ -912,15 +937,7 @@ internal sealed class AnchorStore
     /// Reads the unconfirmed timestamp entries of an anchor document.
     /// </summary>
     private static IEnumerable<UnconfirmedTimestamp> ReadUnconfirmedTimestamps(BsonDocument anchor)
-        => ReadDocuments(StoredDocuments.WithDistinctNames(anchor)[TimestampsField])
-           .Where(entry => entry[RevocationStatusField] is BsonString { Value: nameof(TimestampRevocationStatus.Unconfirmed) })
-           .Select(entry => new UnconfirmedTimestamp(ReadGuid(anchor["_id"]),
-                                                     ReadInt64(anchor[SequenceField]),
-                                                     ReadString(entry[AuthorityField]),
-                                                     ReadBinary(entry[TokenHashField]),
-                                                     ReadBinaries(entry[CertificateChainHashesField]),
-                                                     ReadDate(entry[TimestampUtcField]),
-                                                     ReadOptionalTime(entry, ConfirmationNotBeforeField)));
+        => ReadPreparedUnconfirmedTimestamps(StoredDocuments.Prepare(anchor));
 
     private static BsonDocument StreamLeavesFilter(String aggregateType, Guid aggregateId, Int64 minimumVersion)
         => new()
@@ -973,6 +990,18 @@ internal sealed class AnchorStore
             { VersionField, leaf.Version },
             { HashField, leaf.Hash },
             { "Proof", new BsonArray(leaf.Proof.Select(hash => new BsonBinaryData(hash))) }
+        };
+
+    /// <summary>
+    /// Gets the version at which a leaf that cannot be read breaks its stream: its stored integer version, at least 1,
+    /// or 1 when the version is not an integer.
+    /// </summary>
+    private static Int64 UnreadableLeafVersion(RawBsonDocument document)
+        => StoredDocuments.FindTopLevelElement(document.ToBson(), VersionField) switch
+        {
+            { Type: BsonType.Int64, Value: var bytes } => Math.Max(1, BinaryPrimitives.ReadInt64LittleEndian(bytes)),
+            { Type: BsonType.Int32, Value: var bytes } => Math.Max(1, BinaryPrimitives.ReadInt32LittleEndian(bytes)),
+            _ => 1
         };
 
     /// <summary>

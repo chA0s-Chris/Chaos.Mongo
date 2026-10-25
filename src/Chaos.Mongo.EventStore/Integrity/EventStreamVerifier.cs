@@ -181,6 +181,10 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                    .ToList();
     }
 
+    /// <summary>
+    /// Reads the <c>(Version, Path)</c> records of an erasure event from its raw document. Only records of earlier
+    /// versions document an erasure. Entries that do not have the pinned shape are ignored.
+    /// </summary>
     private static void CollectErasureRecords(RawBsonDocument erasureEvent, Int64 erasureVersion, HashSet<UnrecordedErasure> recordedErasures)
     {
         if (!erasureEvent.TryGetValue(PersonalDataErased<TAggregate>.EntriesElement, out var entriesValue) ||
@@ -255,10 +259,6 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                  .ToList();
 
     /// <summary>
-    /// Reads the <c>(Version, Path)</c> records of an erasure event from its raw document. Only records of earlier
-    /// versions document an erasure. Entries that do not have the pinned shape are ignored.
-    /// </summary>
-    /// <summary>
     /// Gets a value indicating whether every top-level element name of an event document is valid UTF-8. A raw document
     /// decodes names on access, so an invalid one would otherwise surface as an exception during a later lookup.
     /// </summary>
@@ -315,28 +315,37 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                 return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
             }
 
-            foreach (var commitment in commitments)
+            try
             {
-                switch (PersonalDataCommitments.Verify(storedDocument, commitment))
+                foreach (var commitment in commitments)
                 {
-                    case PersonalDataVerification.Unresolved:
-                        return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
-                    case PersonalDataVerification.Mismatch:
-                        personalDataFailure ??= StreamVerificationFailure.PersonalDataMismatch;
-                        break;
-                    case PersonalDataVerification.NotErased:
-                        personalDataFailure ??= StreamVerificationFailure.ErasedPersonalDataPresent;
-                        break;
-                    case PersonalDataVerification.Erased:
-                        personalData.Add((commitment.Path, true));
-                        break;
-                    case PersonalDataVerification.Committed:
-                        personalData.Add((commitment.Path, false));
-                        break;
+                    switch (PersonalDataCommitments.Verify(storedDocument, commitment))
+                    {
+                        case PersonalDataVerification.Unresolved:
+                            return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
+                        case PersonalDataVerification.Mismatch:
+                            personalDataFailure ??= StreamVerificationFailure.PersonalDataMismatch;
+                            break;
+                        case PersonalDataVerification.NotErased:
+                            personalDataFailure ??= StreamVerificationFailure.ErasedPersonalDataPresent;
+                            break;
+                        case PersonalDataVerification.Erased:
+                            personalData.Add((commitment.Path, true));
+                            break;
+                        case PersonalDataVerification.Committed:
+                            personalData.Add((commitment.Path, false));
+                            break;
+                    }
                 }
-            }
 
-            canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, commitments);
+                canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, commitments);
+            }
+            catch (Exception ex) when (ex is DecoderFallbackException or FormatException)
+            {
+                // Paths are resolved on the stored bytes, which decode names on the way; a name that is not valid
+                // UTF-8, or a value the reader rejects, makes the event malformed.
+                return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
+            }
         }
 
         var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, integrity.PersonalData, expectedPreviousHash, integrity.SealMode);

@@ -121,7 +121,7 @@ public class AnchorEvidenceStoreTests
 
         var thrown = (await act.Should().ThrowAsync<AnchorEvidenceException>()).Which;
         thrown.Message.Should().Contain("malformed");
-        thrown.InnerException.Should().BeOfType<InvalidCastException>();
+        thrown.InnerException.Should().BeOfType<FormatException>();
     }
 
     [Test]

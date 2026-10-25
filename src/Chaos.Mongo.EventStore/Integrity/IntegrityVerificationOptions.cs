@@ -20,7 +20,8 @@ internal sealed class IntegrityVerificationOptions
 
     /// <summary>
     /// Gets or sets the time after a token's time that the CRLs confirming its revocation status must be issued at or
-    /// after, or <c>null</c> to use the anchoring grace period, which defaults to 24 hours.
+    /// after, or <c>null</c> to use the anchoring grace period, which defaults to 24 hours. It only guards the
+    /// conclusion that nothing is revoked: a CRL issued any time after the token's time that revokes its chain decides.
     /// </summary>
     public TimeSpan? RevocationGracePeriod { get; set; }
 

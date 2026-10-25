@@ -7,6 +7,9 @@ using Chaos.Mongo.EventStore.Tests.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
+using MongoDB.Bson.IO;
+using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Security.Cryptography.X509Certificates;
@@ -423,6 +426,34 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    [TestCase("leaf")]
+    [TestCase("anchor")]
+    public async Task VerifyStreamAsync_AnchorDocumentNameNotValidUtf8_ReportsAnchoredLeafInvalid(String document)
+    {
+        var (context, _) = await CreateAnchoredContextAsync();
+        var aggregateId = await context.AppendStreamAsync(3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        var store = GetStore(context);
+        var collection = document == "leaf" ? store.Leaves : store.Anchors;
+        var raw = await collection.Database.GetCollection<RawBsonDocument>(collection.CollectionNamespace.CollectionName).Find(FilterDefinition<RawBsonDocument>.Empty)
+                                  .SingleAsync();
+        var bytes = raw.ToBson();
+        // The second element's name comes before Sequence and Version; the identifier is an ObjectId or a UUID.
+        var identifierEnd = 4 + 1 + 4 + (bytes[4] == 0x07 ? 12 : 5 + BitConverter.ToInt32(bytes, 4 + 1 + 4));
+        bytes[identifierEnd + 1] = 0xFF;
+        await collection.DeleteOneAsync(new BsonDocument("_id", raw["_id"]));
+        await collection.Database.GetCollection<RawBsonDocument>(collection.CollectionNamespace.CollectionName).InsertOneAsync(new RawBsonDocument(bytes));
+
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var eventAnchor = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
+        var chain = await GetAnchorVerifier(context).VerifyAnchorChainAsync();
+
+        stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
+        eventAnchor.Status.Should().Be(EventAnchorStatus.Failed);
+        chain.IsIntact.Should().BeFalse();
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_AnchoredStream_ReturnsPerVersionIntegrityData()
     {
         var (context, _) = await CreateAnchoredContextAsync();
@@ -504,6 +535,29 @@ public class IntegrityVerificationIntegrationTests
         StatusOf(result, 3, MemoPath).Should().Be(PersonalDataStatus.Present);
         result.Events[3].PersonalData.Should().BeEmpty();
         result.UnrecordedErasures.Should().Equal(new UnrecordedErasure(2, MemoPath));
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_IntegrityHashStoredAsOldBinary_ReportsMalformedIntegrity()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(3);
+        var document = await context.FindEventAsync(aggregateId, 2);
+        document[EventIntegrityChain.ElementName]["Hash"] = new BsonBinaryData(document[EventIntegrityChain.ElementName]["Hash"].AsByteArray, BsonBinarySubType.OldBinary);
+        using var stream = new MemoryStream();
+        using (var writer = new BsonBinaryWriter(stream, new BsonBinaryWriterSettings
+               {
+                   FixOldBinarySubTypeOnOutput = false
+               }))
+        {
+            BsonDocumentSerializer.Instance.Serialize(BsonSerializationContext.CreateRoot(writer), document);
+        }
+
+        await ReplaceRawEventAsync(context, aggregateId, 2, stream.ToArray());
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
     }
 
     [Test]
@@ -602,6 +656,46 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    [TestCase("nestedPersonalDataName", 2)]
+    [TestCase("discriminator", 3)]
+    [TestCase("erasurePath", 4)]
+    public async Task VerifyStreamAsync_StringOrNestedNameNotValidUtf8_ReportsMalformedIntegrity(String place, Int64 version)
+    {
+        // Events with personal data are sealed with a binding, so the discriminator case uses a stream without it.
+        var context = await CreateContextAsync(personalData: place != "discriminator");
+        var aggregateId = await context.AppendStreamAsync(3);
+        if (place == "erasurePath")
+        {
+            await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("TICKET-1", [1], ["Memo"]));
+        }
+
+        var bytes = await context.ReadRawEventAsync(aggregateId, version);
+        Byte[] pattern = place switch
+        {
+            "nestedPersonalDataName" => [0x02, .. "Name"u8, 0x00],
+            "discriminator" => [.. "LedgerEntryRecorded"u8],
+            _ => [0x05, 0x00, 0x00, 0x00, .. "Memo"u8, 0x00]
+        };
+        var offset = place == "discriminator" ? 0 : place == "erasurePath" ? 4 : 1;
+        bytes[bytes.AsSpan().IndexOf(pattern) + offset] = 0xFF;
+        if (place != "nestedPersonalDataName")
+        {
+            // The changed string is covered by the hash, so the event is sealed again to reach the string's decoding.
+            var integrity = LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(aggregateId, version));
+            var resealed = EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(bytes, EventIntegrityChain.ElementName),
+                                                           integrity.PreviousHash,
+                                                           integrity.SealMode);
+            resealed.CopyTo(bytes, bytes.AsSpan().IndexOf(integrity.Hash));
+        }
+
+        await ReplaceRawEventAsync(context, aggregateId, version, bytes);
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(version, StreamVerificationFailure.MalformedIntegrity));
+    }
+
+    [Test]
     [TestCase("leafHash")]
     [TestCase("anchorCreatedUtc")]
     public async Task VerifyStreamAsync_UnreadableLeafOrAnchor_ReportsAnchoredLeafInvalid(String change)
@@ -659,6 +753,12 @@ public class IntegrityVerificationIntegrationTests
         repeated.Add(name, document[name]);
         await collection.DeleteOneAsync(new BsonDocument("_id", document["_id"]));
         await collection.Database.GetCollection<RawBsonDocument>(collection.CollectionNamespace.CollectionName).InsertOneAsync(new RawBsonDocument(repeated.ToBson()));
+    }
+
+    private static async Task ReplaceRawEventAsync(LedgerStoreContext context, Guid aggregateId, Int64 version, Byte[] bytes)
+    {
+        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version));
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(bytes));
     }
 
     private static PersonalDataStatus StatusOf(StreamVerificationResult result, Int64 version, String path)

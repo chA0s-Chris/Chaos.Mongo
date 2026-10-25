@@ -178,13 +178,15 @@ internal static class EventIntegrityChain
     public static Boolean TryRead(BsonValue value, [NotNullWhen(true)] out EventIntegrity? integrity)
     {
         integrity = null;
-        if (value is not BsonDocument document)
+        if (value is not BsonDocument stored)
         {
             return false;
         }
 
         try
         {
+            // A raw document is read again without the driver's conversion of old binary data to generic binary.
+            var document = StoredDocuments.Prepare(stored);
             if (!HasFormatTypes(document))
             {
                 return false;
@@ -193,7 +195,7 @@ internal static class EventIntegrityChain
             integrity = BsonSerializer.Deserialize<EventIntegrity>(document);
             return true;
         }
-        catch (Exception ex) when (ex is FormatException or BsonException or DecoderFallbackException)
+        catch (Exception ex) when (ex is FormatException or BsonException or DecoderFallbackException or InvalidOperationException)
         {
             // A raw document decodes names and strings on access, so a string that is not valid UTF-8 surfaces here.
             integrity = null;
