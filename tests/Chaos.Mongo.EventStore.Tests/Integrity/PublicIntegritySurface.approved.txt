@@ -1,5 +1,9 @@
 sealed class EventRegistrationBuilder<TAggregate, TEvent>
   EventRegistrationBuilder<TAggregate, TEvent> WithPersonalData<TMember>(Expression<Func<TEvent, TMember?>> member)
+interface IEventStore<TAggregate>
+  IAsyncEnumerable<Event<TAggregate>> GetEventStream(Guid aggregateId, Int64 fromVersion = 0, Int64? toVersion = null, CancellationToken cancellationToken = default)
+  Task<Int64> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken cancellationToken = default)
+  Task<TAggregate> AppendEventsAsync(IEnumerable<Event<TAggregate>> events, Int64? expectedRevision = null, Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null, CancellationToken cancellationToken = default)
 sealed class AnchorAuthorityFailure
   AnchorAuthorityFailure <Clone>$()
   Boolean Equals(AnchorAuthorityFailure? other)
@@ -9,9 +13,9 @@ sealed class AnchorAuthorityFailure
   String LastFailure { get; init; }
   Void Deconstruct(String& Authority, Int32& FailureCount, String& LastFailure, DateTime& LastFailureUtc)
   ctor(String Authority, Int32 FailureCount, String LastFailure, DateTime LastFailureUtc)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 enum AnchorChainFailure
   AnchorDigestMismatch = 3
   LeafSetMismatch = 6
@@ -29,9 +33,9 @@ sealed class AnchorChainVerificationResult
   Int64? FirstBrokenSequence { get; init; }
   Void Deconstruct(Int64?& FirstBrokenSequence, AnchorChainFailure?& Failure, Int64& AnchorCount)
   ctor(Int64? FirstBrokenSequence, AnchorChainFailure? Failure, Int64 AnchorCount)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class AnchorLeaf
   AnchorLeaf <Clone>$()
   Boolean Equals(AnchorLeaf? other)
@@ -45,9 +49,9 @@ sealed class AnchorLeaf
   String AggregateType { get; init; }
   Void Deconstruct(Guid& AnchorId, Int64& AnchorSequence, Int32& Index, String& AggregateType, Guid& AggregateId, Int64& Version, Byte[]& Hash, IReadOnlyList<Byte[]>& Proof)
   ctor(Guid AnchorId, Int64 AnchorSequence, Int32 Index, String AggregateType, Guid AggregateId, Int64 Version, Byte[] Hash, IReadOnlyList<Byte[]> Proof)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class AnchorLeafReader
   IAsyncEnumerable<AnchorLeaf> ReadLeavesAsync(Guid anchorId, CancellationToken cancellationToken = default)
 sealed class AnchorReference
@@ -57,9 +61,9 @@ sealed class AnchorReference
   Int64 Sequence { get; init; }
   Void Deconstruct(Guid& AnchorId, Int64& Sequence)
   ctor(Guid AnchorId, Int64 Sequence)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class AnchorTimestamp
   AnchorTimestamp <Clone>$()
   Boolean Equals(AnchorTimestamp? other)
@@ -76,9 +80,9 @@ sealed class AnchorTimestamp
   TimestampRevocationStatus RevocationStatus { get; init; }
   Void Deconstruct(String& Authority, Byte[]& Token, IReadOnlyList<Byte[]>& CertificateChain, IReadOnlyList<Byte[]>& CertificateRevocationLists, DateTime& TimestampUtc, DateTime& ObtainedUtc)
   ctor(String Authority, Byte[] Token, IReadOnlyList<Byte[]> CertificateChain, IReadOnlyList<Byte[]> CertificateRevocationLists, DateTime TimestampUtc, DateTime ObtainedUtc)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 enum CheckpointHashStatus
   Matches = 0
   Mismatch = 2
@@ -92,9 +96,9 @@ sealed class CheckpointVerification
   Int64 Version { get; init; }
   Void Deconstruct(Int64& Version, CheckpointHashStatus& HashStatus, Boolean& StateMatches)
   ctor(Int64 Version, CheckpointHashStatus HashStatus, Boolean StateMatches)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class CompletedAnchor
   Boolean Equals(CompletedAnchor? other)
   Byte[] AnchorDigest { get; init; }
@@ -115,9 +119,9 @@ sealed class CompletedAnchor
   String HashAlgorithm { get; init; }
   Void Deconstruct(Guid& Id, Int64& Sequence, Int32& FormatVersion, String& HashAlgorithm, Byte[]& PreviousDigest, Byte[]& MerkleRoot, Byte[]& AnchorDigest, Int32& LeafCount, DateTime& PeriodStartUtc, DateTime& PeriodEndUtc, DateTime& OldestCandidateUtc, IReadOnlyList<AnchorTimestamp>& Timestamps, IReadOnlyList<AnchorAuthorityFailure>& AuthorityFailures, DateTime& CreatedUtc, DateTime& CompletedUtc)
   ctor(Guid Id, Int64 Sequence, Int32 FormatVersion, String HashAlgorithm, Byte[] PreviousDigest, Byte[] MerkleRoot, Byte[] AnchorDigest, Int32 LeafCount, DateTime PeriodStartUtc, DateTime PeriodEndUtc, DateTime OldestCandidateUtc, IReadOnlyList<AnchorTimestamp> Timestamps, IReadOnlyList<AnchorAuthorityFailure> AuthorityFailures, DateTime CreatedUtc, DateTime CompletedUtc)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class CompletenessFinding
   AnchorChainVerificationResult? AnchorChain { get; init; }
   AnchorReference? Anchor { get; init; }
@@ -131,9 +135,9 @@ sealed class CompletenessFinding
   TimeSpan? Age { get; init; }
   Void Deconstruct(CompletenessFindingKind& Kind, Guid?& AggregateId, Int64?& FirstVersion, Int64?& LastVersion, Int64?& HeadVersion, TimeSpan?& Age, AnchorReference?& Anchor, AnchorChainVerificationResult?& AnchorChain)
   ctor(CompletenessFindingKind Kind, Guid? AggregateId, Int64? FirstVersion, Int64? LastVersion, Int64? HeadVersion, TimeSpan? Age, AnchorReference? Anchor, AnchorChainVerificationResult? AnchorChain)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 enum CompletenessFindingKind
   AnchorChainBroken = 0
   MalformedEvent = 6
@@ -152,9 +156,9 @@ sealed class DerivedDataVerificationResult
   StreamVerificationResult Stream { get; init; }
   Void Deconstruct(StreamVerificationResult& Stream, ReadModelStatus& ReadModel, IReadOnlyList<CheckpointVerification>& Checkpoints, Boolean& CreationTimeConsistent)
   ctor(StreamVerificationResult Stream, ReadModelStatus ReadModel, IReadOnlyList<CheckpointVerification> Checkpoints, Boolean CreationTimeConsistent)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class ErasureRequest
   IReadOnlyCollection<Int64>? Versions { get; }
   IReadOnlyCollection<String>? Paths { get; }
@@ -181,9 +185,9 @@ sealed class EventAnchorVerificationResult
   Int64? LeafVersion { get; init; }
   Void Deconstruct(EventAnchorStatus& Status, EventAnchorFailure?& Failure, AnchorReference?& Anchor, Int64?& LeafVersion, IReadOnlyList<TimestampVerificationResult>& Timestamps)
   ctor(EventAnchorStatus Status, EventAnchorFailure? Failure, AnchorReference? Anchor, Int64? LeafVersion, IReadOnlyList<TimestampVerificationResult> Timestamps)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 interface IAnchorVerifier
   Task<AnchorChainVerificationResult> VerifyAnchorChainAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default)
 interface IEventStoreIntegrity<TAggregate>
@@ -213,18 +217,20 @@ enum IntegritySealMode
   Retroactive = 1
 sealed class IntegritySealingStatus
   Boolean Equals(IntegritySealingStatus? other)
+  Boolean IsCompleteWithoutFailures { get; }
   Boolean IsPassInProgress { get; }
   DateTime? PassCompletedUtc { get; init; }
   DateTime? PassStartedUtc { get; init; }
   Int64 EventsSealed { get; init; }
   Int64 StreamsChecked { get; init; }
+  Int64 StreamsFailed { get; init; }
   Int64 StreamsSealed { get; init; }
   IntegritySealingStatus <Clone>$()
-  Void Deconstruct(Int64& StreamsChecked, Int64& StreamsSealed, Int64& EventsSealed, DateTime?& PassStartedUtc, DateTime?& PassCompletedUtc)
-  ctor(Int64 StreamsChecked, Int64 StreamsSealed, Int64 EventsSealed, DateTime? PassStartedUtc, DateTime? PassCompletedUtc)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  Void Deconstruct(Int64& StreamsChecked, Int64& StreamsSealed, Int64& StreamsFailed, Int64& EventsSealed, DateTime?& PassStartedUtc, DateTime?& PassCompletedUtc)
+  ctor(Int64 StreamsChecked, Int64 StreamsSealed, Int64 StreamsFailed, Int64 EventsSealed, DateTime? PassStartedUtc, DateTime? PassCompletedUtc)
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class IntegrityVerificationBuilder
   IntegrityVerificationBuilder WithAnchorCollections(String anchors, String leaves, String evidence, String evidenceChunks)
   IntegrityVerificationBuilder WithRevocationGracePeriod(TimeSpan gracePeriod)
@@ -245,9 +251,9 @@ sealed class PersonalDataPathStatus
   String Path { get; init; }
   Void Deconstruct(String& Path, PersonalDataStatus& Status)
   ctor(String Path, PersonalDataStatus Status)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 enum PersonalDataStatus
   ErasedWithRecord = 1
   ErasedWithoutRecord = 2
@@ -299,16 +305,15 @@ sealed class StreamVerificationResult
   StreamVerificationResult <Clone>$()
   Void Deconstruct(Int64?& FirstBrokenVersion, StreamVerificationFailure?& Failure, IReadOnlyList<UnrecordedErasure>& UnrecordedErasures)
   ctor(Int64? FirstBrokenVersion, StreamVerificationFailure? Failure, IReadOnlyList<UnrecordedErasure> UnrecordedErasures)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class TimestampAuthorityException : MongoEventStoreException
   String AuthorityName { get; }
   ctor(String authorityName, String message, Exception? innerException = null)
 sealed class TimestampAuthorityTrust
   String? PolicyId { get; set; }
   X509Certificate2Collection TrustedRoots { get; }
-  ctor()
 sealed class TimestampConfirmationFailure
   Boolean Equals(TimestampConfirmationFailure? other)
   DateTime LastFailureUtc { get; init; }
@@ -317,9 +322,9 @@ sealed class TimestampConfirmationFailure
   TimestampConfirmationFailure <Clone>$()
   Void Deconstruct(Int32& FailureCount, String& LastFailure, DateTime& LastFailureUtc)
   ctor(Int32 FailureCount, String LastFailure, DateTime LastFailureUtc)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 enum TimestampRevocationStatus
   Confirmed = 1
   Revoked = 2
@@ -341,9 +346,9 @@ sealed class TimestampVerificationResult
   TimestampVerificationResult <Clone>$()
   Void Deconstruct(String& Authority, DateTime& TimestampUtc, Boolean& IsValid, String?& Failure, TimestampRevocationStatus& RevocationStatus, TimestampRevocationStatus& StoredRevocationStatus)
   ctor(String Authority, DateTime TimestampUtc, Boolean IsValid, String? Failure, TimestampRevocationStatus RevocationStatus, TimestampRevocationStatus StoredRevocationStatus)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class TrustedAnchorHead
   Boolean Equals(TrustedAnchorHead? other)
   Byte[] AnchorDigest { get; init; }
@@ -351,9 +356,9 @@ sealed class TrustedAnchorHead
   TrustedAnchorHead <Clone>$()
   Void Deconstruct(Int64& Sequence, Byte[]& AnchorDigest)
   ctor(Int64 Sequence, Byte[] AnchorDigest)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class UnrecordedErasure
   Boolean Equals(UnrecordedErasure? other)
   Int64 Version { get; init; }
@@ -361,9 +366,9 @@ sealed class UnrecordedErasure
   UnrecordedErasure <Clone>$()
   Void Deconstruct(Int64& Version, String& Path)
   ctor(Int64 Version, String Path)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class VerifiedEvent
   AnchorReference? SealingAnchor { get; init; }
   Boolean Equals(VerifiedEvent? other)
@@ -375,9 +380,9 @@ sealed class VerifiedEvent
   VerifiedEvent <Clone>$()
   Void Deconstruct(Int64& Version, Byte[]& Hash, Byte[]& PreviousHash, IntegritySealMode& SealMode, AnchorReference?& SealingAnchor, IReadOnlyList<PersonalDataPathStatus>& PersonalData)
   ctor(Int64 Version, Byte[] Hash, Byte[] PreviousHash, IntegritySealMode SealMode, AnchorReference? SealingAnchor, IReadOnlyList<PersonalDataPathStatus> PersonalData)
-  virtual Boolean Equals(Object? obj)
-  virtual Int32 GetHashCode()
-  virtual String ToString()
+  override Boolean Equals(Object? obj)
+  override Int32 GetHashCode()
+  override String ToString()
 sealed class IntegrityProtectionBuilder<TAggregate>
   IntegrityProtectionBuilder<TAggregate> WithSealingChunkSize(Int32 chunkSize)
   IntegrityProtectionBuilder<TAggregate> WithSealingSweepInterval(TimeSpan interval)

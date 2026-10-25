@@ -407,6 +407,9 @@ public static class MongoEventStoreSerializationSetup
     private static BsonClassMap GetRegisteredClassMap(Type classType)
         => BsonClassMap.GetRegisteredClassMaps().First(classMap => classMap.ClassType == classType);
 
+    private static Boolean HasElementName(BsonClassMap classMap, String memberName, String elementName)
+        => String.Equals(classMap.GetMemberMap(memberName)?.ElementName, elementName, StringComparison.Ordinal);
+
     /// <summary>
     /// Registers class maps built by <see cref="BuildClassMapHierarchy"/>, base types first.
     /// </summary>
@@ -472,6 +475,7 @@ public static class MongoEventStoreSerializationSetup
             cm.GetMemberMap(s => s.PassCompletedUtc).SetElementName(nameof(IntegritySealingState.PassCompletedUtc));
             cm.GetMemberMap(s => s.StreamsChecked).SetElementName(nameof(IntegritySealingState.StreamsChecked));
             cm.GetMemberMap(s => s.StreamsSealed).SetElementName(nameof(IntegritySealingState.StreamsSealed));
+            cm.GetMemberMap(s => s.StreamsFailed).SetElementName(nameof(IntegritySealingState.StreamsFailed));
             cm.GetMemberMap(s => s.EventsSealed).SetElementName(nameof(IntegritySealingState.EventsSealed));
         });
     }
@@ -496,8 +500,14 @@ public static class MongoEventStoreSerializationSetup
 
     /// <summary>
     /// Registers the erasure event for the aggregate type, whether or not protection is enabled, so streams
-    /// containing it still deserialize. Element names are pinned because the verifier reads the event raw.
+    /// containing it still deserialize. Element names are pinned because the verifier reads the event raw, and the
+    /// eraser's marker is never mapped, even by a convention that maps non-public members, so it cannot be stored and
+    /// read back to pass the append guard. A class map registered before the event store must have the same shape.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a class map of the erasure event or its entries was registered before the event store with another
+    /// discriminator, other element names or the marker mapped.
+    /// </exception>
     private static void RegisterPersonalDataErasedClassMap<TAggregate>()
         where TAggregate : class, IAggregate, new()
     {
@@ -505,6 +515,18 @@ public static class MongoEventStoreSerializationSetup
         var eventType = typeof(PersonalDataErased<TAggregate>);
         if (BsonClassMap.IsClassMapRegistered(eventType))
         {
+            var registered = GetRegisteredClassMap(eventType);
+            if (!String.Equals(registered.Discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal) ||
+                !HasElementName(registered, nameof(PersonalDataErased<TAggregate>.Reference), PersonalDataErased<TAggregate>.ReferenceElement) ||
+                !HasElementName(registered, nameof(PersonalDataErased<TAggregate>.Entries), PersonalDataErased<TAggregate>.EntriesElement) ||
+                registered.GetMemberMap(nameof(PersonalDataErased<TAggregate>.CreatedByEraser)) is not null)
+            {
+                throw new InvalidOperationException(
+                    $"The class map of {eventType.Name} for {typeof(TAggregate).Name} was registered before the event store with another discriminator, " +
+                    "other element names or the eraser's marker mapped, so verification would not recognize its erasure records. Let the event " +
+                    "store register it.");
+            }
+
             return;
         }
 
@@ -513,13 +535,33 @@ public static class MongoEventStoreSerializationSetup
         classMap.SetDiscriminator(PersonalDataErased<TAggregate>.Discriminator);
         classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.Reference)).SetElementName(PersonalDataErased<TAggregate>.ReferenceElement);
         classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.Entries)).SetElementName(PersonalDataErased<TAggregate>.EntriesElement);
+        if (classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.CreatedByEraser)) is { } marker)
+        {
+            classMap.UnmapMember(marker.MemberInfo);
+        }
+
         BsonClassMap.RegisterClassMap(classMap);
     }
 
+    /// <summary>
+    /// Registers the erasure entries with pinned element names, or checks a class map registered before the event store.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a class map of the erasure entries was registered before the event store with other element names.
+    /// </exception>
     private static void RegisterPersonalDataErasureEntryClassMap()
     {
         if (BsonClassMap.IsClassMapRegistered(typeof(PersonalDataErasureEntry)))
         {
+            var registered = GetRegisteredClassMap(typeof(PersonalDataErasureEntry));
+            if (!HasElementName(registered, nameof(PersonalDataErasureEntry.Version), PersonalDataErasureEntry.VersionElement) ||
+                !HasElementName(registered, nameof(PersonalDataErasureEntry.Paths), PersonalDataErasureEntry.PathsElement))
+            {
+                throw new InvalidOperationException(
+                    $"The class map of {nameof(PersonalDataErasureEntry)} was registered before the event store with other element names, so " +
+                    "verification would not recognize erasure records. Let the event store register it.");
+            }
+
             return;
         }
 

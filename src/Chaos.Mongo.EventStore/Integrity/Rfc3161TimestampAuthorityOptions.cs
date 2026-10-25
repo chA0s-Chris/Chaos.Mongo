@@ -55,7 +55,7 @@ public sealed class Rfc3161TimestampAuthorityOptions
     /// <summary>
     /// Gets the name that identifies the authority in stored anchors.
     /// </summary>
-    public String Name { get; internal set; }
+    public String Name { get; }
 
     /// <summary>
     /// Gets or sets the object identifier of the TSA policy that tokens must be issued under, such as a qualified
@@ -87,5 +87,5 @@ public sealed class Rfc3161TimestampAuthorityOptions
     /// <summary>
     /// Gets the absolute HTTP or HTTPS URI that accepts <c>application/timestamp-query</c> requests.
     /// </summary>
-    public Uri Uri { get; internal set; }
+    public Uri Uri { get; }
 }

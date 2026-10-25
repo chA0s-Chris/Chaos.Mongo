@@ -350,6 +350,76 @@ internal static class TimestampTokenValidation
     }
 
     /// <summary>
+    /// Runs the checks that need no trust settings on a token an authority returned, before anchoring stores it, so a
+    /// custom authority cannot complete an anchor with a token that verification rejects anyway: it is one DER-encoded
+    /// RFC 3161 token whose imprint is the SHA-256 digest and whose signature verifies with the returned chain, which
+    /// starts with the signing certificate; its time is the returned time; and its content, signer and algorithms pass
+    /// the checks verification applies. The chain's trust and the policy are checked at verification, which knows the
+    /// trust settings.
+    /// </summary>
+    /// <param name="received">The token as the authority returned it.</param>
+    /// <param name="digest">The SHA-256 digest the token must cover.</param>
+    /// <exception cref="TimestampTokenValidationException">Thrown when the token fails a check.</exception>
+    public static void ValidateReceived(TimestampToken received, ReadOnlySpan<Byte> digest)
+    {
+        ArgumentNullException.ThrowIfNull(received);
+        if (!Rfc3161TimestampToken.TryDecode(received.Token, out var token, out var bytesConsumed) || bytesConsumed != received.Token.Length)
+        {
+            throw new TimestampTokenValidationException("the token is not a single RFC 3161 token.");
+        }
+
+        var chain = new X509Certificate2Collection();
+        try
+        {
+            foreach (var certificate in received.CertificateChain)
+            {
+                chain.Add(X509CertificateLoader.LoadCertificate(certificate));
+            }
+
+            if (chain.Count == 0)
+            {
+                throw new TimestampTokenValidationException("the token comes without its certificate chain.");
+            }
+
+            if (!token.VerifySignatureForHash(digest, HashAlgorithmName.SHA256, out var signer, chain))
+            {
+                throw new TimestampTokenValidationException(
+                    "the token's imprint does not match the digest, or its signature or signing-certificate attribute is invalid.");
+            }
+
+            using (signer)
+            {
+                if (!signer.RawData.AsSpan().SequenceEqual(received.CertificateChain[0]))
+                {
+                    throw new TimestampTokenValidationException("the token's certificate chain does not start with its signing certificate.");
+                }
+
+                if (token.TokenInfo.Timestamp != received.Timestamp)
+                {
+                    throw new TimestampTokenValidationException("the token's time differs from the time returned with it.");
+                }
+
+                ValidateContent(token);
+                RequireDer(received.Token);
+                ValidateSigner(signer);
+                ValidateAlgorithms(token, signer);
+                ValidateAuthorityName(token, signer);
+            }
+        }
+        catch (CryptographicException ex)
+        {
+            throw new TimestampTokenValidationException("a certificate of the token's chain is malformed.", ex);
+        }
+        finally
+        {
+            foreach (var certificate in chain)
+            {
+                certificate.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
     /// Requires the signing certificate to be reserved for timestamping by a critical extended key usage extension
     /// (RFC 3161, section 2.3) and, when it carries a key usage extension, to permit digitalSignature or
     /// nonRepudiation and nothing else, the rule OpenSSL applies, so an independent verification agrees. Both extensions

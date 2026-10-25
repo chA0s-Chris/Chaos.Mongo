@@ -20,7 +20,15 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// unchanged; without it, deleting the newest anchors together with the streams they cover cannot be detected.
     /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The findings: a broken chain of anchors first, then the findings of each stream.</returns>
+    /// <returns>The findings: a broken chain of anchors first, then the findings of each stream in identifier order.</returns>
+    /// <remarks>
+    /// The check reads events and leaves through two server cursors at the pace the findings are consumed. A consumer
+    /// that pauses for longer than the server's cursor timeout, 10 minutes by default, or a long run of streams without
+    /// leaves can let a cursor expire; the check then fails with a <c>MongoCursorNotFoundException</c> and can be run
+    /// again. Event documents whose identifier or version cannot be read are reported as
+    /// <see cref="CompletenessFindingKind.MalformedEvent"/> and count as missing, so their stream may also be reported
+    /// as truncated or deleted.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when neither anchoring nor verification is configured.</exception>
     IAsyncEnumerable<CompletenessFinding> CheckCompletenessAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default);
 
@@ -45,17 +53,27 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// anchor's leaf and inclusion proof, its digest and every stored timestamp token, including their revocation
     /// status recomputed from the stored CRLs.
     /// </summary>
+    /// <remarks>
+    /// A leaf of the stream that cannot be read, or whose committed anchor cannot be read, before the covering anchor
+    /// fails the verification instead of being skipped.
+    /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="version">The event version.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The result.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="version"/> is less than 1.</exception>
     Task<EventAnchorVerificationResult> VerifyEventAnchorAsync(Guid aggregateId, Int64 version, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Recomputes a stream's hash chain from the stored bytes and reports the first broken version, the integrity data
-    /// of every verified version and, for an intact chain, its comparison with the stream's leaves in completed
-    /// anchors. The per-version data is returned as a list, so memory grows with the stream's length.
+    /// of every verified version and its comparison with the stream's leaves in completed anchors, below the break for
+    /// a broken chain. The per-version data is returned as a list, so memory grows with the stream's length.
     /// </summary>
+    /// <remarks>
+    /// A leaf of the stream that cannot be read, or whose committed anchor cannot be read, breaks the stream as
+    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/>. The leaves themselves are authenticated by
+    /// <see cref="IAnchorVerifier.VerifyAnchorChainAsync"/>, which should run as well.
+    /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The result.</returns>

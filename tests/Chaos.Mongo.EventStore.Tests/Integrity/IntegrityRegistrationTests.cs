@@ -46,7 +46,7 @@ public class IntegrityRegistrationTests
         }.ToBsonDocument();
 
         document.Names.Should().BeEquivalentTo(
-            "_id", "Cursor", "LastSealedStream", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "EventsSealed");
+            "_id", "Cursor", "LastSealedStream", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "StreamsFailed", "EventsSealed");
         document["Cursor"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);
         document["Cursor"].AsGuid.Should().Be(cursor);
         document["LastSealedStream"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);

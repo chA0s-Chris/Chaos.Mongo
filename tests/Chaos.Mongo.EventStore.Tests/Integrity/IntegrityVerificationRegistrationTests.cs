@@ -34,6 +34,7 @@ public class IntegrityVerificationRegistrationTests
         services.Should().NotContain(s => s.ServiceType == typeof(IPersonalDataEraser<UnprotectedRegistrationAggregate>));
         withoutAnchors.Should().BeFalse("anchor verification is registered at module level");
         services.Should().ContainSingle(s => s.ServiceType == typeof(IAnchorVerifier));
+        services.Should().NotContain(s => s.ServiceType == typeof(IntegrityVerificationBuilder), "the configuration builder is not a service");
         var options = services.Single(s => s.ServiceType == typeof(MongoEventStoreOptions<ProtectedRegistrationAggregate>))
                               .ImplementationInstance.Should().BeOfType<MongoEventStoreOptions<ProtectedRegistrationAggregate>>().Subject;
         options.IntegrityProtectionEnabled.Should().BeTrue();

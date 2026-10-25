@@ -10,8 +10,15 @@ public interface IAnchorVerifier
 {
     /// <summary>
     /// Verifies that committed anchor sequence numbers are contiguous from 1, that each anchor's previous digest equals
-    /// its predecessor's digest, and that each digest recomputes from its stored fields.
+    /// its predecessor's digest, that each digest recomputes from its stored fields, that each Merkle root recomputes
+    /// from the anchor's stored leaves, and that every anchor but the newest, and every anchor up to a trusted head, is
+    /// completed.
     /// </summary>
+    /// <remarks>
+    /// Recomputing the roots reads every stored leaf, so the cost grows with the number of leaves, one per changed
+    /// stream and anchor. It authenticates the leaves that stream verification compares streams with, so verify the
+    /// chain of anchors as well whenever stream verification is used as evidence.
+    /// </remarks>
     /// <param name="trustedHead">
     /// An anchor kept outside the database that the chain must contain unchanged, or <c>null</c> to check consistency
     /// only.

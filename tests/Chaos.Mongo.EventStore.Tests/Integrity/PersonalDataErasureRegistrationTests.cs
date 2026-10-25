@@ -7,7 +7,9 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Conventions;
 using NUnit.Framework;
+using System.Reflection;
 
 /// <remarks>
 /// Class-map registration is process-global and irreversible, so every test uses dedicated
@@ -93,6 +95,32 @@ public class PersonalDataErasureRegistrationTests
     }
 
     [Test]
+    public void WithEventStore_ConventionMappingNonPublicMembers_NeverMapsTheErasersMarker()
+    {
+        var pack = new ConventionPack
+        {
+            new MapNonPublicPropertiesConvention()
+        };
+        ConventionRegistry.Register(nameof(WithEventStore_ConventionMappingNonPublicMembers_NeverMapsTheErasersMarker),
+                                    pack,
+                                    type => type == typeof(PersonalDataErased<ErasureConventionAggregate>));
+
+        new MongoBuilder(new ServiceCollection()).WithEventStore<ErasureConventionAggregate>(es => es.WithEvent<ErasureConventionEvent>());
+        var erased = new PersonalDataErased<ErasureConventionAggregate>
+        {
+            Reference = "ticket",
+            CreatedByEraser = true
+        };
+        var document = erased.ToBsonDocument(typeof(Event<ErasureConventionAggregate>));
+        var roundTrip = BsonSerializer.Deserialize<Event<ErasureConventionAggregate>>(document);
+
+        BsonClassMap.LookupClassMap(typeof(PersonalDataErased<ErasureConventionAggregate>))
+                    .GetMemberMap(nameof(PersonalDataErased<ErasureConventionAggregate>.CreatedByEraser)).Should().BeNull();
+        document.Names.Should().NotContain(nameof(PersonalDataErased<ErasureConventionAggregate>.CreatedByEraser));
+        roundTrip.Should().BeOfType<PersonalDataErased<ErasureConventionAggregate>>().Which.CreatedByEraser.Should().BeFalse();
+    }
+
+    [Test]
     public void WithEventStore_PreRegisteredClassMapWithReservedDiscriminator_ThrowsInvalidOperationException()
     {
         BsonClassMap.RegisterClassMap<ErasurePreRegisteredEvent>(cm =>
@@ -107,6 +135,21 @@ public class PersonalDataErasureRegistrationTests
         act.Should().Throw<InvalidOperationException>()
            .WithMessage($"*ErasurePreRegisteredEvent*registered before the event store*" +
                         $"'{PersonalDataErased<ErasurePreRegisteredAggregate>.Discriminator}'*reserved*");
+    }
+
+    [Test]
+    public void WithEventStore_PreRegisteredErasureClassMapWithOtherElementName_ThrowsInvalidOperationException()
+    {
+        BsonClassMap.RegisterClassMap<PersonalDataErased<ErasureRenamedAggregate>>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetDiscriminator(PersonalDataErased<ErasureRenamedAggregate>.Discriminator);
+            cm.GetMemberMap(e => e.Reference).SetElementName("Ticket");
+        });
+
+        var act = () => new MongoBuilder(new ServiceCollection()).WithEventStore<ErasureRenamedAggregate>(es => es.WithEvent<ErasureRenamedEvent>());
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*PersonalDataErased*registered before the event store*");
     }
 
     [Test]
@@ -193,6 +236,34 @@ public sealed class ErasurePreRegisteredAggregate : Aggregate;
 public sealed class ErasurePreRegisteredEvent : Event<ErasurePreRegisteredAggregate>
 {
     public override void Execute(ErasurePreRegisteredAggregate aggregate) { }
+}
+
+public sealed class ErasureConventionAggregate : Aggregate;
+
+public sealed class ErasureConventionEvent : Event<ErasureConventionAggregate>
+{
+    public override void Execute(ErasureConventionAggregate aggregate) { }
+}
+
+public sealed class ErasureRenamedAggregate : Aggregate;
+
+public sealed class ErasureRenamedEvent : Event<ErasureRenamedAggregate>
+{
+    public override void Execute(ErasureRenamedAggregate aggregate) { }
+}
+
+/// <summary>
+/// A consumer convention that maps the non-public properties of a class.
+/// </summary>
+public sealed class MapNonPublicPropertiesConvention : ConventionBase, IClassMapConvention
+{
+    public void Apply(BsonClassMap classMap)
+    {
+        foreach (var property in classMap.ClassType.GetProperties(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            classMap.MapProperty(property.Name);
+        }
+    }
 }
 
 public sealed class ErasureReservedAggregate : Aggregate;

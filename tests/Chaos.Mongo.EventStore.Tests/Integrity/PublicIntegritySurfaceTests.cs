@@ -19,18 +19,7 @@ public class PublicIntegritySurfaceTests
     private const String ApprovedFile = "PublicIntegritySurface.approved.txt";
 
     [Test]
-    public void ImplementationDetails_StayNonPublic()
-    {
-        typeof(Event<LedgerAggregate>).GetProperty("Integrity", BindingFlags.Instance | BindingFlags.NonPublic).Should().NotBeNull();
-        typeof(CheckpointDocument<LedgerAggregate>).GetProperty("ChainHash", BindingFlags.Instance | BindingFlags.NonPublic).Should().NotBeNull();
-        typeof(MongoBuilderExtensions).GetMethod("WithAnchorCandidates", BindingFlags.Static | BindingFlags.NonPublic).Should().NotBeNull();
-        typeof(EventIntegrity).IsVisible.Should().BeFalse();
-        typeof(AnchorVerifier).IsVisible.Should().BeFalse();
-        typeof(IntegrityAnchoringOptions).IsVisible.Should().BeFalse();
-    }
-
-    [Test]
-    public void PublicSurface_MatchesApprovedListing()
+    public void DescribeSurface_PublicTypes_MatchApprovedListing()
     {
         var path = Path.Combine(TamperEvidenceVectorTests.RepositoryRoot, "tests", "Chaos.Mongo.EventStore.Tests", "Integrity", ApprovedFile);
         var actual = String.Join(Environment.NewLine, DescribeSurface()) + Environment.NewLine;
@@ -40,6 +29,17 @@ public class PublicIntegritySurfaceTests
         }
 
         actual.Should().Be(File.ReadAllText(path).ReplaceLineEndings(Environment.NewLine));
+    }
+
+    [Test]
+    public void ImplementationDetails_Reflection_StayNonPublic()
+    {
+        typeof(Event<LedgerAggregate>).GetProperty("Integrity", BindingFlags.Instance | BindingFlags.NonPublic).Should().NotBeNull();
+        typeof(CheckpointDocument<LedgerAggregate>).GetProperty("ChainHash", BindingFlags.Instance | BindingFlags.NonPublic).Should().NotBeNull();
+        typeof(MongoBuilderExtensions).GetMethod("WithAnchorCandidates", BindingFlags.Static | BindingFlags.NonPublic).Should().NotBeNull();
+        typeof(EventIntegrity).IsVisible.Should().BeFalse();
+        typeof(AnchorVerifier).IsVisible.Should().BeFalse();
+        typeof(IntegrityAnchoringOptions).IsVisible.Should().BeFalse();
     }
 
     private static String Accessors(PropertyInfo property)
@@ -116,6 +116,7 @@ public class PublicIntegritySurfaceTests
         var integrityTypes = typeof(IEventStoreIntegrity<>).Assembly.GetExportedTypes()
                                                            .Where(t => t.Namespace == typeof(IEventStoreIntegrity<>).Namespace)
                                                            .Append(typeof(EventRegistrationBuilder<,>))
+                                                           .Append(typeof(IEventStore<>))
                                                            .Append(typeof(IntegrityProtectionBuilder<>))
                                                            .Append(typeof(MongoBuilderExtensions))
                                                            .Append(typeof(MongoEventStoreBuilder<>))
@@ -153,6 +154,7 @@ public class PublicIntegritySurfaceTests
     private static String Modifiers(MethodInfo method)
         => method.IsStatic ? "static " :
             method.DeclaringType is { IsInterface: false } && method.IsAbstract ? "abstract " :
+            method.DeclaringType is { IsInterface: false } && method.GetBaseDefinition().DeclaringType != method.DeclaringType ? "override " :
             method.IsVirtual && !method.IsFinal && method.DeclaringType is { IsInterface: false } ? "virtual " : "";
 
     /// <summary>

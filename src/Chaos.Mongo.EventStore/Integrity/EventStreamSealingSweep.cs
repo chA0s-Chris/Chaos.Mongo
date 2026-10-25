@@ -115,6 +115,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                     // failures abort the pass instead, so the retry resumes at this stream.
                     _logger.LogError(ex, "Stream {AggregateId} in collection {CollectionName} cannot be sealed",
                                      streamId, _options.EventsCollectionName);
+                    state.StreamsFailed++;
                 }
             }
 
@@ -251,7 +252,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
                                         CancellationToken cancellationToken)
     {
         var update = Builders<IntegritySealingState>.Update
-                                                    .Inc(s => s.EventsSealed, (Int64)sealedCount)
+                                                    .Inc(s => s.EventsSealed, sealedCount)
                                                     .Inc(s => s.StreamsSealed, state.LastSealedStream == aggregateId ? 0L : 1L)
                                                     .Set(s => s.LastSealedStream, aggregateId);
         return GetStateCollection().UpdateOneAsync(session,
@@ -299,6 +300,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             Builders<IntegritySealingState>.Update
                                            .Set(s => s.Cursor, state.Cursor)
                                            .Set(s => s.StreamsChecked, state.StreamsChecked)
+                                           .Set(s => s.StreamsFailed, state.StreamsFailed)
                                            .Set(s => s.PassCompletedUtc, state.PassCompletedUtc),
             cancellationToken: cancellationToken);
 

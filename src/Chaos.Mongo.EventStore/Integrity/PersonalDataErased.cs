@@ -11,7 +11,8 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// Its class map is registered for every aggregate type, so streams containing it still deserialize when protection
 /// is disabled. Its constructor and setters are public for deserialization only: the event is an output of
 /// <see cref="IPersonalDataEraser{TAggregate}.ErasePersonalDataAsync"/>, and
-/// <see cref="IEventStore{TAggregate}.AppendEventsAsync"/> rejects one created elsewhere.
+/// <see cref="IEventStore{TAggregate}.AppendEventsAsync"/> rejects one created elsewhere, in protected and unprotected
+/// event stores alike, so copying a stream with a past erasure means writing its documents directly.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 public sealed class PersonalDataErased<TAggregate> : ObservationalEvent<TAggregate>

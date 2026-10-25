@@ -442,6 +442,10 @@ internal sealed class AnchoringRun
             try
             {
                 token = await authority.TimestampAsync(anchor.AnchorDigest, HashAlgorithmName.SHA256, cancellationToken);
+
+                // Every token is checked before it is stored, so a custom authority cannot complete an anchor with
+                // a token that verification would reject.
+                TimestampTokenValidation.ValidateReceived(token, anchor.AnchorDigest);
             }
             catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
             {

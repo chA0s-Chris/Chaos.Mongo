@@ -216,6 +216,33 @@ public class AnchoringRunTests
     }
 
     [Test]
+    [TestCase("garbage", "single RFC 3161 token")]
+    [TestCase("noChain", "without its certificate chain")]
+    [TestCase("otherTime", "time differs")]
+    [TestCase("otherSigner", "does not start with its signing certificate")]
+    public async Task RunAsync_CustomAuthorityReturnsInvalidToken_RecordsTheFailureWithoutStoringIt(String change, String failure)
+    {
+        var context = await CreateContextAsync();
+        var testAuthority = CreateTestAuthority();
+        var custom = new ChangingAuthority(testAuthority.CreateAuthority(name: "custom"), token => change switch
+        {
+            "garbage" => new TimestampToken([0x30, 0x03, 0x02, 0x01, 0x01], token.CertificateChain, token.CertificateRevocationLists, token.Timestamp),
+            "noChain" => new TimestampToken(token.Token, [], token.CertificateRevocationLists, token.Timestamp),
+            "otherTime" => new TimestampToken(token.Token, token.CertificateChain, token.CertificateRevocationLists, token.Timestamp.AddSeconds(1)),
+            _ => new TimestampToken(token.Token, token.CertificateChain.Reverse().ToList(), token.CertificateRevocationLists, token.Timestamp)
+        });
+        var run = CreateRun(context, CreateTestAuthority().CreateAuthority(name: "reliable"), custom);
+        await context.AppendStreamAsync(1);
+
+        var result = await RunUntilAsync(run, AnchoringRunOutcome.Completed);
+
+        var anchor = result.Anchor!;
+        anchor.Timestamps.Select(timestamp => timestamp.Authority).Should().Equal("reliable");
+        anchor.AuthorityFailures.Should().ContainSingle().Which.Should().Match<AnchorAuthorityFailure>(entry =>
+                                                                                                           entry.Authority == "custom" && entry.LastFailure.Contains(failure));
+    }
+
+    [Test]
     public async Task RunAsync_DiscardedAttempts_DeletesTheirLeavesAndRemovesOldAttempts()
     {
         var context = await CreateContextAsync();
@@ -763,5 +790,30 @@ public class AnchoringRunTests
         testAuthority ??= new TestTimestampAuthority();
         _testAuthorities.Add(testAuthority);
         return testAuthority;
+    }
+
+    /// <summary>
+    /// An authority that stamps through another one and changes the token it returns, like a faulty custom authority.
+    /// </summary>
+    private sealed class ChangingAuthority : ITimestampAuthority
+    {
+        private readonly Func<TimestampToken, TimestampToken> _change;
+        private readonly ITimestampAuthority _inner;
+
+        public ChangingAuthority(ITimestampAuthority inner, Func<TimestampToken, TimestampToken> change)
+        {
+            _inner = inner;
+            _change = change;
+        }
+
+        public String Name => _inner.Name;
+
+        public Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
+                                                             DateTimeOffset issuedNotBefore,
+                                                             CancellationToken cancellationToken)
+            => _inner.GetRevocationListsAsync(certificateChain, issuedNotBefore, cancellationToken);
+
+        public async Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
+            => _change(await _inner.TimestampAsync(digest, algorithm, cancellationToken));
     }
 }

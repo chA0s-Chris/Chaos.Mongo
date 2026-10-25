@@ -10,7 +10,8 @@ using NUnit.Framework;
 using Testcontainers.MongoDb;
 
 /// <summary>
-/// Uses the feature only through its public services, as a consumer would.
+/// Uses the feature through its public services, as a consumer would. Only the sealing pass and the anchoring run are
+/// driven through internal services, so the test does not wait for their background loops.
 /// </summary>
 public class PublicIntegrityApiIntegrationTests
 {
@@ -20,7 +21,7 @@ public class PublicIntegrityApiIntegrationTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
-    public async Task PublicServices_ProtectAnchorVerifyAndEraseAStream()
+    public async Task PublicServices_ProtectedStream_AreAnchoredVerifiedAndErased()
     {
         using var testAuthority = new TestTimestampAuthority();
         var root = testAuthority.Root;
@@ -38,8 +39,14 @@ public class PublicIntegrityApiIntegrationTests
         var statusBeforePass = await integrity.GetSealingStatusAsync();
         await context.Sweep.RunPassAsync();
         var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
         while ((await integrity.VerifyEventAnchorAsync(aggregateId, 2)).Status != EventAnchorStatus.Anchored)
         {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException("The stream was not anchored within 15 seconds.");
+            }
+
             await run.RunAsync();
         }
 
@@ -58,7 +65,8 @@ public class PublicIntegrityApiIntegrationTests
         }
 
         statusBeforePass.Should().BeNull();
-        (await integrity.GetSealingStatusAsync()).Should().Match<IntegritySealingStatus?>(s => s != null && !s.IsPassInProgress && s.StreamsChecked == 1);
+        (await integrity.GetSealingStatusAsync()).Should()
+                                                 .Match<IntegritySealingStatus?>(s => s != null && !s.IsPassInProgress && s.IsCompleteWithoutFailures && s.StreamsChecked == 1);
         stream.IsIntact.Should().BeTrue();
         stream.Events.Single(e => e.Version == 1).PersonalData.Single(p => p.Path == "Memo").Status.Should().Be(PersonalDataStatus.ErasedWithRecord);
         derived.IsConsistent.Should().BeTrue();

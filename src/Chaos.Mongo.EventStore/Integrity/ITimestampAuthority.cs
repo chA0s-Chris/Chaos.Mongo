@@ -47,6 +47,12 @@ public interface ITimestampAuthority
     /// <param name="algorithm">The hash algorithm of the digest; only SHA-256 is accepted.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The validated token with the evidence captured at stamping time.</returns>
+    /// <remarks>
+    /// Anchoring checks every returned token before storing it: it must be one DER-encoded RFC 3161 token over the
+    /// digest whose signature verifies with the returned chain, which starts with the signing certificate, whose time is
+    /// <see cref="TimestampToken.Timestamp"/>, and whose signer and algorithms meet the verification rules. A token
+    /// that fails counts as a failed request. Its chain's trust and policy are checked at verification.
+    /// </remarks>
     /// <exception cref="ArgumentException">Thrown when the algorithm is not SHA-256 or the digest has the wrong length.</exception>
     /// <exception cref="TimestampAuthorityException">Thrown when no valid token could be obtained.</exception>
     Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken);

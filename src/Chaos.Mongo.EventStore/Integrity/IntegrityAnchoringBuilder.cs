@@ -55,8 +55,10 @@ public sealed class IntegrityAnchoringBuilder
     /// </summary>
     /// <param name="threshold">The threshold.</param>
     /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="threshold"/> is not positive.</exception>
     public IntegrityAnchoringBuilder WithDelayThreshold(TimeSpan threshold)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(threshold, TimeSpan.Zero);
         Options.DelayThreshold = threshold;
         return this;
     }
@@ -66,8 +68,10 @@ public sealed class IntegrityAnchoringBuilder
     /// </summary>
     /// <param name="interval">The interval.</param>
     /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="interval"/> is not positive.</exception>
     public IntegrityAnchoringBuilder WithInterval(TimeSpan interval)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero);
         Options.Interval = interval;
         return this;
     }
@@ -77,32 +81,39 @@ public sealed class IntegrityAnchoringBuilder
     /// </summary>
     /// <param name="maximum">The maximum.</param>
     /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maximum"/> is not positive.</exception>
     public IntegrityAnchoringBuilder WithMaxLeavesPerAnchor(Int32 maximum)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximum);
         Options.MaxLeavesPerAnchor = maximum;
         return this;
     }
 
     /// <summary>
     /// Sets the number of valid timestamp tokens an anchor needs to complete. Defaults to 1; it must not exceed the
-    /// number of authorities.
+    /// number of authorities, which is checked once the configuration is complete.
     /// </summary>
     /// <param name="minimum">The minimum.</param>
     /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="minimum"/> is not positive.</exception>
     public IntegrityAnchoringBuilder WithMinimumTimestampTokens(Int32 minimum)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(minimum);
         Options.MinimumTimestampTokens = minimum;
         return this;
     }
 
     /// <summary>
     /// Sets the age of the oldest timestamp token with an unconfirmed revocation status above which the revocation
-    /// confirmation delay is reported. Defaults to 72 hours; it must exceed the revocation grace period.
+    /// confirmation delay is reported. Defaults to 72 hours; it must exceed the revocation grace period, which is
+    /// checked once the configuration is complete.
     /// </summary>
     /// <param name="threshold">The threshold.</param>
     /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="threshold"/> is not positive.</exception>
     public IntegrityAnchoringBuilder WithRevocationConfirmationDelayThreshold(TimeSpan threshold)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(threshold, TimeSpan.Zero);
         Options.RevocationConfirmationDelayThreshold = threshold;
         return this;
     }
@@ -113,8 +124,10 @@ public sealed class IntegrityAnchoringBuilder
     /// </summary>
     /// <param name="gracePeriod">The grace period.</param>
     /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="gracePeriod"/> is not positive.</exception>
     public IntegrityAnchoringBuilder WithRevocationGracePeriod(TimeSpan gracePeriod)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(gracePeriod, TimeSpan.Zero);
         Options.RevocationGracePeriod = gracePeriod;
         return this;
     }
@@ -149,7 +162,9 @@ public sealed class IntegrityAnchoringBuilder
     /// </summary>
     /// <remarks>
     /// Authority names must be unique. For custom authorities this is checked when the anchoring run is created,
-    /// because they only exist once the service provider is built.
+    /// because they only exist once the service provider is built. Anchoring checks every token a custom authority
+    /// returns before storing it, see <see cref="ITimestampAuthority.TimestampAsync"/>; trust its roots for
+    /// verification with <c>WithIntegrityVerification</c>.
     /// </remarks>
     /// <param name="factory">Creates the authority.</param>
     /// <returns>The builder for method chaining.</returns>
@@ -169,7 +184,10 @@ public sealed class IntegrityAnchoringBuilder
     /// <summary>
     /// Throws when the configuration cannot anchor.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when no authority is configured or a setting is out of range.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no authority is configured, the minimum number of tokens exceeds the number of authorities, or the
+    /// revocation confirmation delay threshold does not exceed the revocation grace period.
+    /// </exception>
     internal void Validate()
     {
         if (_authorities.Count == 0)
@@ -179,20 +197,15 @@ public sealed class IntegrityAnchoringBuilder
                 $"Add one with {nameof(WithRfc3161TimestampAuthority)} or {nameof(WithTimestampAuthority)}.");
         }
 
-        if (Options.MinimumTimestampTokens < 1 || Options.MinimumTimestampTokens > _authorities.Count)
+        if (Options.MinimumTimestampTokens > _authorities.Count)
         {
             throw new InvalidOperationException(
-                $"The minimum number of timestamp tokens per anchor must be between 1 and the number of authorities ({_authorities.Count}).");
+                $"The minimum number of timestamp tokens per anchor must not exceed the number of authorities ({_authorities.Count}).");
         }
 
-        if (Options.Interval <= TimeSpan.Zero || Options.DelayThreshold <= TimeSpan.Zero || Options.MaxLeavesPerAnchor < 1)
+        if (Options.RevocationConfirmationDelayThreshold <= Options.RevocationGracePeriod)
         {
-            throw new InvalidOperationException("The anchoring interval, the delay threshold and the maximum number of leaves must be positive.");
-        }
-
-        if (Options.RevocationGracePeriod <= TimeSpan.Zero || Options.RevocationConfirmationDelayThreshold <= Options.RevocationGracePeriod)
-        {
-            throw new InvalidOperationException("The revocation grace period must be positive and less than the revocation confirmation delay threshold.");
+            throw new InvalidOperationException("The revocation grace period must be less than the revocation confirmation delay threshold.");
         }
     }
 }

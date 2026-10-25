@@ -7,8 +7,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// its failure and the unrecorded erasures, not the per-version details.
 /// </summary>
 /// <remarks>
-/// Records of the integrity API that hold byte arrays, such as <see cref="VerifiedEvent"/>, compare those arrays by
-/// reference, as records do; compare hashes and digests with <c>SequenceEqual</c>.
+/// Records of the integrity API that hold byte arrays or collections, such as <see cref="VerifiedEvent"/>,
+/// <see cref="DerivedDataVerificationResult"/>, <see cref="EventAnchorVerificationResult"/> and
+/// <see cref="CompletedAnchor"/>, compare them by reference, as records do, so two separately obtained results are not
+/// equal; compare hashes, digests and lists with <c>SequenceEqual</c>.
 /// </remarks>
 /// <param name="FirstBrokenVersion">The first version whose verification failed, or <c>null</c> when the stream is intact.</param>
 /// <param name="Failure">Why the first broken version failed, or <c>null</c> when the stream is intact.</param>
@@ -49,6 +51,10 @@ public sealed record StreamVerificationResult(
     /// </summary>
     internal static StreamVerificationResult Intact { get; } = new(null, null, []);
 
+    /// <summary>
+    /// Gets a hash code of the verdict, consistent with <see cref="Equals(StreamVerificationResult)"/>.
+    /// </summary>
+    /// <returns>The hash code.</returns>
     public override Int32 GetHashCode()
         => HashCode.Combine(FirstBrokenVersion, Failure, UnrecordedErasures.Count);
 
@@ -72,6 +78,12 @@ public sealed record StreamVerificationResult(
         return unrecordedErasures.Count == 0 ? Intact : new StreamVerificationResult(null, null, unrecordedErasures);
     }
 
+    /// <summary>
+    /// Compares the verdict: the first broken version, its failure and the unrecorded erasures, not the per-version
+    /// details.
+    /// </summary>
+    /// <param name="other">The result to compare with.</param>
+    /// <returns><c>true</c> when both results reach the same verdict.</returns>
     public Boolean Equals(StreamVerificationResult? other)
         => other is not null &&
            FirstBrokenVersion == other.FirstBrokenVersion &&

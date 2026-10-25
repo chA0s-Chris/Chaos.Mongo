@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -373,6 +374,9 @@ public class IntegritySealingIntegrationTests
         var status = await protectedContext.Sweep.GetStatusAsync();
         status.Should().NotBeNull();
         status.StreamsChecked.Should().Be(3);
+        status.StreamsFailed.Should().Be(1);
+        (await protectedContext.ServiceProvider.GetRequiredService<IEventStoreIntegrity<LedgerAggregate>>().GetSealingStatusAsync())
+            .Should().Match<IntegritySealingStatus?>(s => s != null && s.StreamsFailed == 1 && !s.IsCompleteWithoutFailures);
     }
 
     [Test]
@@ -499,6 +503,7 @@ public class IntegritySealingIntegrationTests
         status.StreamsChecked.Should().Be(4);
         status.StreamsSealed.Should().Be(3);
         status.EventsSealed.Should().Be(6);
+        status.StreamsFailed.Should().Be(0);
         status.PassStartedUtc.Should().NotBeNull();
         status.PassCompletedUtc.Should().NotBeNull();
         status.IsPassInProgress.Should().BeFalse();

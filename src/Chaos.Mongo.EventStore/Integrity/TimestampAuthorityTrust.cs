@@ -10,6 +10,12 @@ using System.Security.Cryptography.X509Certificates;
 public sealed class TimestampAuthorityTrust
 {
     /// <summary>
+    /// Creates empty trust settings; consumers receive them from
+    /// <see cref="IntegrityVerificationBuilder.WithTimestampAuthorityTrust"/>.
+    /// </summary>
+    internal TimestampAuthorityTrust() { }
+
+    /// <summary>
     /// Gets or sets the object identifier of the policy the authority's tokens must be issued under, or <c>null</c>
     /// to accept any policy.
     /// </summary>

@@ -137,7 +137,7 @@ public static class MongoBuilderExtensions
         }
 
         var options = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
-        var configured = builder.Services.FirstOrDefault(s => s.ServiceType == typeof(IntegrityVerificationBuilder))?.ImplementationInstance as IntegrityVerificationBuilder;
+        var configured = builder.Services.Select(s => s.ImplementationInstance).OfType<IntegrityVerificationRegistration>().FirstOrDefault()?.Builder;
 
         // Collections named for verification never pre-fill the anchoring configuration, so the outcome does not depend
         // on the registration order.
@@ -211,7 +211,7 @@ public static class MongoBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
-        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityVerificationBuilder)))
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityVerificationRegistration)))
         {
             throw new InvalidOperationException("Integrity verification is already configured; configure it once at module level.");
         }
@@ -229,8 +229,9 @@ public static class MongoBuilderExtensions
             verificationBuilder.ApplyAnchorCollections();
         }
 
-        // Registered to detect a second configuration and an anchoring configuration with other collections.
-        builder.Services.AddSingleton(verificationBuilder);
+        // Registered to detect a second configuration and an anchoring configuration with other collections, without
+        // making the public builder resolvable.
+        builder.Services.AddSingleton(new IntegrityVerificationRegistration(verificationBuilder));
         AddAnchorVerifier(builder.Services);
         return builder;
     }
