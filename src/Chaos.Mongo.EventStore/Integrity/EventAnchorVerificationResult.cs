@@ -10,7 +10,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// Why the anchoring does not verify, or <c>null</c> unless <paramref name="Status"/> is
 /// <see cref="EventAnchorStatus.Failed"/>.
 /// </param>
-/// <param name="Anchor">The anchor that covers the event, or <c>null</c> when none does.</param>
+/// <param name="Anchor">
+/// The covering anchor that verified, or the first covering anchor when none did, or <c>null</c> when no anchor covers
+/// the event.
+/// </param>
 /// <param name="LeafVersion">
 /// The version of the stream's leaf in that anchor, or <c>null</c> when no anchor covers the
 /// event.

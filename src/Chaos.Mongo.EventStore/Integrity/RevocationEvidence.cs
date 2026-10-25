@@ -41,6 +41,17 @@ internal static class RevocationEvidence
         var entries = new List<RevokedCertificate>();
         foreach (var crl in lists)
         {
+            // A CRL whose entries cannot be decoded cannot show a revocation, so it counts for no point.
+            IReadOnlyList<RevokedCertificate> crlEntries;
+            try
+            {
+                crlEntries = RevokedCertificate.DecodeAll(crl);
+            }
+            catch (AsnContentException)
+            {
+                continue;
+            }
+
             var counts = false;
             for (var index = 0; index < sources.Count; index++)
             {
@@ -53,7 +64,7 @@ internal static class RevocationEvidence
 
             if (counts)
             {
-                entries.AddRange(RevokedCertificate.DecodeAll(crl));
+                entries.AddRange(crlEntries);
             }
         }
 

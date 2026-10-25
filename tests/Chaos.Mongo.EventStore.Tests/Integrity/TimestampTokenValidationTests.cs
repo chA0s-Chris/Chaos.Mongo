@@ -7,6 +7,7 @@ using FluentAssertions;
 using NUnit.Framework;
 using System.Formats.Asn1;
 using System.Security.Cryptography;
+using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 
 public class TimestampTokenValidationTests
@@ -65,6 +66,22 @@ public class TimestampTokenValidationTests
         {
             act.Should().NotThrow();
         }
+    }
+
+    [Test]
+    public async Task ValidateContent_CountersignatureAttributeOfAnyValue_ThrowsTimestampTokenValidationException()
+    {
+        using var authority = new TestTimestampAuthority();
+        var token = (await authority.CreateAuthority().TimestampAsync(SHA256.HashData([1]), HashAlgorithmName.SHA256, CancellationToken.None)).Token;
+        var signedCms = new SignedCms();
+        signedCms.Decode(token);
+        // The attribute is unsigned, so anyone storing the token can add it; its type alone marks a countersignature.
+        signedCms.SignerInfos[0].AddUnsignedAttribute(new AsnEncodedData("1.2.840.113549.1.9.6", [0x05, 0x00]));
+        Rfc3161TimestampToken.TryDecode(signedCms.Encode(), out var modified, out _).Should().BeTrue();
+
+        var act = () => TimestampTokenValidation.ValidateContent(modified ?? throw new AssertionException("The modified token does not decode."));
+
+        act.Should().Throw<TimestampTokenValidationException>().WithMessage("*countersignature*");
     }
 
     [Test]

@@ -299,6 +299,14 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 
     /// <summary>
     /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
+    /// week, with one entry whose serial number is <paramref name="encodedSerialNumber"/> as given, for example not
+    /// minimally encoded.
+    /// </summary>
+    public Byte[] BuildCrlWithEncodedSerialNumber(DateTimeOffset thisUpdate, Byte[] encodedSerialNumber)
+        => BuildSignedCrl(thisUpdate, [(encodedSerialNumber, thisUpdate.AddDays(-1))], []);
+
+    /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
     /// week, that carries exactly the given CRL extensions.
     /// </summary>
     public Byte[] BuildCrlWithExtensions(DateTimeOffset thisUpdate, params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
@@ -311,64 +319,15 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public Byte[] BuildCrlWithExtensions(DateTimeOffset thisUpdate,
                                          IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt)> revoked,
                                          params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
-    {
-        var tbs = new AsnWriter(AsnEncodingRules.DER);
-        using (tbs.PushSequence())
-        {
-            tbs.WriteInteger(1);
-            WriteEcdsaWithSha256(tbs);
-            tbs.WriteEncodedValue(Root.SubjectName.RawData);
-            tbs.WriteUtcTime(thisUpdate);
-            tbs.WriteUtcTime(thisUpdate.AddDays(7));
-            if (revoked.Count > 0)
-            {
-                using (tbs.PushSequence())
-                {
-                    foreach (var (serialNumber, revokedAt) in revoked)
-                    {
-                        using (tbs.PushSequence())
-                        {
-                            tbs.WriteIntegerUnsigned(serialNumber);
-                            tbs.WriteUtcTime(revokedAt);
-                        }
-                    }
-                }
-            }
-
-            if (extensions.Length > 0)
-            {
-                using (tbs.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
-                using (tbs.PushSequence())
-                {
-                    foreach (var (oid, critical, value) in extensions)
-                    {
-                        using (tbs.PushSequence())
-                        {
-                            tbs.WriteObjectIdentifier(oid);
-                            if (critical)
-                            {
-                                tbs.WriteBoolean(true);
-                            }
-
-                            tbs.WriteOctetString(value);
-                        }
-                    }
-                }
-            }
-        }
-
-        var tbsBytes = tbs.Encode();
-        using var key = Root.GetECDsaPrivateKey() ?? throw new InvalidOperationException("The test root has no ECDSA private key.");
-        var writer = new AsnWriter(AsnEncodingRules.DER);
-        using (writer.PushSequence())
-        {
-            writer.WriteEncodedValue(tbsBytes);
-            WriteEcdsaWithSha256(writer);
-            writer.WriteBitString(key.SignData(tbsBytes, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence));
-        }
-
-        return writer.Encode();
-    }
+        => BuildSignedCrl(thisUpdate,
+                          revoked.Select(entry =>
+                                 {
+                                     var serialNumber = new AsnWriter(AsnEncodingRules.DER);
+                                     serialNumber.WriteIntegerUnsigned(entry.SerialNumber);
+                                     return (serialNumber.Encode(), entry.RevokedAt);
+                                 })
+                                 .ToList(),
+                          extensions);
 
     /// <summary>
     /// Encodes an unsigned CRL of the authority's CA issued at <paramref name="thisUpdate"/> without a next update; CRL
@@ -534,6 +493,71 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         {
             writer.WriteObjectIdentifier("1.2.840.10045.4.3.2");
         }
+    }
+
+    /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, with entries whose serial numbers are given encoded.
+    /// </summary>
+    private Byte[] BuildSignedCrl(DateTimeOffset thisUpdate,
+                                  IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt)> revoked,
+                                  (String Oid, Boolean Critical, Byte[] Value)[] extensions)
+    {
+        var tbs = new AsnWriter(AsnEncodingRules.DER);
+        using (tbs.PushSequence())
+        {
+            tbs.WriteInteger(1);
+            WriteEcdsaWithSha256(tbs);
+            tbs.WriteEncodedValue(Root.SubjectName.RawData);
+            tbs.WriteUtcTime(thisUpdate);
+            tbs.WriteUtcTime(thisUpdate.AddDays(7));
+            if (revoked.Count > 0)
+            {
+                using (tbs.PushSequence())
+                {
+                    foreach (var (serialNumber, revokedAt) in revoked)
+                    {
+                        using (tbs.PushSequence())
+                        {
+                            tbs.WriteEncodedValue(serialNumber);
+                            tbs.WriteUtcTime(revokedAt);
+                        }
+                    }
+                }
+            }
+
+            if (extensions.Length > 0)
+            {
+                using (tbs.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+                using (tbs.PushSequence())
+                {
+                    foreach (var (oid, critical, value) in extensions)
+                    {
+                        using (tbs.PushSequence())
+                        {
+                            tbs.WriteObjectIdentifier(oid);
+                            if (critical)
+                            {
+                                tbs.WriteBoolean(true);
+                            }
+
+                            tbs.WriteOctetString(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        var tbsBytes = tbs.Encode();
+        using var key = Root.GetECDsaPrivateKey() ?? throw new InvalidOperationException("The test root has no ECDSA private key.");
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            writer.WriteEncodedValue(tbsBytes);
+            WriteEcdsaWithSha256(writer);
+            writer.WriteBitString(key.SignData(tbsBytes, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence));
+        }
+
+        return writer.Encode();
     }
 
     private Byte[] CreateResponse(Byte[] query)

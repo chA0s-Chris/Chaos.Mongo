@@ -358,6 +358,39 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    [TestCase("firstTokenHash", 2, 3)]
+    [TestCase("everyTokenHash", 1, 2)]
+    [TestCase("firstDigest", 1, 2)]
+    public async Task VerifyEventAnchorAsync_EventCoveredByTwoAnchors_FallsBackOnlyWhenNoTokenIsValid(String change, Int64 sequence, Int64 leafVersion)
+    {
+        var (status, failure) = change switch
+        {
+            "firstTokenHash" => (EventAnchorStatus.Anchored, (EventAnchorFailure?)null),
+            "everyTokenHash" => (EventAnchorStatus.Failed, EventAnchorFailure.NoValidTimestamp),
+            _ => (EventAnchorStatus.Failed, EventAnchorFailure.AnchorDigestMismatch)
+        };
+        var (context, _) = await CreateAnchoredContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.RunUntilAnchoredAsync(aggregateId, 2);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        var firstAnchor = new BsonDocument(AnchorStore.SequenceField, 1L);
+        await (change switch
+        {
+            "firstTokenHash" => GetStore(context).Anchors.UpdateOneAsync(firstAnchor,
+                                                                         Builders<BsonDocument>.Update.Set("Timestamps.0.TokenHash", new BsonBinaryData(new Byte[32]))),
+            "everyTokenHash" => GetStore(context).Anchors.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty,
+                                                                          Builders<BsonDocument>.Update.Set("Timestamps.0.TokenHash", new BsonBinaryData(new Byte[32]))),
+            _ => GetStore(context).Anchors.UpdateOneAsync(firstAnchor,
+                                                          Builders<BsonDocument>.Update.Set(AnchorStore.AnchorDigestField, new BsonBinaryData(new Byte[32])))
+        });
+
+        var result = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
+
+        (result.Status, result.Failure, result.Anchor?.Sequence, result.LeafVersion).Should().Be((status, failure, sequence, leafVersion));
+    }
+
+    [Test]
     public async Task VerifyEventAnchorAsync_TrustFromRfc3161Authority_VerifiesWithoutVerificationConfiguration()
     {
         var testAuthority = CreateTestAuthority();

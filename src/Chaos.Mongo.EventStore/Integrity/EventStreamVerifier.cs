@@ -29,8 +29,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// Verifies that an event is anchored: the chain from the event to the version of the first completed anchor that
-    /// covers it, the anchor's leaf and inclusion proof, the anchor's digest and its stored timestamp tokens. A stream
-    /// leaf before that anchor that cannot be read, or whose committed anchor cannot be read, fails the verification as
+    /// covers it, the anchor's leaf and inclusion proof, the anchor's digest and its stored timestamp tokens. When none
+    /// of that anchor's tokens is valid, for example because one was revoked, the next completed anchor that covers the
+    /// event is verified in the same way, so the evidence degrades to that anchor's time; the result names the anchor
+    /// that verified, or the first one when none does. Any other failure ends the verification. A stream leaf that
+    /// cannot be read, or whose committed anchor cannot be read, met before an anchor verified, fails it as
     /// <see cref="EventAnchorFailure.LeafHashMismatch"/>.
     /// </summary>
     /// <param name="aggregateId">The aggregate identifier.</param>
@@ -46,47 +49,24 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             return EventAnchorVerificationResult.NotChecked;
         }
 
-        var (first, unreadable) = await _anchors.Store.FindFirstCompletedStreamLeafAsync(_aggregateTypeName, aggregateId, version, cancellationToken);
-        if (unreadable)
+        EventAnchorVerificationResult? firstWithoutValidToken = null;
+        await foreach (var (covering, unreadable) in _anchors.Store.FindCompletedStreamLeavesInOrderAsync(_aggregateTypeName, aggregateId, version, cancellationToken))
         {
-            return new EventAnchorVerificationResult(EventAnchorStatus.Failed, EventAnchorFailure.LeafHashMismatch, null, null, []);
+            if (unreadable || covering is null)
+            {
+                return new EventAnchorVerificationResult(EventAnchorStatus.Failed, EventAnchorFailure.LeafHashMismatch, null, null, []);
+            }
+
+            var result = await VerifyEventAtAnchorAsync(_anchors, aggregateId, version, covering, cancellationToken);
+            if (result.Failure != EventAnchorFailure.NoValidTimestamp)
+            {
+                return result;
+            }
+
+            firstWithoutValidToken ??= result;
         }
 
-        if (first is null)
-        {
-            return EventAnchorVerificationResult.NotAnchored;
-        }
-
-        var (leaf, anchor) = first;
-        var reference = new AnchorReference(anchor.Id, anchor.Sequence);
-        var anchoredHash = await VerifyChainToAsync(aggregateId, version, leaf.Version, cancellationToken);
-        if (anchoredHash is null)
-        {
-            return Failed(EventAnchorFailure.ChainBroken, []);
-        }
-
-        if (!anchoredHash.AsSpan().SequenceEqual(leaf.Hash))
-        {
-            return Failed(EventAnchorFailure.LeafHashMismatch, []);
-        }
-
-        if (!AnchorVerifier.ProvesInclusion(leaf, anchor))
-        {
-            return Failed(EventAnchorFailure.InclusionProofInvalid, []);
-        }
-
-        var anchorResult = await _anchors.VerifyAnchorAsync(anchor, cancellationToken);
-        if (!anchorResult.DigestIsValid)
-        {
-            return Failed(EventAnchorFailure.AnchorDigestMismatch, anchorResult.Timestamps);
-        }
-
-        return anchorResult.IsVerified
-            ? new EventAnchorVerificationResult(EventAnchorStatus.Anchored, null, reference, leaf.Version, anchorResult.Timestamps)
-            : Failed(EventAnchorFailure.NoValidTimestamp, anchorResult.Timestamps);
-
-        EventAnchorVerificationResult Failed(EventAnchorFailure failure, IReadOnlyList<TimestampVerificationResult> timestamps)
-            => new(EventAnchorStatus.Failed, failure, reference, leaf.Version, timestamps);
+        return firstWithoutValidToken ?? EventAnchorVerificationResult.NotAnchored;
     }
 
     /// <summary>
@@ -99,8 +79,10 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// A consistent chain does not reveal deleted newest events or a deleted stream, because the remaining events still
     /// form a valid chain. Only the comparison with anchored leaves detects that, for anchored versions. A stream leaf
     /// that cannot be read, or whose committed anchor cannot be read, breaks the stream as
-    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/> at its version, or at version 1 when its version
-    /// cannot be read. The leaves themselves are authenticated by the anchor-chain verification, which should run too.
+    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/> at its version, or at version 1 when its version is a
+    /// number but not an integer. A leaf whose version is not a number is not selected by the query for the stream's
+    /// leaves at all; the anchor-chain verification, which binds the leaves to the anchor digests and should run too,
+    /// reports it.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
@@ -498,6 +480,47 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         }
 
         return expectedVersion == toVersion + 1 ? previousHash : null;
+    }
+
+    /// <summary>
+    /// Verifies an event against one completed anchor that covers it.
+    /// </summary>
+    private async Task<EventAnchorVerificationResult> VerifyEventAtAnchorAsync(AnchorVerifier anchors,
+                                                                               Guid aggregateId,
+                                                                               Int64 version,
+                                                                               CompletedStreamLeaf covering,
+                                                                               CancellationToken cancellationToken)
+    {
+        var (leaf, anchor) = covering;
+        var reference = new AnchorReference(anchor.Id, anchor.Sequence);
+        var anchoredHash = await VerifyChainToAsync(aggregateId, version, leaf.Version, cancellationToken);
+        if (anchoredHash is null)
+        {
+            return Failed(EventAnchorFailure.ChainBroken, []);
+        }
+
+        if (!anchoredHash.AsSpan().SequenceEqual(leaf.Hash))
+        {
+            return Failed(EventAnchorFailure.LeafHashMismatch, []);
+        }
+
+        if (!AnchorVerifier.ProvesInclusion(leaf, anchor))
+        {
+            return Failed(EventAnchorFailure.InclusionProofInvalid, []);
+        }
+
+        var anchorResult = await anchors.VerifyAnchorAsync(anchor, cancellationToken);
+        if (!anchorResult.DigestIsValid)
+        {
+            return Failed(EventAnchorFailure.AnchorDigestMismatch, anchorResult.Timestamps);
+        }
+
+        return anchorResult.IsVerified
+            ? new EventAnchorVerificationResult(EventAnchorStatus.Anchored, null, reference, leaf.Version, anchorResult.Timestamps)
+            : Failed(EventAnchorFailure.NoValidTimestamp, anchorResult.Timestamps);
+
+        EventAnchorVerificationResult Failed(EventAnchorFailure failure, IReadOnlyList<TimestampVerificationResult> timestamps)
+            => new(EventAnchorStatus.Failed, failure, reference, leaf.Version, timestamps);
     }
 
     /// <summary>

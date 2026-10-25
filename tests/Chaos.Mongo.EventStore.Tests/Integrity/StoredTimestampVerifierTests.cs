@@ -463,7 +463,9 @@ public class StoredTimestampVerifierTests
             authority.BuildCrl(timestamp.TimestampUtc.AddHours(1)),
             authority.OtherIssuerCrl,
             brokenSignature,
-            [1, 2, 3]
+            [1, 2, 3],
+            // An entry that cannot be decoded, here a serial number that is not minimally encoded, voids the CRL.
+            authority.BuildCrlWithEncodedSerialNumber(lateEnough, [0x02, 0x02, 0x00, 0x01])
         ];
 
         foreach (var crl in unusable)

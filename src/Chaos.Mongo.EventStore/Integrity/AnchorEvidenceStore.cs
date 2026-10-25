@@ -156,6 +156,9 @@ internal sealed class AnchorEvidenceStore
             { IndexField, index }
         };
 
+    /// <summary>
+    /// Reads fields of a stored document, reporting a missing field or one of another type as malformed evidence.
+    /// </summary>
     private static T Decode<T>(Byte[] hash, Func<T> decode)
     {
         try
@@ -181,9 +184,6 @@ internal sealed class AnchorEvidenceStore
         }
     }
 
-    /// <summary>
-    /// Reads fields of a stored document, reporting a missing field or one of another type as malformed evidence.
-    /// </summary>
     /// <summary>
     /// Reads stored item data, which is generic binary data (subtype 0x00).
     /// </summary>

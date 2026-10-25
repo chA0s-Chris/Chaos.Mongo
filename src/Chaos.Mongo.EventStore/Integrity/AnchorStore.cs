@@ -390,19 +390,21 @@ internal sealed class AnchorStore
         => (await ReadStreamLeavesAsync(aggregateType, aggregateId, minimumVersion, cancellationToken)).Completed;
 
     /// <summary>
-    /// Finds the first completed anchor, by sequence number, whose leaf for a stream has a version at least the given
-    /// one. It stops at that leaf, or at a stream leaf before it that cannot be read or whose committed anchor cannot
-    /// be read; leaves of missing or uncommitted anchors are skipped.
+    /// Enumerates the completed anchors, by sequence number, whose leaf for a stream has a version at least the given
+    /// one, with those leaves. A stream leaf that cannot be read, or whose committed anchor cannot be read, ends the
+    /// enumeration with an entry marked unreadable; leaves of missing or uncommitted anchors are skipped. The caller
+    /// reads only as far as it needs.
     /// </summary>
     /// <param name="aggregateType">The aggregate type name.</param>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="minimumVersion">The lowest leaf version to include.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The leaf and its anchor, or <c>null</c>, and whether an unreadable leaf or anchor came first.</returns>
-    public async Task<(CompletedStreamLeaf? Leaf, Boolean Unreadable)> FindFirstCompletedStreamLeafAsync(String aggregateType,
-                                                                                                         Guid aggregateId,
-                                                                                                         Int64 minimumVersion,
-                                                                                                         CancellationToken cancellationToken)
+    /// <returns>Each leaf with its anchor, and a last entry without a leaf when an unreadable leaf or anchor is met.</returns>
+    public async IAsyncEnumerable<(CompletedStreamLeaf? Leaf, Boolean Unreadable)> FindCompletedStreamLeavesInOrderAsync(
+        String aggregateType,
+        Guid aggregateId,
+        Int64 minimumVersion,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         using var cursor = await FindRaw(Leaves, StreamLeavesFilter(aggregateType, aggregateId, minimumVersion))
                                  .Sort(StreamLeavesSort())
@@ -413,7 +415,8 @@ internal sealed class AnchorStore
             {
                 if (!TryRead(document, ReadLeaf, out var leaf))
                 {
-                    return (null, true);
+                    yield return (null, true);
+                    yield break;
                 }
 
                 var anchorDocument = await FindRaw(Anchors, new BsonDocument("_id", ToBson(leaf.AnchorId))).FirstOrDefaultAsync(cancellationToken);
@@ -424,17 +427,16 @@ internal sealed class AnchorStore
 
                 if (!TryRead(anchorDocument, ReadAnchor, out var anchor))
                 {
-                    return (null, true);
+                    yield return (null, true);
+                    yield break;
                 }
 
                 if (anchor.Status == AnchorStatus.Completed && anchor.Sequence == leaf.AnchorSequence)
                 {
-                    return (new CompletedStreamLeaf(leaf, anchor), false);
+                    yield return (new CompletedStreamLeaf(leaf, anchor), false);
                 }
             }
         }
-
-        return (null, false);
     }
 
     /// <summary>
@@ -630,8 +632,9 @@ internal sealed class AnchorStore
     /// <summary>
     /// Reads the leaves of a stream with a version at least the given one: those in completed anchors, in anchor order,
     /// and the lowest version among stream leaves that cannot be read or whose committed anchor cannot be read, which
-    /// is version 1 when the leaf's version itself cannot be read. Leaves of missing or uncommitted anchors are ignored:
-    /// they belong to discarded attempts awaiting cleanup.
+    /// is version 1 when the leaf's version is a number but not an integer. A leaf whose version is not a number does
+    /// not match the version condition and is not read. Leaves of missing or uncommitted anchors are ignored: they
+    /// belong to discarded attempts awaiting cleanup.
     /// </summary>
     /// <param name="aggregateType">The aggregate type name.</param>
     /// <param name="aggregateId">The aggregate identifier.</param>

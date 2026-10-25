@@ -25,6 +25,7 @@ internal static class TimestampTokenValidation
     /// </summary>
     public const String TimeStampingPurposeOid = "1.3.6.1.5.5.7.3.8";
 
+    private const String CounterSignatureOid = "1.2.840.113549.1.9.6";
     private const String EcPublicKeyOid = "1.2.840.10045.2.1";
 
     /// <summary>
@@ -319,7 +320,8 @@ internal static class TimestampTokenValidation
             throw new TimestampTokenValidationException("the token's signed content is not exactly one TSTInfo.");
         }
 
-        if (signedCms.SignerInfos[0].CounterSignerInfos.Count > 0)
+        // A countersignature attribute counts whatever values it holds, as an independent verifier sees it.
+        if (signedCms.SignerInfos[0].UnsignedAttributes.Cast<CryptographicAttributeObject>().Any(attribute => attribute.Oid.Value == CounterSignatureOid))
         {
             throw new TimestampTokenValidationException("the token carries a countersignature besides the authority's signature.");
         }
