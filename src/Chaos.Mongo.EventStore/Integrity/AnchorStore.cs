@@ -598,11 +598,9 @@ internal sealed class AnchorStore
     /// <returns>The completed anchors by identifier.</returns>
     public async Task<Dictionary<Guid, AnchorReference>> ReadCompletedAnchorReferencesAsync(CancellationToken cancellationToken)
     {
+        // Read raw, so a value the driver rejects makes only that anchor unreadable; the chain check reports it.
         var documents = await Anchors.Find(new BsonDocument(StatusField, nameof(AnchorStatus.Completed)))
-                                     .Project(new BsonDocument
-                                     {
-                                         { SequenceField, 1 }
-                                     })
+                                     .Project(new BsonDocumentProjectionDefinition<BsonDocument, RawBsonDocument>(new BsonDocument(SequenceField, 1)))
                                      .ToListAsync(cancellationToken);
         var anchors = new Dictionary<Guid, AnchorReference>();
         foreach (var document in documents)

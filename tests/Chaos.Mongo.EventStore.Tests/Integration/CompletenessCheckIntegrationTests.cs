@@ -96,6 +96,27 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    [TestCase("shortUuid")]
+    [TestCase("boolean")]
+    public async Task CheckAsync_EventWithUnreadableIdentifier_ReportsItWhereTheWalkMeetsIt(String identifier)
+    {
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification());
+        var aggregateId = await context.AppendStreamAsync(1);
+        // A UUID that is not 16 bytes long makes the driver throw when it reads the value and sorts before the stream,
+        // because MongoDB orders binary data by length first; a boolean sorts after every UUID.
+        Byte[] value = identifier == "shortUuid" ? [0x05, .. "AggregateId"u8, 0x00, .. BitConverter.GetBytes(15), 0x04, .. new Byte[15]] : [0x08, .. "AggregateId"u8, 0x00, 0x01];
+        Byte[] fields = [.. value, 0x12, .. "Version"u8, 0x00, .. BitConverter.GetBytes(1L)];
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName)
+                     .InsertOneAsync(new RawBsonDocument([.. BitConverter.GetBytes(fields.Length + 5), .. fields, 0x00]));
+
+        var findings = await CheckAsync(context);
+
+        (CompletenessFindingKind, Guid?) unanchored = (CompletenessFindingKind.Unanchored, aggregateId);
+        (CompletenessFindingKind, Guid?) malformed = (CompletenessFindingKind.MalformedEvent, null);
+        findings.Select(f => (f.Kind, f.AggregateId)).Should().Equal(identifier == "shortUuid" ? [malformed, unanchored] : [unanchored, malformed]);
+    }
+
+    [Test]
     public async Task CheckAsync_FullyAnchoredStreams_ReportsNothing()
     {
         var context = await CreateAnchoredContextAsync();

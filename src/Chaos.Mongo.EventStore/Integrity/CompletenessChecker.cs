@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 /// <summary>
 /// Checks that every event of an aggregate type is covered by a completed anchor whose leaf for its stream has a
@@ -22,7 +23,9 @@ using System.Runtime.CompilerServices;
 /// its events can be read. Coverage counts the stored completed anchors without verifying their timestamp tokens: the
 /// chain of anchors proves their consistency, and a trusted head their authenticity up to it. Anchors after the trusted
 /// head, or all anchors without one, may have been appended consistently by someone with write access, which would
-/// hide unanchored events; <c>VerifyEventAnchorAsync</c> verifies the tokens that authenticate an anchor.
+/// hide unanchored events; whoever can obtain tokens from a configured authority, such as the operator, can even stamp
+/// such anchors again, and their tokens then only bound the time. A trusted head, or anchors replicated when they
+/// completed, detects that.
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, IAggregate, new()
@@ -274,7 +277,7 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         using var cursor = await _mongoHelper.Database.GetCollection<BsonDocument>(_options.EventsCollectionName)
                                              .Find(FilterDefinition<BsonDocument>.Empty)
                                              .Sort(sort)
-                                             .Project(projection)
+                                             .Project(new BsonDocumentProjectionDefinition<BsonDocument, RawBsonDocument>(projection))
                                              .ToCursorAsync(cancellationToken);
 
         Guid? currentId = null;
@@ -283,8 +286,22 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         {
             foreach (var document in cursor.Current)
             {
-                var summary = ReadSummary(document, out var readId, out var readVersion);
-                if (currentId is { } id && readId is { } nextId && id != nextId)
+                EventSummary? summary;
+                Guid? readId;
+                Int64? readVersion;
+                try
+                {
+                    summary = ReadSummary(document, out readId, out readVersion);
+                }
+                catch (Exception ex) when (ex is FormatException or DecoderFallbackException or InvalidOperationException)
+                {
+                    // Raw documents decode values on access, so a value the driver rejects, such as a UUID that is not
+                    // 16 bytes long, makes the document malformed instead of failing the walk.
+                    (summary, readId, readVersion) = (null, null, null);
+                }
+
+                // A document of another stream, or one whose stream cannot be read, ends the stream being collected.
+                if (currentId is { } id && readId != id)
                 {
                     yield return new WalkItem(id, events, null);
                     currentId = null;
