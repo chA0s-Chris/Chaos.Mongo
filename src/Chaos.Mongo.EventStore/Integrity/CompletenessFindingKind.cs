@@ -23,7 +23,8 @@ internal enum CompletenessFindingKind
     StreamDeleted,
 
     /// <summary>
-    /// A stream ends below a version a completed anchor covers, so its newest events were deleted.
+    /// A version up to one a completed anchor covers no longer exists: the stream ends below it, so its newest events
+    /// were deleted, or anchored events below its head were deleted.
     /// </summary>
     StreamTruncated,
 

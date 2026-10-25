@@ -7,7 +7,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 /// <param name="Kind">The kind of finding.</param>
 /// <param name="AggregateId">The stream, or <c>null</c> for a broken chain of anchors.</param>
-/// <param name="FirstVersion">The first version the finding concerns, or <c>null</c> when it concerns no version.</param>
+/// <param name="FirstVersion">
+/// The first version the finding concerns, for a deleted or truncated stream the lowest missing one, or <c>null</c> when
+/// it concerns no version.
+/// </param>
 /// <param name="LastVersion">
 /// The last version the finding concerns; for a deleted or truncated stream, the highest anchored version.
 /// </param>

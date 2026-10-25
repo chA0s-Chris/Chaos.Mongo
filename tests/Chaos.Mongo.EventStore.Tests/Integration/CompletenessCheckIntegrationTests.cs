@@ -38,6 +38,31 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    [TestCase("prefix", 1)]
+    [TestCase("anchoredHead", 3)]
+    public async Task CheckAsync_AnchoredVersionsDeletedBelowANewerHead_ReportsTruncatedStream(String deleted, Int64 firstMissing)
+    {
+        var context = await CreateAnchoredContextAsync();
+        var aggregateId = await AnchorNewStreamAsync(context, 3);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
+        await context.Events.DeleteManyAsync(deleted == "prefix"
+                                                 ? Builders<BsonDocument>.Filter.And(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId),
+                                                                                     Builders<BsonDocument>.Filter.Lte("Version", 3))
+                                                 : EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 3));
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().ContainEquivalentOf(new
+        {
+            Kind = CompletenessFindingKind.StreamTruncated,
+            AggregateId = (Guid?)aggregateId,
+            FirstVersion = (Int64?)firstMissing,
+            LastVersion = (Int64?)3,
+            HeadVersion = (Int64?)4
+        });
+    }
+
+    [Test]
     public async Task CheckAsync_BrokenAnchorChain_ReportsItFirst()
     {
         var context = await CreateAnchoredContextAsync();
@@ -312,6 +337,16 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_TrustedHeadWithoutPositiveSequence_ThrowsArgumentExceptionAtTheCall()
+    {
+        var context = await CreateAnchoredContextAsync();
+
+        var act = () => context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync(new TrustedAnchorHead(0, new Byte[32]));
+
+        act.Should().Throw<ArgumentException>().WithParameterName("trustedHead");
+    }
+
+    [Test]
     public async Task CheckAsync_UnanchoredEventsCreatedOutOfOrder_ReportsAgeOfTheOldest()
     {
         var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
@@ -346,13 +381,13 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
-    public async Task CheckAsync_WithoutAnchors_ThrowsInvalidOperationException()
+    public async Task CheckAsync_WithoutAnchors_ThrowsInvalidOperationExceptionAtTheCall()
     {
         var context = await CreateContextAsync();
 
-        var act = () => CheckAsync(context);
+        var act = () => context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync();
 
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*needs anchors*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*needs anchors*");
     }
 
     [OneTimeSetUp]

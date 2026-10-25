@@ -82,11 +82,7 @@ internal sealed class AnchorVerifier
     /// <exception cref="ArgumentException">Thrown when the trusted head has no positive sequence number or no SHA-256 digest.</exception>
     public async Task<AnchorChainVerificationResult> VerifyAnchorChainAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default)
     {
-        if (trustedHead is not null && (trustedHead.Sequence < 1 || trustedHead.AnchorDigest.Length != AnchorEncoding.HashLength))
-        {
-            throw new ArgumentException("A trusted head needs a positive sequence number and a SHA-256 anchor digest.", nameof(trustedHead));
-        }
-
+        ValidateTrustedHead(trustedHead);
         var expectedSequence = 1L;
         var previousDigest = FirstPreviousDigest;
         Byte[]? trustedSequenceDigest = null;
@@ -176,6 +172,19 @@ internal sealed class AnchorVerifier
     internal static Boolean ProvesInclusion(AnchorLeaf leaf, AnchorRecord anchor)
         => leaf.Hash.Length == AnchorEncoding.HashLength &&
            MerkleTree.VerifyInclusion(HashLeaf(leaf), leaf.Index, anchor.LeafCount, leaf.Proof, anchor.MerkleRoot);
+
+    /// <summary>
+    /// Requires a trusted head, when given, to have a positive sequence number and a SHA-256 anchor digest.
+    /// </summary>
+    /// <param name="trustedHead">The trusted head, or <c>null</c>.</param>
+    /// <exception cref="ArgumentException">Thrown when the trusted head has no positive sequence number or no SHA-256 digest.</exception>
+    internal static void ValidateTrustedHead(TrustedAnchorHead? trustedHead)
+    {
+        if (trustedHead is not null && (trustedHead.Sequence < 1 || trustedHead.AnchorDigest.Length != AnchorEncoding.HashLength))
+        {
+            throw new ArgumentException("A trusted head needs a positive sequence number and a SHA-256 anchor digest.", nameof(trustedHead));
+        }
+    }
 
     private static Boolean RecomputesDigest(AnchorRecord anchor)
     {

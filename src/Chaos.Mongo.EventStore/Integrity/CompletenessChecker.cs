@@ -9,7 +9,8 @@ using System.Text;
 
 /// <summary>
 /// Checks that every event of an aggregate type is covered by a completed anchor whose leaf for its stream has a
-/// version at or above the event's, and that every anchored stream still exists up to its anchored version.
+/// version at or above the event's, and that every version of an anchored stream up to its anchored version still
+/// exists.
 /// </summary>
 /// <remarks>
 /// An explicit audit operation: it walks the streams in aggregate identifier order, reading each event's version,
@@ -71,55 +72,14 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
     /// <see cref="MongoCursorNotFoundException"/>; consume the findings promptly and run the check again in that case.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when anchors are not configured.</exception>
-    public async IAsyncEnumerable<CompletenessFinding> CheckAsync(TrustedAnchorHead? trustedHead = null,
-                                                                  [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    /// <exception cref="ArgumentException">Thrown when the trusted head has no positive sequence number or no SHA-256 digest.</exception>
+    public IAsyncEnumerable<CompletenessFinding> CheckAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default)
     {
+        // Validated before the findings are enumerated, so a misconfigured call fails where it is made.
         var anchors = _anchors ?? throw new InvalidOperationException(
             "The completeness check needs anchors; configure integrity anchoring or verification at module level.");
-
-        var chain = await anchors.VerifyAnchorChainAsync(trustedHead, cancellationToken);
-        if (!chain.IsIntact)
-        {
-            yield return new CompletenessFinding(CompletenessFindingKind.AnchorChainBroken, null, null, null, null, null, null, chain);
-        }
-
-        var completedAnchors = await anchors.Store.ReadCompletedAnchorReferencesAsync(cancellationToken);
-        await using var leaves = new LeafReader(anchors.Store.StreamLeavesOfTypeAsync(_aggregateTypeName, cancellationToken), completedAnchors);
-        await leaves.InitializeAsync();
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-
-        await foreach (var item in WalkEventsAsync(cancellationToken))
-        {
-            // Streams that only appear in leaves come first in identifier order: every event of them was deleted.
-            while (item.AggregateId is { } aggregateId && leaves.Current is { } leaf && GuidOrder.Compare(leaf.AggregateId, aggregateId) < 0)
-            {
-                foreach (var finding in CheckStream(leaf.AggregateId, [], await leaves.TakeStreamAsync(leaf.AggregateId), now))
-                {
-                    yield return finding;
-                }
-            }
-
-            if (item.Malformed is { } malformed)
-            {
-                yield return malformed;
-                continue;
-            }
-
-            var streamId = item.AggregateId.GetValueOrDefault();
-            var streamLeaves = leaves.Current?.AggregateId == streamId ? await leaves.TakeStreamAsync(streamId) : [];
-            foreach (var finding in CheckStream(streamId, item.Events, streamLeaves, now))
-            {
-                yield return finding;
-            }
-        }
-
-        while (leaves.Current is { } remaining)
-        {
-            foreach (var finding in CheckStream(remaining.AggregateId, [], await leaves.TakeStreamAsync(remaining.AggregateId), now))
-            {
-                yield return finding;
-            }
-        }
+        AnchorVerifier.ValidateTrustedHead(trustedHead);
+        return CheckCoreAsync(anchors, trustedHead, cancellationToken);
     }
 
     /// <summary>
@@ -155,11 +115,13 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         var highest = leaves.OrderByDescending(leaf => leaf.Version).ThenBy(leaf => leaf.Anchor.Sequence).FirstOrDefault();
         var anchoredVersion = highest?.Version ?? 0;
 
-        if (highest is not null && anchoredVersion > head)
+        // Every version up to the anchored one must still exist, not only the head: anchored events below a newer head
+        // may have been deleted as well.
+        if (highest is not null && FirstMissingVersion(events, anchoredVersion) is { } firstMissing)
         {
             yield return new CompletenessFinding(head == 0 ? CompletenessFindingKind.StreamDeleted : CompletenessFindingKind.StreamTruncated,
                                                  aggregateId,
-                                                 head + 1,
+                                                 firstMissing,
                                                  anchoredVersion,
                                                  head,
                                                  null,
@@ -220,6 +182,25 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         return ranges;
     }
 
+    private static Int64? FirstMissingVersion(IReadOnlyList<EventSummary> events, Int64 anchoredVersion)
+    {
+        var expected = 1L;
+        foreach (var version in events.Select(e => e.Version).Where(version => version <= anchoredVersion))
+        {
+            if (version > expected)
+            {
+                return expected;
+            }
+
+            if (version == expected)
+            {
+                expected++;
+            }
+        }
+
+        return expected <= anchoredVersion ? expected : null;
+    }
+
     /// <summary>
     /// Reads a projected event. Its readable aggregate identifier and version are returned even when the other one
     /// cannot be read, so a malformed event can be reported with them.
@@ -252,6 +233,55 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
             ? date.ToUniversalTime()
             : null;
         return new EventSummary(eventVersion, integrity is not null, sealMode, createdUtc);
+    }
+
+    private async IAsyncEnumerable<CompletenessFinding> CheckCoreAsync(AnchorVerifier anchors,
+                                                                       TrustedAnchorHead? trustedHead,
+                                                                       [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var chain = await anchors.VerifyAnchorChainAsync(trustedHead, cancellationToken);
+        if (!chain.IsIntact)
+        {
+            yield return new CompletenessFinding(CompletenessFindingKind.AnchorChainBroken, null, null, null, null, null, null, chain);
+        }
+
+        var completedAnchors = await anchors.Store.ReadCompletedAnchorReferencesAsync(cancellationToken);
+        await using var leaves = new LeafReader(anchors.Store.StreamLeavesOfTypeAsync(_aggregateTypeName, cancellationToken), completedAnchors);
+        await leaves.InitializeAsync();
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+        await foreach (var item in WalkEventsAsync(cancellationToken))
+        {
+            // Streams that only appear in leaves come first in identifier order: every event of them was deleted.
+            while (item.AggregateId is { } aggregateId && leaves.Current is { } leaf && GuidOrder.Compare(leaf.AggregateId, aggregateId) < 0)
+            {
+                foreach (var finding in CheckStream(leaf.AggregateId, [], await leaves.TakeStreamAsync(leaf.AggregateId), now))
+                {
+                    yield return finding;
+                }
+            }
+
+            if (item.Malformed is { } malformed)
+            {
+                yield return malformed;
+                continue;
+            }
+
+            var streamId = item.AggregateId.GetValueOrDefault();
+            var streamLeaves = leaves.Current?.AggregateId == streamId ? await leaves.TakeStreamAsync(streamId) : [];
+            foreach (var finding in CheckStream(streamId, item.Events, streamLeaves, now))
+            {
+                yield return finding;
+            }
+        }
+
+        while (leaves.Current is { } remaining)
+        {
+            foreach (var finding in CheckStream(remaining.AggregateId, [], await leaves.TakeStreamAsync(remaining.AggregateId), now))
+            {
+                yield return finding;
+            }
+        }
     }
 
     /// <summary>
