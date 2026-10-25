@@ -312,6 +312,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             try
             {
                 TimestampTokenValidation.ValidateContent(token);
+                TimestampTokenValidation.RequireDer(rawToken);
                 TimestampTokenValidation.ValidatePolicy(token, _policyId);
                 ValidateTime(token);
                 TimestampTokenValidation.ValidateSigner(signer);

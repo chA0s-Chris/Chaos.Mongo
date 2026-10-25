@@ -61,7 +61,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// TSA name its subject alternative names extension carries <paramref name="rawAlternativeNames"/> when given.
     /// The CA's CRL lists <paramref name="revokedCertificates"/> revoked certificates, about 28 bytes each, so tests
     /// can capture large CRLs. With <paramref name="nonCriticalPurpose"/> the signer's extended key usage extension is
-    /// not critical.
+    /// not critical. The root carries <paramref name="rootKeyUsage"/>.
     /// </summary>
     public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                   Byte[]? rawCrlDistributionPoints = null,
@@ -75,11 +75,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   Byte[]? rawAlternativeNames = null,
                                   Int32? rsaKeySize = null,
                                   Int32 revokedCertificates = 0,
-                                  Boolean nonCriticalPurpose = false)
+                                  Boolean nonCriticalPurpose = false,
+                                  X509KeyUsageFlags rootKeyUsage = X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
-        Root = CreateRoot("CN=Chaos.Mongo Test TSA Root", notBefore, notAfter);
+        Root = CreateRoot("CN=Chaos.Mongo Test TSA Root", notBefore, notAfter, rootKeyUsage);
         _alternativeTsaName = alternativeTsaName;
 
         var rsaSigner = rawKeyUsage is not null || rsaKeySize is not null;
@@ -138,13 +139,19 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             : null;
         var certificate = patched ?? issued;
         SigningCertificate = ecdsaKey is not null ? certificate.CopyWithPrivateKey(ecdsaKey) : certificate.CopyWithPrivateKey(rsaKey!);
-        Crl = BuildRevocationList(revokedCertificates, notBefore).Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
-        ExpiredCrl = new CertificateRevocationListBuilder().Build(Root,
-                                                                  BigInteger.One,
-                                                                  DateTimeOffset.UtcNow.AddDays(-1),
-                                                                  HashAlgorithmName.SHA256,
-                                                                  thisUpdate: DateTimeOffset.UtcNow.AddDays(-2));
-        using var otherRoot = CreateRoot(OtherIssuerName, notBefore, notAfter);
+        // The BCL's builder refuses an issuer without cRLSign, so such a root's CRLs are encoded directly.
+        var rootSignsCrls = rootKeyUsage.HasFlag(X509KeyUsageFlags.CrlSign);
+        Crl = rootSignsCrls
+            ? BuildRevocationList(revokedCertificates, notBefore).Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256)
+            : BuildCrlWithExtensions(DateTimeOffset.UtcNow);
+        ExpiredCrl = rootSignsCrls
+            ? new CertificateRevocationListBuilder().Build(Root,
+                                                           BigInteger.One,
+                                                           DateTimeOffset.UtcNow.AddDays(-1),
+                                                           HashAlgorithmName.SHA256,
+                                                           thisUpdate: DateTimeOffset.UtcNow.AddDays(-2))
+            : BuildCrlWithExtensions(DateTimeOffset.UtcNow.AddDays(-9));
+        using var otherRoot = CreateRoot(OtherIssuerName, notBefore, notAfter, X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign);
         OtherIssuerCrl = new CertificateRevocationListBuilder().Build(otherRoot, BigInteger.One, notAfter, HashAlgorithmName.SHA256);
     }
 
@@ -238,6 +245,44 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Encodes a CRL distribution points extension value with one point per location, each with a full name.
+    /// </summary>
+    public static Byte[] EncodeDistributionPoints(params Uri[] locations)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            foreach (var location in locations)
+            {
+                using (writer.PushSequence())
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+                using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+                {
+                    writer.WriteCharacterString(UniversalTagNumber.IA5String, location.OriginalString, new Asn1Tag(TagClass.ContextSpecific, 6));
+                }
+            }
+        }
+
+        return writer.Encode();
+    }
+
+    /// <summary>
+    /// Encodes an issuing distribution point extension value whose full name names one location.
+    /// </summary>
+    public static Byte[] EncodeIssuingDistributionPoint(Uri location)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+        using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
+        {
+            writer.WriteCharacterString(UniversalTagNumber.IA5String, location.OriginalString, new Asn1Tag(TagClass.ContextSpecific, 6));
+        }
+
+        return writer.Encode();
+    }
+
+    /// <summary>
     /// Builds a CRL of the authority's CA issued at <paramref name="thisUpdate"/>, valid until
     /// <paramref name="nextUpdate"/> or for a week, that revokes the given certificates.
     /// </summary>
@@ -257,6 +302,15 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// week, that carries exactly the given CRL extensions.
     /// </summary>
     public Byte[] BuildCrlWithExtensions(DateTimeOffset thisUpdate, params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
+        => BuildCrlWithExtensions(thisUpdate, [], extensions);
+
+    /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
+    /// week, that lists the given revoked certificates and carries exactly the given CRL extensions.
+    /// </summary>
+    public Byte[] BuildCrlWithExtensions(DateTimeOffset thisUpdate,
+                                         IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt)> revoked,
+                                         params (String Oid, Boolean Critical, Byte[] Value)[] extensions)
     {
         var tbs = new AsnWriter(AsnEncodingRules.DER);
         using (tbs.PushSequence())
@@ -266,6 +320,21 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             tbs.WriteEncodedValue(Root.SubjectName.RawData);
             tbs.WriteUtcTime(thisUpdate);
             tbs.WriteUtcTime(thisUpdate.AddDays(7));
+            if (revoked.Count > 0)
+            {
+                using (tbs.PushSequence())
+                {
+                    foreach (var (serialNumber, revokedAt) in revoked)
+                    {
+                        using (tbs.PushSequence())
+                        {
+                            tbs.WriteIntegerUnsigned(serialNumber);
+                            tbs.WriteUtcTime(revokedAt);
+                        }
+                    }
+                }
+            }
+
             if (extensions.Length > 0)
             {
                 using (tbs.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
@@ -405,12 +474,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         return value;
     }
 
-    private static X509Certificate2 CreateRoot(String subject, DateTimeOffset notBefore, DateTimeOffset notAfter)
+    private static X509Certificate2 CreateRoot(String subject, DateTimeOffset notBefore, DateTimeOffset notAfter, X509KeyUsageFlags keyUsage)
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var request = new CertificateRequest(subject, key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
-        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(keyUsage, true));
         request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
         return request.CreateSelfSigned(notBefore, notAfter);
     }

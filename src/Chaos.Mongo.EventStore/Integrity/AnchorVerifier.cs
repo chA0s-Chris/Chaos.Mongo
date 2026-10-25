@@ -60,11 +60,14 @@ internal sealed class AnchorVerifier
     /// <summary>
     /// Verifies the chain of anchors: committed sequence numbers must be contiguous from 1, each anchor's previous
     /// digest must equal its predecessor's digest, each digest must recompute from its stored fields, and each Merkle
-    /// root must recompute from the anchor's stored leaves. Only the newest anchor may still await its timestamps.
+    /// root must recompute from the anchor's stored leaves. Only the newest anchor may still await its timestamps, and
+    /// with a trusted head, every anchor up to it must be completed.
     /// </summary>
     /// <remarks>
     /// Recomputing the roots authenticates the stored leaves, which stream verification compares streams with, so
-    /// deleting or changing leaves together with the streams they cover is detected.
+    /// deleting or changing leaves together with the streams they cover is detected. The status of the newest anchor is
+    /// not covered by its digest, so without a trusted head it is not authenticated. The cost grows with the stored
+    /// leaves.
     /// </remarks>
     /// <param name="trustedHead">
     /// An anchor kept outside the database that the chain must contain unchanged, or <c>null</c> to check consistency
@@ -102,7 +105,10 @@ internal sealed class AnchorVerifier
                 return new AnchorChainVerificationResult(expectedSequence - 1, AnchorChainFailure.MalformedAnchor, expectedSequence - 2);
             }
 
+            // The completion hook only sees completed anchors, so every anchor up to a trusted head was completed; a
+            // status changed back to awaiting its timestamps would hide the anchor's leaves from stream verification.
             if (anchor.Status is not (AnchorStatus.AwaitingTimestamp or AnchorStatus.Completed) ||
+                (anchor.Sequence <= trustedHead?.Sequence && anchor.Status != AnchorStatus.Completed) ||
                 anchor.FormatVersion != AnchorEncoding.FormatVersion ||
                 !String.Equals(anchor.HashAlgorithm, AnchorEncoding.HashAlgorithmName, StringComparison.Ordinal) ||
                 anchor.AnchorDigest.Length != AnchorEncoding.HashLength)

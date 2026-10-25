@@ -60,7 +60,7 @@ public class CertificateRevocationListScopeTests
         };
         var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, crlExtensions);
 
-        var result = CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlMirrorUri, TestTimestampAuthority.CrlUri]);
+        var result = CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlMirrorUri, TestTimestampAuthority.CrlUri], false);
 
         result.Should().Be(expected);
     }
@@ -70,7 +70,17 @@ public class CertificateRevocationListScopeTests
     {
         var crl = _authority.BuildCrl(DateTimeOffset.UtcNow, null, ([1, 2, 3], DateTimeOffset.UtcNow.AddDays(-1)));
 
-        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri]).Should().BeTrue();
+        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], false).Should().BeTrue();
+    }
+
+    [Test]
+    [TestCase("HTTP://TSA.test:80/./ca.crl")]
+    [TestCase("http://user@tsa.test/x/../ca.crl#fragment")]
+    public void IsCompleteFor_EquivalentLocationSpelling_NamesThePoint(String spelling)
+    {
+        var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, (IssuingDistributionPointOid, true, EncodePoint(new Uri(spelling))));
+
+        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], false).Should().BeTrue();
     }
 
     [Test]
@@ -81,9 +91,19 @@ public class CertificateRevocationListScopeTests
             1,
             2,
             3
-        }, [TestTimestampAuthority.CrlUri]);
+        }, [TestTimestampAuthority.CrlUri], false);
 
         act.Should().Throw<AsnContentException>();
+    }
+
+    [Test]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    public void IsCompleteFor_OnlyUserCertificates_DoesNotCoverPointOfCaCertificate(Boolean fromCaCertificate, Boolean expected)
+    {
+        var crl = _authority.BuildCrlWithExtensions(DateTimeOffset.UtcNow, Point(TestTimestampAuthority.CrlUri, 1));
+
+        CertificateRevocationListScope.IsCompleteFor(crl, [TestTimestampAuthority.CrlUri], fromCaCertificate).Should().Be(expected);
     }
 
     /// <summary>
@@ -110,7 +130,7 @@ public class CertificateRevocationListScopeTests
                 using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
                 using (writer.PushSequence(new Asn1Tag(TagClass.ContextSpecific, 0, true)))
                 {
-                    writer.WriteCharacterString(UniversalTagNumber.IA5String, uri.AbsoluteUri, new Asn1Tag(TagClass.ContextSpecific, 6));
+                    writer.WriteCharacterString(UniversalTagNumber.IA5String, uri.OriginalString, new Asn1Tag(TagClass.ContextSpecific, 6));
                 }
             }
 

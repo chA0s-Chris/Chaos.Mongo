@@ -78,6 +78,13 @@ internal sealed class AnchorEvidenceStore
                 ? (storedLength, value.AsByteArray, 0)
                 : (storedLength, (Byte[]?)null, document[ChunkCountField].ToInt32());
         });
+        // A chunked item is longer than one chunk and has exactly as many chunks as its length needs, so a tampered count
+        // cannot make the read unbounded.
+        if (inline is null && (length <= ChunkSize || chunkCount != ((length - 1) / ChunkSize) + 1))
+        {
+            throw new AnchorEvidenceException(hash, "its stored document is malformed.");
+        }
+
         var data = inline ?? await ReadChunksAsync(hash, chunkCount, length, cancellationToken);
 
         if ((data.Length != length) || !SHA256.HashData(data).AsSpan().SequenceEqual(hash))
@@ -154,7 +161,8 @@ internal sealed class AnchorEvidenceStore
         {
             return decode();
         }
-        catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or FormatException or OverflowException)
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidCastException or InvalidOperationException or FormatException or OverflowException or
+                                         NotSupportedException)
         {
             throw new AnchorEvidenceException(hash, "its stored document is malformed.", ex);
         }

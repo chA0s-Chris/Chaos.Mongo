@@ -10,9 +10,10 @@ using System.Formats.Asn1;
 /// <remarks>
 /// A CRL is complete for a point when it is not a delta CRL, carries no critical extension other than the issuing
 /// distribution point and the CRL number, and, when it carries an issuing distribution point, that extension covers all
-/// reasons, is neither restricted to CA nor to attribute certificates nor indirect, and its full name names one of the
-/// point's locations. Any other CRL, such as a delta CRL or a CRL partitioned by reason or by distribution point,
-/// cannot show that a certificate is not revoked.
+/// reasons, is neither restricted to CA nor to attribute certificates nor indirect, is not restricted to end-entity
+/// certificates when a CA certificate names the point (RFC 5280, section 6.3.3), and its full name, if present, names
+/// one of the point's locations, compared as <see cref="CrlLocation"/> normalizes them. Any other CRL, such as a delta
+/// CRL or a CRL partitioned by reason or by distribution point, cannot show that a certificate is not revoked.
 /// </remarks>
 internal static class CertificateRevocationListScope
 {
@@ -34,9 +35,10 @@ internal static class CertificateRevocationListScope
     /// </summary>
     /// <param name="crl">The DER-encoded CRL.</param>
     /// <param name="locations">The locations of the distribution point the CRL was captured for.</param>
+    /// <param name="fromCaCertificate">Whether a CA certificate names the point.</param>
     /// <returns><c>true</c> when the CRL is complete for the point.</returns>
     /// <exception cref="AsnContentException">Thrown when the data is not exactly one DER-encoded CRL.</exception>
-    public static Boolean IsCompleteFor(ReadOnlyMemory<Byte> crl, IReadOnlyList<Uri> locations)
+    public static Boolean IsCompleteFor(ReadOnlyMemory<Byte> crl, IReadOnlyList<Uri> locations, Boolean fromCaCertificate)
     {
         ArgumentNullException.ThrowIfNull(locations);
 
@@ -69,7 +71,7 @@ internal static class CertificateRevocationListScope
             var complete = oid switch
             {
                 DeltaCrlIndicatorOid => false,
-                IssuingDistributionPointOid => IssuingDistributionPointCovers(value, locations),
+                IssuingDistributionPointOid => IssuingDistributionPointCovers(value, locations, fromCaCertificate),
                 CrlNumberOid => true,
                 _ => !critical
             };
@@ -91,7 +93,7 @@ internal static class CertificateRevocationListScope
     /// </c>
     /// .
     /// </summary>
-    private static Boolean IssuingDistributionPointCovers(ReadOnlyMemory<Byte> value, IReadOnlyList<Uri> locations)
+    private static Boolean IssuingDistributionPointCovers(ReadOnlyMemory<Byte> value, IReadOnlyList<Uri> locations, Boolean fromCaCertificate)
     {
         var reader = new AsnReader(value, AsnEncodingRules.DER);
         var point = reader.ReadSequence();
@@ -103,12 +105,8 @@ internal static class CertificateRevocationListScope
             namesLocation = NamesLocation(point.ReadSequence(DistributionPointTag), locations);
         }
 
-        if (point.HasData && point.PeekTag().HasSameClassAndValue(OnlyUserCertificatesTag))
-        {
-            point.ReadBoolean(OnlyUserCertificatesTag);
-        }
-
-        var restricted = ReadFlag(point, OnlyCaCertificatesTag);
+        var restricted = ReadFlag(point, OnlyUserCertificatesTag) && fromCaCertificate;
+        restricted |= ReadFlag(point, OnlyCaCertificatesTag);
         if (point.HasData && point.PeekTag().HasSameClassAndValue(OnlySomeReasonsTag))
         {
             point.ReadBitString(out _, OnlySomeReasonsTag);
@@ -136,6 +134,7 @@ internal static class CertificateRevocationListScope
 
         var fullName = name.ReadSequence(FullNameTag);
         name.ThrowIfNotEmpty();
+        var normalizedLocations = locations.Select(location => CrlLocation.Normalize(location.OriginalString)).OfType<String>().ToHashSet(StringComparer.Ordinal);
         var named = false;
         while (fullName.HasData)
         {
@@ -146,7 +145,7 @@ internal static class CertificateRevocationListScope
             }
 
             var value = fullName.ReadCharacterString(UniversalTagNumber.IA5String, UriTag);
-            named |= Uri.TryCreate(value, UriKind.Absolute, out var uri) && locations.Contains(uri);
+            named |= CrlLocation.Normalize(value) is { } normalized && normalizedLocations.Contains(normalized);
         }
 
         return named;

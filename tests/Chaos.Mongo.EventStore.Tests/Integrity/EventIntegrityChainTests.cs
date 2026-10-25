@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using NUnit.Framework;
 using System.Globalization;
+using System.Text;
 
 public class EventIntegrityChainTests
 {
@@ -21,6 +22,9 @@ public class EventIntegrityChainTests
         Case("PreviousHash", new BsonString("hash")),
         Case("Hash", new BsonBinaryData(new Byte[32], BsonBinarySubType.OldBinary)),
         Case("SealMode", new BsonInt32(0)),
+        Case("SealMode", new BsonString("1")),
+        Case("SealMode", new BsonString(" Append")),
+        Case("SealMode", new BsonString("Append, Retroactive")),
         Case("PersonalData", BsonNull.Value),
         Case("PersonalData", new BsonDocument()),
         Case("PersonalData.0", new BsonString("Name")),
@@ -239,6 +243,40 @@ public class EventIntegrityChainTests
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TryRead_DuplicateElementName_ReturnsFalse(Boolean inEntry)
+    {
+        var sealedIntegrity = EventIntegrityChain.Seal(new BsonDocument("Name", "Alice").ToBson(), ["Name"], new Byte[32], IntegritySealMode.Append)
+                                                 .ToBsonDocument();
+        var document = new BsonDocument(true);
+        foreach (var element in sealedIntegrity)
+        {
+            document.Add(element);
+        }
+
+        if (inEntry)
+        {
+            var entry = new BsonDocument(true);
+            entry.AddRange(document["PersonalData"][0].AsBsonDocument);
+            entry.Add("Path", "Other");
+            document["PersonalData"] = new BsonArray
+            {
+                entry
+            };
+        }
+        else
+        {
+            document.Add("SealMode", "Retroactive");
+        }
+
+        var result = EventIntegrityChain.TryRead(new RawBsonDocument(document.ToBson()), out var integrity);
+
+        result.Should().BeFalse();
+        integrity.Should().BeNull();
+    }
+
+    [Test]
     public void TryRead_ErasedCommitment_ReadsEntryWithoutSalt()
     {
         var document = EventIntegrityChain.Seal([1, 2, 3], new Byte[32], IntegritySealMode.Append).ToBsonDocument();
@@ -293,6 +331,24 @@ public class EventIntegrityChainTests
 
         result.Should().BeTrue();
         integrity.Should().BeEquivalentTo(sealedIntegrity);
+    }
+
+    [Test]
+    [TestCase("SHA-256")]
+    [TestCase("Append")]
+    [TestCase("Name")]
+    public void TryRead_StringNotValidUtf8_ReturnsFalse(String value)
+    {
+        var bytes = EventIntegrityChain.Seal(new BsonDocument("Name", "Alice").ToBson(), ["Name"], new Byte[32], IntegritySealMode.Append)
+                                       .ToBsonDocument()
+                                       .ToBson();
+        Byte[] stored = [.. BitConverter.GetBytes(value.Length + 1), .. Encoding.UTF8.GetBytes(value), 0];
+        bytes[bytes.AsSpan().IndexOf(stored) + 4] = 0xFF;
+
+        var result = EventIntegrityChain.TryRead(new RawBsonDocument(bytes), out var integrity);
+
+        result.Should().BeFalse();
+        integrity.Should().BeNull();
     }
 
     [Test]

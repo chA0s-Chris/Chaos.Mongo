@@ -165,10 +165,12 @@ internal static class EventIntegrityChain
     /// </summary>
     /// <remarks>
     /// Every member must have the BSON type the format writes: <c>FormatVersion</c> a 32-bit integer,
-    /// <c>Algorithm</c> and <c>SealMode</c> strings, <c>PreviousHash</c> and <c>Hash</c> generic binary data (subtype
-    /// <c>0x00</c>), and <c>PersonalData</c>, when present, an array of documents with a string <c>Path</c>, a generic
-    /// binary <c>Commitment</c> and, unless erased, a generic binary <c>Salt</c>. A value the serializer could convert,
-    /// such as a numeric seal mode, is malformed, so every verifier reads the same data.
+    /// <c>Algorithm</c> a string, <c>SealMode</c> exactly <c>"Append"</c> or <c>"Retroactive"</c>, <c>PreviousHash</c>
+    /// and <c>Hash</c> generic binary data (subtype <c>0x00</c>), and <c>PersonalData</c>, when present, an array of
+    /// documents with a string <c>Path</c>, a generic binary <c>Commitment</c> and, unless erased, a generic binary
+    /// <c>Salt</c>. A value the serializer could convert, such as a numeric seal mode, an element name that occurs
+    /// twice in the document or an entry, and a string that is not valid UTF-8 are malformed, so every verifier reads
+    /// the same data.
     /// </remarks>
     /// <param name="value">The value of the <c>_integrity</c> element.</param>
     /// <param name="integrity">The integrity data when it could be read.</param>
@@ -176,33 +178,45 @@ internal static class EventIntegrityChain
     public static Boolean TryRead(BsonValue value, [NotNullWhen(true)] out EventIntegrity? integrity)
     {
         integrity = null;
-        if (value is not BsonDocument document || !HasFormatTypes(document))
+        if (value is not BsonDocument document)
         {
             return false;
         }
 
         try
         {
+            if (!HasFormatTypes(document))
+            {
+                return false;
+            }
+
             integrity = BsonSerializer.Deserialize<EventIntegrity>(document);
             return true;
         }
-        catch (Exception ex) when (ex is FormatException or BsonException)
+        catch (Exception ex) when (ex is FormatException or BsonException or DecoderFallbackException)
         {
+            // A raw document decodes names and strings on access, so a string that is not valid UTF-8 surfaces here.
+            integrity = null;
             return false;
         }
     }
 
+    private static Boolean HasDistinctNames(BsonDocument document)
+        => document.Names.Distinct(StringComparer.Ordinal).Count() == document.ElementCount;
+
     private static Boolean HasFormatTypes(BsonDocument document)
-        => document.GetValue(nameof(EventIntegrity.FormatVersion), BsonNull.Value) is BsonInt32 &&
+        => HasDistinctNames(document) &&
+           document.GetValue(nameof(EventIntegrity.FormatVersion), BsonNull.Value) is BsonInt32 &&
            document.GetValue(nameof(EventIntegrity.Algorithm), BsonNull.Value) is BsonString &&
            IsGenericBinary(document.GetValue(nameof(EventIntegrity.PreviousHash), BsonNull.Value)) &&
            IsGenericBinary(document.GetValue(nameof(EventIntegrity.Hash), BsonNull.Value)) &&
-           document.GetValue(nameof(EventIntegrity.SealMode), BsonNull.Value) is BsonString &&
+           document.GetValue(nameof(EventIntegrity.SealMode), BsonNull.Value) is BsonString { Value: nameof(IntegritySealMode.Append) or nameof(IntegritySealMode.Retroactive) } &&
            (!document.TryGetValue(nameof(EventIntegrity.PersonalData), out var personalData) ||
             (personalData is BsonArray commitments && commitments.All(IsCommitment)));
 
     private static Boolean IsCommitment(BsonValue value)
         => value is BsonDocument commitment &&
+           HasDistinctNames(commitment) &&
            commitment.GetValue(nameof(PersonalDataCommitment.Path), BsonNull.Value) is BsonString &&
            IsGenericBinary(commitment.GetValue(nameof(PersonalDataCommitment.Commitment), BsonNull.Value)) &&
            (!commitment.TryGetValue(nameof(PersonalDataCommitment.Salt), out var salt) || IsGenericBinary(salt));

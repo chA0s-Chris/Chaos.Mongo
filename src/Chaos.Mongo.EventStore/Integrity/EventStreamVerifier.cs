@@ -28,12 +28,15 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// Verifies that an event is anchored: the chain from the event to the version of the first completed anchor that
-    /// covers it, the anchor's leaf and inclusion proof, the anchor's digest and its stored timestamp tokens.
+    /// covers it, the anchor's leaf and inclusion proof, the anchor's digest and its stored timestamp tokens. A stream
+    /// leaf before that anchor that cannot be read, or whose committed anchor cannot be read, fails the verification as
+    /// <see cref="EventAnchorFailure.LeafHashMismatch"/>.
     /// </summary>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="version">The event version.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The result.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="version"/> is less than 1.</exception>
     public async Task<EventAnchorVerificationResult> VerifyEventAnchorAsync(Guid aggregateId, Int64 version, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(version, 1);
@@ -42,13 +45,18 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             return EventAnchorVerificationResult.NotChecked;
         }
 
-        var leaves = await _anchors.Store.FindCompletedStreamLeavesAsync(_aggregateTypeName, aggregateId, version, cancellationToken);
-        if (leaves.Count == 0)
+        var (first, unreadable) = await _anchors.Store.FindFirstCompletedStreamLeafAsync(_aggregateTypeName, aggregateId, version, cancellationToken);
+        if (unreadable)
+        {
+            return new EventAnchorVerificationResult(EventAnchorStatus.Failed, EventAnchorFailure.LeafHashMismatch, null, null, []);
+        }
+
+        if (first is null)
         {
             return EventAnchorVerificationResult.NotAnchored;
         }
 
-        var (leaf, anchor) = leaves[0];
+        var (leaf, anchor) = first;
         var reference = new AnchorReference(anchor.Id, anchor.Sequence);
         var anchoredHash = await VerifyChainToAsync(aggregateId, version, leaf.Version, cancellationToken);
         if (anchoredHash is null)
@@ -82,13 +90,16 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// Recomputes the hash chain of a stream and reports the first broken version. For every verified version it
-    /// returns the integrity data and the sealing anchor. For an intact stream it also checks the inclusion proofs of
-    /// its leaves in completed anchors, compares the stream with them, and reports erased values that no later erasure
-    /// event of the stream records.
+    /// returns the integrity data and the sealing anchor. It also checks the inclusion proofs of the stream's leaves in
+    /// completed anchors and compares the verified versions with them, reporting the lowest broken version of the chain
+    /// and of the leaves, and for an intact stream the erased values that no later erasure event records.
     /// </summary>
     /// <remarks>
     /// A consistent chain does not reveal deleted newest events or a deleted stream, because the remaining events still
-    /// form a valid chain. Only the comparison with anchored leaves detects that, for anchored versions.
+    /// form a valid chain. Only the comparison with anchored leaves detects that, for anchored versions. A stream leaf
+    /// that cannot be read, or whose committed anchor cannot be read, breaks the stream as
+    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/> at its version, or at version 1 when its version
+    /// cannot be read. The leaves themselves are authenticated by the anchor-chain verification, which should run too.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
@@ -97,17 +108,20 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     {
         var scan = await ScanChainAsync(aggregateId, cancellationToken);
         var leaves = _anchors is null
-            ? []
-            : await _anchors.Store.FindCompletedStreamLeavesAsync(_aggregateTypeName, aggregateId, 1, cancellationToken);
-        var events = BuildVerifiedEvents(scan, leaves);
+            ? new StreamLeaves([], null)
+            : await _anchors.Store.ReadStreamLeavesAsync(_aggregateTypeName, aggregateId, 1, cancellationToken);
+        var events = BuildVerifiedEvents(scan, leaves.Completed);
         var transitions = FindSealModeTransitions(scan.Events);
 
         StreamVerificationResult result;
         if (scan is { BrokenVersion: { } brokenVersion, Failure: { } failure })
         {
-            result = StreamVerificationResult.Broken(brokenVersion, failure);
+            // Leaves below the break still judge the verified prefix, so a re-sealed prefix shows at its anchored version.
+            result = CompareWithLeaves(scan.Events, leaves, brokenVersion) is { } earlierBreak
+                ? StreamVerificationResult.Broken(earlierBreak.Version, earlierBreak.Failure)
+                : StreamVerificationResult.Broken(brokenVersion, failure);
         }
-        else if (CompareWithLeaves(scan.Events, leaves) is { } anchoredBreak)
+        else if (CompareWithLeaves(scan.Events, leaves, null) is { } anchoredBreak)
         {
             result = StreamVerificationResult.Broken(anchoredBreak.Version, anchoredBreak.Failure);
         }
@@ -201,16 +215,20 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
-    /// Compares an intact chain with the stream's leaves in completed anchors: a leaf that does not prove its inclusion
-    /// in its anchor's root was changed, an anchored version that no longer exists reveals truncation, and an anchored
-    /// version whose stored hash differs from its leaf reveals a rewritten or rolled-back stream.
+    /// Compares the verified versions with the stream's leaves in completed anchors: a leaf that cannot be read or does
+    /// not prove its inclusion in its anchor's root was changed, an anchored version that no longer exists reveals
+    /// truncation, and an anchored version whose stored hash differs from its leaf reveals a rewritten or rolled-back
+    /// stream. For a chain broken at a version, only findings below it count.
     /// </summary>
     /// <returns>The lowest broken version and why, or <c>null</c> when every anchored version matches.</returns>
     private static (Int64 Version, StreamVerificationFailure Failure)? CompareWithLeaves(IReadOnlyList<ScannedEvent> events,
-                                                                                         IReadOnlyList<CompletedStreamLeaf> leaves)
+                                                                                         StreamLeaves leaves,
+                                                                                         Int64? brokenVersion)
     {
-        (Int64 Version, StreamVerificationFailure Failure)? first = null;
-        foreach (var (leaf, anchor) in leaves)
+        (Int64 Version, StreamVerificationFailure Failure)? first = leaves.FirstUnreadableVersion is { } unreadable && !(unreadable >= brokenVersion)
+            ? (unreadable, StreamVerificationFailure.AnchoredLeafInvalid)
+            : null;
+        foreach (var (leaf, anchor) in leaves.Completed.Where(completed => !(completed.Leaf.Version >= brokenVersion)))
         {
             (Int64 Version, StreamVerificationFailure Failure)? finding = !AnchorVerifier.ProvesInclusion(leaf, anchor)
                 ? (leaf.Version, StreamVerificationFailure.AnchoredLeafInvalid)

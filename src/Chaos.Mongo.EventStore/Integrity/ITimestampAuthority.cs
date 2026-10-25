@@ -25,6 +25,12 @@ internal interface ITimestampAuthority
     /// <param name="certificateChain">The DER-encoded certificates from the signing certificate to the root.</param>
     /// <param name="issuedNotBefore">The time the CRLs must be issued at or after.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
+    /// <remarks>
+    /// Return one CRL for each distribution point with an HTTP or HTTPS location that the chain's non-root certificates
+    /// name, in any order. A CRL confirms a point only when it comes from the point's issuer, is complete for the point
+    /// (no delta CRL, no partition by reason or by another point) and its signature verifies against the issuer's
+    /// certificate in the chain; otherwise confirmation fails and is retried.
+    /// </remarks>
     /// <returns>
     /// The CRLs, an empty list when the chain names no distribution points, or the information that a point's CRL
     /// was issued too early.

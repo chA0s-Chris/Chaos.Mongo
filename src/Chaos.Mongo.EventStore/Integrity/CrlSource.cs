@@ -8,4 +8,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 /// <param name="Locations">The point's HTTP and HTTPS locations.</param>
 /// <param name="Issuer">The encoded name of the expected CRL issuer, or <c>null</c> for an indirect CRL issuer.</param>
-internal sealed record CrlSource(IReadOnlyList<Uri> Locations, Byte[]? Issuer);
+/// <param name="FromCaCertificate">
+/// Whether a CA certificate names the point, so a CRL limited to end-entity certificates does not cover it.
+/// </param>
+internal sealed record CrlSource(IReadOnlyList<Uri> Locations, Byte[]? Issuer, Boolean FromCaCertificate);

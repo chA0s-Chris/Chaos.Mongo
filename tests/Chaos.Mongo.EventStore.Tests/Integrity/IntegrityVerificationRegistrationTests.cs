@@ -14,6 +14,16 @@ public class IntegrityVerificationRegistrationTests
     private static readonly Uri AuthorityUri = new("http://tsa.test/timestamp");
 
     [Test]
+    public void WithIntegrityAnchoring_AfterVerificationWithNamedCollections_RequiresTheSameNames()
+    {
+        var builder = CreateBuilder().WithIntegrityVerification(v => v.WithAnchorCollections("A", "L", "E", "C"));
+
+        var act = () => builder.WithIntegrityAnchoring(a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*anchor collections*");
+    }
+
+    [Test]
     public void WithIntegrityAnchoring_Rfc3161Authority_ContributesTrustThatExplicitTrustOverrides()
     {
         using var testAuthority = new TestTimestampAuthority();

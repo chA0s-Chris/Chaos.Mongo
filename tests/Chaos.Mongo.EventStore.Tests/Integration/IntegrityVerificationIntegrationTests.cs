@@ -42,7 +42,7 @@ public class IntegrityVerificationIntegrationTests
 
     [Test]
     public async Task VerifyAnchorChainAsync_ChangedAnchor_ReportsFirstBrokenSequence(
-        [Values("delete", "root", "previous", "unset", "format", "status", "anchorId")]
+        [Values("delete", "root", "previous", "unset", "format", "status", "anchorId", "sequenceNull", "timestamp", "statusNumber", "leafCountInt64")]
         String change)
     {
         var (context, _) = await CreateAnchoredContextAsync();
@@ -57,6 +57,9 @@ public class IntegrityVerificationIntegrationTests
             "previous" => (2L, AnchorChainFailure.PreviousDigestMismatch),
             "unset" => (1L, AnchorChainFailure.MalformedAnchor),
             "status" => (1L, AnchorChainFailure.MalformedAnchor),
+
+            // A null sequence number sorts before every number.
+            "sequenceNull" => (1L, AnchorChainFailure.MalformedAnchor),
             _ => (2L, AnchorChainFailure.MalformedAnchor)
         };
         switch (change)
@@ -77,6 +80,18 @@ public class IntegrityVerificationIntegrationTests
                 // Hides the anchor's leaves from stream verification, which only uses completed anchors.
                 await anchors.UpdateOneAsync(bySequence(1), Builders<BsonDocument>.Update.Set(AnchorStore.StatusField, nameof(AnchorStatus.AwaitingTimestamp)));
                 break;
+            case "sequenceNull":
+                await anchors.UpdateOneAsync(bySequence(2), Builders<BsonDocument>.Update.Set(AnchorStore.SequenceField, BsonNull.Value));
+                break;
+            case "timestamp":
+                await anchors.UpdateOneAsync(bySequence(2), Builders<BsonDocument>.Update.Set("Timestamps.0.TimestampUtc", "yesterday"));
+                break;
+            case "statusNumber":
+                await anchors.UpdateOneAsync(bySequence(2), Builders<BsonDocument>.Update.Set(AnchorStore.StatusField, "2"));
+                break;
+            case "leafCountInt64":
+                await anchors.UpdateOneAsync(bySequence(2), Builders<BsonDocument>.Update.Set("LeafCount", (Int64)1));
+                break;
             case "anchorId":
                 var anchor = await anchors.Find(bySequence(2)).SingleAsync();
                 await anchors.DeleteOneAsync(bySequence(2));
@@ -95,13 +110,13 @@ public class IntegrityVerificationIntegrationTests
 
     [Test]
     public async Task VerifyAnchorChainAsync_ChangedLeaves_ReportsLeafSetMismatch(
-        [Values("hash", "delete", "add", "version", "anchorId", "sequence")]
+        [Values("hash", "delete", "add", "version", "anchorId", "sequence", "index", "indexString")]
         String change)
     {
         var (context, _) = await CreateAnchoredContextAsync();
         await AnchorNewStreamAsync(context);
         var aggregateId = await context.AppendStreamAsync(1);
-        await RunUntilAnchoredAsync(context, aggregateId, 1);
+        await context.RunUntilAnchoredAsync(aggregateId, 1);
         var leaves = GetStore(context).Leaves;
         var leafFilter = new BsonDocument("AggregateId", new BsonBinaryData(aggregateId, GuidRepresentation.Standard));
         switch (change)
@@ -121,6 +136,12 @@ public class IntegrityVerificationIntegrationTests
                 break;
             case "version":
                 await leaves.UpdateOneAsync(leafFilter, Builders<BsonDocument>.Update.Set("Version", 0L));
+                break;
+            case "index":
+                await leaves.UpdateOneAsync(leafFilter, Builders<BsonDocument>.Update.Set("Index", BsonNull.Value));
+                break;
+            case "indexString":
+                await leaves.UpdateOneAsync(leafFilter, Builders<BsonDocument>.Update.Set("Index", "0"));
                 break;
             case "anchorId":
                 var leaf = await leaves.Find(leafFilter).SingleAsync();
@@ -157,6 +178,25 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    public async Task VerifyAnchorChainAsync_NewestAnchorAwaitingTimestampsWithTrustedHead_ReportsMalformedAnchor()
+    {
+        var (context, _) = await CreateAnchoredContextAsync();
+        await AnchorNewStreamAsync(context);
+        await AnchorNewStreamAsync(context);
+        var store = GetStore(context);
+        var head = AnchorStore.ReadAnchor(await store.Anchors.Find(new BsonDocument(AnchorStore.SequenceField, 2L)).SingleAsync());
+        await store.Anchors.UpdateOneAsync(new BsonDocument(AnchorStore.SequenceField, 2L),
+                                           Builders<BsonDocument>.Update.Set(AnchorStore.StatusField, nameof(AnchorStatus.AwaitingTimestamp)));
+        var verifier = GetAnchorVerifier(context);
+
+        var withoutHead = await verifier.VerifyAnchorChainAsync();
+        var withHead = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead(2, head.AnchorDigest));
+
+        withoutHead.IsIntact.Should().BeTrue("the newest anchor may await its timestamps");
+        withHead.Should().Be(new AnchorChainVerificationResult(2, AnchorChainFailure.MalformedAnchor, 1));
+    }
+
+    [Test]
     public async Task VerifyAnchorChainAsync_TrustedHead_DetectsDeletedNewestAnchorsAndChangedDigests()
     {
         var (context, _) = await CreateAnchoredContextAsync();
@@ -187,7 +227,7 @@ public class IntegrityVerificationIntegrationTests
         var verifier = context.CreateVerifier();
         var aggregateId = await context.AppendStreamAsync(3);
         var beforeAnchoring = await verifier.VerifyEventAnchorAsync(aggregateId, 1);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
 
         var result = await verifier.VerifyEventAnchorAsync(aggregateId, 1);
 
@@ -201,12 +241,12 @@ public class IntegrityVerificationIntegrationTests
 
     [Test]
     public async Task VerifyEventAnchorAsync_ChangedEvidence_ReportsFailure(
-        [Values("event", "leafHash", "proof", "digest", "evidence", "tokenHash")]
+        [Values("event", "leafHash", "proof", "digest", "evidence", "tokenHash", "length")]
         String change)
     {
         var (context, _) = await CreateAnchoredContextAsync();
         var aggregateId = await context.AppendStreamAsync(3);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         var store = GetStore(context);
         var leafFilter = new BsonDocument("AggregateId", new BsonBinaryData(aggregateId, GuidRepresentation.Standard));
         var expected = change switch
@@ -236,6 +276,11 @@ public class IntegrityVerificationIntegrationTests
                 await store.Anchors.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty,
                                                     Builders<BsonDocument>.Update.Set(AnchorStore.AnchorDigestField, new BsonBinaryData(new Byte[32])));
                 break;
+            case "length":
+                await context.MongoHelper.Database.GetCollection<BsonDocument>(context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>()
+                                                                                      .AnchorEvidenceCollectionName)
+                             .UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("Length", BsonNull.Value));
+                break;
             case "tokenHash":
                 await store.Anchors.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty,
                                                     Builders<BsonDocument>.Update.Set("Timestamps.0.TokenHash", new BsonBinaryData(new Byte[16])));
@@ -251,9 +296,14 @@ public class IntegrityVerificationIntegrationTests
 
         result.Status.Should().Be(EventAnchorStatus.Failed);
         result.Failure.Should().Be(expected);
-        if (change is "evidence" or "tokenHash")
+        if (change is "evidence" or "tokenHash" or "length")
         {
-            result.Timestamps.Should().ContainSingle().Which.Failure.Should().Contain(change == "evidence" ? "missing" : "malformed evidence");
+            result.Timestamps.Should().ContainSingle().Which.Failure.Should().Contain(change switch
+            {
+                "evidence" => "missing",
+                "tokenHash" => "malformed evidence",
+                _ => "malformed"
+            });
         }
     }
 
@@ -272,7 +322,7 @@ public class IntegrityVerificationIntegrationTests
                                                                                              options.PolicyId = TestTimestampAuthority.DefaultPolicyId;
                                                                                          })));
         var aggregateId = await context.AppendStreamAsync(1);
-        await RunUntilAnchoredAsync(context, aggregateId, 1);
+        await context.RunUntilAnchoredAsync(aggregateId, 1);
 
         var result = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
 
@@ -285,7 +335,7 @@ public class IntegrityVerificationIntegrationTests
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
         var (anchoring, testAuthority) = await CreateAnchoredContextAsync(databaseName);
         var aggregateId = await anchoring.AppendStreamAsync(2);
-        await RunUntilAnchoredAsync(anchoring, aggregateId, 2);
+        await anchoring.RunUntilAnchoredAsync(aggregateId, 2);
         var verifying = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(verification => verification
                                                                                                           .WithTimestampAuthorityTrust(
                                                                                                               AuthorityName, trust => trust.TrustedRoots.Add(testAuthority.Root))
@@ -316,7 +366,7 @@ public class IntegrityVerificationIntegrationTests
         var testAuthority = CreateTestAuthority();
         var context = await CreateContextAsync(mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority())));
         var aggregateId = await context.AppendStreamAsync(1);
-        await RunUntilAnchoredAsync(context, aggregateId, 1);
+        await context.RunUntilAnchoredAsync(aggregateId, 1);
 
         var result = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
 
@@ -331,7 +381,7 @@ public class IntegrityVerificationIntegrationTests
         var (context, _) = await CreateAnchoredContextAsync();
         var verifier = context.CreateVerifier();
         var aggregateId = await context.AppendStreamAsync(3);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
         var anchor = (await verifier.VerifyEventAnchorAsync(aggregateId, 1)).Anchor;
 
@@ -360,7 +410,7 @@ public class IntegrityVerificationIntegrationTests
     {
         var (context, _) = await CreateAnchoredContextAsync();
         var aggregateId = await context.AppendStreamAsync(3);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         await context.Events.DeleteManyAsync(Builders<BsonDocument>.Filter.And(
                                                  EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId),
                                                  Builders<BsonDocument>.Filter.Gt("Version", deleteWholeStream ? 0 : 2)));
@@ -397,7 +447,7 @@ public class IntegrityVerificationIntegrationTests
     {
         var (context, _) = await CreateAnchoredContextAsync();
         var aggregateId = await context.AppendStreamAsync(3);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId));
         await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
                      .DeleteOneAsync(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)));
@@ -411,6 +461,25 @@ public class IntegrityVerificationIntegrationTests
 
         result.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
         chain.Failure.Should().Be(AnchorChainFailure.LeafSetMismatch);
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_ResealedPrefixWithLaterBreak_ReportsAnchoredMismatchBelowTheBreak()
+    {
+        var (context, _) = await CreateAnchoredContextAsync();
+        var aggregateId = await context.AppendStreamAsync(3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId));
+        await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+                     .DeleteOneAsync(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)));
+        await context.Store.AppendEventsAsync(Enumerable.Range(1, 4).Select(version => LedgerStoreContext.CreateEntry(aggregateId, version, memo: "rewritten")));
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 4),
+                                            Builders<BsonDocument>.Update.Set(MemoPath, "forged"));
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredHashMismatch));
+        result.Events.Should().HaveCount(3, "the chain itself breaks at version 4");
     }
 
     [Test]
@@ -437,7 +506,7 @@ public class IntegrityVerificationIntegrationTests
     {
         var (context, _) = await CreateAnchoredContextAsync();
         var aggregateId = await context.AppendStreamAsync(3);
-        await RunUntilAnchoredAsync(context, aggregateId, 3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
         await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId));
         await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
                      .DeleteOneAsync(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)));
@@ -447,6 +516,46 @@ public class IntegrityVerificationIntegrationTests
 
         result.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredHashMismatch));
         result.Events.Should().HaveCount(3, "the rewritten chain itself is consistent");
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_StreamCoveredByTwoAnchors_AssignsTheFirstCoveringAnchor()
+    {
+        var (context, _) = await CreateAnchoredContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.RunUntilAnchoredAsync(aggregateId, 2);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        var verifier = context.CreateVerifier();
+        var first = (await verifier.VerifyEventAnchorAsync(aggregateId, 1)).Anchor;
+        var second = (await verifier.VerifyEventAnchorAsync(aggregateId, 3)).Anchor;
+
+        var result = await verifier.VerifyStreamAsync(aggregateId);
+
+        result.IsIntact.Should().BeTrue();
+        first.Should().NotBe(second);
+        result.Events.Select(e => e.SealingAnchor).Should().Equal(first, first, second);
+    }
+
+    [Test]
+    [TestCase("leafHash")]
+    [TestCase("anchorCreatedUtc")]
+    public async Task VerifyStreamAsync_UnreadableLeafOrAnchor_ReportsAnchoredLeafInvalid(String change)
+    {
+        var (context, _) = await CreateAnchoredContextAsync();
+        var aggregateId = await context.AppendStreamAsync(3);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        var store = GetStore(context);
+        await (change == "leafHash"
+            ? (Task)store.Leaves.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("Hash", "unreadable"))
+            : store.Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("CreatedUtc", "unreadable")));
+
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var anchor = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
+
+        stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
+        anchor.Status.Should().Be(EventAnchorStatus.Failed);
+        anchor.Failure.Should().Be(EventAnchorFailure.LeafHashMismatch);
     }
 
     [Test]
@@ -465,31 +574,12 @@ public class IntegrityVerificationIntegrationTests
     private static async Task AnchorNewStreamAsync(LedgerStoreContext context)
     {
         var aggregateId = await context.AppendStreamAsync(1);
-        await RunUntilAnchoredAsync(context, aggregateId, 1);
+        await context.RunUntilAnchoredAsync(aggregateId, 1);
     }
 
     private static AnchorVerifier GetAnchorVerifier(LedgerStoreContext context) => context.ServiceProvider.GetRequiredService<AnchorVerifier>();
 
     private static AnchorStore GetStore(LedgerStoreContext context) => GetAnchorVerifier(context).Store;
-
-    /// <summary>
-    /// Runs the anchoring run until a completed anchor covers the version.
-    /// </summary>
-    private static async Task RunUntilAnchoredAsync(LedgerStoreContext context, Guid aggregateId, Int64 version)
-    {
-        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
-        var store = GetStore(context);
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while ((await store.FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                Assert.Fail("The version was not anchored within the timeout.");
-            }
-
-            await run.RunAsync();
-        }
-    }
 
     private static PersonalDataStatus StatusOf(StreamVerificationResult result, Int64 version, String path)
         => result.Events.Single(e => e.Version == version).PersonalData.Single(p => p.Path == path).Status;

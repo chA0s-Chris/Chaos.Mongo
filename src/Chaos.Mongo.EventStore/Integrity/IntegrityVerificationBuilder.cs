@@ -116,4 +116,22 @@ internal sealed class IntegrityVerificationBuilder
                                                 "configure the same names for both.");
         }
     }
+
+    /// <summary>
+    /// Restores the default anchor collection names in the shared options before an anchoring configuration fills them,
+    /// when names were configured here, so the anchoring configuration must name the same collections itself.
+    /// </summary>
+    internal void RestoreDefaultAnchorCollections()
+    {
+        if (_anchorCollections is null)
+        {
+            return;
+        }
+
+        var defaults = new IntegrityAnchoringOptions();
+        _anchoring.AnchorsCollectionName = defaults.AnchorsCollectionName;
+        _anchoring.AnchorLeavesCollectionName = defaults.AnchorLeavesCollectionName;
+        _anchoring.AnchorEvidenceCollectionName = defaults.AnchorEvidenceCollectionName;
+        _anchoring.AnchorEvidenceChunksCollectionName = defaults.AnchorEvidenceChunksCollectionName;
+    }
 }

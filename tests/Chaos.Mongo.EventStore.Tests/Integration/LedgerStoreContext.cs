@@ -219,6 +219,25 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                       .Find(Builders<BsonDocument>.Filter.Eq("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)))
                       .SingleAsync();
 
+    /// <summary>
+    /// Runs the anchoring run until a completed anchor covers the version, and fails after 15 seconds.
+    /// </summary>
+    public async Task RunUntilAnchoredAsync(Guid aggregateId, Int64 version)
+    {
+        var run = ServiceProvider.GetRequiredService<AnchoringRun>();
+        var store = ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while ((await store.FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException($"Version {version} of aggregate '{aggregateId}' was not anchored within 15 seconds.");
+            }
+
+            await run.RunAsync();
+        }
+    }
+
     public Task SetVersionAsync(Guid aggregateId, Int64 version, Int64 newVersion)
         => Events.UpdateOneAsync(
             EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),

@@ -133,8 +133,8 @@ public static class MongoBuilderExtensions
     /// <param name="configure">Configures the authorities, the completion hook and the run settings.</param>
     /// <returns>The Mongo builder for method chaining.</returns>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when anchoring is already configured, when no timestamp authority is configured, or when a setting is out
-    /// of range.
+    /// Thrown when anchoring is already configured, when no timestamp authority is configured, when a setting is out
+    /// of range, or when the verification configuration names other anchor collections.
     /// </exception>
     internal static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
     {
@@ -146,13 +146,15 @@ public static class MongoBuilderExtensions
         }
 
         var options = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
+        var configured = builder.Services.FirstOrDefault(s => s.ServiceType == typeof(IntegrityVerificationBuilder))?.ImplementationInstance as IntegrityVerificationBuilder;
+
+        // Collections named for verification never pre-fill the anchoring configuration, so the outcome does not depend
+        // on the registration order.
+        configured?.RestoreDefaultAnchorCollections();
         var anchoring = new IntegrityAnchoringBuilder(options);
         configure(anchoring);
         anchoring.Validate();
-        if (builder.Services.FirstOrDefault(s => s.ServiceType == typeof(IntegrityVerificationBuilder))?.ImplementationInstance is IntegrityVerificationBuilder configured)
-        {
-            configured.EnsureAnchorCollectionsMatch();
-        }
+        configured?.EnsureAnchorCollectionsMatch();
 
         // The trust settings of RFC 3161 authorities also apply when their stored tokens are verified.
         var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
@@ -210,7 +212,10 @@ public static class MongoBuilderExtensions
     /// <param name="builder">The Mongo builder.</param>
     /// <param name="configure">Configures the trust settings, the revocation grace period and the anchor collections.</param>
     /// <returns>The Mongo builder for method chaining.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when verification is already configured.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when verification is already configured, or when it names other anchor collections than the anchoring
+    /// configuration.
+    /// </exception>
     internal static MongoBuilder WithIntegrityVerification(this MongoBuilder builder, Action<IntegrityVerificationBuilder>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);

@@ -114,7 +114,9 @@ internal static class TimestampTokenValidation
     }
 
     /// <summary>
-    /// Gets the distinct CRLs the distribution points of certificates name, in the order they are captured.
+    /// Gets the distinct CRLs the distribution points of certificates name, in the order they are captured. Sources with
+    /// the same normalized locations and issuer are listed once, and count as named by a CA certificate when any of
+    /// their certificates is one.
     /// </summary>
     /// <param name="certificates">The certificates, usually the non-root certificates of a chain.</param>
     /// <returns>The CRL sources.</returns>
@@ -124,8 +126,12 @@ internal static class TimestampTokenValidation
     /// <exception cref="AsnContentException">Thrown when a distribution point extension is malformed.</exception>
     public static IReadOnlyList<CrlSource> GetCrlSources(IEnumerable<X509Certificate2> certificates)
         => certificates.SelectMany(GetCrlSources)
-                       .DistinctBy(source => (String.Join(" ", source.Locations.Select(uri => uri.AbsoluteUri)),
-                                              Convert.ToHexString(source.Issuer ?? [])))
+                       .GroupBy(source => (String.Join(" ", source.Locations.Select(uri => CrlLocation.Normalize(uri.OriginalString) ?? uri.AbsoluteUri)),
+                                           Convert.ToHexString(source.Issuer ?? [])))
+                       .Select(group => group.First() with
+                       {
+                           FromCaCertificate = group.Any(source => source.FromCaCertificate)
+                       })
                        .ToList();
 
     /// <summary>
@@ -199,6 +205,36 @@ internal static class TimestampTokenValidation
     /// <returns><c>true</c> for RSA with MD2, MD4, MD5 or SHA-1, ECDSA with SHA-1 and DSA with SHA-1.</returns>
     public static Boolean IsWeakSignatureAlgorithm(String signatureAlgorithmOid)
         => WeakSignatureAlgorithmOids.Contains(signatureAlgorithmOid);
+
+    /// <summary>
+    /// Requires a token to be exactly one DER value: definite, minimal lengths throughout and no constructed encoding of
+    /// a string type, also inside the signed <c>TSTInfo</c>. The CMS decoder accepts BER, which an independent
+    /// verification of the stored bytes may not.
+    /// </summary>
+    /// <param name="token">The encoded token.</param>
+    /// <exception cref="TimestampTokenValidationException">Thrown when the token is not DER.</exception>
+    public static void RequireDer(ReadOnlyMemory<Byte> token)
+    {
+        try
+        {
+            var reader = new AsnReader(token, AsnEncodingRules.DER);
+            RequireDerValue(reader.ReadEncodedValue());
+            reader.ThrowIfNotEmpty();
+
+            // The TSTInfo is the content of an OCTET STRING, which the walk does not descend into.
+            if (Rfc3161TimestampToken.TryDecode(token, out var decoded, out _))
+            {
+                var content = decoded.AsSignedCms().ContentInfo.Content;
+                var contentReader = new AsnReader(content, AsnEncodingRules.DER);
+                RequireDerValue(contentReader.ReadEncodedValue());
+                contentReader.ThrowIfNotEmpty();
+            }
+        }
+        catch (AsnContentException ex)
+        {
+            throw new TimestampTokenValidationException("the token is not DER-encoded.", ex);
+        }
+    }
 
     /// <summary>
     /// Requires the token to be signed with a collision-resistant digest and the signing key to have at least 2048 bits
@@ -300,10 +336,10 @@ internal static class TimestampTokenValidation
 
     /// <summary>
     /// Requires the signing certificate to be reserved for timestamping by a critical extended key usage extension
-    /// (RFC 3161, section 2.3) and, when it carries a key usage extension, to permit signatures (RFC 5280, section
-    /// 4.2.1.3). Both extensions are decoded on first access, so an undecodable one fails the check here. A certificate
-    /// must not carry an extension more than once (RFC 5280, section 4.2); the extension accessors would read only one
-    /// instance.
+    /// (RFC 3161, section 2.3) and, when it carries a key usage extension, to permit digitalSignature or
+    /// nonRepudiation and nothing else, the rule OpenSSL applies, so an independent verification agrees. Both extensions
+    /// are decoded on first access, so an undecodable one fails the check here. A certificate must not carry an
+    /// extension more than once (RFC 5280, section 4.2); the extension accessors would read only one instance.
     /// </summary>
     /// <param name="signer">The signing certificate.</param>
     /// <exception cref="TimestampTokenValidationException">Thrown when the check fails.</exception>
@@ -339,9 +375,15 @@ internal static class TimestampTokenValidation
             throw new TimestampTokenValidationException("the signing certificate's extended key usage extension must be critical.");
         }
 
-        if (keyUsages is { } usages && (usages & (X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation)) == 0)
+        const X509KeyUsageFlags signatureUsages = X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.NonRepudiation;
+        if (keyUsages is { } usages && (usages & signatureUsages) == 0)
         {
             throw new TimestampTokenValidationException("the signing certificate's key usage permits neither digitalSignature nor nonRepudiation.");
+        }
+
+        if (keyUsages is { } allUsages && (allUsages & ~signatureUsages) != 0)
+        {
+            throw new TimestampTokenValidationException("the signing certificate's key usage permits more than digitalSignature and nonRepudiation.");
         }
     }
 
@@ -380,6 +422,32 @@ internal static class TimestampTokenValidation
                 "covers all revocation reasons.");
         }
 
-        return points.Select(point => new CrlSource(point.Locations, point.NamesCrlIssuer ? null : certificate.IssuerName.RawData)).ToList();
+        var fromCaCertificate = certificate.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault() is { CertificateAuthority: true };
+        return points.Select(point => new CrlSource(point.Locations, point.NamesCrlIssuer ? null : certificate.IssuerName.RawData, fromCaCertificate)).ToList();
+    }
+
+    /// <summary>
+    /// Checks one encoded DER value and, for a constructed one, each of its children. Universal string and bit string
+    /// types must be primitive in DER.
+    /// </summary>
+    private static void RequireDerValue(ReadOnlyMemory<Byte> encoded)
+    {
+        var tag = Asn1Tag.Decode(encoded.Span, out _);
+        if (!tag.IsConstructed)
+        {
+            return;
+        }
+
+        if (tag.TagClass == TagClass.Universal && tag.TagValue is not ((Int32)UniversalTagNumber.Sequence or (Int32)UniversalTagNumber.Set))
+        {
+            throw new AsnContentException("A universal primitive type is encoded as constructed.");
+        }
+
+        AsnDecoder.ReadEncodedValue(encoded.Span, AsnEncodingRules.DER, out var contentOffset, out var contentLength, out _);
+        var children = new AsnReader(encoded.Slice(contentOffset, contentLength), AsnEncodingRules.DER);
+        while (children.HasData)
+        {
+            RequireDerValue(children.ReadEncodedValue());
+        }
     }
 }
