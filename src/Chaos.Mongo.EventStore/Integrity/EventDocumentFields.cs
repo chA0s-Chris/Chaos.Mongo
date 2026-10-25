@@ -7,6 +7,7 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 
 /// <summary>
 /// Resolves element names of stored events through the registered class map, so untyped queries
@@ -181,7 +182,16 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
     public static Boolean TryReadAggregateType(BsonDocument document, [NotNullWhen(true)] out String? aggregateType)
     {
         ArgumentNullException.ThrowIfNull(document);
-        aggregateType = document.TryGetValue(AggregateType, out var value) && value is BsonString { Value: var name } ? name : null;
+        try
+        {
+            aggregateType = document.TryGetValue(AggregateType, out var value) && value is BsonString { Value: var name } ? name : null;
+        }
+        catch (DecoderFallbackException)
+        {
+            // A raw document decodes its strings on access; a string that is not valid UTF-8 is no aggregate type.
+            aggregateType = null;
+        }
+
         return aggregateType is not null;
     }
 

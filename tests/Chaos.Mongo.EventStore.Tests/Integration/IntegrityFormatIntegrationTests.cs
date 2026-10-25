@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using NUnit.Framework;
+using System.Text;
 using Testcontainers.MongoDb;
 
 public class IntegrityFormatIntegrationTests
@@ -18,19 +19,20 @@ public class IntegrityFormatIntegrationTests
     private MongoDbContainer _container;
 
     [Test]
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task AppendEventsAsync_VersionOneWithoutAggregateType_ThrowsAndPersistsNothing(Boolean storeAsNumber)
+    [TestCase("unset")]
+    [TestCase("number")]
+    [TestCase("invalidUtf8")]
+    public async Task AppendEventsAsync_VersionOneWithoutAggregateType_ThrowsAndPersistsNothing(String breakage)
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
         var aggregateId = await unprotected.AppendStreamAsync(2);
-        await BreakAggregateTypeAsync(unprotected, aggregateId, storeAsNumber);
+        await BreakAggregateTypeAsync(unprotected, aggregateId, breakage);
 
         var act = () => protectedContext.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
 
         await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*Version 1*no aggregate type*");
         (await protectedContext.CountEventsAsync(aggregateId)).Should().Be(2);
-        (await protectedContext.FindEventAsync(aggregateId, 1)).Contains(EventIntegrityChain.ElementName).Should().BeFalse();
+        (await CountSealedAsync(protectedContext, aggregateId)).Should().Be(0);
     }
 
     [Test]
@@ -67,13 +69,14 @@ public class IntegrityFormatIntegrationTests
     }
 
     [Test]
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task RunPassAsync_VersionOneWithoutAggregateType_SkipsAndLogsStream(Boolean storeAsNumber)
+    [TestCase("unset")]
+    [TestCase("number")]
+    [TestCase("invalidUtf8")]
+    public async Task RunPassAsync_VersionOneWithoutAggregateType_SkipsAndLogsStream(String breakage)
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
         var brokenStream = await unprotected.AppendStreamAsync(2);
-        await BreakAggregateTypeAsync(unprotected, brokenStream, storeAsNumber);
+        await BreakAggregateTypeAsync(unprotected, brokenStream, breakage);
         var healthyStream = await unprotected.AppendStreamAsync(2);
         var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
         var sweep = new EventStreamSealingSweep<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options, TimeProvider.System, logger);
@@ -85,7 +88,7 @@ public class IntegrityFormatIntegrationTests
         (await protectedContext.CreateVerifier().VerifyStreamAsync(healthyStream)).IsIntact.Should().BeTrue();
         (await protectedContext.CreateVerifier().VerifyStreamAsync(brokenStream))
             .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.MissingAggregateType));
-        (await protectedContext.FindEventAsync(brokenStream, 1)).Contains(EventIntegrityChain.ElementName).Should().BeFalse();
+        (await CountSealedAsync(protectedContext, brokenStream)).Should().Be(0);
     }
 
     [TearDown]
@@ -134,15 +137,35 @@ public class IntegrityFormatIntegrationTests
             .Should().Be(StreamVerificationResult.Broken(2, StreamVerificationFailure.MalformedIntegrity));
     }
 
-    private static Task BreakAggregateTypeAsync(LedgerStoreContext context, Guid aggregateId, Boolean storeAsNumber)
+    /// <summary>
+    /// Removes the aggregate type of version 1, stores it as a number, or replaces its first byte with one that is not
+    /// valid UTF-8, which only a raw document can carry.
+    /// </summary>
+    private static async Task BreakAggregateTypeAsync(LedgerStoreContext context, Guid aggregateId, String breakage)
     {
         var aggregateTypeElement = EventDocumentFields<LedgerAggregate>.AggregateType;
-        return context.Events.UpdateOneAsync(
-            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1),
-            storeAsNumber
-                ? Builders<BsonDocument>.Update.Set(aggregateTypeElement, 42)
-                : Builders<BsonDocument>.Update.Unset(aggregateTypeElement));
+        var versionOne = EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1);
+        if (breakage != "invalidUtf8")
+        {
+            await context.Events.UpdateOneAsync(versionOne,
+                                                breakage == "number"
+                                                    ? Builders<BsonDocument>.Update.Set(aggregateTypeElement, 42)
+                                                    : Builders<BsonDocument>.Update.Unset(aggregateTypeElement));
+            return;
+        }
+
+        var bytes = await context.ReadRawEventAsync(aggregateId, 1);
+        Byte[] marker = [.. Encoding.UTF8.GetBytes(aggregateTypeElement), 0, .. BitConverter.GetBytes(nameof(LedgerAggregate).Length + 1)];
+        var valueStart = bytes.AsSpan().IndexOf(marker) + marker.Length;
+        bytes[valueStart] = 0xFF;
+        await context.Events.DeleteOneAsync(versionOne);
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(bytes));
     }
+
+    private static Task<Int64> CountSealedAsync(LedgerStoreContext context, Guid aggregateId)
+        => context.Events.CountDocumentsAsync(Builders<BsonDocument>.Filter.And(
+                                                  EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(aggregateId),
+                                                  Builders<BsonDocument>.Filter.Exists(EventIntegrityChain.ElementName)));
 
     private static Task SetSealModeAsync(LedgerStoreContext context, Guid aggregateId, Int64 version, BsonValue sealMode)
         => context.Events.UpdateOneAsync(
