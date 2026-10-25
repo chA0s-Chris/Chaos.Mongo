@@ -176,8 +176,6 @@ public class IntegrityRegistrationTests
     }
 }
 
-public sealed class RegistrationVisibilityAggregate : Aggregate;
-
 public sealed class RegistrationCollisionAggregate : Aggregate;
 
 public sealed class RegistrationCollidingEvent : Event<RegistrationCollisionAggregate>

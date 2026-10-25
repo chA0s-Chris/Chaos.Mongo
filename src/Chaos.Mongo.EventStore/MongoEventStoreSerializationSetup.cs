@@ -55,8 +55,11 @@ public static class MongoEventStoreSerializationSetup
     /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when an event type uses the
     /// discriminator reserved for the personal data erasure event, when two registered event class maps of the
     /// aggregate share a discriminator, when integrity protection is enabled but the event base class map was
-    /// registered without the integrity member, or when the event base class map or the class map declaring
-    /// <see cref="IAggregate.Revision"/> was registered without the revision member. In each of these cases, no event
+    /// registered without the integrity member, when the event base class map or the class map declaring
+    /// <see cref="IAggregate.Revision"/> was registered without the revision member, when integrity protection is
+    /// enabled but the checkpoint class map was registered before the event store, or when a class map of the personal
+    /// data erasure event or its entries was registered before the event store with another discriminator, other
+    /// element names or the eraser's marker mapped. In each of these cases, no event
     /// class map of the call is registered, so a retry with corrected options can succeed unless the failure was caused
     /// by a class map registered before the event store.
     /// </exception>

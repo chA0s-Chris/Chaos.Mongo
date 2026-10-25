@@ -30,6 +30,39 @@ public class TimestampTokenValidationTests
     }
 
     [Test]
+    [TestCase("Chaos Root", UniversalTagNumber.PrintableString, "chaos ROOT", UniversalTagNumber.UTF8String, true)]
+    [TestCase("Chaos Root", UniversalTagNumber.BMPString, "Chaos Root", UniversalTagNumber.IA5String, true)]
+    [TestCase("Chaos Root", UniversalTagNumber.T61String, "CHAOS ROOT", UniversalTagNumber.PrintableString, true)]
+    [TestCase("Chaos Root", UniversalTagNumber.UTF8String, "Chaos Root 2", UniversalTagNumber.UTF8String, false)]
+    [TestCase("Ärger", UniversalTagNumber.UTF8String, "ärger", UniversalTagNumber.BMPString, false)]
+    public void NamesMatch_CommonNamesOfStringTypes_ComparesDecodedTextIgnoringAsciiCase(String first,
+                                                                                         UniversalTagNumber firstType,
+                                                                                         String second,
+                                                                                         UniversalTagNumber secondType,
+                                                                                         Boolean expected)
+    {
+        var firstName = new X500DistinguishedNameBuilder();
+        firstName.Add("2.5.4.3", first, firstType);
+        var secondName = new X500DistinguishedNameBuilder();
+        secondName.Add("2.5.4.3", second, secondType);
+
+        TimestampTokenValidation.NamesMatch(firstName.Build(), secondName.Build()).Should().Be(expected);
+    }
+
+    [Test]
+    public void NamesMatch_SameAttributesInAnotherOrder_ReturnsFalse()
+    {
+        var first = new X500DistinguishedNameBuilder();
+        first.AddOrganizationName("Chaos");
+        first.AddCommonName("Root");
+        var second = new X500DistinguishedNameBuilder();
+        second.AddCommonName("Root");
+        second.AddOrganizationName("Chaos");
+
+        TimestampTokenValidation.NamesMatch(first.Build(), second.Build()).Should().BeFalse();
+    }
+
+    [Test]
     public async Task RequireDer_IndefiniteLength_ThrowsTimestampTokenValidationException()
     {
         using var authority = new TestTimestampAuthority();

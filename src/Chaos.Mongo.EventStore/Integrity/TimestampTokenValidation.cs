@@ -6,6 +6,7 @@ using System.Formats.Asn1;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 
 /// <summary>
 /// The checks of an RFC 3161 timestamp token that hold both when it is received and when it is verified later, so
@@ -37,6 +38,9 @@ internal static class TimestampTokenValidation
     private const Int32 MinimumRsaKeySize = 2048;
     private const String RsaPssPublicKeyOid = "1.2.840.113549.1.1.10";
     private const String RsaPublicKeyOid = "1.2.840.113549.1.1.1";
+    private static readonly Encoding StrictAscii = Encoding.GetEncoding("us-ascii", EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+    private static readonly Encoding StrictBigEndianUnicode = new UnicodeEncoding(true, false, true);
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     /// <summary>
     /// MD2, MD4, MD5 and SHA-1, which are not collision resistant.
@@ -215,6 +219,33 @@ internal static class TimestampTokenValidation
         => WeakSignatureAlgorithmOids.Contains(signatureAlgorithmOid);
 
     /// <summary>
+    /// Gets a value indicating whether two names are equal after decoding: the same relative distinguished names in
+    /// order, each with the same attribute types in order, and equal values. A value of type <c>PrintableString</c>,
+    /// <c>UTF8String</c>, <c>IA5String</c>, <c>TeletexString</c> (read as ISO 8859-1) or <c>BMPString</c> is compared
+    /// as text, ignoring the case of ASCII letters, any other value by its encoding. An issuer name that a certificate
+    /// encodes with another string type or case than the issuer's subject is thereby still linked, as chain building
+    /// links it; the specification states the same rule.
+    /// </summary>
+    /// <param name="first">The first name.</param>
+    /// <param name="second">The second name.</param>
+    /// <returns><c>true</c> when the names are equal; <c>false</c> otherwise, also when either cannot be decoded.</returns>
+    public static Boolean NamesMatch(X500DistinguishedName first, X500DistinguishedName second)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        try
+        {
+            var firstNames = ReadName(first.RawData);
+            var secondNames = ReadName(second.RawData);
+            return firstNames.Count == secondNames.Count && firstNames.Zip(secondNames).All(pair => pair.First.SequenceEqual(pair.Second));
+        }
+        catch (Exception ex) when (ex is AsnContentException or DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Requires a token to be exactly one DER value: definite, minimal lengths throughout, no constructed encoding of a
     /// string type and no constructed value nested 64 or more levels deep, also inside the signed <c>TSTInfo</c>. The
     /// CMS decoder accepts BER, which an independent verification of the stored bytes may not.
@@ -353,7 +384,8 @@ internal static class TimestampTokenValidation
     /// Runs the checks that need no trust settings on a token an authority returned, before anchoring stores it, so a
     /// custom authority cannot complete an anchor with a malformed token or chain: it is one DER-encoded RFC 3161 token
     /// whose imprint is the SHA-256 digest and whose signature verifies with the returned chain; the chain starts with
-    /// the signing certificate, names each next certificate's subject as its issuer and ends with a self-issued root;
+    /// the signing certificate, names each next certificate's subject as its issuer and ends with a self-issued root,
+    /// comparing names as <see cref="NamesMatch"/> does;
     /// its time is the returned time to the millisecond, as stored; and its content, signer and algorithms pass the
     /// checks verification applies. Whether the root is trusted and the policy are checked at verification, which knows
     /// the trust settings.
@@ -398,7 +430,7 @@ internal static class TimestampTokenValidation
                 for (var index = 0; index < chain.Count; index++)
                 {
                     var issuer = index + 1 < chain.Count ? chain[index + 1] : chain[index];
-                    if (!chain[index].IssuerName.RawData.AsSpan().SequenceEqual(issuer.SubjectName.RawData))
+                    if (!NamesMatch(chain[index].IssuerName, issuer.SubjectName))
                     {
                         throw new TimestampTokenValidationException(
                             "the token's certificate chain does not name each next certificate as issuer and end with a self-issued root.");
@@ -552,6 +584,60 @@ internal static class TimestampTokenValidation
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Gets the encoding a name's attribute value of a string type is decoded with, or <c>null</c> for other types.
+    /// </summary>
+    private static Encoding? NameStringEncoding(UniversalTagNumber type)
+        => type switch
+        {
+            UniversalTagNumber.UTF8String => StrictUtf8,
+            UniversalTagNumber.PrintableString or UniversalTagNumber.IA5String => StrictAscii,
+            UniversalTagNumber.TeletexString => Encoding.Latin1,
+            UniversalTagNumber.BMPString => StrictBigEndianUnicode,
+            _ => null
+        };
+
+    /// <summary>
+    /// Reads a name's relative distinguished names, each as its attribute types with their comparable values: text
+    /// with lower-cased ASCII letters, prefixed with <c>T</c>, or the hexadecimal encoding, prefixed with <c>E</c>.
+    /// </summary>
+    private static List<List<(String Type, String Value)>> ReadName(Byte[] encoded)
+    {
+        var reader = new AsnReader(encoded, AsnEncodingRules.DER);
+        var name = reader.ReadSequence();
+        reader.ThrowIfNotEmpty();
+        var relativeNames = new List<List<(String Type, String Value)>>();
+        while (name.HasData)
+        {
+            var set = name.ReadSetOf(true);
+            var attributes = new List<(String Type, String Value)>();
+            while (set.HasData)
+            {
+                var attribute = set.ReadSequence();
+                var type = attribute.ReadObjectIdentifier();
+                var tag = attribute.PeekTag();
+                var encoding = tag.TagClass == TagClass.Universal && !tag.IsConstructed ? NameStringEncoding((UniversalTagNumber)tag.TagValue) : null;
+                String value;
+                if (encoding is not null && attribute.TryReadPrimitiveCharacterStringBytes(tag, out var contents))
+                {
+                    value = "T" + String.Concat(encoding.GetString(contents.Span)
+                                                        .Select(character => Char.IsAsciiLetterUpper(character) ? Char.ToLowerInvariant(character) : character));
+                }
+                else
+                {
+                    value = "E" + Convert.ToHexString(attribute.ReadEncodedValue().Span);
+                }
+
+                attribute.ThrowIfNotEmpty();
+                attributes.Add((type, value));
+            }
+
+            relativeNames.Add(attributes);
+        }
+
+        return relativeNames;
     }
 
     /// <summary>

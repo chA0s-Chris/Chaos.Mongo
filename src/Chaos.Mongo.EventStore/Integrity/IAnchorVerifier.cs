@@ -18,10 +18,11 @@ public interface IAnchorVerifier
     /// Recomputing the roots reads every stored leaf, so the cost grows with the number of leaves, one per changed
     /// stream and anchor. It binds the leaves that stream verification compares streams with to the anchor digests, so
     /// verify the chain of anchors as well whenever stream verification is used as evidence. Digests and roots involve
-    /// no secret, so the chain proves consistency, not authenticity: anchors are authentic up to a trusted head, and
-    /// otherwise only through their timestamp tokens, which
-    /// <see cref="IEventStoreIntegrity{TAggregate}.VerifyEventAnchorAsync"/> verifies. Anchors after the trusted head, or
-    /// all anchors without one, may have been rebuilt or appended consistently by someone with write access.
+    /// no secret, so the chain proves consistency, not authenticity. Timestamp tokens, which
+    /// <see cref="IEventStoreIntegrity{TAggregate}.VerifyEventAnchorAsync"/> verifies, bound when an anchor's digest
+    /// existed, not who built the anchor: anchors after a trusted head, or all anchors without one, may have been rebuilt
+    /// or appended consistently by someone with write access, who can obtain genuine tokens for them. Detecting that
+    /// needs a trusted head kept outside the database, or anchors replicated when they completed.
     /// </remarks>
     /// <param name="trustedHead">
     /// An anchor kept outside the database that the chain must contain unchanged, or <c>null</c> to check consistency

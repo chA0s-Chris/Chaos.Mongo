@@ -27,9 +27,11 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// leaves can let a cursor expire; the check then fails with a <c>MongoCursorNotFoundException</c> and can be run
     /// again. Event documents whose identifier or version cannot be read are reported as
     /// <see cref="CompletenessFindingKind.MalformedEvent"/> and count as missing, so their stream may also be reported
-    /// as truncated or deleted. Coverage counts stored completed anchors without verifying their timestamp tokens, so
-    /// it is authentic up to the trusted head; anchors after it may have been appended by someone with write access to
-    /// hide unanchored events, and <see cref="VerifyEventAnchorAsync"/> verifies the tokens that authenticate them.
+    /// as truncated or deleted. Coverage counts stored completed anchors without verifying their timestamp tokens.
+    /// Anchors after the trusted head, or all anchors without one, may have been appended consistently by someone with
+    /// write access to hide unanchored events, even with genuine tokens, which <see cref="VerifyEventAnchorAsync"/>
+    /// verifies but which only bound the time; a trusted head kept outside the database, or anchors replicated when
+    /// they completed, detects that.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when neither anchoring nor verification is configured.</exception>
     IAsyncEnumerable<CompletenessFinding> CheckCompletenessAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default);
@@ -73,7 +75,7 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// </summary>
     /// <remarks>
     /// A leaf of the stream that cannot be read, or whose committed anchor cannot be read, breaks the stream as
-    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/>. The leaves themselves are authenticated by
+    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/>. The leaves themselves are bound to the anchor digests by
     /// <see cref="IAnchorVerifier.VerifyAnchorChainAsync"/>, which should run as well.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>

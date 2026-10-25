@@ -49,8 +49,11 @@ public interface ITimestampAuthority
     /// <returns>The validated token with the evidence captured at stamping time.</returns>
     /// <remarks>
     /// Anchoring checks every returned token before storing it: it must be one DER-encoded RFC 3161 token over the
-    /// digest whose signature verifies with the returned chain, which starts with the signing certificate, whose time is
-    /// <see cref="TimestampToken.Timestamp"/>, and whose signer and algorithms meet the verification rules. A token
+    /// digest whose signature verifies with the returned chain, which starts with the signing certificate, names each
+    /// next certificate's subject as its issuer and ends with a self-issued root; its time must equal
+    /// <see cref="TimestampToken.Timestamp"/> to the millisecond, and its signer and algorithms must meet the
+    /// verification rules. Names are compared after decoding, so an issuer name in another string type or ASCII case
+    /// than the issuer's subject still links. A token
     /// that fails counts as a failed request. Its chain's trust and policy are checked at verification.
     /// </remarks>
     /// <exception cref="ArgumentException">Thrown when the algorithm is not SHA-256 or the digest has the wrong length.</exception>

@@ -61,7 +61,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// TSA name its subject alternative names extension carries <paramref name="rawAlternativeNames"/> when given.
     /// The CA's CRL lists <paramref name="revokedCertificates"/> revoked certificates, about 28 bytes each, so tests
     /// can capture large CRLs. With <paramref name="nonCriticalPurpose"/> the signer's extended key usage extension is
-    /// not critical. The root carries <paramref name="rootKeyUsage"/>.
+    /// not critical. The root carries <paramref name="rootKeyUsage"/>. The signer names <paramref name="issuerName"/> as
+    /// its issuer when given, for example the root's subject in another string type, instead of the root's subject.
     /// </summary>
     public TestTimestampAuthority(IReadOnlyList<Uri>? crlLocations = null,
                                   Byte[]? rawCrlDistributionPoints = null,
@@ -76,7 +77,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   Int32? rsaKeySize = null,
                                   Int32 revokedCertificates = 0,
                                   Boolean nonCriticalPurpose = false,
-                                  X509KeyUsageFlags rootKeyUsage = X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign)
+                                  X509KeyUsageFlags rootKeyUsage = X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+                                  X500DistinguishedName? issuerName = null)
     {
         var notBefore = DateTimeOffset.UtcNow.AddDays(-30);
         var notAfter = DateTimeOffset.UtcNow.AddDays(30);
@@ -133,7 +135,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 
         var signerNotAfter = expiredSigner ? DateTimeOffset.UtcNow.AddDays(-1) : notAfter;
         using var rootKey = Root.GetECDsaPrivateKey()!;
-        using var issued = request.Create(Root.SubjectName, X509SignatureGenerator.CreateForECDsa(rootKey), notBefore, signerNotAfter, RandomNumberGenerator.GetBytes(8));
+        using var issued = request.Create(issuerName ?? Root.SubjectName, X509SignatureGenerator.CreateForECDsa(rootKey), notBefore, signerNotAfter,
+                                          RandomNumberGenerator.GetBytes(8));
         using var patched = duplicateKeyUsage
             ? X509CertificateLoader.LoadCertificate(DuplicateExtensions.RenamePlaceholder(issued.RawData, KeyUsageOid))
             : null;

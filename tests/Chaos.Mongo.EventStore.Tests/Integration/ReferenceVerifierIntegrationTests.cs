@@ -190,6 +190,26 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    public async Task Check_ChainNamingItsIssuerInAnotherStringType_IsValidLikeTheLibrary()
+    {
+        // The root's subject is a PrintableString; the signer names it as a UTF8String in another case. A CRL's issuer
+        // must still equal the certificate's issuer name exactly, so the signer names no distribution points.
+        var issuerName = new X500DistinguishedNameBuilder();
+        issuerName.Add("2.5.4.3", "CHAOS.MONGO TEST TSA ROOT", UniversalTagNumber.UTF8String);
+        var (context, aggregateId) = await CreateAnchoredStreamAsync(new TestTimestampAuthority([], issuerName: issuerName.Build()));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+        var timestamp = report["anchors"]?[0]?["timestamps"]?[0];
+
+        library.IsValid.Should().BeTrue(library.Failure);
+        (timestamp?["valid"]?.GetValue<Boolean>(), timestamp?["revocationStatus"]?.GetValue<String>())
+            .Should().Be((true, library.RevocationStatus.ToString()), report.ToJsonString());
+        code.Should().Be(0);
+    }
+
+    [Test]
     public async Task Check_ChunkCountNotMatchingTheLength_IsInvalidLikeTheLibrary()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
