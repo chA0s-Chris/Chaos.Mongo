@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using System.Text;
 
 /// <summary>
 /// Compares a stream's derived data, its read model and checkpoints, with the stream. The chain does not cover derived
@@ -47,7 +48,9 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
     /// checkpoint's when the read model is missing; the states are compared without it, and
     /// <see cref="DerivedDataVerificationResult.CreationTimeConsistent"/> reports whether the
     /// read model and the checkpoints agree on it. The comparison uses the serialized documents, so it does not depend
-    /// on equality members of the aggregate.
+    /// on equality members of the aggregate. A stored read model that cannot be read, for example because it repeats an
+    /// element name, is reported as <see cref="ReadModelStatus.Differs"/>, and such a checkpoint as a mismatch of its
+    /// hash and state.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
@@ -71,27 +74,36 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
         }
 
         var idFilter = new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard));
-        var readModel = await _mongoHelper.Database.GetCollection<BsonDocument>(_options.ReadModelCollectionName)
-                                          .Find(session, idFilter)
-                                          .FirstOrDefaultAsync(cancellationToken);
+        // Read raw, so a document the driver cannot read, for example one that repeats an element name, is reported.
+        var storedReadModel = await _mongoHelper.Database.GetCollection<BsonDocument>(_options.ReadModelCollectionName)
+                                                .Find(session, idFilter)
+                                                .As<RawBsonDocument>()
+                                                .FirstOrDefaultAsync(cancellationToken);
+        var readModel = storedReadModel is null ? null : TryPrepare(storedReadModel);
         var checkpointVersion = $"_id.{CheckpointIdElement(nameof(CheckpointId.Version))}";
-        var checkpointDocuments = await _mongoHelper.Database.GetCollection<BsonDocument>(_options.CheckpointCollectionName)
-                                                    .Find(session,
-                                                          new BsonDocument($"_id.{CheckpointIdElement(nameof(CheckpointId.AggregateId))}",
-                                                                           new BsonBinaryData(aggregateId, GuidRepresentation.Standard)))
-                                                    .Sort(new BsonDocument(checkpointVersion, 1))
-                                                    .ToListAsync(cancellationToken);
-        var checkpoints = checkpointDocuments.Select(document => (Version: ReadCheckpointVersion(document), Document: document)).ToList();
+        var storedCheckpoints = await _mongoHelper.Database.GetCollection<BsonDocument>(_options.CheckpointCollectionName)
+                                                  .Find(session,
+                                                        new BsonDocument($"_id.{CheckpointIdElement(nameof(CheckpointId.AggregateId))}",
+                                                                         new BsonBinaryData(aggregateId, GuidRepresentation.Standard)))
+                                                  .Sort(new BsonDocument(checkpointVersion, 1))
+                                                  .As<RawBsonDocument>()
+                                                  .ToListAsync(cancellationToken);
+        var checkpoints = storedCheckpoints.Select(stored => TryPrepare(stored) is { } document
+                                                       ? (Version: ReadCheckpointVersion(document), Document: document)
+                                                       : (Version: TryReadCheckpointVersion(stored), Document: null))
+                                           .ToList();
+        var checkpointDocuments = checkpoints.Select(c => c.Document).OfType<BsonDocument>().ToList();
 
         // Every stored document is compared: a second document at a version, for example with its identifier's fields
         // in another order, must not share the first one's result.
         var checkpointsByVersion = checkpoints.Where(c => c.Version is not null)
                                               .GroupBy(c => c.Version.GetValueOrDefault())
-                                              .ToDictionary(group => group.Key, group => group.Select(c => c.Document).ToList());
+                                              .ToDictionary(group => group.Key, group => group.Select(c => c.Document).OfType<BsonDocument>().ToList());
         var replay = await ReplayAsync(aggregateId, StoredCreationTime(readModel, checkpointDocuments), session, checkpointsByVersion, cancellationToken);
 
         var readModelStatus = (readModel, replay.HasState) switch
         {
+            (null, _) when storedReadModel is not null => ReadModelStatus.Differs,
             (null, false) => ReadModelStatus.Matches,
             (null, true) => ReadModelStatus.Missing,
             _ => DocumentsMatch(WithIdFirst(replay.State), readModel, replay.Version, replay.Revision) ? ReadModelStatus.Matches : ReadModelStatus.Differs
@@ -103,9 +115,12 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
             hashes.TryAdd(verified.Version, verified.Hash);
         }
 
-        var results = checkpoints.Select(checkpoint => new CheckpointVerification(checkpoint.Version.GetValueOrDefault(),
-                                                                                  VerifyHash(checkpoint.Document, checkpoint.Version.GetValueOrDefault(), hashes),
-                                                                                  replay.CheckpointStates.GetValueOrDefault(checkpoint.Document)))
+        // A checkpoint document that cannot be read counts as a mismatch of its hash and state.
+        var results = checkpoints.Select(checkpoint => checkpoint.Document is { } document
+                                             ? new CheckpointVerification(checkpoint.Version.GetValueOrDefault(),
+                                                                          VerifyHash(document, checkpoint.Version.GetValueOrDefault(), hashes),
+                                                                          replay.CheckpointStates.GetValueOrDefault(document))
+                                             : new CheckpointVerification(checkpoint.Version.GetValueOrDefault(), CheckpointHashStatus.Mismatch, false))
                                  .ToList();
         return new DerivedDataVerificationResult(stream, readModelStatus, results, CreationTimesAgree(readModel, checkpointDocuments));
     }
@@ -185,6 +200,37 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
         var stateElement = CheckpointElement(nameof(CheckpointDocument<TAggregate>.State));
         var source = readModel ?? checkpoints.Select(checkpoint => checkpoint.GetValue(stateElement, BsonNull.Value)).OfType<BsonDocument>().FirstOrDefault();
         return source?.GetValue(createdUtcElement, BsonNull.Value) is BsonDateTime createdUtc ? createdUtc.ToUniversalTime() : default;
+    }
+
+    /// <summary>
+    /// Prepares a stored document for comparison, or returns <c>null</c> when it cannot be read: it repeats an element
+    /// name, holds a value the driver rejects, or is not valid UTF-8.
+    /// </summary>
+    private static BsonDocument? TryPrepare(BsonDocument document)
+    {
+        try
+        {
+            return StoredDocuments.Prepare(document);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException or DecoderFallbackException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads the version of a checkpoint document that cannot be read as a whole, or <c>null</c>.
+    /// </summary>
+    private static Int64? TryReadCheckpointVersion(BsonDocument checkpoint)
+    {
+        try
+        {
+            return ReadCheckpointVersion(checkpoint);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException or DecoderFallbackException)
+        {
+            return null;
+        }
     }
 
     private static CheckpointHashStatus VerifyHash(BsonDocument checkpoint, Int64 version, Dictionary<Int64, Byte[]> hashes)

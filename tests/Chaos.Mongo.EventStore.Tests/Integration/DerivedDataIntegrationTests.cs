@@ -180,6 +180,44 @@ public class DerivedDataIntegrationTests
     }
 
     [Test]
+    [TestCase("readModel")]
+    [TestCase("checkpoint")]
+    public async Task VerifyAsync_DocumentRepeatingAnElementName_ReportsItInsteadOfFailing(String document)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        var collection = document == "readModel"
+            ? context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+            : GetCheckpoints(context);
+        var stored = document == "readModel"
+            ? await collection.Find(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard))).SingleAsync()
+            : (await context.ReadRawCheckpointsAsync(aggregateId))[0];
+        var repeated = new BsonDocument
+        {
+            AllowDuplicateNames = true
+        };
+        repeated.AddRange(stored);
+        repeated.Add("Revision", stored["Revision"]);
+        await collection.DeleteOneAsync(new BsonDocument("_id", stored["_id"]));
+        await collection.Database.GetCollection<RawBsonDocument>(collection.CollectionNamespace.CollectionName).InsertOneAsync(new RawBsonDocument(repeated.ToBson()));
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        result.IsConsistent.Should().BeFalse();
+        if (document == "readModel")
+        {
+            result.ReadModel.Should().Be(ReadModelStatus.Differs);
+            result.Checkpoints.Should().OnlyContain(c => c.IsConsistent);
+        }
+        else
+        {
+            result.ReadModel.Should().Be(ReadModelStatus.Matches);
+            result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Mismatch, false),
+                                              new CheckpointVerification(4, CheckpointHashStatus.Matches, true));
+        }
+    }
+
+    [Test]
     public async Task VerifyAsync_ManipulatedCheckpointState_ReportsStateMismatch()
     {
         var context = await CreateContextAsync();
