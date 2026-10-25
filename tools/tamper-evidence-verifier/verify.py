@@ -24,6 +24,7 @@ import base64
 import datetime
 import decimal
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -842,7 +843,7 @@ def verify_anchor_chain(anchor_documents, leaf_documents, trusted_head=None):
     anchors = []
     for document in anchor_documents:
         try:
-            found = first(document, "Sequence")
+            found = first_raw(document, "Sequence")
             if found is None:
                 continue
             key = sort_key(found)
@@ -940,7 +941,7 @@ class Evidence:
             raise LookupError(f"evidence {item_hash.hex()} is missing")
         try:
             length = evidence_int(document, "Length")
-            data = get(document, "Data", T_BINARY)
+            data = evidence_data(document)
             if data is None:
                 count = evidence_int(document, "ChunkCount")
                 # A chunked item is longer than one chunk and has exactly as many chunks as its length needs.
@@ -949,7 +950,7 @@ class Evidence:
                 chunks = [self.chunks.get((item_hash, index)) for index in range(count)]
                 if any(chunk is None for chunk in chunks):
                     raise LookupError(f"a chunk of evidence {item_hash.hex()} is missing")
-                parts = [get(chunk, "Data", T_BINARY) for chunk in chunks]
+                parts = [evidence_data(chunk) for chunk in chunks]
                 if any(part is None for part in parts):
                     raise Malformed("a chunk holds no data")
                 data = b"".join(parts)
@@ -958,6 +959,17 @@ class Evidence:
         if len(data) != length or hashlib.sha256(data).digest() != item_hash:
             raise LookupError(f"evidence {item_hash.hex()} does not match its hash")
         return data
+
+
+def evidence_data(document):
+    """The data of an evidence item or chunk, or None when it has none. Data of another type or subtype, old binary data
+    of subtype 0x02 included, is malformed."""
+    found = first(document, "Data")
+    if found is None:
+        return None
+    if found[0] != T_BINARY or found[1][4] != SUBTYPE_GENERIC:
+        raise Malformed("the evidence data is not generic binary data")
+    return found[1][5:]
 
 
 def chunked_item(length, multiplier, increment, modulus):
@@ -1133,13 +1145,24 @@ def remove_dot_segments(path):
     return "/" + "/".join(output)
 
 
+def is_ipv6_literal(host):
+    """Whether the host is a bracketed IPv6 address written with hexadecimal digits, colons and dots only."""
+    if not re.fullmatch(r"\[[0-9A-Fa-f:.]+\]", host):
+        return False
+    try:
+        ipaddress.IPv6Address(host[1:-1])
+    except ValueError:
+        return False
+    return True
+
+
 def normalize_uri(text):
     """Normalizes an HTTP or HTTPS location as the specification defines, on the text as written: the fragment and user
     information are dropped, the scheme and host lower-cased with an IPv6 host keeping its brackets, a default port
     dropped, an empty path made '/' and dot segments removed; the rest of the path and the query stay as written.
-    A location counts only when its host consists of ASCII letters, digits, hyphens and dots, or is a bracketed IPv6
-    literal of hexadecimal digits, colons and dots, and its port, if any, is a decimal number of at most 65535. Returns
-    None for other locations."""
+    A location counts only when its host is non-empty labels of ASCII letters, digits and hyphens joined by dots, or a
+    bracketed IPv6 address of hexadecimal digits, colons and dots, and its port, if any, is a decimal number of at most
+    65535. Returns None for other locations."""
     text = text.split("#", 1)[0]
     scheme_end = text.find("://")
     if scheme_end < 0:
@@ -1160,7 +1183,7 @@ def normalize_uri(text):
         host, port = authority[:close + 1], authority[close + 2:] if close + 1 < len(authority) else ""
     else:
         host, _, port = authority.partition(":")
-    if not (re.fullmatch(r"\[[0-9A-Fa-f:.]+\]", host) or re.fullmatch(r"[A-Za-z0-9.-]+", host)):
+    if not (is_ipv6_literal(host) or re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*", host)):
         return None
     port_suffix = ""
     if port:
@@ -1607,9 +1630,40 @@ def signer_failure(fields):
     return None
 
 
+# The string types a name's attribute value is decoded from, by their DER tags.
+NAME_STRING_CODECS = {0x0C: "utf-8", 0x13: "ascii", 0x14: "latin-1", 0x16: "ascii", 0x1E: "utf-16-be"}
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def name_key(name):
+    """The comparable form of a DER-encoded name: its relative distinguished names in order, each a list of its
+    attribute types in order with their values. A value of a string type is decoded and its ASCII letters lower-cased, so
+    names that differ only in string type or ASCII case are equal; any other value is kept as its encoding."""
+    tag, start, end = der_single(name)
+    if tag != 0x30:
+        raise ValueError("expected a name")
+    key = []
+    for rdn in der_children(name, start, end):
+        if rdn[0] != 0x31:
+            raise ValueError("expected a relative distinguished name")
+        attributes = []
+        for attribute in der_children(name, rdn[1], rdn[2]):
+            if attribute[0] != 0x30:
+                raise ValueError("expected an attribute")
+            parts = der_children(name, attribute[1], attribute[2])
+            if len(parts) != 2:
+                raise ValueError("expected an attribute type and value")
+            codec = NAME_STRING_CODECS.get(parts[1][0])
+            value = name[parts[1][3]:parts[1][4]] if codec is None else name[parts[1][1]:parts[1][2]].decode(codec).translate(ASCII_LOWER)
+            attributes.append((der_oid(name, parts[0]), value))
+        key.append(attributes)
+    return key
+
+
 def chain_failure(chain_fields, chain, signer, trusted_roots):
     """Checks the stored chain's structure: it starts with the token's signer, each certificate names the next one's
-    subject as its issuer, and it ends with a self-issued trusted root."""
+    subject as its issuer, and it ends with a self-issued trusted root. Issuer and subject names are compared in the form
+    name_key gives them."""
     first_fields = chain_fields[0]
     if signer[0] == "issuerAndSerialNumber":
         is_signer = signer[1] == first_fields["issuer"] and signer[2] == first_fields["serial"]
@@ -1618,9 +1672,9 @@ def chain_failure(chain_fields, chain, signer, trusted_roots):
         is_signer = bool(identifiers) and der_only(identifiers[0][1], 0x04) == signer[1]
     if not is_signer:
         return "the stored chain does not start with the token's signing certificate"
-    if any(chain_fields[index]["issuer"] != chain_fields[index + 1]["subject"] for index in range(len(chain) - 1)):
+    if any(name_key(chain_fields[index]["issuer"]) != name_key(chain_fields[index + 1]["subject"]) for index in range(len(chain) - 1)):
         return "the stored chain does not link each certificate to its issuer"
-    if chain_fields[-1]["issuer"] != chain_fields[-1]["subject"] or chain[-1] not in trusted_roots:
+    if name_key(chain_fields[-1]["issuer"]) != name_key(chain_fields[-1]["subject"]) or chain[-1] not in trusted_roots:
         return "the stored chain does not end with a trusted root"
     return None
 
@@ -1904,9 +1958,9 @@ def check(arguments):
             anchors[anchor["Id"]] = anchor
             continue
         try:
-            anchor_id = get_binary(document, "_id", SUBTYPE_UUID)
-            if first(document, "Sequence") is not None and anchor_id is not None:
-                unreadable_anchors.add(anchor_id)
+            found = first_raw(document, "_id")
+            if first_raw(document, "Sequence") is not None and found is not None and found[0] == T_BINARY and found[1][4] == SUBTYPE_UUID:
+                unreadable_anchors.add(found[1][5:])
         except PARSE_ERRORS:
             continue
     evidence = Evidence(read_documents(arguments.evidence), read_documents(arguments.evidence_chunks) if arguments.evidence_chunks else [])

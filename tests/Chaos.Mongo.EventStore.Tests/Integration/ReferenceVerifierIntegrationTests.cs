@@ -7,6 +7,9 @@ using Chaos.Mongo.EventStore.Tests.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
+using MongoDB.Bson.IO;
+using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Diagnostics;
@@ -32,6 +35,36 @@ public class ReferenceVerifierIntegrationTests
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
     private String _directory;
+
+    [Test]
+    [TestCase("leaf")]
+    [TestCase("anchor")]
+    public async Task Check_AnchorDocumentNameNotValidUtf8_ReportsLikeTheLibrary(String document)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var store = GetStore(context);
+        var typed = document == "leaf" ? store.Leaves : store.Anchors;
+        var collection = typed.Database.GetCollection<RawBsonDocument>(typed.CollectionNamespace.CollectionName);
+        var raw = await collection.Find(FilterDefinition<RawBsonDocument>.Empty).SingleAsync();
+        var bytes = raw.ToBson();
+        // The second element's name comes before Sequence and Version; the identifier is an ObjectId or a UUID.
+        var identifierEnd = 4 + 1 + 4 + (bytes[4] == 0x07 ? 12 : 5 + BitConverter.ToInt32(bytes, 4 + 1 + 4));
+        bytes[identifierEnd + 1] = 0xFF;
+        await collection.DeleteOneAsync(new BsonDocument("_id", raw["_id"]));
+        await collection.InsertOneAsync(new RawBsonDocument(bytes));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var chain = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync();
+
+        code.Should().Be(1);
+        stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
+        (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.AnchoredLeafInvalid));
+        (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(3);
+        (report["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(chain.Failure?.ToString());
+        (report["anchorChain"]?["firstBrokenSequence"]?.GetValue<Int64>()).Should().Be(chain.FirstBrokenSequence);
+    }
 
     [Test]
     [TestCase("--trusted-head", "1:00")]
@@ -244,11 +277,13 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
-    public async Task Check_ElementNameNotValidUtf8_ReportsMalformedIntegrityLikeTheLibrary()
+    [TestCase("topLevel")]
+    [TestCase("nestedInPersonalDataPath")]
+    public async Task Check_ElementNameNotValidUtf8_ReportsMalformedIntegrityLikeTheLibrary(String place)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
         var bytes = await context.ReadRawEventAsync(aggregateId, 2);
-        Byte[] name = [0x03, .. "Counterparty"u8, 0x00];
+        Byte[] name = place == "topLevel" ? [0x03, .. "Counterparty"u8, 0x00] : [0x02, .. "Name"u8, 0x00];
         bytes[bytes.AsSpan().IndexOf(name) + 1] = 0xFF;
         await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2));
         await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(bytes));
@@ -283,6 +318,28 @@ public class ReferenceVerifierIntegrationTests
         library.Should().Be(StreamVerificationResult.Broken(brokenVersion, StreamVerificationFailure.VersionGap));
         (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.VersionGap));
         (report["stream"]?["firstBrokenVersion"]?.GetValue<Int64>()).Should().Be(brokenVersion);
+    }
+
+    [Test]
+    public async Task Check_EvidenceDataStoredAsOldBinary_IsInvalidLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var evidence = new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>()).Evidence;
+        var filter = new BsonDocument("_id", anchor["Timestamps"][0]["TokenHash"]);
+        var document = await evidence.Find(filter).SingleAsync();
+        document[AnchorEvidenceStore.DataField] = new BsonBinaryData(document[AnchorEvidenceStore.DataField].AsByteArray, BsonBinarySubType.OldBinary);
+        await evidence.DeleteOneAsync(filter);
+        await evidence.Database.GetCollection<RawBsonDocument>(evidence.CollectionNamespace.CollectionName)
+                      .InsertOneAsync(new RawBsonDocument(ToBsonKeepingOldBinary(document)));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var library = await VerifyTimestampWithLibraryAsync(context);
+
+        code.Should().Be(1);
+        library.IsValid.Should().BeFalse();
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("malformed");
     }
 
     [Test]
@@ -371,13 +428,16 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
-    public async Task Check_IntegrityHashWithOtherBinarySubtype_ReportsMalformedIntegrityLikeTheLibrary()
+    [TestCase(BsonBinarySubType.UserDefined)]
+    [TestCase(BsonBinarySubType.OldBinary)]
+    public async Task Check_IntegrityHashWithOtherBinarySubtype_ReportsMalformedIntegrityLikeTheLibrary(BsonBinarySubType subType)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
-        var stored = LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(aggregateId, 2));
-        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
-                                            Builders<BsonDocument>.Update.Set($"{EventIntegrityChain.ElementName}.Hash",
-                                                                              new BsonBinaryData(stored.Hash, BsonBinarySubType.UserDefined)));
+        var document = await context.FindEventAsync(aggregateId, 2);
+        document[EventIntegrityChain.ElementName]["Hash"] = new BsonBinaryData(document[EventIntegrityChain.ElementName]["Hash"].AsByteArray, subType);
+        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2));
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName)
+                     .InsertOneAsync(new RawBsonDocument(ToBsonKeepingOldBinary(document)));
 
         await DumpAsync(context);
         var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
@@ -825,6 +885,24 @@ public class ReferenceVerifierIntegrationTests
         return report is null
             ? throw new InvalidDataException($"The reference verifier printed no JSON report (exit code {exitCode}): {error}")
             : (exitCode, report);
+    }
+
+    /// <summary>
+    /// Serializes a document as stored, keeping binary data of the old subtype <c>0x02</c>, which the driver otherwise
+    /// writes as generic binary data.
+    /// </summary>
+    private static Byte[] ToBsonKeepingOldBinary(BsonDocument document)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BsonBinaryWriter(stream, new BsonBinaryWriterSettings
+               {
+                   FixOldBinarySubTypeOnOutput = false
+               }))
+        {
+            BsonDocumentSerializer.Instance.Serialize(BsonSerializationContext.CreateRoot(writer), document);
+        }
+
+        return stream.ToArray();
     }
 
     private static async Task<TimestampVerificationResult> VerifyTimestampWithLibraryAsync(LedgerStoreContext context)
