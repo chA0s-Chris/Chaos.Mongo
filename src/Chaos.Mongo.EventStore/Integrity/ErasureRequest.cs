@@ -41,8 +41,9 @@ public sealed class ErasureRequest
         }
 
         Reference = reference;
-        Versions = versions;
-        Paths = paths;
+        // Copied, so changing the caller's collections later cannot bypass the checks above.
+        Versions = versions?.ToArray();
+        Paths = paths?.ToArray();
     }
 
     /// <summary>

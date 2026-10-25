@@ -27,7 +27,9 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// leaves can let a cursor expire; the check then fails with a <c>MongoCursorNotFoundException</c> and can be run
     /// again. Event documents whose identifier or version cannot be read are reported as
     /// <see cref="CompletenessFindingKind.MalformedEvent"/> and count as missing, so their stream may also be reported
-    /// as truncated or deleted.
+    /// as truncated or deleted. Coverage counts stored completed anchors without verifying their timestamp tokens, so
+    /// it is authentic up to the trusted head; anchors after it may have been appended by someone with write access to
+    /// hide unanchored events, and <see cref="VerifyEventAnchorAsync"/> verifies the tokens that authenticate them.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when neither anchoring nor verification is configured.</exception>
     IAsyncEnumerable<CompletenessFinding> CheckCompletenessAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default);

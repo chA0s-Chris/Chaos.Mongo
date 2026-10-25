@@ -873,6 +873,7 @@ The goal is tamper *evidence*, not prevention: anyone with write access to the d
 | Backdating events | Anchors: an event existed no later than the token time of the first anchor that covers it |
 | Deleting or changing anchor leaves, also together with the streams they cover | Anchor-chain verification, which recomputes every anchor's Merkle root from its leaves |
 | Deleting the newest anchors together with the streams they cover | Only against a trusted head kept outside the database |
+| Rebuilding or appending anchors consistently, for example to hide unanchored events from the completeness check | Token verification (`VerifyEventAnchorAsync`), or a trusted head for anchors up to it: digests and roots involve no secret, so the chain of anchors proves consistency, not authenticity |
 | Changing a read model or checkpoint | Derived-data verification, by replay and compare |
 | Erasing personal data without an erasure record | Stream verification reports it, without breaking the chain |
 
@@ -984,7 +985,7 @@ await foreach (var finding in integrity.CheckCompletenessAsync(trustedHead)) // 
 - `VerifyEventAnchorAsync` verifies the chain up to the anchored version, the leaf and its Merkle inclusion proof, the anchor digest and every stored token: its signature, imprint, certificate chain at the token's time and its revocation status, recomputed from the stored CRLs, whose signatures are verified, rather than read from the stored status.
 - `VerifyDerivedDataAsync` reads the stream, the read model and the checkpoints in one snapshot session, which needs MongoDB 5.0 or later, so concurrent appends cause no false reports. It compares the states without `CreatedUtc`, which records the append time and cannot be derived from the events, and reports in `CreationTimeConsistent` whether the read model and the checkpoints agree on it.
 - `CheckCompletenessAsync` is an audit operation over all streams of the type; its cost grows with events and leaves, and its memory with the largest stream and the number of completed anchors, about 8,600 small entries per month at the default interval. It verifies the chain of anchors first, optionally against a trusted head, and reports event documents whose identifier or version cannot be read as `MalformedEvent`; they count as missing, so their stream may also be reported as truncated or deleted. It reads through two server cursors at the pace you consume the findings: a pause longer than the server's cursor timeout (10 minutes by default), or a long run of streams without leaves, can let a cursor expire with `MongoCursorNotFoundException`. Consume the findings promptly and run the check again in that case.
-- `IAnchorVerifier.VerifyAnchorChainAsync` verifies the chain of anchors of all types: sequence numbers, digests, every anchor's Merkle root recomputed from its stored leaves, and the completed status of every anchor but the newest and of every anchor up to a trusted head. Its cost grows with the number of leaves.
+- `IAnchorVerifier.VerifyAnchorChainAsync` verifies the chain of anchors of all types: sequence numbers, digests, every anchor's Merkle root recomputed from its stored leaves, and the completed status of every anchor but the newest and of every anchor up to a trusted head. Its cost grows with the number of leaves. It proves consistency: anchors are authentic up to a trusted head, and otherwise through their timestamp tokens, which `VerifyEventAnchorAsync` verifies. The same holds for the coverage `CheckCompletenessAsync` reports.
 
 Tokens are only valid when their authority's roots are trusted. The roots of RFC 3161 authorities configured for anchoring are trusted automatically; custom authorities, and containers that only verify, configure them with `WithIntegrityVerification`:
 
@@ -1024,7 +1025,7 @@ Grant least privilege:
 | Application | `insert` and `find` on the events collection; the usual permissions on the read-model and checkpoint collections; while the sealing sweep runs in it, `insert`, `update` and `find` on `{Prefix}_IntegrityState`, and `insert`, `update`, `remove` and `find` on the distributed lock collection, whose lock the sweep releases by removing it. A container with `WithoutSealingSweep()` needs none of these. |
 | Retroactive sealing | The sweep's permissions above, and temporarily `update` on the events collection. |
 | Anchoring | `changeStream` and `find` on the database; `insert`, `update`, `remove` and `find` on `IntegrityAnchors`, `IntegrityAnchorLeaves`, `IntegrityChangeStreamState` and the distributed lock collection; `insert` and `find` on the evidence collections. |
-| Erasure | The application's permissions on the events, read-model and checkpoint collections, and `update` on the events collection, with separate credentials. |
+| Erasure | The application's permissions on the events, read-model and checkpoint collections, and `update` on the events collection, with separate credentials. Register its event stores with `WithoutSealingSweep()`, so it needs no sweep permissions. |
 | Verification | `find` on the events, read-model and checkpoint collections, on `{Prefix}_IntegrityState`, which `GetSealingStatusAsync` reads, and on the anchor and evidence collections. |
 
 MongoDB roles cannot restrict `update` to documents without `_integrity`, so sealing needs it temporarily:
@@ -1034,7 +1035,7 @@ MongoDB roles cannot restrict `update` to documents without `_integrity`, so sea
 3. Wait until `GetSealingStatusAsync` reports a pass that completed without failures (`IsCompleteWithoutFailures`). A pass also completes when it skipped streams it could not seal; it logs them and counts them in `StreamsFailed`. Fix those streams, for example from the logged errors and `CheckCompletenessAsync`'s `Unsealed` findings, and wait for the next pass.
 4. Revoke `update`, leaving the application with insert and find on the events collection.
 
-Erasure permanently needs `update`. Run it in a separate process or tool, or a separate dependency-injection container with its own connection and credentials, so the application role keeps insert and find only.
+Erasure permanently needs `update`. Run it in a separate process or tool, or a separate dependency-injection container with its own connection and credentials, so the application role keeps insert and find only. Register that container's event stores with `WithIntegrityProtection(protection => protection.WithoutSealingSweep())`; otherwise its sweep fails for lack of permissions and logs errors.
 
 ## Exception Handling
 

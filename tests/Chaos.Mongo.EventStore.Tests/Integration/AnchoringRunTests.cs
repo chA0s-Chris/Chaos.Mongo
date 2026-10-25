@@ -220,6 +220,7 @@ public class AnchoringRunTests
     [TestCase("noChain", "without its certificate chain")]
     [TestCase("otherTime", "time differs")]
     [TestCase("otherSigner", "does not start with its signing certificate")]
+    [TestCase("withoutRoot", "end with a self-issued root")]
     public async Task RunAsync_CustomAuthorityReturnsInvalidToken_RecordsTheFailureWithoutStoringIt(String change, String failure)
     {
         var context = await CreateContextAsync();
@@ -229,6 +230,7 @@ public class AnchoringRunTests
             "garbage" => new TimestampToken([0x30, 0x03, 0x02, 0x01, 0x01], token.CertificateChain, token.CertificateRevocationLists, token.Timestamp),
             "noChain" => new TimestampToken(token.Token, [], token.CertificateRevocationLists, token.Timestamp),
             "otherTime" => new TimestampToken(token.Token, token.CertificateChain, token.CertificateRevocationLists, token.Timestamp.AddSeconds(1)),
+            "withoutRoot" => new TimestampToken(token.Token, token.CertificateChain.Take(1).ToList(), token.CertificateRevocationLists, token.Timestamp),
             _ => new TimestampToken(token.Token, token.CertificateChain.Reverse().ToList(), token.CertificateRevocationLists, token.Timestamp)
         });
         var run = CreateRun(context, CreateTestAuthority().CreateAuthority(name: "reliable"), custom);
@@ -240,6 +242,25 @@ public class AnchoringRunTests
         anchor.Timestamps.Select(timestamp => timestamp.Authority).Should().Equal("reliable");
         anchor.AuthorityFailures.Should().ContainSingle().Which.Should().Match<AnchorAuthorityFailure>(entry =>
                                                                                                            entry.Authority == "custom" && entry.LastFailure.Contains(failure));
+    }
+
+    [Test]
+    public async Task RunAsync_CustomAuthorityReturnsTimeInMilliseconds_StoresTheToken()
+    {
+        var context = await CreateContextAsync();
+        var custom = new ChangingAuthority(CreateTestAuthority().CreateAuthority(name: "custom"),
+                                           token => new TimestampToken(token.Token,
+                                                                       token.CertificateChain,
+                                                                       token.CertificateRevocationLists,
+                                                                       new DateTimeOffset(token.Timestamp.UtcTicks - (token.Timestamp.UtcTicks % TimeSpan.TicksPerMillisecond),
+                                                                                          TimeSpan.Zero)));
+        var run = CreateRun(context, custom);
+        await context.AppendStreamAsync(1);
+
+        var result = await RunUntilAsync(run, AnchoringRunOutcome.Completed);
+
+        result.Anchor!.Timestamps.Select(timestamp => timestamp.Authority).Should().Equal("custom");
+        result.Anchor.AuthorityFailures.Should().BeEmpty();
     }
 
     [Test]

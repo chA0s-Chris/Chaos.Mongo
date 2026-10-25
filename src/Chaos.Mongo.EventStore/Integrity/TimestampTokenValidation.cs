@@ -351,11 +351,12 @@ internal static class TimestampTokenValidation
 
     /// <summary>
     /// Runs the checks that need no trust settings on a token an authority returned, before anchoring stores it, so a
-    /// custom authority cannot complete an anchor with a token that verification rejects anyway: it is one DER-encoded
-    /// RFC 3161 token whose imprint is the SHA-256 digest and whose signature verifies with the returned chain, which
-    /// starts with the signing certificate; its time is the returned time; and its content, signer and algorithms pass
-    /// the checks verification applies. The chain's trust and the policy are checked at verification, which knows the
-    /// trust settings.
+    /// custom authority cannot complete an anchor with a malformed token or chain: it is one DER-encoded RFC 3161 token
+    /// whose imprint is the SHA-256 digest and whose signature verifies with the returned chain; the chain starts with
+    /// the signing certificate, names each next certificate's subject as its issuer and ends with a self-issued root;
+    /// its time is the returned time to the millisecond, as stored; and its content, signer and algorithms pass the
+    /// checks verification applies. Whether the root is trusted and the policy are checked at verification, which knows
+    /// the trust settings.
     /// </summary>
     /// <param name="received">The token as the authority returned it.</param>
     /// <param name="digest">The SHA-256 digest the token must cover.</param>
@@ -394,7 +395,18 @@ internal static class TimestampTokenValidation
                     throw new TimestampTokenValidationException("the token's certificate chain does not start with its signing certificate.");
                 }
 
-                if (token.TokenInfo.Timestamp != received.Timestamp)
+                for (var index = 0; index < chain.Count; index++)
+                {
+                    var issuer = index + 1 < chain.Count ? chain[index + 1] : chain[index];
+                    if (!chain[index].IssuerName.RawData.AsSpan().SequenceEqual(issuer.SubjectName.RawData))
+                    {
+                        throw new TimestampTokenValidationException(
+                            "the token's certificate chain does not name each next certificate as issuer and end with a self-issued root.");
+                    }
+                }
+
+                // BSON dates keep milliseconds, so verification compares the times to the millisecond as well.
+                if (TruncateToMilliseconds(token.TokenInfo.Timestamp) != TruncateToMilliseconds(received.Timestamp))
                 {
                     throw new TimestampTokenValidationException("the token's time differs from the time returned with it.");
                 }
@@ -572,4 +584,7 @@ internal static class TimestampTokenValidation
             RequireDerValue(children.ReadEncodedValue(), depth + 1);
         }
     }
+
+    private static DateTimeOffset TruncateToMilliseconds(DateTimeOffset time)
+        => new(time.UtcTicks - (time.UtcTicks % TimeSpan.TicksPerMillisecond), TimeSpan.Zero);
 }

@@ -18,6 +18,26 @@ using System.Reflection;
 public class PersonalDataErasureRegistrationTests
 {
     [Test]
+    public void ErasureRequest_CallerCollectionsChangedLater_KeepsTheValidatedSelection()
+    {
+        var versions = new List<Int64>
+        {
+            2
+        };
+        var paths = new List<String>
+        {
+            "Memo"
+        };
+        var request = new ErasureRequest("ticket", versions, paths);
+
+        versions.Clear();
+        paths.Add(" ");
+
+        request.Versions.Should().Equal(2);
+        request.Paths.Should().Equal("Memo");
+    }
+
+    [Test]
     public void ErasureRequest_EmptyCollections_ThrowArgumentException()
     {
         var actVersions = () => new ErasureRequest("ticket", []);
@@ -150,6 +170,8 @@ public class PersonalDataErasureRegistrationTests
         var act = () => new MongoBuilder(new ServiceCollection()).WithEventStore<ErasureRenamedAggregate>(es => es.WithEvent<ErasureRenamedEvent>());
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*PersonalDataErased*registered before the event store*");
+        BsonClassMap.IsClassMapRegistered(typeof(ErasureRenamedAggregate)).Should().BeFalse("the check runs before anything is registered");
+        BsonClassMap.IsClassMapRegistered(typeof(ErasureRenamedEvent)).Should().BeFalse();
     }
 
     [Test]
