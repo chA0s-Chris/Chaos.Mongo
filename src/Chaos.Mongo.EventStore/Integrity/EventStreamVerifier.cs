@@ -34,8 +34,8 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// event is verified in the same way, so the evidence degrades to that anchor's time; the result names the anchor
     /// that verified, or the first one when none does. Any other failure ends the verification. A stream leaf that
     /// cannot be read, or whose committed anchor cannot be read, met before an anchor verified, fails it as
-    /// <see cref="EventAnchorFailure.AnchorDataUnreadable"/>. Each covering anchor's chain walk continues from the
-    /// previous one's verified hash, so every event is hashed once.
+    /// <see cref="EventAnchorFailure.AnchorDataUnreadable"/>, without naming an anchor. A later covering anchor whose
+    /// leaf version is at least the previous one's continues the chain walk from the hash verified there.
     /// </summary>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="version">The event version.</param>

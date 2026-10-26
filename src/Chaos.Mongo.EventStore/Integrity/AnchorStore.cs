@@ -374,22 +374,6 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
-    /// Finds the completed anchors whose leaf for a stream has a version at least the given one, in anchor order, with
-    /// that leaf. Leaves of other anchors are ignored, and so are leaf and anchor documents that cannot be read; use
-    /// <see cref="ReadStreamLeavesAsync"/> to learn about those.
-    /// </summary>
-    /// <param name="aggregateType">The aggregate type name.</param>
-    /// <param name="aggregateId">The aggregate identifier.</param>
-    /// <param name="minimumVersion">The lowest leaf version to include.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The leaves in completed anchors, ordered by anchor sequence.</returns>
-    public async Task<IReadOnlyList<CompletedStreamLeaf>> FindCompletedStreamLeavesAsync(String aggregateType,
-                                                                                         Guid aggregateId,
-                                                                                         Int64 minimumVersion,
-                                                                                         CancellationToken cancellationToken)
-        => (await ReadStreamLeavesAsync(aggregateType, aggregateId, minimumVersion, cancellationToken)).Completed;
-
-    /// <summary>
     /// Enumerates the completed anchors, by sequence number, whose leaf for a stream has a version at least the given
     /// one, with those leaves. A stream leaf that cannot be read, or whose committed anchor cannot be read, ends the
     /// enumeration with an entry marked unreadable; leaves of missing or uncommitted anchors are skipped. The caller

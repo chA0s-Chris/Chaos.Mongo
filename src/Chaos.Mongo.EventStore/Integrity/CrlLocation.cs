@@ -100,12 +100,14 @@ internal static class CrlLocation
 
     /// <summary>
     /// Gets a value indicating whether a host is a name of non-empty labels of ASCII letters, digits and hyphens joined
-    /// by dots, or a bracketed literal of hexadecimal digits, colons and dots that parses as an IPv6 address.
+    /// by dots, or a bracketed literal of hexadecimal digits, colons and dots that parses as an IPv6 address whose
+    /// embedded IPv4 part, if any, has no numbers with leading zeros.
     /// </summary>
     private static Boolean IsHost(String host)
         => host.StartsWith('[')
             ? host.Length > 2 &&
               host[1..^1].All(character => Char.IsAsciiHexDigit(character) || character is ':' or '.') &&
+              (!host.Contains('.') || host[1..^1].Split(':')[^1].Split('.').All(part => part.Length <= 1 || part[0] != '0')) &&
               IPAddress.TryParse(host[1..^1], out var address) &&
               address.AddressFamily == AddressFamily.InterNetworkV6
             : host.Split('.').All(label => label.Length > 0 && label.All(character => Char.IsAsciiLetterOrDigit(character) || character == '-'));

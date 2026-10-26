@@ -391,6 +391,54 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    public async Task VerifyEventAnchorAsync_ForgedEventsWithRebuiltFirstAnchor_DoNotVerifyThroughTheNextAnchor()
+    {
+        var (context, _) = await CreateAnchoredContextAsync();
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.RunUntilAnchoredAsync(aggregateId, 2);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        // Versions 1 and 2 are forged and chained again, and the first anchor is rebuilt over them; its tokens then no
+        // longer cover its digest, so verification falls back to the second anchor, whose chain must start from the
+        // forged hash and therefore breaks at version 3.
+        Byte[]? previousHash = null;
+        for (var version = 1L; version <= 2; version++)
+        {
+            var document = await context.FindEventAsync(aggregateId, version);
+            var integrity = LedgerStoreContext.ReadIntegrity(document);
+            if (version == 1)
+            {
+                document[MemoPath] = "forged";
+            }
+
+            previousHash ??= integrity.PreviousHash;
+            var hash = EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(document.ToBson(), EventIntegrityChain.ElementName),
+                                                       previousHash,
+                                                       integrity.SealMode);
+            document[EventIntegrityChain.ElementName]["PreviousHash"] = new BsonBinaryData(previousHash);
+            document[EventIntegrityChain.ElementName]["Hash"] = new BsonBinaryData(hash);
+            await context.Events.ReplaceOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version), document);
+            previousHash = hash;
+        }
+
+        var forgedHead = previousHash ?? throw new AssertionException("No event was forged.");
+        var store = GetStore(context);
+        var firstAnchor = new BsonDocument(AnchorStore.SequenceField, 1L);
+        var anchorId = (await store.Anchors.Find(firstAnchor).SingleAsync())["_id"].AsBsonBinaryData.ToGuid(GuidRepresentation.Standard);
+        var root = AnchorVerifier.HashLeaf(new AnchorLeaf(anchorId, 1, 0, nameof(LedgerAggregate), aggregateId, 2, forgedHead, []));
+        await store.Leaves.UpdateOneAsync(new BsonDocument(AnchorStore.AnchorSequenceField, 1L),
+                                          Builders<BsonDocument>.Update.Set("Hash", new BsonBinaryData(forgedHead)));
+        await store.Anchors.UpdateOneAsync(firstAnchor,
+                                           Builders<BsonDocument>.Update.Set("MerkleRoot", new BsonBinaryData(root))
+                                                                 .Set(AnchorStore.AnchorDigestField,
+                                                                      new BsonBinaryData(AnchorEncoding.ComputeAnchorDigest(1, 1, new Byte[32], root))));
+
+        var result = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
+
+        (result.Status, result.Failure, result.Anchor?.Sequence).Should().Be((EventAnchorStatus.Failed, EventAnchorFailure.ChainBroken, 2));
+    }
+
+    [Test]
     public async Task VerifyEventAnchorAsync_TrustFromRfc3161Authority_VerifiesWithoutVerificationConfiguration()
     {
         var testAuthority = CreateTestAuthority();

@@ -304,10 +304,11 @@ internal static class TimestampTokenValidation
     }
 
     /// <summary>
-    /// Requires the signed content to be exactly one DER <c>TSTInfo</c> and the token to carry no signature besides
-    /// the authority's (RFC 3161, section 2.4.2). The Pkcs decoder does not reject data that follows the
-    /// <c>TSTInfo</c>, although the signature covers that data, and it requires one signer but ignores
-    /// countersignatures.
+    /// Requires the signed content to be exactly one DER <c>TSTInfo</c> whose message imprint names its hash algorithm
+    /// without parameters or with <c>NULL</c> ones, and the token to carry no signature besides the authority's (RFC
+    /// 3161, section 2.4.2). The Pkcs decoder does not reject data that follows the <c>TSTInfo</c>, although the
+    /// signature covers that data, its imprint check compares only the algorithm's identifier, and it requires one
+    /// signer but ignores countersignatures.
     /// </summary>
     /// <param name="token">The token.</param>
     /// <exception cref="TimestampTokenValidationException">Thrown when the check fails.</exception>
@@ -318,6 +319,11 @@ internal static class TimestampTokenValidation
         if (!Rfc3161TimestampTokenInfo.TryDecode(content, out _, out var bytesConsumed) || bytesConsumed != content.Length)
         {
             throw new TimestampTokenValidationException("the token's signed content is not exactly one TSTInfo.");
+        }
+
+        if (!HasImprintAlgorithmWithoutParameters(content))
+        {
+            throw new TimestampTokenValidationException("the token's message imprint names its hash algorithm with parameters other than NULL.");
         }
 
         // A countersignature attribute counts whatever values it holds, as an independent verifier sees it.
@@ -437,6 +443,33 @@ internal static class TimestampTokenValidation
                                                     fromCaCertificate,
                                                     !fromCaCertificate))
                      .ToList();
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the hash algorithm of a <c>TSTInfo</c>'s message imprint has no parameters or
+    /// <c>NULL</c> ones: <c>TSTInfo ::= SEQUENCE { version, policy, messageImprint SEQUENCE { hashAlgorithm, ... }, ... }</c>.
+    /// </summary>
+    private static Boolean HasImprintAlgorithmWithoutParameters(ReadOnlyMemory<Byte> tstInfo)
+    {
+        try
+        {
+            var info = new AsnReader(tstInfo, AsnEncodingRules.DER).ReadSequence();
+            info.ReadEncodedValue();
+            info.ReadEncodedValue();
+            var algorithm = info.ReadSequence().ReadSequence();
+            algorithm.ReadObjectIdentifier();
+            if (!algorithm.HasData)
+            {
+                return true;
+            }
+
+            algorithm.ReadNull();
+            return !algorithm.HasData;
+        }
+        catch (AsnContentException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

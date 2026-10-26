@@ -368,6 +368,14 @@ public class Rfc3161TimestampAuthorityTests
         exception.Message.Should().Contain("timestamp request failed");
     }
 
+    [Test]
+    public async Task TimestampAsync_ImprintAlgorithmWithParameters_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.ImprintWithParameters);
+
+        exception.Message.Should().Contain("parameters other than NULL");
+    }
+
     [TestCase(TestTimestampAuthorityMode.WrongImprint)]
     [TestCase(TestTimestampAuthorityMode.WrongNonce)]
     [TestCase(TestTimestampAuthorityMode.BrokenSignature)]

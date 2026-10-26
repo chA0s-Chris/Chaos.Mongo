@@ -227,7 +227,7 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
         var run = ServiceProvider.GetRequiredService<AnchoringRun>();
         var store = ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
         var deadline = DateTime.UtcNow.AddSeconds(15);
-        while ((await store.FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
+        while ((await store.ReadStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Completed.Count == 0)
         {
             if (DateTime.UtcNow > deadline)
             {

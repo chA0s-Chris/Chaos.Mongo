@@ -487,6 +487,43 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             Content = new ByteArrayContent(content ?? [])
         };
 
+    /// <summary>
+    /// Rewrites a <c>TSTInfo</c> so that its message imprint's hash algorithm carries the parameter <c>INTEGER 7</c>.
+    /// </summary>
+    private static Byte[] WithImprintParameters(Byte[] tstInfo)
+    {
+        var info = new AsnReader(tstInfo, AsnEncodingRules.DER).ReadSequence();
+        var version = info.ReadEncodedValue();
+        var policy = info.ReadEncodedValue();
+        var imprint = info.ReadSequence();
+        var algorithm = imprint.ReadSequence();
+        var algorithmId = algorithm.ReadEncodedValue();
+        var hashedMessage = imprint.ReadEncodedValue();
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            writer.WriteEncodedValue(version.Span);
+            writer.WriteEncodedValue(policy.Span);
+            using (writer.PushSequence())
+            {
+                using (writer.PushSequence())
+                {
+                    writer.WriteEncodedValue(algorithmId.Span);
+                    writer.WriteInteger(7);
+                }
+
+                writer.WriteEncodedValue(hashedMessage.Span);
+            }
+
+            while (info.HasData)
+            {
+                writer.WriteEncodedValue(info.ReadEncodedValue().Span);
+            }
+        }
+
+        return writer.Encode();
+    }
+
     private static void WriteEcdsaWithSha256(AsnWriter writer)
     {
         using (writer.PushSequence())
@@ -613,7 +650,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                                  nonce: nonce,
                                                  timestampAuthorityName: tsaName);
 
-        var content = Mode == TestTimestampAuthorityMode.TrailingTstInfoData ? [.. info.Encode(), 0x05, 0x00] : info.Encode();
+        var content = Mode switch
+        {
+            TestTimestampAuthorityMode.TrailingTstInfoData => [.. info.Encode(), 0x05, 0x00],
+            TestTimestampAuthorityMode.ImprintWithParameters => WithImprintParameters(info.Encode()),
+            _ => info.Encode()
+        };
         var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), content));
         var signer = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, SigningCertificate)
         {

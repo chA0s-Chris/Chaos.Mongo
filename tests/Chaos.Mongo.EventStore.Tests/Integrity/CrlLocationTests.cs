@@ -40,6 +40,7 @@ public class CrlLocationTests
     [TestCase("http://.tsa.test/ca.crl")]
     [TestCase("http://[1.2.3.4]/ca.crl")]
     [TestCase("http://[abc]/ca.crl")]
+    [TestCase("http://[::1.2.3.04]/ca.crl")]
     public void Normalize_NotAnHttpLocation_ReturnsNull(String location)
         => CrlLocation.Normalize(location).Should().BeNull();
 }

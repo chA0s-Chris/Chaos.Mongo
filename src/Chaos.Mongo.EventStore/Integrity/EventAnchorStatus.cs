@@ -24,7 +24,8 @@ internal enum EventAnchorStatus
     Anchored,
 
     /// <summary>
-    /// A completed anchor covers the event, but its evidence does not verify.
+    /// A completed anchor covers the event, but its evidence does not verify, or a leaf of the stream or the anchor it
+    /// belongs to cannot be read.
     /// </summary>
     Failed
 }
