@@ -203,7 +203,8 @@ public static class MongoBuilderExtensions
     /// anchor verification without the anchoring run, so a container that only verifies, for example an audit tool
     /// with read-only credentials, needs no timestamp authority. With anchoring configured as well, the trust settings
     /// of its RFC 3161 authorities apply unless configured here; trust configured here for an authority's name replaces
-    /// them, roots and policy alike, and also decides which of its tokens anchoring accepts.
+    /// them for verification, roots and policy alike. Anchoring accepts a new token only when it passes both, the
+    /// authority's own settings and the trust configured here, so a root rotation updates both.
     /// </summary>
     /// <param name="builder">The Mongo builder.</param>
     /// <param name="configure">Configures the trust settings, the revocation grace period and the anchor collections.</param>

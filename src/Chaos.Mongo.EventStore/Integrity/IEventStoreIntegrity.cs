@@ -68,9 +68,10 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// <remarks>
     /// When none of the first covering anchor's tokens is valid, for example because one was revoked, the next
     /// completed anchor that covers the event is verified in the same way, so the evidence degrades to that anchor's
-    /// time; the result names the anchor that verified, or the first one when none does. Any other failure ends the
-    /// verification. A leaf of the stream that cannot be read, or whose committed anchor cannot be read, met before an
-    /// anchor verified, fails the verification instead of being skipped.
+    /// time. Any other failure ends the verification. The result names the anchor whose check ended it: the one that
+    /// verified, the one that failed for another reason than having no valid token, or the first covering anchor when
+    /// none had a valid token. A leaf of the stream that cannot be read, or whose committed anchor cannot be read, met
+    /// before an anchor verified, fails the verification instead of being skipped.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="version">The event version.</param>
