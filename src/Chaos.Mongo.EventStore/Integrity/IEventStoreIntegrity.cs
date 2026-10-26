@@ -27,7 +27,9 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// leaves can let a cursor expire; the check then fails with a <c>MongoCursorNotFoundException</c> and can be run
     /// again. Event documents whose identifier or version cannot be read are reported as
     /// <see cref="CompletenessFindingKind.MalformedEvent"/> and count as missing, so their stream may also be reported
-    /// as truncated or deleted. Coverage counts stored completed anchors without verifying their timestamp tokens.
+    /// as truncated or deleted. The check covers presence and coverage, not contents: a document at an anchored version
+    /// counts as present whatever it holds, so verify streams as well to find replaced or relocated events. Coverage
+    /// counts stored completed anchors without verifying their timestamp tokens.
     /// Anchors after the trusted head, or all anchors without one, may have been appended consistently by someone with
     /// write access to hide unanchored events, even with genuine tokens, which <see cref="VerifyEventAnchorAsync"/>
     /// verifies but which only bound the time; a trusted head kept outside the database, or anchors replicated when

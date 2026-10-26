@@ -202,7 +202,8 @@ public static class MongoBuilderExtensions
     /// Configures how anchors and their stored timestamp tokens are verified, once at module level. It registers the
     /// anchor verification without the anchoring run, so a container that only verifies, for example an audit tool
     /// with read-only credentials, needs no timestamp authority. With anchoring configured as well, the trust settings
-    /// of its RFC 3161 authorities apply unless configured here.
+    /// of its RFC 3161 authorities apply unless configured here; trust configured here for an authority's name replaces
+    /// them, roots and policy alike, and also decides which of its tokens anchoring accepts.
     /// </summary>
     /// <param name="builder">The Mongo builder.</param>
     /// <param name="configure">Configures the trust settings, the revocation grace period and the anchor collections.</param>

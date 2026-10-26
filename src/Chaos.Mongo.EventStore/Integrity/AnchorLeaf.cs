@@ -7,7 +7,8 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// anchor.
 /// </summary>
 /// <remarks>
-/// Records compare byte arrays by reference, so compare hashes and proofs with <c>SequenceEqual</c>.
+/// Records compare byte arrays and lists by reference, so compare the hash with <c>SequenceEqual</c> and the proof's
+/// hashes one by one, since <c>SequenceEqual</c> on a list of byte arrays compares references too.
 /// </remarks>
 /// <param name="AnchorId">The identifier of the anchor.</param>
 /// <param name="AnchorSequence">The sequence number of the anchor.</param>

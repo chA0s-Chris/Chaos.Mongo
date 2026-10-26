@@ -7,7 +7,9 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// confirm its chain's revocation status, resolved from the evidence store so a handed-out anchor is self-contained.
 /// </summary>
 /// <remarks>
-/// Records compare byte arrays by reference, so compare tokens, hashes and certificates with <c>SequenceEqual</c>.
+/// Records compare byte arrays and lists by reference, so compare single byte arrays with <c>SequenceEqual</c> and lists
+/// of them, such as the certificate chain, item by item, since <c>SequenceEqual</c> on a list of byte arrays compares
+/// references too.
 /// </remarks>
 /// <param name="Authority">The name of the authority that issued the token.</param>
 /// <param name="Token">The raw RFC 3161 token.</param>

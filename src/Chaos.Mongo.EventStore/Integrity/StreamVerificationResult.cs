@@ -10,7 +10,8 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// Records of the integrity API that hold byte arrays or collections, such as <see cref="VerifiedEvent"/>,
 /// <see cref="DerivedDataVerificationResult"/>, <see cref="EventAnchorVerificationResult"/> and
 /// <see cref="CompletedAnchor"/>, compare them by reference, as records do, so two separately obtained results are not
-/// equal; compare hashes, digests and lists with <c>SequenceEqual</c>.
+/// equal; compare hashes and digests with <c>SequenceEqual</c>, and lists of byte arrays or records item by item,
+/// field by field, since <c>SequenceEqual</c> on them compares references too.
 /// </remarks>
 /// <param name="FirstBrokenVersion">The first version whose verification failed, or <c>null</c> when the stream is intact.</param>
 /// <param name="Failure">Why the first broken version failed, or <c>null</c> when the stream is intact.</param>
