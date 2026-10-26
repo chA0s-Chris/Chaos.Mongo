@@ -67,7 +67,7 @@ public class PublicIntegritySurfaceTests
         }
 
         bases.AddRange(type.GetInterfaces().Where(i => i.IsPublic && i.Namespace?.StartsWith("System", StringComparison.Ordinal) == false));
-        return bases.Count == 0 ? String.Empty : " : " + String.Join(", ", bases.Select(b => Name(b)));
+        return bases.Count == 0 ? String.Empty : $" : {String.Join(", ", bases.Select(b => Name(b)))}";
     }
 
     /// <summary>

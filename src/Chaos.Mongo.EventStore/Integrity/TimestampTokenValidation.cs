@@ -223,8 +223,9 @@ internal static class TimestampTokenValidation
     /// order, each with the same attribute types in order, and equal values. A value of type <c>PrintableString</c>,
     /// <c>UTF8String</c>, <c>IA5String</c>, <c>TeletexString</c> (read as ISO 8859-1) or <c>BMPString</c> is compared
     /// as text, ignoring the case of ASCII letters, any other value by its encoding. An issuer name that a certificate
-    /// encodes with another string type or case than the issuer's subject is thereby still linked, as chain building
-    /// links it; the specification states the same rule.
+    /// encodes with another string type or case than the issuer's subject is thereby still linked. Chain building may
+    /// link more names, for example by normalizing whitespace, so names are linked at least as strictly as chain
+    /// building links them, never less; the specification states the same rule.
     /// </summary>
     /// <param name="first">The first name.</param>
     /// <param name="second">The second name.</param>
@@ -387,13 +388,15 @@ internal static class TimestampTokenValidation
     /// the signing certificate, names each next certificate's subject as its issuer and ends with a self-issued root,
     /// comparing names as <see cref="NamesMatch"/> does;
     /// its time is the returned time to the millisecond, as stored; and its content, signer and algorithms pass the
-    /// checks verification applies. Whether the root is trusted and the policy are checked at verification, which knows
-    /// the trust settings.
+    /// checks verification applies. When the authority's trust settings for verification are known, the chain must
+    /// also be the one built to a trusted root with them and the token issued under their policy, so a token that
+    /// verification would reject never completes an anchor; otherwise trust and policy are checked at verification.
     /// </summary>
     /// <param name="received">The token as the authority returned it.</param>
     /// <param name="digest">The SHA-256 digest the token must cover.</param>
+    /// <param name="trust">The authority's trust settings for verification, or <c>null</c> when none are configured.</param>
     /// <exception cref="TimestampTokenValidationException">Thrown when the token fails a check.</exception>
-    public static void ValidateReceived(TimestampToken received, ReadOnlySpan<Byte> digest)
+    public static void ValidateReceived(TimestampToken received, ReadOnlySpan<Byte> digest, TimestampAuthorityTrust? trust = null)
     {
         ArgumentNullException.ThrowIfNull(received);
         if (!Rfc3161TimestampToken.TryDecode(received.Token, out var token, out var bytesConsumed) || bytesConsumed != received.Token.Length)
@@ -448,6 +451,16 @@ internal static class TimestampTokenValidation
                 ValidateSigner(signer);
                 ValidateAlgorithms(token, signer);
                 ValidateAuthorityName(token, signer);
+                if (trust is not null)
+                {
+                    ValidatePolicy(token, trust.PolicyId is { } policyId ? new Oid(policyId) : null);
+                    var built = BuildChain(token, signer, new ChainSettings(trust.TrustedRoots, X509RevocationMode.NoCheck, TimeSpan.Zero, chain));
+                    if (built.Certificates.Count != received.CertificateChain.Count ||
+                        !built.Certificates.Zip(received.CertificateChain).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)))
+                    {
+                        throw new TimestampTokenValidationException("the token's certificate chain differs from the chain built to a trusted root.");
+                    }
+                }
             }
         }
         catch (CryptographicException ex)
@@ -622,12 +635,13 @@ internal static class TimestampTokenValidation
                 String value;
                 if (encoding is not null && attribute.TryReadPrimitiveCharacterStringBytes(tag, out var contents))
                 {
-                    value = "T" + String.Concat(encoding.GetString(contents.Span)
-                                                        .Select(character => Char.IsAsciiLetterUpper(character) ? Char.ToLowerInvariant(character) : character));
+                    var text = String.Concat(encoding.GetString(contents.Span)
+                                                     .Select(character => Char.IsAsciiLetterUpper(character) ? Char.ToLowerInvariant(character) : character));
+                    value = $"T{text}";
                 }
                 else
                 {
-                    value = "E" + Convert.ToHexString(attribute.ReadEncodedValue().Span);
+                    value = $"E{Convert.ToHexString(attribute.ReadEncodedValue().Span)}";
                 }
 
                 attribute.ThrowIfNotEmpty();

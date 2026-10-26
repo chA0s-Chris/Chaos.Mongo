@@ -220,6 +220,13 @@ public static class MongoEventStoreSerializationSetup
     }
 
     /// <summary>
+    /// Gets a value indicating whether a class map of the erasure entries maps the element names the verifier reads.
+    /// </summary>
+    internal static Boolean ErasureEntryClassMapMatches(BsonClassMap classMap)
+        => HasElementName(classMap, nameof(PersonalDataErasureEntry.Version), PersonalDataErasureEntry.VersionElement) &&
+           HasElementName(classMap, nameof(PersonalDataErasureEntry.Paths), PersonalDataErasureEntry.PathsElement);
+
+    /// <summary>
     /// Builds the class map of <paramref name="classType"/> on top of the class map of its direct base type, so
     /// members declared on intermediate classes are mapped. Missing base types are built first, including those
     /// above class maps registered by consumers, before <paramref name="configure"/> sees the new class map.
@@ -409,9 +416,7 @@ public static class MongoEventStoreSerializationSetup
 
         if (BsonClassMap.IsClassMapRegistered(typeof(PersonalDataErasureEntry)))
         {
-            var registered = GetRegisteredClassMap(typeof(PersonalDataErasureEntry));
-            if (!HasElementName(registered, nameof(PersonalDataErasureEntry.Version), PersonalDataErasureEntry.VersionElement) ||
-                !HasElementName(registered, nameof(PersonalDataErasureEntry.Paths), PersonalDataErasureEntry.PathsElement))
+            if (!ErasureEntryClassMapMatches(GetRegisteredClassMap(typeof(PersonalDataErasureEntry))))
             {
                 throw new InvalidOperationException(
                     $"The class map of {nameof(PersonalDataErasureEntry)} was registered before the event store with other element names, so " +

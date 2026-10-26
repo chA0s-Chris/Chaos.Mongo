@@ -61,6 +61,7 @@ internal sealed class AnchoringRun
     private readonly IAnchorCandidateSource _source;
     private readonly AnchorStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly IntegrityVerificationOptions? _verification;
 
     public AnchoringRun(IMongoHelper mongoHelper,
                         IAnchorCandidateSource source,
@@ -68,7 +69,8 @@ internal sealed class AnchoringRun
                         IntegrityAnchoringOptions options,
                         TimeProvider timeProvider,
                         ILogger<AnchoringRun> logger,
-                        AnchorCompletionNotifier? notifier = null)
+                        AnchorCompletionNotifier? notifier = null,
+                        IntegrityVerificationOptions? verification = null)
     {
         ArgumentNullException.ThrowIfNull(mongoHelper);
         ArgumentNullException.ThrowIfNull(source);
@@ -84,6 +86,7 @@ internal sealed class AnchoringRun
         _timeProvider = timeProvider;
         _logger = logger;
         _notifier = notifier;
+        _verification = verification;
         _store = new AnchorStore(mongoHelper, options);
         _evidence = new AnchorEvidenceStore(mongoHelper, options);
         _confirmer = new TimestampRevocationConfirmer(_store, _evidence, authorities, options, timeProvider, logger);
@@ -444,8 +447,8 @@ internal sealed class AnchoringRun
                 token = await authority.TimestampAsync(anchor.AnchorDigest, HashAlgorithmName.SHA256, cancellationToken);
 
                 // Every token is checked before it is stored, so a custom authority cannot complete an anchor with
-                // a malformed token or chain; whether its root is trusted is checked at verification.
-                TimestampTokenValidation.ValidateReceived(token, anchor.AnchorDigest);
+                // a malformed token or chain, nor with an untrusted one when verification knows the authority's trust.
+                TimestampTokenValidation.ValidateReceived(token, anchor.AnchorDigest, _verification?.FindTrust(authority.Name));
             }
             catch (Exception ex) when (!IsCancellation(ex, cancellationToken))
             {

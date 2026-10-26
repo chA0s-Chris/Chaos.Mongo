@@ -117,15 +117,18 @@ public static class MongoBuilderExtensions
 
     /// <summary>
     /// Configures the anchoring pipeline once at module level: a hosted service anchors the changed stream heads of all
-    /// protected aggregate types at the configured interval and has the anchors timestamped. It registers the
-    /// change-stream candidate source through <see cref="WithAnchorCandidates"/>.
+    /// protected aggregate types at the configured interval and has the anchors timestamped, collecting the changed
+    /// stream heads from a database-wide change stream.
     /// </summary>
     /// <param name="builder">The Mongo builder.</param>
     /// <param name="configure">Configures the authorities, the completion hook and the run settings.</param>
     /// <returns>The Mongo builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown by the builder's methods when a duration, count or threshold is not positive.
+    /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when anchoring is already configured, when no timestamp authority is configured, when a setting is out
-    /// of range, or when the verification configuration names other anchor collections.
+    /// Thrown when anchoring is already configured, when no timestamp authority is configured, when settings
+    /// contradict each other, or when the verification configuration names other anchor collections.
     /// </exception>
     public static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
     {
@@ -182,7 +185,8 @@ public static class MongoBuilderExtensions
                                     options,
                                     timeProvider,
                                     sp.GetService<ILogger<AnchoringRun>>() ?? NullLogger<AnchoringRun>.Instance,
-                                    notifier);
+                                    notifier,
+                                    verification);
         });
         builder.Services.AddSingleton(sp => new IntegrityAnchoringService(sp.GetRequiredService<AnchoringRun>(),
                                                                           sp.GetRequiredService<IMongoHelper>(),

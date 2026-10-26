@@ -383,6 +383,44 @@ public class AnchoringRunTests
     }
 
     [Test]
+    [TestCase("matching", null)]
+    [TestCase("otherRoot", "not trusted")]
+    [TestCase("otherPolicy", "policy")]
+    public async Task RunAsync_KnownTrustSettings_AreRequiredOnReceipt(String trustSettings, String? failure)
+    {
+        var context = await CreateContextAsync();
+        var testAuthority = CreateTestAuthority();
+        var trust = new TimestampAuthorityTrust
+        {
+            PolicyId = trustSettings == "otherPolicy" ? "1.2.3.4" : null
+        };
+        trust.TrustedRoots.Add(trustSettings == "otherRoot" ? CreateTestAuthority().Root : testAuthority.Root);
+        var verification = new IntegrityVerificationOptions();
+        verification.Authorities["test-tsa"] = trust;
+        var run = new AnchoringRun(context.MongoHelper,
+                                   context.CandidateSource,
+                                   [testAuthority.CreateAuthority()],
+                                   GetOptions(context),
+                                   TimeProvider.System,
+                                   NullLogger<AnchoringRun>.Instance,
+                                   verification: verification);
+        await context.AppendStreamAsync(1);
+
+        var result = await RunUntilAsync(run, failure is null ? AnchoringRunOutcome.Completed : AnchoringRunOutcome.AwaitingTimestamps);
+
+        var anchor = result.Anchor ?? throw new AssertionException("The run created no anchor.");
+        if (failure is null)
+        {
+            anchor.Timestamps.Should().ContainSingle();
+        }
+        else
+        {
+            anchor.Timestamps.Should().BeEmpty();
+            anchor.AuthorityFailures.Should().ContainSingle().Which.LastFailure.Should().Contain(failure);
+        }
+    }
+
+    [Test]
     public async Task RunAsync_LateCommit_IsCoveredByALaterAnchor()
     {
         var context = await CreateContextAsync();

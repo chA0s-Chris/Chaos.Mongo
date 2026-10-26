@@ -34,6 +34,7 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// they completed, detects that.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when neither anchoring nor verification is configured.</exception>
+    /// <exception cref="ArgumentException">Thrown when the trusted head has no positive sequence number or no SHA-256 digest.</exception>
     IAsyncEnumerable<CompletenessFinding> CheckCompletenessAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -58,8 +59,11 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// status recomputed from the stored CRLs.
     /// </summary>
     /// <remarks>
-    /// A leaf of the stream that cannot be read, or whose committed anchor cannot be read, before the covering anchor
-    /// fails the verification instead of being skipped.
+    /// When none of the first covering anchor's tokens is valid, for example because one was revoked, the next
+    /// completed anchor that covers the event is verified in the same way, so the evidence degrades to that anchor's
+    /// time; the result names the anchor that verified, or the first one when none does. Any other failure ends the
+    /// verification. A leaf of the stream that cannot be read, or whose committed anchor cannot be read, met before an
+    /// anchor verified, fails the verification instead of being skipped.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="version">The event version.</param>

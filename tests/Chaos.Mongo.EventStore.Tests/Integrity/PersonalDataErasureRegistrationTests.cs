@@ -18,6 +18,21 @@ using System.Reflection;
 public class PersonalDataErasureRegistrationTests
 {
     [Test]
+    public void ErasureEntryClassMapMatches_OtherElementName_ReturnsFalse()
+    {
+        // The entry type is shared by all aggregates, so its class maps are checked without registering them.
+        var standard = new BsonClassMap<PersonalDataErasureEntry>(cm => cm.AutoMap());
+        var renamed = new BsonClassMap<PersonalDataErasureEntry>(cm =>
+        {
+            cm.AutoMap();
+            cm.GetMemberMap(e => e.Paths).SetElementName("ErasedPaths");
+        });
+
+        MongoEventStoreSerializationSetup.ErasureEntryClassMapMatches(standard).Should().BeTrue();
+        MongoEventStoreSerializationSetup.ErasureEntryClassMapMatches(renamed).Should().BeFalse();
+    }
+
+    [Test]
     public void ErasureRequest_CallerCollectionsChangedLater_KeepsTheValidatedSelection()
     {
         var versions = new List<Int64>
@@ -158,6 +173,22 @@ public class PersonalDataErasureRegistrationTests
     }
 
     [Test]
+    public void WithEventStore_PreRegisteredErasureClassMapMappingTheMarker_ThrowsInvalidOperationException()
+    {
+        BsonClassMap.RegisterClassMap<PersonalDataErased<ErasureMarkerMappedAggregate>>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetDiscriminator(PersonalDataErased<ErasureMarkerMappedAggregate>.Discriminator);
+            cm.MapMember(e => e.CreatedByEraser);
+        });
+
+        var act = () => new MongoBuilder(new ServiceCollection()).WithEventStore<ErasureMarkerMappedAggregate>(es => es.WithEvent<ErasureMarkerMappedEvent>());
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*PersonalDataErased*eraser's marker*");
+        BsonClassMap.IsClassMapRegistered(typeof(ErasureMarkerMappedEvent)).Should().BeFalse("the check runs before anything is registered");
+    }
+
+    [Test]
     public void WithEventStore_PreRegisteredErasureClassMapWithOtherElementName_ThrowsInvalidOperationException()
     {
         BsonClassMap.RegisterClassMap<PersonalDataErased<ErasureRenamedAggregate>>(cm =>
@@ -251,6 +282,13 @@ public sealed class ErasureProtectedAggregate : Aggregate;
 public sealed class ErasureProtectedEvent : Event<ErasureProtectedAggregate>
 {
     public override void Execute(ErasureProtectedAggregate aggregate) { }
+}
+
+public sealed class ErasureMarkerMappedAggregate : Aggregate;
+
+public sealed class ErasureMarkerMappedEvent : Event<ErasureMarkerMappedAggregate>
+{
+    public override void Execute(ErasureMarkerMappedAggregate aggregate) { }
 }
 
 public sealed class ErasurePreRegisteredAggregate : Aggregate;

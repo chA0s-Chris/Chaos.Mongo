@@ -139,6 +139,7 @@ The work stays one issue because the format freeze, the verification semantics, 
   - leaf access for completion hooks
   - the verification and erasure interfaces with their request and result types, the sealing status, and `PersonalDataErased<TAggregate>`
 - Stays internal: the anchoring run, the stores (including the evidence store and `AnchorTimestampReference`), the candidate source and `WithAnchorCandidates`, the revocation confirmer, the sealing sweep, and `Event<TAggregate>.Integrity`.
+- Anchoring checks a received token against the verification trust settings of its authority's name when they exist, chain trust and policy, and counts a failure as a failed request, so an untrusted custom authority cannot complete anchors.
 - Erasure gets its own interface, separate from verification, so it can be resolved from a separate container with its own credentials, as the documentation recommends.
 - Besides the items in #160, the documentation covers the following from #171 and #181:
   - the evidence collections, which need insert and find for the anchoring role
