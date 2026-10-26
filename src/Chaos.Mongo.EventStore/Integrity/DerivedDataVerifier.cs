@@ -286,47 +286,50 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
         };
 
         var eventFilter = Builders<Event<TAggregate>>.Filter;
-        // Read raw and deserialize one event at a time, so an event that no longer deserializes stops the replay
-        // instead of failing the check.
-        var storedEvents = await _mongoHelper.Database.GetCollection<Event<TAggregate>>(_options.EventsCollectionName)
+        // Read raw through a cursor and deserialize one event at a time, so memory does not grow with the stream and an
+        // event that no longer deserializes stops the replay instead of failing the check.
+        using var cursor = await _mongoHelper.Database.GetCollection<Event<TAggregate>>(_options.EventsCollectionName)
                                              .Find(session,
                                                    eventFilter.Eq(e => e.AggregateId, aggregateId) &
                                                    EventDocumentFields<TAggregate>.ExcludeObservationalEvents(_options.ObservationalEventDiscriminators))
                                              .SortBy(e => e.Version)
                                              .As<RawBsonDocument>()
-                                             .ToListAsync(cancellationToken);
+                                             .ToCursorAsync(cancellationToken);
 
         var checkpointStates = new Dictionary<BsonDocument, Boolean>(ReferenceEqualityComparer.Instance);
         var hasState = false;
-        foreach (var storedEvent in storedEvents)
+        while (await cursor.MoveNextAsync(cancellationToken))
         {
-            Event<TAggregate> @event;
-            try
+            foreach (var storedEvent in cursor.Current)
             {
-                @event = BsonSerializer.Deserialize<Event<TAggregate>>(storedEvent);
-            }
-            catch (Exception ex) when (ex is FormatException or BsonException or InvalidOperationException or DecoderFallbackException)
-            {
-                return new Replay(aggregate.ToBsonDocument(), hasState, aggregate.Version, aggregate.Revision, checkpointStates, true);
-            }
-
-            if (@event is ObservationalEvent<TAggregate>)
-            {
-                continue;
-            }
-
-            LegacyRevision.Normalize(@event);
-            @event.Execute(aggregate);
-            aggregate.Version = @event.Version;
-            aggregate.Revision = @event.Revision;
-            hasState = true;
-
-            if (checkpoints.TryGetValue(@event.Version, out var documents))
-            {
-                var state = aggregate.ToBsonDocument();
-                foreach (var checkpoint in documents)
+                Event<TAggregate> @event;
+                try
                 {
-                    checkpointStates[checkpoint] = MatchesCheckpoint(state, checkpoint, aggregate.Version, aggregate.Revision);
+                    @event = BsonSerializer.Deserialize<Event<TAggregate>>(storedEvent);
+                }
+                catch (Exception ex) when (ex is FormatException or BsonException or InvalidOperationException or DecoderFallbackException)
+                {
+                    return new Replay(aggregate.ToBsonDocument(), hasState, aggregate.Version, aggregate.Revision, checkpointStates, true);
+                }
+
+                if (@event is ObservationalEvent<TAggregate>)
+                {
+                    continue;
+                }
+
+                LegacyRevision.Normalize(@event);
+                @event.Execute(aggregate);
+                aggregate.Version = @event.Version;
+                aggregate.Revision = @event.Revision;
+                hasState = true;
+
+                if (checkpoints.TryGetValue(@event.Version, out var documents))
+                {
+                    var state = aggregate.ToBsonDocument();
+                    foreach (var checkpoint in documents)
+                    {
+                        checkpointStates[checkpoint] = MatchesCheckpoint(state, checkpoint, aggregate.Version, aggregate.Revision);
+                    }
                 }
             }
         }
