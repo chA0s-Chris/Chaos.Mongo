@@ -54,7 +54,8 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
     /// deserializes, for example after a field's type was changed and the chain recomputed, or after an event type was
     /// removed: replay then stops at that event, the read model is reported as
     /// <see cref="ReadModelStatus.Differs"/>, or as <see cref="ReadModelStatus.Missing"/> when none is stored, and
-    /// checkpoints the replay did not reach as state mismatches.
+    /// checkpoints the replay did not reach as state mismatches. An exception thrown by an event's <c>Execute</c>, such
+    /// as a failed domain check in consumer code, propagates, as it does when the aggregate is loaded.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>

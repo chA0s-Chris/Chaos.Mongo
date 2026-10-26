@@ -263,26 +263,52 @@ public class DerivedDataIntegrationTests
     }
 
     [Test]
-    public async Task VerifyAsync_EventThatNoLongerDeserializes_StopsReplayAndReportsIt()
+    [TestCase(4, false)]
+    [TestCase(3, false)]
+    [TestCase(4, true)]
+    public async Task VerifyAsync_EventThatNoLongerDeserializes_StopsReplayAndReportsIt(Int64 brokenVersion, Boolean readModelDeleted)
     {
         var context = await CreateContextAsync();
         var aggregateId = await AppendOneByOneAsync(context, 4);
-        // The memo becomes a number and the chain is recomputed, so the stream stays intact but the event cannot be read.
-        var document = await context.FindEventAsync(aggregateId, 4);
-        document[MemoPath] = 5;
-        var integrity = LedgerStoreContext.ReadIntegrity(document);
-        document[EventIntegrityChain.ElementName]["Hash"] =
-            new BsonBinaryData(EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(document.ToBson(), EventIntegrityChain.ElementName),
-                                                               integrity.PreviousHash,
-                                                               integrity.SealMode));
-        await context.Events.ReplaceOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 4), document);
+        // The memo becomes a number and the chain is recomputed from there, so the stream stays intact but the event
+        // cannot be read.
+        Byte[]? previousHash = null;
+        for (var version = brokenVersion; version <= 4; version++)
+        {
+            var document = await context.FindEventAsync(aggregateId, version);
+            var integrity = LedgerStoreContext.ReadIntegrity(document);
+            if (version == brokenVersion)
+            {
+                document[MemoPath] = 5;
+            }
+
+            previousHash ??= integrity.PreviousHash;
+            var hash = EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(document.ToBson(), EventIntegrityChain.ElementName),
+                                                       previousHash,
+                                                       integrity.SealMode);
+            document[EventIntegrityChain.ElementName]["PreviousHash"] = new BsonBinaryData(previousHash);
+            document[EventIntegrityChain.ElementName]["Hash"] = new BsonBinaryData(hash);
+            await context.Events.ReplaceOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version), document);
+            previousHash = hash;
+        }
+
+        // A checkpoint after the stop that records the recomputed hash still fails, because replay never reached it.
+        var lastCheckpoint = (await context.ReadRawCheckpointsAsync(aggregateId))[^1];
+        await GetCheckpoints(context).UpdateOneAsync(new BsonDocument("_id", lastCheckpoint["_id"]),
+                                                     Builders<BsonDocument>.Update.Set(CheckpointDocument<LedgerAggregate>.ChainHashElementName,
+                                                                                       new BsonBinaryData(previousHash)));
+        if (readModelDeleted)
+        {
+            await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+                         .DeleteOneAsync(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)));
+        }
 
         var result = await GetVerifier(context).VerifyAsync(aggregateId);
 
         result.Stream.IsIntact.Should().BeTrue();
-        result.ReadModel.Should().Be(ReadModelStatus.Differs);
+        result.ReadModel.Should().Be(readModelDeleted ? ReadModelStatus.Missing : ReadModelStatus.Differs);
         result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Matches, true),
-                                          new CheckpointVerification(4, CheckpointHashStatus.Mismatch, false));
+                                          new CheckpointVerification(4, CheckpointHashStatus.Matches, false));
     }
 
     [Test]
