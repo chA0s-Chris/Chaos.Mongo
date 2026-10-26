@@ -22,6 +22,7 @@ public class IntegrityFormatIntegrationTests
     [TestCase("unset")]
     [TestCase("number")]
     [TestCase("invalidUtf8")]
+    [TestCase("uuidOfFifteenBytes")]
     public async Task AppendEventsAsync_VersionOneWithoutAggregateType_ThrowsAndPersistsNothing(String breakage)
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -72,6 +73,7 @@ public class IntegrityFormatIntegrationTests
     [TestCase("unset")]
     [TestCase("number")]
     [TestCase("invalidUtf8")]
+    [TestCase("uuidOfFifteenBytes")]
     public async Task RunPassAsync_VersionOneWithoutAggregateType_SkipsAndLogsStream(String breakage)
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -145,6 +147,18 @@ public class IntegrityFormatIntegrationTests
     {
         var aggregateTypeElement = EventDocumentFields<LedgerAggregate>.AggregateType;
         var versionOne = EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 1);
+        if (breakage == "uuidOfFifteenBytes")
+        {
+            // The driver writes no UUID of another length, so a generic binary value's subtype is changed in place.
+            await context.Events.UpdateOneAsync(versionOne, Builders<BsonDocument>.Update.Set(aggregateTypeElement, new BsonBinaryData(new Byte[15])));
+            var stored = await context.ReadRawEventAsync(aggregateId, 1);
+            Byte[] binary = [.. Encoding.UTF8.GetBytes(aggregateTypeElement), 0, 0x0F, 0x00, 0x00, 0x00, 0x00];
+            stored[stored.AsSpan().IndexOf(binary) + binary.Length - 1] = (Byte)BsonBinarySubType.UuidStandard;
+            await context.Events.DeleteOneAsync(versionOne);
+            await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(stored));
+            return;
+        }
+
         if (breakage != "invalidUtf8")
         {
             await context.Events.UpdateOneAsync(versionOne,

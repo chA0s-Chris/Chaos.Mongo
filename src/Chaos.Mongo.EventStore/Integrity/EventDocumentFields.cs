@@ -186,9 +186,10 @@ internal static class EventDocumentFields<TAggregate> where TAggregate : class, 
         {
             aggregateType = document.TryGetValue(AggregateType, out var value) && value is BsonString { Value: var name } ? name : null;
         }
-        catch (DecoderFallbackException)
+        catch (Exception ex) when (ex is DecoderFallbackException or FormatException or InvalidOperationException)
         {
-            // A raw document decodes its strings on access; a string that is not valid UTF-8 is no aggregate type.
+            // A raw document decodes its values on access; a string that is not valid UTF-8, or a value the reader
+            // rejects, such as a UUID that is not 16 bytes long, is no aggregate type.
             aggregateType = null;
         }
 
