@@ -230,8 +230,9 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
             return null;
         }
 
-        // The seal mode and creation time only qualify an event of its stream, so a value the reader rejects counts
-        // as unknown instead of making the event malformed; an _integrity value it rejects is no integrity document.
+        // The seal mode and creation time only qualify an event of its stream, so a value the reader rejects, or a
+        // date outside the years 1 to 9999, counts as unknown instead of making the event malformed; an _integrity
+        // value it rejects is no integrity document.
         var integrity = ReadTolerantly(() => document.GetValue(EventIntegrityChain.ElementName, BsonNull.Value) as BsonDocument);
         var sealMode = integrity is null
             ? null
@@ -240,7 +241,8 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
                                    Enum.TryParse<IntegritySealMode>(name, out var parsed)
                                  ? parsed
                                  : (IntegritySealMode?)null);
-        var createdUtc = ReadTolerantly(() => document.TryGetValue(EventDocumentFields<TAggregate>.CreatedUtc, out var created) && created is BsonDateTime date
+        var createdUtc = ReadTolerantly(() => document.TryGetValue(EventDocumentFields<TAggregate>.CreatedUtc, out var created) &&
+                                              created is BsonDateTime { IsValidDateTime: true } date
                                             ? date.ToUniversalTime()
                                             : (DateTime?)null);
         return new EventSummary(eventVersion, integrity is not null, sealMode, createdUtc);

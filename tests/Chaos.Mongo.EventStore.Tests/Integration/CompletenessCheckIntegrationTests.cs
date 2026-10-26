@@ -364,6 +364,26 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_UnanchoredEventCreatedAfterTheYear9999_IsLeftOutOfTheAge()
+    {
+        var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(), timeProvider: new FakeTimeProvider(now));
+        var aggregateId = Guid.NewGuid();
+        await context.Store.AppendEventsAsync([
+            LedgerStoreContext.CreateEntry(aggregateId, 1, createdUtc: now.UtcDateTime.AddHours(-1)),
+            LedgerStoreContext.CreateEntry(aggregateId, 2, createdUtc: now.UtcDateTime.AddHours(-3))
+        ]);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+                                            Builders<BsonDocument>.Update.Set(EventDocumentFields<LedgerAggregate>.CreatedUtc,
+                                                                              new BsonDateTime(253402300800001)));
+
+        var finding = (await CheckAsync(context)).Should().ContainSingle().Subject;
+
+        (finding.Kind, finding.FirstVersion, finding.LastVersion).Should().Be((CompletenessFindingKind.Unanchored, 1L, 2L));
+        finding.Age.Should().Be(TimeSpan.FromHours(1));
+    }
+
+    [Test]
     public async Task CheckAsync_UnanchoredEventsCreatedOutOfOrder_ReportsAgeOfTheOldest()
     {
         var now = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
