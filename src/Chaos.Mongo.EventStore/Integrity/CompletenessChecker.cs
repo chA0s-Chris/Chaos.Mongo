@@ -202,6 +202,12 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
+    /// Gets a value indicating whether an exception is the driver rejecting a stored value while a raw document is read.
+    /// </summary>
+    private static Boolean IsReadError(Exception exception)
+        => exception is FormatException or DecoderFallbackException or InvalidOperationException;
+
+    /// <summary>
     /// Reads a projected event. Its readable aggregate identifier and version are returned even when the other one
     /// cannot be read, so a malformed event can be reported with them.
     /// </summary>
@@ -222,17 +228,35 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
             return null;
         }
 
-        var integrity = document.GetValue(EventIntegrityChain.ElementName, BsonNull.Value) as BsonDocument;
-        IntegritySealMode? sealMode = integrity is not null &&
-                                      integrity.TryGetValue(nameof(EventIntegrity.SealMode), out var mode) &&
-                                      mode is BsonString { Value: var name } &&
-                                      Enum.TryParse<IntegritySealMode>(name, out var parsed)
-            ? parsed
-            : null;
-        DateTime? createdUtc = document.TryGetValue(EventDocumentFields<TAggregate>.CreatedUtc, out var created) && created is BsonDateTime date
-            ? date.ToUniversalTime()
-            : null;
+        // The seal mode and creation time only qualify an event of its stream, so a value the reader rejects counts
+        // as unknown instead of making the event malformed; an _integrity value it rejects is no integrity document.
+        var integrity = ReadTolerantly(() => document.GetValue(EventIntegrityChain.ElementName, BsonNull.Value) as BsonDocument);
+        var sealMode = integrity is null
+            ? null
+            : ReadTolerantly(() => integrity.TryGetValue(nameof(EventIntegrity.SealMode), out var mode) &&
+                                   mode is BsonString { Value: var name } &&
+                                   Enum.TryParse<IntegritySealMode>(name, out var parsed)
+                                 ? parsed
+                                 : (IntegritySealMode?)null);
+        var createdUtc = ReadTolerantly(() => document.TryGetValue(EventDocumentFields<TAggregate>.CreatedUtc, out var created) && created is BsonDateTime date
+                                            ? date.ToUniversalTime()
+                                            : (DateTime?)null);
         return new EventSummary(eventVersion, integrity is not null, sealMode, createdUtc);
+    }
+
+    /// <summary>
+    /// Reads a value of a raw document, or returns the default when the reader rejects it.
+    /// </summary>
+    private static T? ReadTolerantly<T>(Func<T?> read)
+    {
+        try
+        {
+            return read();
+        }
+        catch (Exception ex) when (IsReadError(ex))
+        {
+            return default;
+        }
     }
 
     private async IAsyncEnumerable<CompletenessFinding> CheckCoreAsync(AnchorVerifier anchors,
@@ -317,17 +341,18 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
             foreach (var document in cursor.Current)
             {
                 EventSummary? summary;
-                Guid? readId;
-                Int64? readVersion;
+                Guid? readId = null;
+                Int64? readVersion = null;
                 try
                 {
                     summary = ReadSummary(document, out readId, out readVersion);
                 }
-                catch (Exception ex) when (ex is FormatException or DecoderFallbackException or InvalidOperationException)
+                catch (Exception ex) when (IsReadError(ex))
                 {
                     // Raw documents decode values on access, so a value the driver rejects, such as a UUID that is not
-                    // 16 bytes long, makes the document malformed instead of failing the walk.
-                    (summary, readId, readVersion) = (null, null, null);
+                    // 16 bytes long, makes the document malformed instead of failing the walk; an identifier or version
+                    // read before it is kept for the finding.
+                    summary = null;
                 }
 
                 // A document of another stream, or one whose stream cannot be read, ends the stream being collected.

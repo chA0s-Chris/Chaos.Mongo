@@ -121,6 +121,23 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_EventWithUndecodableSealMode_StaysInItsStream()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var aggregateId = await AnchorNewStreamAsync(context, 3);
+        // _integrity is outside the hashed bytes, so its seal mode can be changed without recomputing anything.
+        var bytes = await context.ReadRawEventAsync(aggregateId, 2);
+        Byte[] sealMode = [0x07, 0x00, 0x00, 0x00, .. "Append"u8, 0x00];
+        bytes[bytes.AsSpan().IndexOf(sealMode) + 4] = 0xFF;
+        await context.Events.DeleteOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2));
+        await context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName).InsertOneAsync(new RawBsonDocument(bytes));
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().BeEmpty("an unknown seal mode leaves the event in its anchored stream");
+    }
+
+    [Test]
     [TestCase("shortUuid")]
     [TestCase("boolean")]
     public async Task CheckAsync_EventWithUnreadableIdentifier_ReportsItWhereTheWalkMeetsIt(String identifier)
