@@ -343,29 +343,62 @@ public class ReferenceVerifierIntegrationTests
     [Test]
     [TestCase("skippedEntryWithUndecodableName", null)]
     [TestCase("uuidOfFifteenBytes", nameof(StreamVerificationFailure.MalformedIntegrity))]
+    [TestCase("versionNotValidUtf8", nameof(StreamVerificationFailure.MalformedIntegrity))]
+    [TestCase("entriesNotValidUtf8", nameof(StreamVerificationFailure.MalformedIntegrity))]
+    [TestCase("codeWithUndecodableScope", nameof(StreamVerificationFailure.MalformedIntegrity))]
+    [TestCase("discriminatorFirstItemUndecodable", null)]
     public async Task Check_ErasureEntry_IsReadLikeTheLibrary(String entry, String? failure)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
         await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("TICKET-1", [1], ["Memo"]));
         var document = await context.FindEventAsync(aggregateId, 4);
         // An entry for a version at or above the erasure event's is skipped after its version was read, so its later
-        // names are never decoded; every item of the entries is read, so a UUID of another length is rejected.
-        document[PersonalDataErased<LedgerAggregate>.EntriesElement].AsBsonArray.Add(entry == "uuidOfFifteenBytes"
-                                                                                         ? new BsonBinaryData(new Byte[15])
-                                                                                         : new BsonDocument
-                                                                                         {
-                                                                                             { "Version", 5L },
-                                                                                             { "x", 1 }
-                                                                                         });
-        var bytes = document.ToBson();
-        if (entry == "uuidOfFifteenBytes")
+        // names are never decoded; the entries, every item of them and the versions read are values the library reads,
+        // while of a discriminator array only the last item is read.
+        var entries = document[PersonalDataErased<LedgerAggregate>.EntriesElement].AsBsonArray;
+        switch (entry)
         {
-            Byte[] item = [0x0F, 0x00, 0x00, 0x00, 0x00, .. new Byte[15]];
-            bytes[bytes.AsSpan().IndexOf(item) + 4] = (Byte)BsonBinarySubType.UuidStandard;
+            case "uuidOfFifteenBytes":
+                entries.Add(new BsonBinaryData(new Byte[15]));
+                break;
+            case "skippedEntryWithUndecodableName":
+                entries.Add(new BsonDocument
+                {
+                    { "Version", 5L },
+                    { "x", 1 }
+                });
+                break;
+            case "versionNotValidUtf8":
+                entries.Add(new BsonDocument("Version", "x"));
+                break;
+            case "entriesNotValidUtf8":
+                document[PersonalDataErased<LedgerAggregate>.EntriesElement] = "x";
+                break;
+            case "codeWithUndecodableScope":
+                entries.Add(new BsonJavaScriptWithScope("c", new BsonDocument("s", "x")));
+                break;
+            default:
+                var discriminator = document["_t"];
+                document["_t"] = new BsonArray
+                {
+                    "x"
+                }.AddRange(discriminator as BsonArray ?? [discriminator]);
+                break;
         }
-        else
+
+        var bytes = document.ToBson();
+        switch (entry)
         {
-            bytes[bytes.AsSpan().IndexOf([(Byte)0x10, (Byte)'x', (Byte)0x00]) + 1] = 0xFF;
+            case "uuidOfFifteenBytes":
+                Byte[] item = [0x0F, 0x00, 0x00, 0x00, 0x00, .. new Byte[15]];
+                bytes[bytes.AsSpan().IndexOf(item) + 4] = (Byte)BsonBinarySubType.UuidStandard;
+                break;
+            case "skippedEntryWithUndecodableName":
+                bytes[bytes.AsSpan().IndexOf([(Byte)0x10, (Byte)'x', (Byte)0x00]) + 1] = 0xFF;
+                break;
+            default:
+                bytes[bytes.AsSpan().IndexOf([(Byte)0x02, (Byte)0x00, (Byte)0x00, (Byte)0x00, (Byte)'x', (Byte)0x00]) + 4] = 0xFF;
+                break;
         }
 
         var integrity = LedgerStoreContext.ReadIntegrity(document);
@@ -662,6 +695,7 @@ public class ReferenceVerifierIntegrationTests
     [Test]
     [TestCase("highTagNumber", true)]
     [TestCase("emptyCountersignature", false)]
+    [TestCase("fiveByteTagNumber", true)]
     public async Task Check_TokenWithAddedUnsignedAttribute_IsJudgedLikeTheLibrary(String attribute, Boolean valid)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -670,9 +704,13 @@ public class ReferenceVerifierIntegrationTests
         var token = await evidence.ReadAsync(anchor["Timestamps"][0]["TokenHash"].AsByteArray, CancellationToken.None);
         // Unsigned attributes are not covered by the signature, so anyone storing the token can add them: one holding a
         // value with tag number 31, which DER encodes in the high-tag-number form, or a countersignature without signers.
-        Byte[] added = attribute == "highTagNumber"
-            ? [0x30, 0x0C, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x31, 0x05, 0x30, 0x03, 0x9F, 0x1F, 0x00]
-            : [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x06, 0x31, 0x00];
+        Byte[] added = attribute switch
+        {
+            "highTagNumber" => [0x30, 0x0C, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x31, 0x05, 0x30, 0x03, 0x9F, 0x1F, 0x00],
+            // Tag number 2^28 needs five bytes in the high-tag-number form.
+            "fiveByteTagNumber" => [0x30, 0x10, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x31, 0x09, 0x30, 0x07, 0x9F, 0x81, 0x80, 0x80, 0x80, 0x00, 0x00],
+            _ => [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x06, 0x31, 0x00]
+        };
         var hash = await evidence.StoreAsync(WithUnsignedAttribute(token, added), CancellationToken.None);
         await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
                                                        Builders<BsonDocument>.Update.Set("Timestamps.0.TokenHash", new BsonBinaryData(hash)));
@@ -752,6 +790,9 @@ public class ReferenceVerifierIntegrationTests
     [TestCase("integrityString", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
     [TestCase("integrityRepeatedName", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
     [TestCase("anchorString", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
+    [TestCase("eventDbPointer", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
+    [TestCase("pathDbPointer", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
+    [TestCase("anchorDbPointer", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
     public async Task Check_UnknownElementThatCannotBeRead_MakesTheDocumentMalformedLikeTheLibrary(String place, String streamFailure, String? chainFailure)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -762,12 +803,25 @@ public class ReferenceVerifierIntegrationTests
                 AllowDuplicateNames = true
             }.Add("a", 1).Add("a", 2)
             : "x";
-        if (place == "anchorString")
+        if (place is "anchorString" or "anchorDbPointer")
         {
             var anchors = context.MongoHelper.Database.GetCollection<RawBsonDocument>(GetStore(context).Anchors.CollectionNamespace.CollectionName);
-            var anchor = (await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync()).Add("Note", unknown);
+            var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
             await anchors.DeleteOneAsync(new BsonDocument("_id", anchor["_id"]));
-            await anchors.InsertOneAsync(new RawBsonDocument(WithUndecodableNote(anchor.ToBson())));
+            await anchors.InsertOneAsync(new RawBsonDocument(place == "anchorDbPointer"
+                                                                 ? WithDbPointer(anchor.ToBson())
+                                                                 : WithUndecodableNote(anchor.Add("Note", unknown).ToBson())));
+        }
+        else if (place is "eventDbPointer" or "pathDbPointer")
+        {
+            // A DBPointer cannot even be skipped over, so it fails the walk over the names or over the embedded
+            // document a personal-data path descends into before any hash is compared.
+            var bytes = await context.ReadRawEventAsync(aggregateId, 2);
+            Byte[] counterparty = [0x03, .. "Counterparty"u8, 0x00];
+            await ReplaceRawEventAsync(context,
+                                       aggregateId,
+                                       2,
+                                       place == "eventDbPointer" ? WithDbPointer(bytes) : WithDbPointer(bytes, bytes.AsSpan().IndexOf(counterparty) + counterparty.Length));
         }
         else
         {
@@ -1087,6 +1141,29 @@ public class ReferenceVerifierIntegrationTests
         var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
         var anchor = AnchorStore.ReadAnchor(await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync());
         return (await verifier.VerifyAnchorAsync(anchor)).Timestamps[0];
+    }
+
+    /// <summary>
+    /// Appends a DBPointer element, a type MongoDB stores but the driver cannot read, to a document or to the embedded
+    /// document that starts at a position of it, correcting the length prefixes.
+    /// </summary>
+    private static Byte[] WithDbPointer(Byte[] document, Int32 embeddedStart = 0)
+    {
+        Byte[] element = [0x0C, (Byte)'p', 0x00, 0x02, 0x00, 0x00, 0x00, (Byte)'x', 0x00, .. new Byte[12]];
+        var end = embeddedStart + BitConverter.ToInt32(document, embeddedStart) - 1;
+        Byte[] result = [.. document.AsSpan(0, end), .. element, .. document.AsSpan(end)];
+        foreach (var start in embeddedStart == 0
+                     ? new[] { 0 }
+                     : new[]
+                     {
+                         0,
+                         embeddedStart
+                     })
+        {
+            BitConverter.TryWriteBytes(result.AsSpan(start, 4), BitConverter.ToInt32(result, start) + element.Length);
+        }
+
+        return result;
     }
 
     /// <summary>

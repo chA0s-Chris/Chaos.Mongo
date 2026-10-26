@@ -45,6 +45,7 @@ ALGORITHM = "SHA-256"
 EVIDENCE_CHUNK_SIZE = 4 * 1024 * 1024
 
 T_DOUBLE, T_STRING, T_DOCUMENT, T_ARRAY, T_BINARY = 0x01, 0x02, 0x03, 0x04, 0x05
+T_DBPOINTER = 0x0C
 T_BOOLEAN, T_DATETIME, T_NULL, T_INT32, T_INT64, T_DECIMAL128 = 0x08, 0x09, 0x0A, 0x10, 0x12, 0x13
 SUBTYPE_GENERIC, SUBTYPE_UUID = 0x00, 0x04
 ANCHOR_STATUSES = ("Preparing", "AwaitingTimestamp", "Completed", "Discarded")
@@ -202,12 +203,20 @@ def array_items(array):
     return [(bson_type, value) for _, bson_type, value, _, _ in raw_elements(array)]
 
 
+def check_type(bson_type):
+    """Raises ValueError for a DBPointer, the deprecated type that MongoDB stores but the .NET driver cannot read, not
+    even to skip over it."""
+    if bson_type == T_DBPOINTER:
+        raise BsonError("a DBPointer cannot be read")
+
+
 def check_value(bson_type, value):
-    """Raises ValueError for a value the .NET driver refuses to read: a string, JavaScript code or symbol that is not
-    terminated or not valid UTF-8, a regular expression or DBPointer whose strings are not valid UTF-8, a boolean other
-    than 0x00 or 0x01, a binary of subtype 0x03 or 0x04 that is not 16 bytes long, or a binary of subtype 0x02 whose
-    inner length does not match."""
-    if bson_type in (T_STRING, 0x0D, 0x0E, 0x0C):
+    """Raises ValueError for a value the .NET driver refuses to read: a DBPointer, a string, JavaScript code or symbol
+    that is not terminated or not valid UTF-8, a regular expression whose strings are not valid UTF-8, JavaScript code
+    with a scope that is not a readable document, a boolean other than 0x00 or 0x01, a binary of subtype 0x03 or 0x04
+    that is not 16 bytes long, or a binary of subtype 0x02 whose inner length does not match."""
+    check_type(bson_type)
+    if bson_type in (T_STRING, 0x0D, 0x0E):
         if len(value) < 5 or value[struct.unpack_from("<i", value, 0)[0] + 3] != 0:
             raise BsonError("a string is not terminated")
         value[4:struct.unpack_from("<i", value, 0)[0] + 3].decode("utf-8")
@@ -215,7 +224,10 @@ def check_value(bson_type, value):
         for part in value[:-1].split(b"\x00"):
             part.decode("utf-8")
     elif bson_type == 0x0F:
-        check_value(T_STRING, value[4:4 + 4 + struct.unpack_from("<i", value, 4)[0]])
+        code_end = 4 + 4 + struct.unpack_from("<i", value, 4)[0]
+        check_value(T_STRING, value[4:code_end])
+        if not is_readable(value[code_end:]):
+            raise BsonError("the scope of JavaScript code is not a readable document")
     elif bson_type == T_BOOLEAN and value not in (b"\x00", b"\x01"):
         raise BsonError("a boolean is neither 0x00 nor 0x01")
     elif bson_type == T_BINARY:
@@ -241,8 +253,6 @@ def is_readable(document, depth=0, is_array=False):
                 names.add(name)
             check_value(bson_type, value)
             if bson_type in (T_DOCUMENT, T_ARRAY) and not is_readable(value, depth + 1, bson_type == T_ARRAY):
-                return False
-            if bson_type == 0x0F and not is_readable(value[8 + struct.unpack_from("<i", value, 4)[0]:], depth + 1):
                 return False
     except PARSE_ERRORS:
         return False
@@ -360,6 +370,7 @@ def locate(document, path):
     for depth, segment in enumerate(segments):
         found = None
         for element_name, bson_type, value, _, _ in elements(current):
+            check_type(bson_type)
             if "." not in element_name and element_name == segment:
                 found = (bson_type, value)
                 break
@@ -378,6 +389,7 @@ def replace_with_binary(document, replacements, prefix=""):
     and position, and corrects the length prefixes. Returns the new document and the paths that resolved."""
     body, resolved, seen = bytearray(), set(), set()
     for element_name, bson_type, value, start, end in elements(document):
+        check_type(bson_type)
         raw = document[start:end]
         if "." not in element_name and element_name not in seen:
             seen.add(element_name)
@@ -512,7 +524,8 @@ def read_items(array):
 
 
 def is_erasure_event(document):
-    """Whether an event is the erasure event by its discriminator. Every item of a discriminator array is read."""
+    """Whether an event is the erasure event by its discriminator. Of a discriminator array, as of the .NET library's
+    reads, only the last item is read; the others are skipped over, which a DBPointer prevents."""
     found = first(document, "_t")
     if found is None:
         return False
@@ -521,8 +534,13 @@ def is_erasure_event(document):
     if bson_type == T_STRING:
         return decode(bson_type, value) == ERASURE_DISCRIMINATOR
     if bson_type == T_ARRAY:
-        items = read_items(value)
-        return bool(items) and items[-1][0] == T_STRING and decode(*items[-1]) == ERASURE_DISCRIMINATOR
+        items = array_items(value)
+        for item_type, _ in items:
+            check_type(item_type)
+        if not items:
+            return False
+        check_value(*items[-1])
+        return items[-1][0] == T_STRING and decode(*items[-1]) == ERASURE_DISCRIMINATOR
     return False
 
 
@@ -532,16 +550,22 @@ def erasure_records(document, erasure_version):
     ValueError."""
     records = set()
     found = first(document, "Entries")
+    if found is not None:
+        check_value(*found)
     if found is None or found[0] != T_ARRAY:
         return records
     for bson_type, entry in read_items(found[1]):
         if bson_type != T_DOCUMENT:
             continue
         version_element = first(entry, "Version")
+        if version_element is not None:
+            check_value(*version_element)
         version = as_version(*version_element) if version_element else None
         if version is None or version >= erasure_version:
             continue
         paths = first(entry, "Paths")
+        if paths is not None:
+            check_value(*paths)
         if paths is None or paths[0] != T_ARRAY:
             continue
         for path_type, path in read_items(paths[1]):
@@ -567,10 +591,11 @@ def version_sort_key(document):
 
 
 def has_readable_names(document):
-    """Whether every top-level element name of a document is valid UTF-8."""
+    """Whether every top-level element name of a document is valid UTF-8 and no top-level element is a DBPointer, which
+    the .NET driver cannot skip over while it reads the names."""
     try:
-        for _ in elements(document):
-            pass
+        for _, bson_type, _, _, _ in elements(document):
+            check_type(bson_type)
         return True
     except PARSE_ERRORS:
         return False
@@ -1071,8 +1096,9 @@ class InvalidSources(ValueError):
 
 def der_read(data, position=0):
     """Reads one DER value: returns (tag, content start, content end, value end). Only minimal tags and minimal definite
-    lengths are accepted. A single-byte tag is returned as that byte; a tag number of 31 or more, in the high-tag-number
-    form, as the first byte plus the number shifted left by 8 bits, so the class and constructed bits stay in place and
+    lengths are accepted, with tag numbers up to 2^31 - 1, as the .NET reader accepts them. A single-byte tag is
+    returned as that byte; a tag number of 31 or more, in the high-tag-number form, as the first byte plus the number
+    shifted left by 8 bits, so the class and constructed bits stay in place and
     no such tag equals a single-byte one."""
     tag = data[position]
     position += 1
@@ -1082,9 +1108,11 @@ def der_read(data, position=0):
             byte = data[position]
             position += 1
             count += 1
-            if (count == 1 and byte == 0x80) or count > 4:
+            if count == 1 and byte == 0x80:
                 raise ValueError("the DER tag is not minimal")
             number = (number << 7) | (byte & 0x7F)
+            if number > 0x7FFFFFFF:
+                raise ValueError("the DER tag number exceeds 2^31 - 1")
             if not byte & 0x80:
                 break
         if number < 0x1F:
