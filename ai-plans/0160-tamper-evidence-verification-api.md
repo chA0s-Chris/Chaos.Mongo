@@ -136,7 +136,7 @@ The work stays one issue because the format freeze, the verification semantics, 
   - `CompletedAnchor` and `AnchorTimestamp` with their revocation fields, `TimestampRevocationStatus` and `TimestampConfirmationFailure`
   - the grace period and unconfirmed-delay threshold settings on the anchoring builder
   - the verification configuration and its verification-only registration
-  - leaf access for completion hooks
+  - leaf access for completion hooks, through the `IAnchorLeafReader` interface
   - the verification and erasure interfaces with their request and result types, the sealing status, and `PersonalDataErased<TAggregate>`
 - Stays internal: the anchoring run, the stores (including the evidence store and `AnchorTimestampReference`), the candidate source and `WithAnchorCandidates`, the revocation confirmer, the sealing sweep, and `Event<TAggregate>.Integrity`.
 - Anchoring checks a received token against the verification trust settings of its authority's name when they exist, chain trust and policy, and counts a failure as a failed request, so an untrusted custom authority cannot complete anchors.

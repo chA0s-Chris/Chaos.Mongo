@@ -6,6 +6,9 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// A timestamp token of an anchor with the evidence captured when it was obtained and, once confirmed, the CRLs that
 /// confirm its chain's revocation status, resolved from the evidence store so a handed-out anchor is self-contained.
 /// </summary>
+/// <remarks>
+/// Records compare byte arrays by reference, so compare tokens, hashes and certificates with <c>SequenceEqual</c>.
+/// </remarks>
 /// <param name="Authority">The name of the authority that issued the token.</param>
 /// <param name="Token">The raw RFC 3161 token.</param>
 /// <param name="CertificateChain">The DER-encoded certificates from the signing certificate to the root.</param>

@@ -27,6 +27,31 @@ public class IntegrityVerificationIntegrationTests
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
+    [Test]
+    public async Task RunAsync_RegisteredTrustOfAnotherRoot_RecordsAFailedRequest()
+    {
+        var testAuthority = CreateTestAuthority();
+        var otherRoot = CreateTestAuthority().Root;
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()))
+                                                             .WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
+                                                                                            "test-tsa",
+                                                                                            trust => trust.TrustedRoots.Add(otherRoot))));
+        await context.AppendStreamAsync(1);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+
+        AnchoringRunResult result;
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        do
+        {
+            result = await run.RunAsync();
+        } while (result.Anchor is null && DateTime.UtcNow < deadline);
+
+        var anchor = result.Anchor ?? throw new AssertionException("The run created no anchor.");
+        result.Outcome.Should().Be(AnchoringRunOutcome.AwaitingTimestamps);
+        anchor.Timestamps.Should().BeEmpty();
+        anchor.AuthorityFailures.Should().ContainSingle().Which.LastFailure.Should().Contain("not trusted");
+    }
+
     [TearDown]
     public async Task TearDown()
     {

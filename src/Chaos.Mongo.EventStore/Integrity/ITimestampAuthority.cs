@@ -55,8 +55,9 @@ public interface ITimestampAuthority
     /// verification rules. Names are compared after decoding, so an issuer name in another string type or ASCII case
     /// than the issuer's subject still links. A token
     /// that fails counts as a failed request. When trust settings for the authority's name are configured for
-    /// verification, the chain must also be trusted with them and the token issued under their policy; otherwise trust
-    /// and policy are checked at verification only.
+    /// verification, the returned chain must also equal the chain built from it to one of their trusted roots, as
+    /// verification requires, and the token must be issued under their policy; otherwise trust and policy are checked
+    /// at verification only.
     /// </remarks>
     /// <exception cref="ArgumentException">Thrown when the algorithm is not SHA-256 or the digest has the wrong length.</exception>
     /// <exception cref="TimestampAuthorityException">Thrown when no valid token could be obtained.</exception>

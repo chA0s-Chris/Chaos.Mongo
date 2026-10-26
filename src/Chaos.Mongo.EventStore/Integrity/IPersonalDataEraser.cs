@@ -26,6 +26,8 @@ public interface IPersonalDataEraser<TAggregate> where TAggregate : class, IAggr
     /// <param name="request">The selection and the reference to record.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The erased paths per event version, empty when nothing was left to erase.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="aggregateId"/> is empty.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="request"/> is <c>null</c>.</exception>
     /// <exception cref="Errors.MongoEventStoreException">
     /// Thrown when the request cannot be fulfilled, for example because a
     /// requested version does not exist.

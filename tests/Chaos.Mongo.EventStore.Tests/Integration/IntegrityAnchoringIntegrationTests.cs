@@ -244,7 +244,7 @@ public class IntegrityAnchoringIntegrationTests
                                                                          }
 
                                                                          var streamed = 0;
-                                                                         await foreach (var _ in services.GetRequiredService<AnchorLeafReader>()
+                                                                         await foreach (var _ in services.GetRequiredService<IAnchorLeafReader>()
                                                                                                          .ReadLeavesAsync(anchor.Id, ct))
                                                                          {
                                                                              streamed++;

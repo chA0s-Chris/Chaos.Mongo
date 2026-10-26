@@ -87,7 +87,7 @@ public class IntegrityAnchoringRegistrationTests
         services.GetServices<IHostedService>().Should().ContainSingle(service => service is IntegrityAnchoringHostedService);
         services.GetServices<IMongoConfigurator>().Should().ContainSingle(configurator => configurator is IntegrityAnchoringConfigurator);
         services.GetRequiredService<AnchoringRun>().Should().NotBeNull();
-        services.GetRequiredService<AnchorLeafReader>().Should().NotBeNull();
+        services.GetRequiredService<IAnchorLeafReader>().Should().NotBeNull();
         services.GetRequiredService<SealingAnchorLookup>().Should().NotBeNull();
         services.GetRequiredService<AnchorEvidenceResolver>().Should().NotBeNull();
     }

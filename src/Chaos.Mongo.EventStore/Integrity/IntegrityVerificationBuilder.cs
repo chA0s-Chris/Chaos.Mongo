@@ -59,9 +59,11 @@ public sealed class IntegrityVerificationBuilder
     }
 
     /// <summary>
-    /// Sets the trust settings for the stored tokens of an authority. They take precedence over the settings of an RFC
-    /// 3161 authority with the same name in the anchoring configuration; tokens of an authority without trust settings
-    /// are not trusted.
+    /// Sets the trust settings for the stored tokens of an authority. They replace the settings of an RFC 3161
+    /// authority with the same name in the anchoring configuration rather than adding to them; tokens of an authority
+    /// without trust settings are not trusted. In a container that also anchors, they apply on receipt as well: a token
+    /// whose chain does not equal the chain built to one of these roots, or that is not issued under the required
+    /// policy, counts as a failed request, so keep the roots of current tokens trusted when adding older ones.
     /// </summary>
     /// <param name="name">The authority name stored on the anchors.</param>
     /// <param name="configure">Configures the trusted roots and the required policy.</param>

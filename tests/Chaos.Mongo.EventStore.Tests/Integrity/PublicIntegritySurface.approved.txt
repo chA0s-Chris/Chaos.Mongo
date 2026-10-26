@@ -52,8 +52,6 @@ sealed class AnchorLeaf
   override Boolean Equals(Object? obj)
   override Int32 GetHashCode()
   override String ToString()
-sealed class AnchorLeafReader
-  IAsyncEnumerable<AnchorLeaf> ReadLeavesAsync(Guid anchorId, CancellationToken cancellationToken = default)
 sealed class AnchorReference
   AnchorReference <Clone>$()
   Boolean Equals(AnchorReference? other)
@@ -165,6 +163,7 @@ sealed class ErasureRequest
   String Reference { get; }
   ctor(String reference, IReadOnlyCollection<Int64>? versions = null, IReadOnlyCollection<String>? paths = null)
 enum EventAnchorFailure
+  AnchorDataUnreadable = 5
   AnchorDigestMismatch = 3
   ChainBroken = 0
   InclusionProofInvalid = 2
@@ -188,6 +187,8 @@ sealed class EventAnchorVerificationResult
   override Boolean Equals(Object? obj)
   override Int32 GetHashCode()
   override String ToString()
+interface IAnchorLeafReader
+  IAsyncEnumerable<AnchorLeaf> ReadLeavesAsync(Guid anchorId, CancellationToken cancellationToken = default)
 interface IAnchorVerifier
   Task<AnchorChainVerificationResult> VerifyAnchorChainAsync(TrustedAnchorHead? trustedHead = null, CancellationToken cancellationToken = default)
 interface IEventStoreIntegrity<TAggregate>

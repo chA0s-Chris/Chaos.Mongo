@@ -6,6 +6,9 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// One leaf of an anchor with its inclusion proof, so a single leaf suffices to verify one stream head against the
 /// anchor.
 /// </summary>
+/// <remarks>
+/// Records compare byte arrays by reference, so compare hashes and proofs with <c>SequenceEqual</c>.
+/// </remarks>
 /// <param name="AnchorId">The identifier of the anchor.</param>
 /// <param name="AnchorSequence">The sequence number of the anchor.</param>
 /// <param name="Index">The zero-based position of the leaf in the anchor's sorted leaves.</param>

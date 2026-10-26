@@ -48,6 +48,11 @@ public interface IEventStoreIntegrity<TAggregate> where TAggregate : class, IAgg
     /// Verifies a stream's chain and, when it is intact, replays the stream from its start and compares the read model
     /// and every checkpoint with the replayed state, and every checkpoint's recorded chain hash with the stream.
     /// </summary>
+    /// <remarks>
+    /// An event that no longer deserializes stops the replay and is reported through the read model and the checkpoints
+    /// the replay did not reach; an exception thrown by an event's <c>Execute</c> propagates, as when the aggregate is
+    /// loaded.
+    /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The result.</returns>

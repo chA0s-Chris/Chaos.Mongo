@@ -165,7 +165,7 @@ public static class MongoBuilderExtensions
         AddAnchorVerifier(builder.Services);
         builder.WithAnchorCandidates();
         builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
-        builder.Services.AddSingleton(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton<IAnchorLeafReader>(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp => new SealingAnchorLookup(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp => new AnchorEvidenceResolver(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp =>
