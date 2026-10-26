@@ -349,6 +349,22 @@ public class DerivedDataIntegrationTests
     }
 
     [Test]
+    public async Task VerifyAsync_ReadModelCreationTimeAfterTheYear9999_ReportsInconsistentCreationTimeInsteadOfFailing()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await AppendOneByOneAsync(context, 4);
+        await context.MongoHelper.Database.GetCollection<BsonDocument>(context.Options.ReadModelCollectionName)
+                     .UpdateOneAsync(new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)),
+                                     Builders<BsonDocument>.Update.Set("CreatedUtc", new BsonDateTime(253402300800001)));
+
+        var result = await GetVerifier(context).VerifyAsync(aggregateId);
+
+        result.ReadModel.Should().Be(ReadModelStatus.Matches);
+        result.CreationTimeConsistent.Should().BeFalse();
+        result.IsConsistent.Should().BeFalse();
+    }
+
+    [Test]
     public async Task VerifyAsync_ReplayReadingCreationTime_StartsWithTheStoredCreationTime()
     {
         var context = await CreateContextAsync();

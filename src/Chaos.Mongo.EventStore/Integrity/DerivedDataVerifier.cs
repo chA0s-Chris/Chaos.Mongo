@@ -201,14 +201,16 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
 
     /// <summary>
     /// Gets the creation time replay starts with: the stored read model's, or the earliest checkpoint state's when the
-    /// read model is missing, or the default when neither records one.
+    /// read model is missing, or the default when neither records one .NET can read, within the years 1 to 9999.
     /// </summary>
     private static DateTime StoredCreationTime(BsonDocument? readModel, IEnumerable<BsonDocument> checkpoints)
     {
         var createdUtcElement = ElementNameOf(nameof(IAggregate.CreatedUtc));
         var stateElement = CheckpointElement(nameof(CheckpointDocument<TAggregate>.State));
         var source = readModel ?? checkpoints.Select(checkpoint => checkpoint.GetValue(stateElement, BsonNull.Value)).OfType<BsonDocument>().FirstOrDefault();
-        return source?.GetValue(createdUtcElement, BsonNull.Value) is BsonDateTime createdUtc ? createdUtc.ToUniversalTime() : default;
+        return source?.GetValue(createdUtcElement, BsonNull.Value) is BsonDateTime { IsValidDateTime: true } createdUtc
+            ? createdUtc.ToUniversalTime()
+            : default;
     }
 
     /// <summary>
