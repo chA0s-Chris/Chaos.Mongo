@@ -10,7 +10,9 @@ using System.Text;
 /// <summary>
 /// Checks that every event of an aggregate type is covered by a completed anchor whose leaf for its stream has a
 /// version at or above the event's, and that every version of an anchored stream up to its anchored version still
-/// exists.
+/// exists. It checks presence and coverage only, not contents: a document at an anchored version counts as present
+/// whatever it holds, so replaced or relocated events are found by stream verification, which recomputes the chain;
+/// run both.
 /// </summary>
 /// <remarks>
 /// An explicit audit operation: it walks the streams in aggregate identifier order, reading each event's version,
