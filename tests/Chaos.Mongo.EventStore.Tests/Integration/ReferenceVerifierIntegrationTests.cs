@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using NUnit.Framework;
@@ -35,6 +36,22 @@ public class ReferenceVerifierIntegrationTests
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
     private String _directory;
+
+    [Test]
+    public async Task Check_AnchorDateOutsideTheReadableYears_MakesTheAnchorMalformedLikeTheLibrary()
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        // The operational dates are not in the anchor digest, so this is a plain write; .NET cannot read a date after 9999.
+        await GetStore(context).Anchors.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty,
+                                                       Builders<BsonDocument>.Update.Set("PeriodStartUtc", new BsonDateTime(253402300800001)));
+
+        await DumpAsync(context);
+        var (_, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var chain = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync();
+
+        chain.Failure.Should().Be(AnchorChainFailure.MalformedAnchor);
+        await AssertReportMatchesLibraryAsync(context, aggregateId, report);
+    }
 
     [Test]
     [TestCase("leaf")]
@@ -234,6 +251,7 @@ public class ReferenceVerifierIntegrationTests
     [TestCase("onlyUserCertificates", true, nameof(TimestampRevocationStatus.Confirmed))]
     [TestCase("unknownCriticalExtension", true, nameof(TimestampRevocationStatus.Unconfirmed))]
     [TestCase("nonMinimalSerialNumber", true, nameof(TimestampRevocationStatus.Unconfirmed))]
+    [TestCase("nonDerNextUpdate", true, nameof(TimestampRevocationStatus.Unconfirmed))]
     public async Task Check_ConfirmingCrlCase_MatchesTheLibrary(String crlCase, Boolean valid, String revocationStatus)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -347,6 +365,7 @@ public class ReferenceVerifierIntegrationTests
     [TestCase("entriesNotValidUtf8", nameof(StreamVerificationFailure.MalformedIntegrity))]
     [TestCase("codeWithUndecodableScope", nameof(StreamVerificationFailure.MalformedIntegrity))]
     [TestCase("discriminatorFirstItemUndecodable", null)]
+    [TestCase("dbPointerBeforeVersion", nameof(StreamVerificationFailure.MalformedIntegrity))]
     public async Task Check_ErasureEntry_IsReadLikeTheLibrary(String entry, String? failure)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -377,6 +396,20 @@ public class ReferenceVerifierIntegrationTests
             case "codeWithUndecodableScope":
                 entries.Add(new BsonJavaScriptWithScope("c", new BsonDocument("s", "x")));
                 break;
+            case "dbPointerBeforeVersion":
+                // A string of the size of a DBPointer, which the driver cannot write, is turned into one in place.
+                entries.Add(new BsonDocument
+                {
+                    { "p", new String('p', 13) },
+                    { "Version", 1L },
+                    {
+                        "Paths", new BsonArray
+                        {
+                            "Memo"
+                        }
+                    }
+                });
+                break;
             default:
                 var discriminator = document["_t"];
                 document["_t"] = new BsonArray
@@ -396,6 +429,11 @@ public class ReferenceVerifierIntegrationTests
             case "skippedEntryWithUndecodableName":
                 bytes[bytes.AsSpan().IndexOf([(Byte)0x10, (Byte)'x', (Byte)0x00]) + 1] = 0xFF;
                 break;
+            case "dbPointerBeforeVersion":
+                Byte[] placeholder = [0x02, (Byte)'p', 0x00, 0x0E, 0x00, 0x00, 0x00, .. Enumerable.Repeat((Byte)'p', 13), 0x00];
+                Byte[] dbPointer = [0x0C, (Byte)'p', 0x00, 0x02, 0x00, 0x00, 0x00, (Byte)'x', 0x00, .. new Byte[12]];
+                dbPointer.CopyTo(bytes, bytes.AsSpan().IndexOf(placeholder));
+                break;
             default:
                 bytes[bytes.AsSpan().IndexOf([(Byte)0x02, (Byte)0x00, (Byte)0x00, (Byte)0x00, (Byte)'x', (Byte)0x00]) + 4] = 0xFF;
                 break;
@@ -412,6 +450,67 @@ public class ReferenceVerifierIntegrationTests
 
         stream.Failure?.ToString().Should().Be(failure);
         await AssertReportMatchesLibraryAsync(context, aggregateId, report);
+    }
+
+    [Test]
+    public async Task Check_EventElementsRenamedByConvention_AreFoundWithElementNames()
+    {
+        ConventionRegistry.Register(nameof(Check_EventElementsRenamedByConvention_AreFoundWithElementNames),
+                                    new ConventionPack
+                                    {
+                                        new CamelCaseElementNameConvention()
+                                    },
+                                    type => type == typeof(Event<RenamedElementsAggregate>));
+        var services = new ServiceCollection();
+        services.AddMongo(new MongoUrl(_container.GetConnectionString()),
+                          configure: options =>
+                          {
+                              options.DefaultDatabase = $"RenamedElementsDb_{Guid.NewGuid():N}";
+                              options.RunConfiguratorsOnStartup = false;
+                          })
+                .WithEventStore<RenamedElementsAggregate>(es => es.WithEvent<RenamedElementsEvent>("RenamedElementsEvent").WithIntegrityProtection());
+        await using var provider = services.BuildServiceProvider();
+        var aggregateId = Guid.NewGuid();
+        await provider.GetRequiredService<IEventStore<RenamedElementsAggregate>>().AppendEventsAsync([
+            new RenamedElementsEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1
+            },
+            new RenamedElementsEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 2
+            }
+        ]);
+        var options = provider.GetRequiredService<MongoEventStoreOptions<RenamedElementsAggregate>>();
+        var library = await new EventStreamVerifier<RenamedElementsAggregate>(provider.GetRequiredService<IMongoHelper>(), options).VerifyStreamAsync(aggregateId);
+        var file = Path.Combine(_directory, "renamed-events.bson");
+        await using (var output = File.Create(file))
+        {
+            foreach (var document in await provider.GetRequiredService<IMongoHelper>().Database.GetCollection<RawBsonDocument>(options.EventsCollectionName)
+                                                   .Find(FilterDefinition<RawBsonDocument>.Empty).ToListAsync())
+            {
+                using (document)
+                {
+                    await output.WriteAsync(document.ToBson());
+                }
+            }
+        }
+
+        String[] arguments = ["check", "--events", file, "--aggregate-type", nameof(RenamedElementsAggregate), "--aggregate-id", aggregateId.ToString()];
+        var (defaultCode, defaultReport) = await RunVerifierAsync(arguments);
+        var (namedCode, namedReport) = await RunVerifierAsync([
+            .. arguments, "--element-name", "AggregateId=aggregateId", "--element-name", "AggregateType=aggregateType", "--element-name", "Version=version"
+        ]);
+
+        library.IsIntact.Should().BeTrue();
+        (defaultCode, defaultReport["eventCount"]?.GetValue<Int32>()).Should().Be((1, 0), defaultReport.ToJsonString());
+        defaultReport["warnings"].Should().NotBeNull();
+        (namedCode, namedReport["eventCount"]?.GetValue<Int32>(), namedReport["stream"]?["intact"]?.GetValue<Boolean>())
+            .Should().Be((0, 2, true), namedReport.ToJsonString());
     }
 
     [Test]
@@ -1001,6 +1100,8 @@ public class ReferenceVerifierIntegrationTests
             "onlyUserCertificates" => authority.BuildCrlWithExtensions(thisUpdate, (IssuingDistributionPointOid, true, [0x30, 0x03, 0x81, 0x01, 0xFF])),
             "unknownCriticalExtension" => authority.BuildCrlWithExtensions(thisUpdate, ("1.2.3.4", true, [0x05, 0x00])),
             "nonMinimalSerialNumber" => authority.BuildCrlWithEncodedSerialNumber(thisUpdate, [0x02, 0x02, 0x00, 0x01]),
+            // A GeneralizedTime whose fraction ends in a zero is not DER.
+            "nonDerNextUpdate" => authority.BuildCrlWithEncodedNextUpdate(thisUpdate, [0x18, 0x11, .. "20991231235959.0Z"u8]),
             _ => throw new ArgumentOutOfRangeException(nameof(crlCase), crlCase, null)
         };
 
@@ -1301,4 +1402,11 @@ public class ReferenceVerifierIntegrationTests
             }
         }
     }
+}
+
+public sealed class RenamedElementsAggregate : Aggregate;
+
+public sealed class RenamedElementsEvent : Event<RenamedElementsAggregate>
+{
+    public override void Execute(RenamedElementsAggregate aggregate) { }
 }

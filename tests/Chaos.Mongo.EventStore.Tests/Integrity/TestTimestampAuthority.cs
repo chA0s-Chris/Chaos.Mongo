@@ -298,6 +298,13 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/>, whose next update
+    /// is <paramref name="encodedNextUpdate"/> as given, for example not in DER form.
+    /// </summary>
+    public Byte[] BuildCrlWithEncodedNextUpdate(DateTimeOffset thisUpdate, Byte[] encodedNextUpdate)
+        => BuildSignedCrl(thisUpdate, [], [], encodedNextUpdate);
+
+    /// <summary>
     /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid for a
     /// week, with one entry whose serial number is <paramref name="encodedSerialNumber"/> as given, for example not
     /// minimally encoded.
@@ -547,7 +554,8 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     /// </summary>
     private Byte[] BuildSignedCrl(DateTimeOffset thisUpdate,
                                   IReadOnlyList<(Byte[] SerialNumber, DateTimeOffset RevokedAt, (String Oid, Byte[] Value)[] Extensions)> revoked,
-                                  (String Oid, Boolean Critical, Byte[] Value)[] extensions)
+                                  (String Oid, Boolean Critical, Byte[] Value)[] extensions,
+                                  Byte[]? encodedNextUpdate = null)
     {
         var tbs = new AsnWriter(AsnEncodingRules.DER);
         using (tbs.PushSequence())
@@ -556,7 +564,15 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
             WriteEcdsaWithSha256(tbs);
             tbs.WriteEncodedValue(Root.SubjectName.RawData);
             tbs.WriteUtcTime(thisUpdate);
-            tbs.WriteUtcTime(thisUpdate.AddDays(7));
+            if (encodedNextUpdate is null)
+            {
+                tbs.WriteUtcTime(thisUpdate.AddDays(7));
+            }
+            else
+            {
+                tbs.WriteEncodedValue(encodedNextUpdate);
+            }
+
             if (revoked.Count > 0)
             {
                 using (tbs.PushSequence())

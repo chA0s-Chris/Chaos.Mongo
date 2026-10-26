@@ -46,6 +46,12 @@ EVIDENCE_CHUNK_SIZE = 4 * 1024 * 1024
 
 T_DOUBLE, T_STRING, T_DOCUMENT, T_ARRAY, T_BINARY = 0x01, 0x02, 0x03, 0x04, 0x05
 T_DBPOINTER = 0x0C
+# The stored names of the event elements the verifier reads. They follow the store's class maps, so a store that maps
+# them with a naming convention needs --element-name.
+EVENT_ELEMENTS = {"AggregateId": "AggregateId", "AggregateType": "AggregateType", "Version": "Version", "Discriminator": "_t"}
+# The milliseconds since the Unix epoch of the first and the last instant .NET reads as a date, years 1 to 9999; the
+# last bound is read as the latest representable time.
+DATE_RANGE = (-62135596800000, 253402300800000)
 T_BOOLEAN, T_DATETIME, T_NULL, T_INT32, T_INT64, T_DECIMAL128 = 0x08, 0x09, 0x0A, 0x10, 0x12, 0x13
 SUBTYPE_GENERIC, SUBTYPE_UUID = 0x00, 0x04
 ANCHOR_STATUSES = ("Preparing", "AwaitingTimestamp", "Completed", "Discarded")
@@ -336,7 +342,8 @@ LATEST = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
 
 
 def datetime_ms(milliseconds):
-    """A BSON date; dates outside the years 1 to 9999 are clamped to that range, as .NET reads them."""
+    """A BSON date. The anchor and timestamp dates read through element lie within the years 1 to 9999; a value outside
+    them is clamped to that range."""
     try:
         return datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(milliseconds=milliseconds)
     except OverflowError:
@@ -514,6 +521,16 @@ def verify_event(document, previous_hash):
     return None, integrity, statuses
 
 
+def first_walked(document, name):
+    """Like first, but rejects a DBPointer among the elements walked before the match, as the .NET library cannot skip
+    over one while it looks up an element."""
+    for element_name, bson_type, value, _, _ in elements(document):
+        check_type(bson_type)
+        if element_name == name:
+            return bson_type, value
+    return None
+
+
 def read_items(array):
     """The items of an array, each of which must pass check_value, as the library reads every item when it enumerates an
     array; embedded documents are read only where they are used."""
@@ -526,7 +543,7 @@ def read_items(array):
 def is_erasure_event(document):
     """Whether an event is the erasure event by its discriminator. Of a discriminator array, as of the .NET library's
     reads, only the last item is read; the others are skipped over, which a DBPointer prevents."""
-    found = first(document, "_t")
+    found = first(document, EVENT_ELEMENTS["Discriminator"])
     if found is None:
         return False
     bson_type, value = found
@@ -557,13 +574,13 @@ def erasure_records(document, erasure_version):
     for bson_type, entry in read_items(found[1]):
         if bson_type != T_DOCUMENT:
             continue
-        version_element = first(entry, "Version")
+        version_element = first_walked(entry, "Version")
         if version_element is not None:
             check_value(*version_element)
         version = as_version(*version_element) if version_element else None
         if version is None or version >= erasure_version:
             continue
-        paths = first(entry, "Paths")
+        paths = first_walked(entry, "Paths")
         if paths is not None:
             check_value(*paths)
         if paths is None or paths[0] != T_ARRAY:
@@ -577,7 +594,7 @@ def erasure_records(document, erasure_version):
 def read_version(document):
     """The version of an event document, or None when it is missing, not a version or the document is malformed."""
     try:
-        found = first_raw(document, "Version")
+        found = first_raw(document, EVENT_ELEMENTS["Version"])
         return as_version(*found) if found else None
     except PARSE_ERRORS:
         return None
@@ -585,7 +602,7 @@ def read_version(document):
 
 def version_sort_key(document):
     try:
-        return sort_key(first_raw(document, "Version"))
+        return sort_key(first_raw(document, EVENT_ELEMENTS["Version"]))
     except PARSE_ERRORS:
         return (3,)
 
@@ -659,7 +676,7 @@ def verify_stream(documents, aggregate_id, leaves=None, first_unreadable=None):
         try:
             if previous_hash is None:
                 try:
-                    aggregate_type = get(document, "AggregateType", T_STRING)
+                    aggregate_type = get(document, EVENT_ELEMENTS["AggregateType"], T_STRING)
                 except UnicodeDecodeError:
                     aggregate_type = None
                 if aggregate_type is None:
@@ -749,11 +766,15 @@ class Malformed(ValueError):
 
 
 def element(document, name, *types):
-    """The decoded value of a required element of one of the given types."""
+    """The decoded value of a required element of one of the given types. A date must lie within the years 1 to 9999,
+    which .NET can read."""
     found = first(document, name)
     if found is None or found[0] not in types:
         raise Malformed(f"{name} is missing or of another type")
-    return decode(*found)
+    value = decode(*found)
+    if found[0] == T_DATETIME and not DATE_RANGE[0] <= value <= DATE_RANGE[1]:
+        raise Malformed(f"{name} is a date outside the years 1 to 9999")
+    return value
 
 
 def optional(document, name, read):
@@ -1202,6 +1223,13 @@ def der_boolean(data, child):
     return content == b"\xff"
 
 
+def der_minimal_integer(content):
+    """Returns the content of a DER INTEGER or ENUMERATED when it is minimal, as the .NET reader requires."""
+    if not content or (len(content) > 1 and (content[0], content[1] >> 7) in ((0x00, 0), (0xFF, 1))):
+        raise ValueError("an integer is not minimally encoded")
+    return content
+
+
 def der_integer(data, child):
     if child[0] != 0x02 or child[2] == child[1]:
         raise ValueError("expected an integer")
@@ -1209,13 +1237,21 @@ def der_integer(data, child):
 
 
 def der_time(data, tag, start, end):
-    if tag not in (0x17, 0x18):
-        raise ValueError("expected a time")
-    text = data[start:end].decode("ascii").rstrip("Z")
+    """Reads a DER time as the .NET reader does: a UTCTime as YYMMDDHHMMSSZ, with years 50 to 99 in the 1900s, or a
+    GeneralizedTime as YYYYMMDDHHMMSS, an optional fraction of seconds without trailing zeros, and Z."""
+    text = data[start:end].decode("ascii")
     if tag == 0x17:
+        if not re.fullmatch(r"[0-9]{12}Z", text):
+            raise ValueError("a UTCTime is not in DER form")
         year = int(text[:2])
-        text = (str(1900 + year) if year >= 50 else str(2000 + year)) + text[2:]
-    whole, _, fraction = text.partition(".")
+        whole, fraction = (str(1900 + year) if year >= 50 else str(2000 + year)) + text[2:12], ""
+    elif tag == 0x18:
+        match = re.fullmatch(r"([0-9]{14})(?:\.([0-9]*[1-9]))?Z", text)
+        if not match:
+            raise ValueError("a GeneralizedTime is not in DER form")
+        whole, fraction = match.group(1), match.group(2) or ""
+    else:
+        raise ValueError("expected a time")
     moment = datetime.datetime.strptime(whole, "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
     return moment + datetime.timedelta(microseconds=int((fraction + "000000")[:6])) if fraction else moment
 
@@ -1466,6 +1502,7 @@ def crl_fields(crl):
     this_update = der_time(crl, *fields[2][:3])
     rest = fields[3:]
     if rest and rest[0][0] in (0x17, 0x18):
+        der_time(crl, *rest[0][:3])
         rest = rest[1:]
     entries, extensions, issuers = [], [], [issuer]
     if rest and rest[0][0] == 0x30:
@@ -1473,9 +1510,7 @@ def crl_fields(crl):
             parts = der_children(crl, entry[1], entry[2])
             if entry[0] != 0x30 or len(parts) not in (2, 3) or parts[0][0] != 0x02:
                 raise ValueError("malformed CRL entry")
-            serial = crl[parts[0][1]:parts[0][2]]
-            if not serial or (len(serial) > 1 and (serial[0], serial[1] >> 7) in ((0x00, 0), (0xFF, 1))):
-                raise ValueError("a CRL entry's serial number is not a minimal DER integer")
+            der_minimal_integer(crl[parts[0][1]:parts[0][2]])
             revocation_date = der_time(crl, *parts[1][:3])
             invalidity_date, removed = None, False
             if len(parts) == 3:
@@ -1484,7 +1519,7 @@ def crl_fields(crl):
                 for extension in der_children(crl, parts[2][1], parts[2][2]):
                     oid, _, value = read_extension(crl, extension)
                     if oid == OID_REASON_CODE:
-                        removed = der_only(value, 0x0A) == b"\x08"
+                        removed = der_minimal_integer(der_only(value, 0x0A)) == b"\x08"
                     elif oid == OID_INVALIDITY_DATE:
                         tag, start, end = der_single(value)
                         if tag != 0x18:
@@ -1596,14 +1631,15 @@ def pss_hash(crl, parameters):
 
 
 def key_size(public_key):
-    """The algorithm and size of a DER SubjectPublicKeyInfo: RSA keys by their modulus, ECDSA keys by their curve, or by
-    their point for an unknown curve; the size is None for other key types."""
+    """The algorithm and size of a DER SubjectPublicKeyInfo: RSA keys (rsaEncryption) by their modulus, ECDSA keys by
+    their curve, or by their point for an unknown curve; the size is None for other key types, including keys with the
+    RSASSA-PSS identifier, which the .NET library cannot read as RSA keys, so they fail the RSA minimum."""
     _, start, end = der_single(public_key)
     algorithm, key = der_children(public_key, start, end)
     algorithm_parts = der_children(public_key, algorithm[1], algorithm[2])
     oid = der_oid(public_key, algorithm_parts[0])
     bits = public_key[key[1] + 1:key[2]]
-    if oid in (OID_RSA, OID_RSASSA_PSS):
+    if oid == OID_RSA:
         _, rsa_start, rsa_end = der_single(bits)
         modulus = der_children(bits, rsa_start, rsa_end)[0]
         return oid, int.from_bytes(bits[modulus[1]:modulus[2]], "big").bit_length()
@@ -1985,7 +2021,7 @@ def stream_documents(documents, aggregate_id, malformed=None):
     selected = []
     for index, document in enumerate(documents):
         try:
-            if selects_uuid(document, "AggregateId", aggregate_id):
+            if selects_uuid(document, EVENT_ELEMENTS["AggregateId"], aggregate_id):
                 selected.append(document)
         except PARSE_ERRORS as error:
             if malformed is not None:
@@ -2038,7 +2074,7 @@ def check(arguments):
     aggregate_id = guid_bytes(arguments.aggregate_id)
     malformed = []
     events = stream_documents(read_documents(arguments.events), aggregate_id, malformed)
-    report = {"stream": None, "anchorChain": None, "anchors": [], "malformed": malformed}
+    report = {"stream": None, "anchorChain": None, "anchors": [], "malformed": malformed, "eventCount": len(events)}
     if not arguments.anchors:
         report["stream"] = verify_stream(events, aggregate_id)
         return report, report["stream"]["intact"]
@@ -2190,6 +2226,8 @@ def main():
     check_parser.add_argument("--policy", action="append", default=[], help="NAME=OID, the policy the authority's tokens must be issued under")
     check_parser.add_argument("--grace-hours", type=float, help="the hours after a token's time from which confirming CRLs count; 24 by default")
     check_parser.add_argument("--trusted-head", help="SEQUENCE:DIGESTHEX of an anchor kept outside the database")
+    check_parser.add_argument("--element-name", action="append", default=[],
+                              help="NAME=STORED, the stored name of an event element (AggregateId, AggregateType, Version or Discriminator)")
     arguments = parser.parse_args()
     try:
         if arguments.command == "vectors":
@@ -2207,7 +2245,18 @@ def main():
                 arguments.grace = None
             if arguments.grace is None or arguments.grace <= datetime.timedelta(0):
                 parser.error("--grace-hours expects a positive number of hours")
+            for option in arguments.element_name:
+                name, separator, stored = option.partition("=")
+                if not separator or name not in EVENT_ELEMENTS or not stored:
+                    parser.error(f"--element-name expects NAME=STORED with NAME one of {', '.join(EVENT_ELEMENTS)}")
+                EVENT_ELEMENTS[name] = stored
             report, ok = check(arguments)
+            # Without any event of the stream, a wrong identifier or element name would look like an intact empty
+            # stream, so the check does not pass.
+            if report["eventCount"] == 0:
+                report["warnings"] = ["no event of the stream was found; check --aggregate-id and, for a store whose class maps rename "
+                                      "event elements, --element-name"]
+                ok = False
     except (OSError, *PARSE_ERRORS) as error:
         json.dump({"error": str(error)}, sys.stdout, indent=2)
         sys.stdout.write("\n")

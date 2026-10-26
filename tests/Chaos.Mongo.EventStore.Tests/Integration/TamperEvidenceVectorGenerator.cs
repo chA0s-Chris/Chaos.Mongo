@@ -141,7 +141,7 @@ public class TamperEvidenceVectorGenerator
         var deadline = DateTime.UtcNow.AddSeconds(30);
         foreach (var (aggregateId, version) in heads)
         {
-            while ((await store.FindCompletedStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, CancellationToken.None)).Count == 0)
+            while ((await store.ReadStreamLeavesAsync(nameof(LedgerAggregate), aggregateId, version, null, CancellationToken.None)).Completed.Count == 0)
             {
                 Assert.That(DateTime.UtcNow, Is.LessThan(deadline), "The streams were not anchored within the timeout.");
                 await run.RunAsync();
