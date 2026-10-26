@@ -11,8 +11,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <see cref="EventAnchorStatus.Failed"/>.
 /// </param>
 /// <param name="Anchor">
-/// The covering anchor that verified, or the first covering anchor when none did, or <c>null</c> when no anchor covers
-/// the event or a leaf or anchor that cannot be read was met (<see cref="EventAnchorFailure.AnchorDataUnreadable"/>).
+/// The covering anchor whose check ended the verification: the one that verified, the one that failed for another
+/// reason than having no valid token, or the first covering anchor when none had a valid token; <c>null</c> when no
+/// anchor covers the event or a leaf or anchor that cannot be read was met
+/// (<see cref="EventAnchorFailure.AnchorDataUnreadable"/>).
 /// </param>
 /// <param name="LeafVersion">
 /// The version of the stream's leaf in that anchor, or <c>null</c> when no anchor is named.

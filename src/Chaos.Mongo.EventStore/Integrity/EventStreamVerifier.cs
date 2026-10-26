@@ -31,9 +31,10 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// Verifies that an event is anchored: the chain from the event to the version of the first completed anchor that
     /// covers it, the anchor's leaf and inclusion proof, the anchor's digest and its stored timestamp tokens. When none
     /// of that anchor's tokens is valid, for example because one was revoked, the next completed anchor that covers the
-    /// event is verified in the same way, so the evidence degrades to that anchor's time; the result names the anchor
-    /// that verified, or the first one when none does. Any other failure ends the verification. A stream leaf that
-    /// cannot be read, or whose committed anchor cannot be read, met before an anchor verified, fails it as
+    /// event is verified in the same way, so the evidence degrades to that anchor's time. Any other failure ends the
+    /// verification. The result names the anchor whose check ended it: the one that verified, the one that failed for
+    /// another reason than having no valid token, or the first covering anchor when none had a valid token. A stream
+    /// leaf that cannot be read, or whose committed anchor cannot be read, met before an anchor verified, fails it as
     /// <see cref="EventAnchorFailure.AnchorDataUnreadable"/>, without naming an anchor. A later covering anchor whose
     /// leaf version is at least the previous one's continues the chain walk from the hash verified there.
     /// </summary>
