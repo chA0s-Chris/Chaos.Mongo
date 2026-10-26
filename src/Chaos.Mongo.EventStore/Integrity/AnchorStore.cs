@@ -672,9 +672,9 @@ internal sealed class AnchorStore
                 {
                     anchors[anchor.Id] = anchor;
                 }
-                else if (HasElement(anchorDocument, SequenceField))
+                else if (HasElement(anchorDocument, SequenceField) && FindUuid(anchorDocument, "_id") is { } unreadableId)
                 {
-                    unreadableAnchors.Add(ReadGuid(anchorDocument["_id"]));
+                    unreadableAnchors.Add(unreadableId);
                 }
             }
         }
@@ -792,11 +792,43 @@ internal sealed class AnchorStore
         => collection.Find(filter).As<RawBsonDocument>();
 
     /// <summary>
+    /// Finds a top-level standard UUID of 16 bytes by comparing names as bytes, or returns <c>null</c>.
+    /// </summary>
+    private static Guid? FindUuid(RawBsonDocument document, String name)
+    {
+        try
+        {
+            return StoredDocuments.FindTopLevelElement(document.ToBson(), name) is { Type: BsonType.Binary, Value: var value } &&
+                   value.Length == 5 + 16 &&
+                   value[4] == (Byte)BsonBinarySubType.UuidStandard
+                ? new Guid(value.AsSpan(5), true)
+                : null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Gets a value indicating whether a raw document has a top-level element, comparing names as bytes, so a name
     /// elsewhere in the document that is not valid UTF-8 does not matter.
     /// </summary>
+    /// <remarks>
+    /// MongoDB stores only well-formed documents, so the lookup does not fail on stored data; should it fail, the element
+    /// counts as present, so the document is treated as unreadable rather than skipped.
+    /// </remarks>
     private static Boolean HasElement(RawBsonDocument document, String name)
-        => StoredDocuments.FindTopLevelElement(document.ToBson(), name) is not null;
+    {
+        try
+        {
+            return StoredDocuments.FindTopLevelElement(document.ToBson(), name) is not null;
+        }
+        catch (FormatException)
+        {
+            return true;
+        }
+    }
 
     /// <summary>
     /// Matches anchors with at least one timestamp entry whose revocation status is unconfirmed.
@@ -1000,12 +1032,21 @@ internal sealed class AnchorStore
     /// or 1 when the version is not an integer.
     /// </summary>
     private static Int64 UnreadableLeafVersion(RawBsonDocument document)
-        => StoredDocuments.FindTopLevelElement(document.ToBson(), VersionField) switch
+    {
+        try
         {
-            { Type: BsonType.Int64, Value: var bytes } => Math.Max(1, BinaryPrimitives.ReadInt64LittleEndian(bytes)),
-            { Type: BsonType.Int32, Value: var bytes } => Math.Max(1, BinaryPrimitives.ReadInt32LittleEndian(bytes)),
-            _ => 1
-        };
+            return StoredDocuments.FindTopLevelElement(document.ToBson(), VersionField) switch
+            {
+                { Type: BsonType.Int64, Value: var bytes } => Math.Max(1, BinaryPrimitives.ReadInt64LittleEndian(bytes)),
+                { Type: BsonType.Int32, Value: var bytes } => Math.Max(1, BinaryPrimitives.ReadInt32LittleEndian(bytes)),
+                _ => 1
+            };
+        }
+        catch (FormatException)
+        {
+            return 1;
+        }
+    }
 
     /// <summary>
     /// Updates timestamp entries that are still unconfirmed, each identified by its authority and token, so an

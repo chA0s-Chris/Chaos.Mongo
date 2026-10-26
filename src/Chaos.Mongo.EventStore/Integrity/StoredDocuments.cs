@@ -16,6 +16,11 @@ using System.Text;
 /// </summary>
 internal static class StoredDocuments
 {
+    /// <summary>
+    /// The deprecated DBPointer type, which the driver cannot read but MongoDB still stores: a string and an ObjectId.
+    /// </summary>
+    private const BsonType DbPointer = (BsonType)0x0C;
+
     private static readonly BsonBinaryReaderSettings StoredSubtypeSettings = new()
     {
         FixOldBinarySubTypeOnInput = false
@@ -164,6 +169,7 @@ internal static class StoredDocuments
             BsonType.Decimal128 => 16,
             BsonType.Undefined or BsonType.Null or BsonType.MinKey or BsonType.MaxKey => 0,
             BsonType.RegularExpression => RegularExpressionSize(document, start),
+            DbPointer => 4 + BinaryPrimitives.ReadInt32LittleEndian(document.AsSpan(start)) + 12,
             _ => throw new FormatException($"A stored element has the unknown type 0x{(Int32)type:x2}.")
         };
 }

@@ -65,7 +65,7 @@ internal enum StreamVerificationFailure
 
     /// <summary>
     /// A leaf of the stream in a completed anchor does not prove its inclusion in the anchor's Merkle root, so the
-    /// leaf was changed.
+    /// leaf was changed, or a leaf of the stream, or the committed anchor it belongs to, cannot be read.
     /// </summary>
     AnchoredLeafInvalid
 }

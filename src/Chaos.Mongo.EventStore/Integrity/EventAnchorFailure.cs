@@ -31,5 +31,11 @@ internal enum EventAnchorFailure
     /// <summary>
     /// None of the anchor's timestamp tokens is valid.
     /// </summary>
-    NoValidTimestamp
+    NoValidTimestamp,
+
+    /// <summary>
+    /// A leaf of the stream, or the committed anchor it belongs to, cannot be read where the verification met it, before
+    /// an anchor verified; no anchor is named in the result, because none could be checked there.
+    /// </summary>
+    AnchorDataUnreadable
 }

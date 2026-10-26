@@ -459,9 +459,11 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
-    [TestCase("leaf")]
-    [TestCase("anchor")]
-    public async Task VerifyStreamAsync_AnchorDocumentNameNotValidUtf8_ReportsAnchoredLeafInvalid(String document)
+    [TestCase("leaf", "undecodableName")]
+    [TestCase("anchor", "undecodableName")]
+    [TestCase("leaf", "dbPointer")]
+    [TestCase("anchor", "dbPointer")]
+    public async Task VerifyStreamAsync_AnchorDocumentThatCannotBeRead_ReportsAnchoredLeafInvalid(String document, String change)
     {
         var (context, _) = await CreateAnchoredContextAsync();
         var aggregateId = await context.AppendStreamAsync(3);
@@ -473,7 +475,15 @@ public class IntegrityVerificationIntegrationTests
         var bytes = raw.ToBson();
         // The second element's name comes before Sequence and Version; the identifier is an ObjectId or a UUID.
         var identifierEnd = 4 + 1 + 4 + (bytes[4] == 0x07 ? 12 : 5 + BitConverter.ToInt32(bytes, 4 + 1 + 4));
-        bytes[identifierEnd + 1] = 0xFF;
+        if (change == "dbPointer")
+        {
+            bytes = WithDbPointer(bytes, identifierEnd);
+        }
+        else
+        {
+            bytes[identifierEnd + 1] = 0xFF;
+        }
+
         await collection.DeleteOneAsync(new BsonDocument("_id", raw["_id"]));
         await collection.Database.GetCollection<RawBsonDocument>(collection.CollectionNamespace.CollectionName).InsertOneAsync(new RawBsonDocument(bytes));
 
@@ -482,7 +492,7 @@ public class IntegrityVerificationIntegrationTests
         var chain = await GetAnchorVerifier(context).VerifyAnchorChainAsync();
 
         stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
-        eventAnchor.Status.Should().Be(EventAnchorStatus.Failed);
+        (eventAnchor.Status, eventAnchor.Failure).Should().Be((EventAnchorStatus.Failed, EventAnchorFailure.AnchorDataUnreadable));
         chain.IsIntact.Should().BeFalse();
     }
 
@@ -768,7 +778,60 @@ public class IntegrityVerificationIntegrationTests
 
         stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
         anchor.Status.Should().Be(EventAnchorStatus.Failed);
-        anchor.Failure.Should().Be(EventAnchorFailure.LeafHashMismatch);
+        anchor.Failure.Should().Be(EventAnchorFailure.AnchorDataUnreadable);
+    }
+
+    [Test]
+    [TestCase("versionNotValidUtf8", 4, nameof(StreamVerificationFailure.VersionGap))]
+    [TestCase("dbPointer", 2, nameof(StreamVerificationFailure.MalformedIntegrity))]
+    [TestCase("integrityNotValidUtf8", 2, nameof(StreamVerificationFailure.MalformedIntegrity))]
+    [TestCase("discriminatorScopeRepeatingName", 3, nameof(StreamVerificationFailure.MalformedIntegrity))]
+    public async Task VerifyStreamAsync_ValueTheReaderRejects_ReportsTheSpecifiedFailure(String place, Int64 version, String failure)
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(3);
+        var events = context.MongoHelper.Database.GetCollection<RawBsonDocument>(context.Options.EventsCollectionName);
+        switch (place)
+        {
+            case "versionNotValidUtf8":
+                // A document of the stream whose version is a string the reader rejects sorts after the numbers.
+                var junk = new BsonDocument
+                {
+                    { EventDocumentFields<LedgerAggregate>.AggregateId, new BsonBinaryData(aggregateId, GuidRepresentation.Standard) },
+                    { EventDocumentFields<LedgerAggregate>.Version, "x" }
+                }.ToBson();
+                junk[junk.AsSpan().IndexOf([(Byte)0x02, (Byte)0x00, (Byte)0x00, (Byte)0x00, (Byte)'x', (Byte)0x00]) + 4] = 0xFF;
+                await events.InsertOneAsync(new RawBsonDocument(junk));
+                break;
+            case "dbPointer":
+                var stored = await context.ReadRawEventAsync(aggregateId, 2);
+                await ReplaceRawEventAsync(context, aggregateId, 2, WithDbPointer(stored, stored.Length - 1));
+                break;
+            case "integrityNotValidUtf8":
+                var document = await context.FindEventAsync(aggregateId, 2);
+                document[EventIntegrityChain.ElementName] = "x";
+                var bytes = document.ToBson();
+                bytes[bytes.AsSpan().IndexOf([(Byte)0x02, (Byte)0x00, (Byte)0x00, (Byte)0x00, (Byte)'x', (Byte)0x00]) + 4] = 0xFF;
+                await ReplaceRawEventAsync(context, aggregateId, 2, bytes);
+                break;
+            default:
+                // The discriminator is covered by the hash, so the event is sealed again to reach its decoding.
+                var last = await context.FindEventAsync(aggregateId, 3);
+                var integrity = LedgerStoreContext.ReadIntegrity(last);
+                last["_t"] = new BsonJavaScriptWithScope("c", new BsonDocument
+                {
+                    AllowDuplicateNames = true
+                }.Add("s", 1).Add("s", 2));
+                var resealed = last.ToBson();
+                EventIntegrityChain.ComputeHash(RawBsonElements.RemoveTopLevelElement(resealed, EventIntegrityChain.ElementName), integrity.PreviousHash, integrity.SealMode)
+                                   .CopyTo(resealed, resealed.AsSpan().IndexOf(integrity.Hash));
+                await ReplaceRawEventAsync(context, aggregateId, 3, resealed);
+                break;
+        }
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(version, Enum.Parse<StreamVerificationFailure>(failure)));
     }
 
     [Test]
@@ -818,6 +881,17 @@ public class IntegrityVerificationIntegrationTests
 
     private static PersonalDataStatus StatusOf(StreamVerificationResult result, Int64 version, String path)
         => result.Events.Single(e => e.Version == version).PersonalData.Single(p => p.Path == path).Status;
+
+    /// <summary>
+    /// Inserts a DBPointer element, a type MongoDB stores but the driver cannot read, at a position of a document.
+    /// </summary>
+    private static Byte[] WithDbPointer(Byte[] document, Int32 position)
+    {
+        Byte[] element = [0x0C, (Byte)'p', 0x00, 0x02, 0x00, 0x00, 0x00, (Byte)'x', 0x00, .. new Byte[12]];
+        Byte[] result = [.. document.AsSpan(0, position), .. element, .. document.AsSpan(position)];
+        BitConverter.TryWriteBytes(result.AsSpan(0, 4), result.Length);
+        return result;
+    }
 
     /// <summary>
     /// Creates a protected store that anchors with a test authority, and trusts that authority for verification.
