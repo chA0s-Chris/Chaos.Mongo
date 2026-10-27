@@ -121,6 +121,28 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_EventWithIdentifierInArray_IsReportedWithoutSplittingItsStream()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var aggregateId = await AnchorNewStreamAsync(context, 3);
+        // MongoDB sorts an array by its smallest item, so the event stays among the events of its stream.
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, 2),
+                                            Builders<BsonDocument>.Update.Set(EventDocumentFields<LedgerAggregate>.AggregateId,
+                                                                              new BsonArray
+                                                                              {
+                                                                                  new BsonBinaryData(aggregateId, GuidRepresentation.Standard)
+                                                                              }));
+
+        var findings = await CheckAsync(context);
+
+        // The event no longer counts for its stream, so its anchored version is missing, but the later version is
+        // still covered by the anchor.
+        findings.Select(f => (f.Kind, f.AggregateId, f.FirstVersion, f.LastVersion, f.HeadVersion))
+                .Should().Equal((CompletenessFindingKind.StreamTruncated, aggregateId, 2, 3, 3),
+                                (CompletenessFindingKind.MalformedEvent, null, 2, 2, null));
+    }
+
+    [Test]
     public async Task CheckAsync_EventWithUndecodableSealMode_StaysInItsStream()
     {
         var context = await CreateAnchoredContextAsync();

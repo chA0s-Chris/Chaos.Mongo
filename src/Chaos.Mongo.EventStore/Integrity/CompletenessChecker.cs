@@ -315,7 +315,8 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
     /// <summary>
     /// Reads the events of the aggregate type in identifier and version order and yields them grouped by stream, and
     /// each document whose identifier or version cannot be read as a finding where the walk meets it, so nothing is
-    /// buffered beyond the current stream.
+    /// buffered beyond the current stream. A document whose identifier cannot be read does not end the current stream;
+    /// its finding follows that stream's.
     /// </summary>
     private async IAsyncEnumerable<WalkItem> WalkEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -340,6 +341,7 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
 
         Guid? currentId = null;
         var events = new List<EventSummary>();
+        var unidentified = new List<WalkItem>();
         while (await cursor.MoveNextAsync(cancellationToken))
         {
             foreach (var document in cursor.Current)
@@ -359,19 +361,36 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
                     summary = null;
                 }
 
-                // A document of another stream, or one whose stream cannot be read, ends the stream being collected.
-                if (currentId is { } id && readId != id)
+                // Only a document of another readable stream ends the stream being collected: one whose identifier
+                // cannot be read may sort among the stream's events, for example a UUID wrapped in an array, which
+                // MongoDB sorts by its smallest item.
+                if (currentId is { } id && readId is { } nextId && nextId != id)
                 {
                     yield return new WalkItem(id, events, null);
+                    foreach (var item in unidentified)
+                    {
+                        yield return item;
+                    }
+
                     currentId = null;
                     events = [];
+                    unidentified = [];
                 }
 
                 if (summary is null || readId is not { } aggregateId)
                 {
-                    yield return new WalkItem(readId,
-                                              [],
-                                              new CompletenessFinding(CompletenessFindingKind.MalformedEvent, readId, readVersion, readVersion, null, null, null, null));
+                    var malformed = new WalkItem(readId,
+                                                 [],
+                                                 new CompletenessFinding(CompletenessFindingKind.MalformedEvent, readId, readVersion, readVersion, null, null, null, null));
+                    if (currentId is not null && readId is null)
+                    {
+                        unidentified.Add(malformed);
+                    }
+                    else
+                    {
+                        yield return malformed;
+                    }
+
                     continue;
                 }
 
@@ -383,6 +402,11 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         if (currentId is { } last)
         {
             yield return new WalkItem(last, events, null);
+        }
+
+        foreach (var item in unidentified)
+        {
+            yield return item;
         }
     }
 
