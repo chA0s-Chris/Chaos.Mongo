@@ -10,7 +10,6 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Attributes;
 using NUnit.Framework;
-using System.Reflection;
 
 /// <remarks>
 /// Class-map registration is process-global and irreversible, so every test uses dedicated
@@ -47,52 +46,11 @@ public class IntegrityRegistrationTests
         }.ToBsonDocument();
 
         document.Names.Should().BeEquivalentTo(
-            "_id", "Cursor", "LastSealedStream", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "EventsSealed");
+            "_id", "Cursor", "LastSealedStream", "PassStartedUtc", "PassCompletedUtc", "StreamsChecked", "StreamsSealed", "StreamsFailed", "EventsSealed");
         document["Cursor"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);
         document["Cursor"].AsGuid.Should().Be(cursor);
         document["LastSealedStream"].AsBsonBinaryData.SubType.Should().Be(BsonBinarySubType.UuidStandard);
         document["LastSealedStream"].AsGuid.Should().Be(lastSealedStream);
-    }
-
-    [Test]
-    public void IntegrityTypesAndMembers_AreNotPublic()
-    {
-        var integrityTypes = typeof(EventIntegrity).Assembly
-                                                   .GetTypes()
-                                                   .Where(t => t.Namespace == typeof(EventIntegrity).Namespace)
-                                                   .ToList();
-
-        integrityTypes.Should().NotBeEmpty();
-        integrityTypes.Should().OnlyContain(t => !t.IsVisible);
-
-        typeof(Event<RegistrationVisibilityAggregate>)
-            .GetProperty(nameof(Event<RegistrationVisibilityAggregate>.Integrity), BindingFlags.Instance | BindingFlags.NonPublic)
-            .Should().NotBeNull();
-        typeof(MongoEventStoreOptions<RegistrationVisibilityAggregate>)
-            .GetProperty(nameof(MongoEventStoreOptions<RegistrationVisibilityAggregate>.IntegrityProtectionEnabled),
-                         BindingFlags.Instance | BindingFlags.NonPublic)
-            .Should().NotBeNull();
-        typeof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>)
-            .GetMethod(nameof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>.WithIntegrityProtection),
-                       BindingFlags.Instance | BindingFlags.NonPublic)
-            .Should().NotBeNull();
-
-        typeof(EventRegistrationBuilder<,>).IsVisible.Should().BeFalse();
-        typeof(MongoEventStoreOptions<RegistrationVisibilityAggregate>)
-            .GetProperty(nameof(MongoEventStoreOptions<RegistrationVisibilityAggregate>.PersonalDataMarks),
-                         BindingFlags.Instance | BindingFlags.NonPublic)
-            .Should().NotBeNull();
-        typeof(MongoEventStoreOptions<RegistrationVisibilityAggregate>)
-            .GetProperty(nameof(MongoEventStoreOptions<RegistrationVisibilityAggregate>.PersonalDataPaths),
-                         BindingFlags.Instance | BindingFlags.NonPublic)
-            .Should().NotBeNull();
-        var withEventOverloads = typeof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>)
-                                 .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                                 .Where(m => m.Name == nameof(MongoEventStoreBuilder<RegistrationVisibilityAggregate>.WithEvent))
-                                 .ToList();
-        withEventOverloads.Should().HaveCount(2);
-        withEventOverloads.Single(m => m.GetParameters().Length == 2).IsPublic.Should().BeFalse();
-        withEventOverloads.Single(m => m.GetParameters().Length == 1).IsPublic.Should().BeTrue();
     }
 
     [Test]
@@ -217,8 +175,6 @@ public class IntegrityRegistrationTests
         services.Should().NotContain(d => d.ServiceType == typeof(IHostedService));
     }
 }
-
-public sealed class RegistrationVisibilityAggregate : Aggregate;
 
 public sealed class RegistrationCollisionAggregate : Aggregate;
 

@@ -1,0 +1,47 @@
+// Copyright (c) 2025 Christian Flessa. All rights reserved.
+// This file is licensed under the MIT license. See LICENSE in the project root for more information.
+namespace Chaos.Mongo.EventStore.Integrity;
+
+/// <summary>
+/// Describes a finding of the completeness check.
+/// </summary>
+public enum CompletenessFindingKind
+{
+    /// <summary>
+    /// The chain of anchors is broken, so findings about deleted or truncated streams may be incomplete.
+    /// </summary>
+    AnchorChainBroken,
+
+    /// <summary>
+    /// Events of a stream are not covered by any completed anchor yet.
+    /// </summary>
+    Unanchored,
+
+    /// <summary>
+    /// Every event of a stream was deleted, although a completed anchor covers its head.
+    /// </summary>
+    StreamDeleted,
+
+    /// <summary>
+    /// A version up to one a completed anchor covers no longer exists: the stream ends below it, so its newest events
+    /// were deleted, or anchored events below its head were deleted.
+    /// </summary>
+    StreamTruncated,
+
+    /// <summary>
+    /// Retroactively sealed events are protected since an anchor, not since their creation.
+    /// </summary>
+    RetroactivelyProtected,
+
+    /// <summary>
+    /// Events of a stream carry no integrity data.
+    /// </summary>
+    Unsealed,
+
+    /// <summary>
+    /// An event document's aggregate identifier or version cannot be read, so the event cannot be assigned to a
+    /// stream; the finding carries whichever of them is readable. Such an event counts as missing, so its stream may
+    /// also be reported as truncated or deleted.
+    /// </summary>
+    MalformedEvent
+}

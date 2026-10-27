@@ -11,7 +11,7 @@ using System.Security.Cryptography;
 /// Implementations for APIs other than RFC 3161 over HTTP still return an RFC 3161 token, so every token can be
 /// verified the same way.
 /// </remarks>
-internal interface ITimestampAuthority
+public interface ITimestampAuthority
 {
     /// <summary>
     /// Gets the name that identifies the authority in stored anchors.
@@ -25,6 +25,12 @@ internal interface ITimestampAuthority
     /// <param name="certificateChain">The DER-encoded certificates from the signing certificate to the root.</param>
     /// <param name="issuedNotBefore">The time the CRLs must be issued at or after.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
+    /// <remarks>
+    /// Return one CRL for each distribution point with an HTTP or HTTPS location that the chain's non-root certificates
+    /// name, in any order. A CRL confirms a point only when it comes from the point's issuer, is complete for the point
+    /// (no delta CRL, no partition by reason or by another point) and its signature verifies against the issuer's
+    /// certificate in the chain; otherwise confirmation fails and is retried.
+    /// </remarks>
     /// <returns>
     /// The CRLs, an empty list when the chain names no distribution points, or the information that a point's CRL
     /// was issued too early.
@@ -41,6 +47,18 @@ internal interface ITimestampAuthority
     /// <param name="algorithm">The hash algorithm of the digest; only SHA-256 is accepted.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The validated token with the evidence captured at stamping time.</returns>
+    /// <remarks>
+    /// Anchoring checks every returned token before storing it: it must be one DER-encoded RFC 3161 token over the
+    /// digest whose signature verifies with the returned chain, which starts with the signing certificate, names each
+    /// next certificate's subject as its issuer and ends with a self-issued root; its time must equal
+    /// <see cref="TimestampToken.Timestamp"/> to the millisecond, and its signer and algorithms must meet the
+    /// verification rules. Names are compared after decoding, so an issuer name in another string type or ASCII case
+    /// than the issuer's subject still links. A token
+    /// that fails counts as a failed request. When trust settings for the authority's name are configured for
+    /// verification, the returned chain must also equal the chain built from it to one of their trusted roots, as
+    /// verification requires, and the token must be issued under their policy; otherwise trust and policy are checked
+    /// at verification only.
+    /// </remarks>
     /// <exception cref="ArgumentException">Thrown when the algorithm is not SHA-256 or the digest has the wrong length.</exception>
     /// <exception cref="TimestampAuthorityException">Thrown when no valid token could be obtained.</exception>
     Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken);

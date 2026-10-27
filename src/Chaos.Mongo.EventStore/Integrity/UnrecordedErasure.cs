@@ -7,4 +7,4 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 /// <param name="Version">The version of the event holding the value.</param>
 /// <param name="Path">The dotted element path of the value.</param>
-internal sealed record UnrecordedErasure(Int64 Version, String Path);
+public sealed record UnrecordedErasure(Int64 Version, String Path);

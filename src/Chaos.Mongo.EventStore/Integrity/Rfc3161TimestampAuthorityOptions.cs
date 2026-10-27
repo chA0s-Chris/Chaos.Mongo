@@ -5,9 +5,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 using System.Security.Cryptography.X509Certificates;
 
 /// <summary>
-/// Configures one <see cref="Rfc3161TimestampAuthority"/>.
+/// Configures an RFC 3161 timestamp authority reached over HTTP. Its name and URI are the arguments of
+/// <see cref="IntegrityAnchoringBuilder.WithRfc3161TimestampAuthority"/>.
 /// </summary>
-internal sealed class Rfc3161TimestampAuthorityOptions
+public sealed class Rfc3161TimestampAuthorityOptions
 {
     private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
     {
@@ -16,6 +17,12 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     {
         Timeout = TimeSpan.FromSeconds(30)
     };
+
+    internal Rfc3161TimestampAuthorityOptions(String name, Uri uri)
+    {
+        Name = name;
+        Uri = uri;
+    }
 
     /// <summary>
     /// Gets or sets the longest time one timestamp attempt may spend on its HTTP work, the timestamp request and the
@@ -46,9 +53,9 @@ internal sealed class Rfc3161TimestampAuthorityOptions
     public Int32 MaximumResponseSize { get; set; } = 16 * 1024 * 1024;
 
     /// <summary>
-    /// Gets or sets the name that identifies the authority in stored anchors.
+    /// Gets the name that identifies the authority in stored anchors.
     /// </summary>
-    public required String Name { get; set; }
+    public String Name { get; }
 
     /// <summary>
     /// Gets or sets the object identifier of the TSA policy that tokens must be issued under, such as a qualified
@@ -72,12 +79,13 @@ internal sealed class Rfc3161TimestampAuthorityOptions
 
     /// <summary>
     /// Gets the roots the token's chain must end in. When empty, the operating system's trust store is used;
-    /// qualified authorities often chain to roots outside it.
+    /// qualified authorities often chain to roots outside it. Explicit roots also keep stored tokens verifiable, because
+    /// a chain built later from a changed trust store may take another path than the stored one.
     /// </summary>
     public X509Certificate2Collection TrustedRoots { get; } = [];
 
     /// <summary>
-    /// Gets or sets the absolute HTTP or HTTPS URI that accepts <c>application/timestamp-query</c> requests.
+    /// Gets the absolute HTTP or HTTPS URI that accepts <c>application/timestamp-query</c> requests.
     /// </summary>
-    public required Uri Uri { get; set; }
+    public Uri Uri { get; }
 }

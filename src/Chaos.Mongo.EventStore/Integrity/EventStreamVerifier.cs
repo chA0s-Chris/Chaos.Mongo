@@ -4,93 +4,189 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
-using System.Globalization;
+using System.Text;
 
 /// <summary>
-/// Verifies the hash chain of an event stream by recomputing it from the raw stored documents.
+/// Verifies the hash chain of an event stream by recomputing it from the raw stored documents, compares it with the
+/// stream's leaves in completed anchors, and verifies that single events are anchored.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, IAggregate, new()
 {
     private readonly String _aggregateTypeName = typeof(TAggregate).Name;
+    private readonly AnchorVerifier? _anchors;
     private readonly IMongoHelper _mongoHelper;
     private readonly MongoEventStoreOptions<TAggregate> _options;
 
-    public EventStreamVerifier(IMongoHelper mongoHelper, MongoEventStoreOptions<TAggregate> options)
+    public EventStreamVerifier(IMongoHelper mongoHelper, MongoEventStoreOptions<TAggregate> options, AnchorVerifier? anchors = null)
     {
         ArgumentNullException.ThrowIfNull(mongoHelper);
         ArgumentNullException.ThrowIfNull(options);
         _mongoHelper = mongoHelper;
         _options = options;
+        _anchors = anchors;
     }
 
     /// <summary>
-    /// Recomputes the hash chain of a stream and reports the first broken version. For an intact stream it also
-    /// reports erased values that no later erasure event of the stream records.
+    /// Verifies that an event is anchored: the chain from the event to the version of the first completed anchor that
+    /// covers it, the anchor's leaf and inclusion proof, the anchor's digest and its stored timestamp tokens. When none
+    /// of that anchor's tokens is valid, for example because one was revoked, the next completed anchor that covers the
+    /// event is verified in the same way, so the evidence degrades to that anchor's time. Any other failure ends the
+    /// verification. The result names the anchor whose check ended it: the one that verified, the one that failed for
+    /// another reason than having no valid token, or the first covering anchor when none had a valid token. A stream
+    /// leaf that cannot be read, or whose committed anchor cannot be read, met before an anchor verified, fails it as
+    /// <see cref="EventAnchorFailure.AnchorDataUnreadable"/>, without naming an anchor. A later covering anchor whose
+    /// leaf version is at least the previous one's continues the chain walk from the hash verified there.
+    /// </summary>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="version">The event version.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The result.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="version"/> is less than 1.</exception>
+    public async Task<EventAnchorVerificationResult> VerifyEventAnchorAsync(Guid aggregateId, Int64 version, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(version, 1);
+        if (_anchors is null)
+        {
+            return EventAnchorVerificationResult.NotChecked;
+        }
+
+        EventAnchorVerificationResult? firstWithoutValidToken = null;
+        (Int64 Version, Byte[] Hash)? verified = null;
+        await foreach (var (covering, unreadable) in _anchors.Store.FindCompletedStreamLeavesInOrderAsync(_aggregateTypeName, aggregateId, version, cancellationToken))
+        {
+            if (unreadable || covering is null)
+            {
+                return new EventAnchorVerificationResult(EventAnchorStatus.Failed, EventAnchorFailure.AnchorDataUnreadable, null, null, []);
+            }
+
+            // A later covering leaf continues the chain from the hash already verified up to an earlier one.
+            var leafVersion = covering.Leaf.Version;
+            var anchoredHash = verified is { } known && known.Version <= leafVersion
+                ? known.Version == leafVersion ? known.Hash : await VerifyChainToAsync(aggregateId, known.Version + 1, leafVersion, known.Hash, cancellationToken)
+                : await VerifyChainToAsync(aggregateId, version, leafVersion, null, cancellationToken);
+            if (anchoredHash is not null)
+            {
+                verified = (leafVersion, anchoredHash);
+            }
+
+            var result = await VerifyEventAtAnchorAsync(_anchors, covering, anchoredHash, cancellationToken);
+            if (result.Failure != EventAnchorFailure.NoValidTimestamp)
+            {
+                return result;
+            }
+
+            firstWithoutValidToken ??= result;
+        }
+
+        return firstWithoutValidToken ?? EventAnchorVerificationResult.NotAnchored;
+    }
+
+    /// <summary>
+    /// Recomputes the hash chain of a stream and reports the first broken version. For every verified version it
+    /// returns the integrity data and the sealing anchor. It also checks the inclusion proofs of the stream's leaves in
+    /// completed anchors and compares the verified versions with them, reporting the lowest broken version of the chain
+    /// and of the leaves, and for an intact stream the erased values that no later erasure event records.
     /// </summary>
     /// <remarks>
-    /// A consistent chain does not reveal deleted newest events or a deleted stream, because the
-    /// remaining events still form a valid chain. Detecting that requires a trusted expected head,
-    /// which anchoring provides.
+    /// A consistent chain does not reveal deleted newest events or a deleted stream, because the remaining events still
+    /// form a valid chain. Only the comparison with anchored leaves detects that, for anchored versions. A stream leaf
+    /// that cannot be read, or whose committed anchor cannot be read, breaks the stream as
+    /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/> at its version, or at version 1 when its version is a
+    /// number but not an integer. A leaf whose version is not a number is not selected by the query for the stream's
+    /// leaves at all; the anchor-chain verification, which binds the leaves to the anchor digests and should run too,
+    /// reports it.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The verification result.</returns>
-    public async Task<StreamVerificationResult> VerifyStreamAsync(Guid aggregateId, CancellationToken cancellationToken = default)
+    public Task<StreamVerificationResult> VerifyStreamAsync(Guid aggregateId, CancellationToken cancellationToken = default)
+        => VerifyStreamAsync(aggregateId, null, cancellationToken);
+
+    /// <summary>
+    /// Verifies a stream as <see cref="VerifyStreamAsync(Guid, CancellationToken)"/> does, reading in a session, so a
+    /// snapshot session sees the stream and its leaves at one point in time.
+    /// </summary>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="session">The session to read in, or <c>null</c>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The verification result.</returns>
+    internal async Task<StreamVerificationResult> VerifyStreamAsync(Guid aggregateId, IClientSessionHandle? session, CancellationToken cancellationToken)
     {
-        var collection = _mongoHelper.Database.GetCollection<RawBsonDocument>(_options.EventsCollectionName);
-        var versionElement = EventDocumentFields<TAggregate>.Version;
-        var discriminatorElement = EventDocumentFields<TAggregate>.Discriminator;
+        // The leaves are read first: events are only appended and erasure keeps their hashes, so every leaf completed
+        // before the scan names a version the scan sees, while one completed during the scan could not.
+        var leaves = _anchors is null
+            ? new StreamLeaves([], null)
+            : await _anchors.Store.ReadStreamLeavesAsync(_aggregateTypeName, aggregateId, 1, session, cancellationToken);
+        var scan = await ScanChainAsync(aggregateId, session, cancellationToken);
+        var events = BuildVerifiedEvents(scan, leaves.Completed);
+        var transitions = FindSealModeTransitions(scan.Events);
 
-        using var cursor = await collection.Find(EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId))
-                                           .Sort(new BsonDocument(versionElement, 1))
-                                           .ToCursorAsync(cancellationToken);
-
-        var expectedVersion = 1L;
-        var previousHash = EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId);
-        var erasures = new List<UnrecordedErasure>();
-        var recordedErasures = new HashSet<UnrecordedErasure>();
-
-        while (await cursor.MoveNextAsync(cancellationToken))
+        StreamVerificationResult result;
+        if (scan is { BrokenVersion: { } brokenVersion, Failure: { } failure })
         {
-            foreach (var rawDocument in cursor.Current)
-            {
-                using (rawDocument)
-                {
-                    if (!rawDocument.TryGetValue(versionElement, out var versionValue) ||
-                        !TryReadVersion(versionValue, out var version) ||
-                        version != expectedVersion)
-                    {
-                        return StreamVerificationResult.Broken(expectedVersion, StreamVerificationFailure.VersionGap);
-                    }
-
-                    rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue);
-                    var failure = VerifyEvent(rawDocument.ToBson(), integrityValue, previousHash, out var hash, out var erasedPaths);
-                    if (failure is { } verificationFailure)
-                    {
-                        return StreamVerificationResult.Broken(expectedVersion, verificationFailure);
-                    }
-
-                    foreach (var path in erasedPaths)
-                    {
-                        erasures.Add(new UnrecordedErasure(expectedVersion, path));
-                    }
-
-                    // The erasure event is identified by its reserved discriminator; its records are trusted once its own hash verified.
-                    if (rawDocument.TryGetValue(discriminatorElement, out var discriminator) &&
-                        EventDocumentFields<TAggregate>.IsErasureEvent(discriminator))
-                    {
-                        CollectErasureRecords(rawDocument, expectedVersion, recordedErasures);
-                    }
-
-                    previousHash = hash;
-                    expectedVersion++;
-                }
-            }
+            // Leaves below the break still judge the verified prefix, so a re-sealed prefix shows at its anchored version.
+            result = CompareWithLeaves(scan.Events, leaves, brokenVersion) is { } earlierBreak
+                ? StreamVerificationResult.Broken(earlierBreak.Version, earlierBreak.Failure)
+                : StreamVerificationResult.Broken(brokenVersion, failure);
+        }
+        else if (CompareWithLeaves(scan.Events, leaves, null) is { } anchoredBreak)
+        {
+            result = StreamVerificationResult.Broken(anchoredBreak.Version, anchoredBreak.Failure);
+        }
+        else
+        {
+            var unrecorded = scan.Events.SelectMany(e => e.PersonalData.Where(p => p.Erased).Select(p => new UnrecordedErasure(e.Version, p.Path)))
+                                 .Where(erasure => !scan.RecordedErasures.Contains(erasure))
+                                 .ToList();
+            result = StreamVerificationResult.IntactWith(unrecorded);
         }
 
-        erasures.RemoveAll(recordedErasures.Contains);
-        return StreamVerificationResult.IntactWith(erasures);
+        return result with
+        {
+            Events = events,
+            SealModeTransitions = transitions,
+            AnchorCoverageChecked = _anchors is not null
+        };
+    }
+
+    /// <summary>
+    /// Assigns each verified event its sealing anchor: the completed anchor with the lowest sequence number whose leaf
+    /// for the stream has a version at or above the event's.
+    /// </summary>
+    private static List<VerifiedEvent> BuildVerifiedEvents(ChainScan scan, IReadOnlyList<CompletedStreamLeaf> leaves)
+    {
+        var byVersionDescending = leaves.OrderByDescending(leaf => leaf.Leaf.Version).ToList();
+        var anchors = new AnchorReference?[scan.Events.Count];
+        CompletedStreamLeaf? best = null;
+        var next = 0;
+        for (var index = scan.Events.Count - 1; index >= 0; index--)
+        {
+            var version = scan.Events[index].Version;
+            while (next < byVersionDescending.Count && byVersionDescending[next].Leaf.Version >= version)
+            {
+                var candidate = byVersionDescending[next++];
+                best = best is null || candidate.Anchor.Sequence < best.Anchor.Sequence ? candidate : best;
+            }
+
+            anchors[index] = best is null ? null : new AnchorReference(best.Anchor.Id, best.Anchor.Sequence);
+        }
+
+        return scan.Events.Select((e, index) => new VerifiedEvent(
+                                      e.Version,
+                                      e.Hash,
+                                      e.PreviousHash,
+                                      e.SealMode,
+                                      anchors[index],
+                                      e.PersonalData.Select(p => new PersonalDataPathStatus(
+                                                                p.Path,
+                                                                !p.Erased
+                                                                    ? PersonalDataStatus.Present
+                                                                    : scan.RecordedErasures.Contains(new UnrecordedErasure(e.Version, p.Path))
+                                                                        ? PersonalDataStatus.ErasedWithRecord
+                                                                        : PersonalDataStatus.ErasedWithoutRecord))
+                                       .ToList()))
+                   .ToList();
     }
 
     /// <summary>
@@ -109,7 +205,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         {
             if (entryValue is not BsonDocument entry ||
                 !entry.TryGetValue(PersonalDataErasureEntry.VersionElement, out var versionValue) ||
-                !TryReadVersion(versionValue, out var version) ||
+                !StoredVersion.TryRead(versionValue, out var version) ||
                 version >= erasureVersion ||
                 !entry.TryGetValue(PersonalDataErasureEntry.PathsElement, out var pathsValue) ||
                 pathsValue is not BsonArray paths)
@@ -128,110 +224,426 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     }
 
     /// <summary>
-    /// Reads a stored version without throwing on tampered values. Only whole numbers within the
-    /// <see cref="Int64"/> range are versions.
+    /// Compares the verified versions with the stream's leaves in completed anchors: a leaf that cannot be read or does
+    /// not prove its inclusion in its anchor's root was changed, an anchored version that no longer exists reveals
+    /// truncation, and an anchored version whose stored hash differs from its leaf reveals a rewritten or rolled-back
+    /// stream. For a chain broken at a version, only findings below it count.
     /// </summary>
-    private static Boolean TryReadVersion(BsonValue value, out Int64 version)
+    /// <returns>The lowest broken version and why, or <c>null</c> when every anchored version matches.</returns>
+    private static (Int64 Version, StreamVerificationFailure Failure)? CompareWithLeaves(IReadOnlyList<ScannedEvent> events,
+                                                                                         StreamLeaves leaves,
+                                                                                         Int64? brokenVersion)
     {
-        // 2^63, the first double above Int64.MaxValue.
-        const Double int64Limit = 9223372036854775808d;
-
-        switch (value)
+        (Int64 Version, StreamVerificationFailure Failure)? first = leaves.FirstUnreadableVersion is { } unreadable && !(unreadable >= brokenVersion)
+            ? (unreadable, StreamVerificationFailure.AnchoredLeafInvalid)
+            : null;
+        foreach (var (leaf, anchor) in leaves.Completed.Where(completed => !(completed.Leaf.Version >= brokenVersion)))
         {
-            case BsonInt32 int32:
-                version = int32.Value;
-                return true;
-            case BsonInt64 int64:
-                version = int64.Value;
-                return true;
-            case BsonDouble { Value: var number } when Double.IsInteger(number) && number >= -int64Limit && number < int64Limit:
-                version = (Int64)number;
-                return true;
-            case BsonDecimal128 decimal128:
-                return Int64.TryParse(decimal128.Value.ToString(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out version);
-            default:
-                version = 0;
-                return false;
+            (Int64 Version, StreamVerificationFailure Failure)? finding = !AnchorVerifier.ProvesInclusion(leaf, anchor)
+                ? (leaf.Version, StreamVerificationFailure.AnchoredLeafInvalid)
+                : leaf.Version > events.Count
+                    ? (events.Count + 1, StreamVerificationFailure.AnchoredVersionMissing)
+                    : !events[(Int32)(leaf.Version - 1)].Hash.AsSpan().SequenceEqual(leaf.Hash)
+                        ? (leaf.Version, StreamVerificationFailure.AnchoredHashMismatch)
+                        : null;
+            if (finding is { } found && (first is null || found.Version < first.Value.Version))
+            {
+                first = found;
+            }
+        }
+
+        return first;
+    }
+
+    /// <summary>
+    /// Finds the versions at which the seal mode changes from <see cref="IntegritySealMode.Append"/> to
+    /// <see cref="IntegritySealMode.Retroactive"/>. Such a transition is either a legitimate gap in protection or a
+    /// suffix re-sealed after tampering; only anchors tell them apart.
+    /// </summary>
+    private static List<Int64> FindSealModeTransitions(IReadOnlyList<ScannedEvent> events)
+        => events.Skip(1)
+                 .Where((e, index) => e.SealMode == IntegritySealMode.Retroactive && events[index].SealMode == IntegritySealMode.Append)
+                 .Select(e => e.Version)
+                 .ToList();
+
+    /// <summary>
+    /// Gets a value indicating whether every top-level element name of an event document is valid UTF-8. A raw document
+    /// decodes names on access, so an invalid one would otherwise surface as an exception during a later lookup.
+    /// </summary>
+    private static Boolean HasReadableNames(RawBsonDocument document)
+    {
+        try
+        {
+            foreach (var _ in document.Names) { }
+
+            return true;
+        }
+        catch (Exception ex) when (IsReadError(ex))
+        {
+            return false;
         }
     }
 
     /// <summary>
-    /// Verifies one event and reports the recorded paths whose values are erased.
+    /// Gets a value indicating whether an exception is the driver rejecting a stored value while a raw document is
+    /// read: a string that is not valid UTF-8, a value or type it cannot read, such as a UUID that is not 16 bytes long
+    /// or a DBPointer, or a document that repeats an element name.
     /// </summary>
-    private static StreamVerificationFailure? VerifyEvent(Byte[] document,
-                                                          BsonValue? integrityValue,
-                                                          Byte[] expectedPreviousHash,
-                                                          out Byte[] hash,
-                                                          out List<String> erasedPaths)
+    private static Boolean IsReadError(Exception exception)
+        => exception is DecoderFallbackException or FormatException or InvalidOperationException;
+
+    /// <summary>
+    /// Reads an event's version, or reports that it has none: a missing value, one that is not a version, or one the
+    /// reader rejects.
+    /// </summary>
+    private static Boolean TryReadVersion(RawBsonDocument document, String versionElement, out Int64 version)
     {
-        hash = [];
-        erasedPaths = [];
-        if (integrityValue is null)
+        try
         {
-            return StreamVerificationFailure.NotSealed;
+            if (document.TryGetValue(versionElement, out var value))
+            {
+                return StoredVersion.TryRead(value, out version);
+            }
+        }
+        catch (Exception ex) when (IsReadError(ex))
+        {
+            version = 0;
+            return false;
         }
 
-        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity))
+        version = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Verifies one event chained from an expected previous hash.
+    /// </summary>
+    private static EventCheck VerifyEvent(Byte[] document, BsonValue? integrityValue, Byte[] expectedPreviousHash)
+    {
+        if (integrityValue is null)
         {
-            return StreamVerificationFailure.MalformedIntegrity;
+            return EventCheck.Failed(StreamVerificationFailure.NotSealed);
+        }
+
+        if (!EventIntegrityChain.TryRead(integrityValue, out var integrity) || !Enum.IsDefined(integrity.SealMode))
+        {
+            return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
         }
 
         if (integrity.FormatVersion != EventIntegrityChain.FormatVersion ||
             !String.Equals(integrity.Algorithm, EventIntegrityChain.Algorithm, StringComparison.Ordinal))
         {
-            return StreamVerificationFailure.UnsupportedFormat;
+            return EventCheck.Failed(StreamVerificationFailure.UnsupportedFormat);
         }
 
         if (!integrity.PreviousHash.AsSpan().SequenceEqual(expectedPreviousHash))
         {
-            return StreamVerificationFailure.PreviousHashMismatch;
+            return EventCheck.Failed(StreamVerificationFailure.PreviousHashMismatch);
         }
 
         var storedDocument = RawBsonElements.RemoveTopLevelElement(document, EventIntegrityChain.ElementName);
         var canonicalDocument = storedDocument;
+        var personalData = new List<(String Path, Boolean Erased)>();
         StreamVerificationFailure? personalDataFailure = null;
 
         // Only the recorded paths take part, so changing or removing marks later does not affect sealed events.
-        if (integrity.PersonalData is { } personalData)
+        if (integrity.PersonalData is { } commitments)
         {
-            if (!PersonalDataCommitments.IsWellFormed(personalData))
+            if (!PersonalDataCommitments.IsWellFormed(commitments))
             {
-                return StreamVerificationFailure.MalformedIntegrity;
+                return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
             }
 
-            foreach (var commitment in personalData)
+            try
             {
-                switch (PersonalDataCommitments.Verify(storedDocument, commitment))
+                foreach (var commitment in commitments)
                 {
-                    case PersonalDataVerification.Unresolved:
-                        return StreamVerificationFailure.MalformedIntegrity;
-                    case PersonalDataVerification.Mismatch:
-                        personalDataFailure ??= StreamVerificationFailure.PersonalDataMismatch;
-                        break;
-                    case PersonalDataVerification.NotErased:
-                        personalDataFailure ??= StreamVerificationFailure.ErasedPersonalDataPresent;
-                        break;
-                    case PersonalDataVerification.Erased:
-                        erasedPaths.Add(commitment.Path);
-                        break;
+                    switch (PersonalDataCommitments.Verify(storedDocument, commitment))
+                    {
+                        case PersonalDataVerification.Unresolved:
+                            return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
+                        case PersonalDataVerification.Mismatch:
+                            personalDataFailure ??= StreamVerificationFailure.PersonalDataMismatch;
+                            break;
+                        case PersonalDataVerification.NotErased:
+                            personalDataFailure ??= StreamVerificationFailure.ErasedPersonalDataPresent;
+                            break;
+                        case PersonalDataVerification.Erased:
+                            personalData.Add((commitment.Path, true));
+                            break;
+                        case PersonalDataVerification.Committed:
+                            personalData.Add((commitment.Path, false));
+                            break;
+                    }
                 }
-            }
 
-            canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, personalData);
+                canonicalDocument = PersonalDataCommitments.Canonicalize(storedDocument, commitments);
+            }
+            catch (Exception ex) when (ex is DecoderFallbackException or FormatException)
+            {
+                // Paths are resolved on the stored bytes, which decode names on the way; a name that is not valid
+                // UTF-8, or a value the reader rejects, makes the event malformed.
+                return EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
+            }
         }
 
-        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, integrity.PersonalData, expectedPreviousHash);
+        var recomputedHash = EventIntegrityChain.ComputeHash(canonicalDocument, integrity.PersonalData, expectedPreviousHash, integrity.SealMode);
         if (!recomputedHash.AsSpan().SequenceEqual(integrity.Hash))
         {
-            return StreamVerificationFailure.HashMismatch;
+            return EventCheck.Failed(StreamVerificationFailure.HashMismatch);
         }
 
-        if (personalDataFailure is { } failure)
-        {
-            return failure;
-        }
-
-        hash = integrity.Hash;
-        return null;
+        return personalDataFailure is { } failure
+            ? EventCheck.Failed(failure)
+            : new EventCheck(null, integrity, personalData);
     }
+
+    /// <summary>
+    /// Verifies an event against one completed anchor that covers it.
+    /// </summary>
+    /// <param name="anchors">The anchor verifier.</param>
+    /// <param name="covering">The covering leaf with its anchor.</param>
+    /// <param name="anchoredHash">The hash verified for the leaf's version, or <c>null</c> when the chain does not verify.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    private static async Task<EventAnchorVerificationResult> VerifyEventAtAnchorAsync(AnchorVerifier anchors,
+                                                                                      CompletedStreamLeaf covering,
+                                                                                      Byte[]? anchoredHash,
+                                                                                      CancellationToken cancellationToken)
+    {
+        var (leaf, anchor) = covering;
+        var reference = new AnchorReference(anchor.Id, anchor.Sequence);
+        if (anchoredHash is null)
+        {
+            return Failed(EventAnchorFailure.ChainBroken, []);
+        }
+
+        if (!anchoredHash.AsSpan().SequenceEqual(leaf.Hash))
+        {
+            return Failed(EventAnchorFailure.LeafHashMismatch, []);
+        }
+
+        if (!AnchorVerifier.ProvesInclusion(leaf, anchor))
+        {
+            return Failed(EventAnchorFailure.InclusionProofInvalid, []);
+        }
+
+        var anchorResult = await anchors.VerifyAnchorAsync(anchor, cancellationToken);
+        if (!anchorResult.DigestIsValid)
+        {
+            return Failed(EventAnchorFailure.AnchorDigestMismatch, anchorResult.Timestamps);
+        }
+
+        return anchorResult.IsVerified
+            ? new EventAnchorVerificationResult(EventAnchorStatus.Anchored, null, reference, leaf.Version, anchorResult.Timestamps)
+            : Failed(EventAnchorFailure.NoValidTimestamp, anchorResult.Timestamps);
+
+        EventAnchorVerificationResult Failed(EventAnchorFailure failure, IReadOnlyList<TimestampVerificationResult> timestamps)
+            => new(EventAnchorStatus.Failed, failure, reference, leaf.Version, timestamps);
+    }
+
+    private IMongoCollection<RawBsonDocument> GetEventsCollection()
+        => _mongoHelper.Database.GetCollection<RawBsonDocument>(_options.EventsCollectionName);
+
+    /// <summary>
+    /// Recomputes the chain of a stream from version 1 until the first broken version or the end of the stream.
+    /// </summary>
+    private async Task<ChainScan> ScanChainAsync(Guid aggregateId, IClientSessionHandle? session, CancellationToken cancellationToken)
+    {
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var discriminatorElement = EventDocumentFields<TAggregate>.Discriminator;
+        var filter = EventDocumentFields<TAggregate>.ForAggregate<RawBsonDocument>(aggregateId);
+        var events = GetEventsCollection();
+        using var cursor = await (session is null ? events.Find(filter) : events.Find(session, filter))
+                                 .Sort(new BsonDocument(versionElement, 1))
+                                 .ToCursorAsync(cancellationToken);
+
+        var scan = new ChainScan();
+        Byte[]? previousHash = null;
+        while (await cursor.MoveNextAsync(cancellationToken))
+        {
+            foreach (var rawDocument in cursor.Current)
+            {
+                using (rawDocument)
+                {
+                    var expectedVersion = scan.Events.Count + 1L;
+                    if (!HasReadableNames(rawDocument))
+                    {
+                        return scan.Break(expectedVersion, StreamVerificationFailure.MalformedIntegrity);
+                    }
+
+                    if (!TryReadVersion(rawDocument, versionElement, out var version) || version != expectedVersion)
+                    {
+                        return scan.Break(expectedVersion, StreamVerificationFailure.VersionGap);
+                    }
+
+                    // The genesis value comes from the aggregate type stored in version 1, not from the class name.
+                    if (previousHash is null)
+                    {
+                        if (!EventDocumentFields<TAggregate>.TryReadAggregateType(rawDocument, out var aggregateType))
+                        {
+                            return scan.Break(expectedVersion, StreamVerificationFailure.MissingAggregateType);
+                        }
+
+                        previousHash = EventIntegrityChain.ComputeGenesis(aggregateType, aggregateId);
+                    }
+
+                    EventCheck check;
+                    try
+                    {
+                        rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue);
+                        check = VerifyEvent(rawDocument.ToBson(), integrityValue, previousHash);
+                    }
+                    catch (Exception ex) when (IsReadError(ex))
+                    {
+                        // An _integrity value the reader rejects, such as a string that is not valid UTF-8.
+                        check = EventCheck.Failed(StreamVerificationFailure.MalformedIntegrity);
+                    }
+
+                    if (check.Integrity is not { } integrity)
+                    {
+                        return scan.Break(expectedVersion, check.Failure ?? StreamVerificationFailure.MalformedIntegrity);
+                    }
+
+                    // The erasure event is identified by its reserved discriminator; its records are trusted once its own hash verified.
+                    var recordedErasures = new HashSet<UnrecordedErasure>();
+                    try
+                    {
+                        if (rawDocument.TryGetValue(discriminatorElement, out var discriminator) &&
+                            EventDocumentFields<TAggregate>.IsErasureEvent(discriminator))
+                        {
+                            CollectErasureRecords(rawDocument, expectedVersion, recordedErasures);
+                        }
+                    }
+                    catch (Exception ex) when (IsReadError(ex))
+                    {
+                        // A raw document decodes values on access, so a discriminator, entry or path that is not valid UTF-8,
+                        // or a value the reader rejects, such as a UUID that is not 16 bytes long, surfaces here.
+                        return scan.Break(expectedVersion, StreamVerificationFailure.MalformedIntegrity);
+                    }
+
+                    scan.Events.Add(new ScannedEvent(expectedVersion, integrity.Hash, integrity.PreviousHash, integrity.SealMode, check.PersonalData));
+                    scan.RecordedErasures.UnionWith(recordedErasures);
+                    previousHash = integrity.Hash;
+                }
+            }
+        }
+
+        return scan;
+    }
+
+    /// <summary>
+    /// Verifies the chain from an event up to a later version, starting from a hash already verified for the previous
+    /// version, or else from the event's stored previous hash.
+    /// </summary>
+    /// <returns>
+    /// The hash of <paramref name="toVersion"/>, or <c>null</c> when a version is missing, cannot be read or does not
+    /// verify.
+    /// </returns>
+    private async Task<Byte[]?> VerifyChainToAsync(Guid aggregateId,
+                                                   Int64 fromVersion,
+                                                   Int64 toVersion,
+                                                   Byte[]? verifiedPreviousHash,
+                                                   CancellationToken cancellationToken)
+    {
+        var versionElement = EventDocumentFields<TAggregate>.Version;
+        var filter = new BsonDocument
+        {
+            { EventDocumentFields<TAggregate>.AggregateId, new BsonBinaryData(aggregateId, GuidRepresentation.Standard) },
+            {
+                versionElement, new BsonDocument
+                {
+                    { "$gte", fromVersion },
+                    { "$lte", toVersion }
+                }
+            }
+        };
+        using var cursor = await GetEventsCollection().Find(filter).Sort(new BsonDocument(versionElement, 1)).ToCursorAsync(cancellationToken);
+
+        var expectedVersion = fromVersion;
+        var previousHash = verifiedPreviousHash;
+        while (await cursor.MoveNextAsync(cancellationToken))
+        {
+            foreach (var rawDocument in cursor.Current)
+            {
+                using (rawDocument)
+                {
+                    try
+                    {
+                        if (!HasReadableNames(rawDocument) ||
+                            !rawDocument.TryGetValue(versionElement, out var versionValue) ||
+                            !StoredVersion.TryRead(versionValue, out var version) ||
+                            version != expectedVersion ||
+                            !rawDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue))
+                        {
+                            return null;
+                        }
+
+                        // The first event's stored previous hash is taken as given: the anchored hash commits to it.
+                        if (previousHash is null)
+                        {
+                            if (!EventIntegrityChain.TryRead(integrityValue, out var first))
+                            {
+                                return null;
+                            }
+
+                            previousHash = first.PreviousHash;
+                        }
+
+                        if (VerifyEvent(rawDocument.ToBson(), integrityValue, previousHash).Integrity is not { } integrity)
+                        {
+                            return null;
+                        }
+
+                        previousHash = integrity.Hash;
+                        expectedVersion++;
+                    }
+                    catch (Exception ex) when (IsReadError(ex))
+                    {
+                        return null;
+                    }
+                }
+            }
+        }
+
+        return expectedVersion == toVersion + 1 ? previousHash : null;
+    }
+
+    /// <summary>
+    /// The events verified by a chain scan, the erasures recorded by its erasure events, and where it broke, if it did.
+    /// </summary>
+    private sealed class ChainScan
+    {
+        public Int64? BrokenVersion { get; private set; }
+
+        public List<ScannedEvent> Events { get; } = [];
+
+        public StreamVerificationFailure? Failure { get; private set; }
+
+        public HashSet<UnrecordedErasure> RecordedErasures { get; } = [];
+
+        public ChainScan Break(Int64 version, StreamVerificationFailure failure)
+        {
+            BrokenVersion = version;
+            Failure = failure;
+            return this;
+        }
+    }
+
+    /// <summary>
+    /// The outcome of verifying one event: its integrity data and recorded personal data, or why it failed.
+    /// </summary>
+    private sealed record EventCheck(StreamVerificationFailure? Failure, EventIntegrity? Integrity, IReadOnlyList<(String Path, Boolean Erased)> PersonalData)
+    {
+        public static EventCheck Failed(StreamVerificationFailure failure) => new(failure, null, []);
+    }
+
+    /// <summary>
+    /// A verified event of a chain scan.
+    /// </summary>
+    private sealed record ScannedEvent(
+        Int64 Version,
+        Byte[] Hash,
+        Byte[] PreviousHash,
+        IntegritySealMode SealMode,
+        IReadOnlyList<(String Path, Boolean Erased)> PersonalData);
 }

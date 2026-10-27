@@ -18,6 +18,7 @@ public class IntegrityChainIntegrationTests
     private static readonly BsonValue[] NonVersionValues =
     [
         new BsonDecimal128(Decimal128.MaxValue),
+        new BsonDecimal128(Decimal128.Parse("3")),
         new BsonDecimal128(Decimal128.Parse("3.5")),
         new BsonDouble(3.5)
     ];
@@ -192,7 +193,8 @@ public class IntegrityChainIntegrationTests
         var canonical = RawBsonElements.RemoveTopLevelElement(storedBytes, EventIntegrityChain.ElementName);
         var recomputedHash = EventIntegrityChain.ComputeHash(
             canonical,
-            EventIntegrityChain.ComputeGenesis(nameof(LedgerAggregate), aggregateId));
+            EventIntegrityChain.ComputeGenesis(nameof(LedgerAggregate), aggregateId),
+            IntegritySealMode.Append);
 
         entry.Integrity.Should().NotBeNull();
         recomputedHash.Should().Equal(entry.Integrity.Hash);

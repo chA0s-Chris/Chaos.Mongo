@@ -4,7 +4,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
 /// Integrity data stored in the reserved <c>_integrity</c> element of a sealed event.
-/// The format is a draft until the tamper-evidence feature is released.
+/// The stable format version 1, as docs/tamper-evidence-specification.md defines it; a change needs a new format version.
 /// </summary>
 internal sealed class EventIntegrity
 {

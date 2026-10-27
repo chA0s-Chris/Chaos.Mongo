@@ -59,9 +59,10 @@ public class PersonalDataCommitmentIntegrationTests
 
         integrity.PersonalData.Should().NotBeNull();
         var canonical = PersonalDataCommitments.Canonicalize(storedDocument, integrity.PersonalData);
-        EventIntegrityChain.ComputeHash(canonical, integrity.PersonalData, genesis).Should().Equal(integrity.Hash);
-        EventIntegrityChain.ComputeHash(canonical, genesis).Should().NotEqual(integrity.Hash, "the recorded paths are bound into the hash");
-        EventIntegrityChain.ComputeHash(storedDocument, genesis).Should().NotEqual(integrity.Hash);
+        const IntegritySealMode mode = IntegritySealMode.Append;
+        EventIntegrityChain.ComputeHash(canonical, integrity.PersonalData, genesis, mode).Should().Equal(integrity.Hash);
+        EventIntegrityChain.ComputeHash(canonical, genesis, mode).Should().NotEqual(integrity.Hash, "the recorded paths are bound into the hash");
+        EventIntegrityChain.ComputeHash(storedDocument, genesis, mode).Should().NotEqual(integrity.Hash);
     }
 
     [Test]

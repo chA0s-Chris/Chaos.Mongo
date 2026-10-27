@@ -11,6 +11,11 @@ namespace Chaos.Mongo.EventStore;
 public sealed class CheckpointDocument<TAggregate> where TAggregate : class, IAggregate, new()
 {
     /// <summary>
+    /// The reserved element name that stores the chain hash of the event at the checkpoint's version.
+    /// </summary>
+    internal const String ChainHashElementName = "_chainHash";
+
+    /// <summary>
     /// Gets or sets the composite identifier containing aggregate ID and stream position.
     /// </summary>
     public CheckpointId Id { get; set; }
@@ -25,4 +30,10 @@ public sealed class CheckpointDocument<TAggregate> where TAggregate : class, IAg
     /// Gets or sets the aggregate state at this position.
     /// </summary>
     public TAggregate State { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the chain hash of the event at the checkpoint's version, recorded by protected stores, so the
+    /// checkpoint can be validated against the stream; <c>null</c> for unprotected stores and earlier checkpoints.
+    /// </summary>
+    internal Byte[]? ChainHash { get; set; }
 }

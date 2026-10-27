@@ -114,24 +114,6 @@ internal sealed class TimestampRevocationConfirmer
         }
     }
 
-    /// <summary>
-    /// Gets the first non-root certificate of a chain that a CRL entry revokes at or before a time.
-    /// </summary>
-    /// <returns>The certificate's subject, or <c>null</c> when none is revoked.</returns>
-    private static String? FindRevokedCertificate(IReadOnlyList<Byte[]> certificateChain, IReadOnlyList<RevokedCertificate> entries, DateTime time)
-    {
-        foreach (var rawCertificate in certificateChain.Take(certificateChain.Count - 1))
-        {
-            using var certificate = X509CertificateLoader.LoadCertificate(rawCertificate);
-            if (entries.Any(entry => entry.Revokes(certificate, time)))
-            {
-                return certificate.Subject;
-            }
-        }
-
-        return null;
-    }
-
     private static String GetChainKey(IReadOnlyList<Byte[]> certificateChainHashes)
         => String.Join(":", certificateChainHashes.Select(Convert.ToHexString));
 
@@ -204,11 +186,16 @@ internal sealed class TimestampRevocationConfirmer
     }
 
     /// <summary>
-    /// Confirms every entry whose required issue time the CRLs meet, as revoked when an entry of them revokes a
-    /// certificate of the chain at or before the token's time. The CRLs are stored in the evidence store before the
-    /// entries reference them.
+    /// Confirms every entry whose required issue time the CRLs meet, as revoked when an entry of a CRL that counts revokes
+    /// a certificate of the chain at or before the token's time. CRLs count by the rule verification applies
+    /// (<see cref="RevocationEvidence"/>), matched with the chain's distribution points by content, so a recorded status
+    /// can always be recomputed; points of indirect CRL issuers, whose CRLs cannot be verified, do not block
+    /// confirmation. The CRLs are stored in the evidence store before the entries reference them.
     /// </summary>
-    /// <exception cref="InvalidDataException">Thrown when a returned CRL was issued too early or is malformed.</exception>
+    /// <exception cref="InvalidDataException">
+    /// Thrown when a returned CRL was issued too early or is malformed, or when no returned CRL counts for a distribution
+    /// point and no counting CRL revokes a certificate of the chain.
+    /// </exception>
     private async Task RecordStatusesAsync(ITimestampAuthority authority,
                                            IReadOnlyList<UnconfirmedTimestamp> timestamps,
                                            IReadOnlyList<Byte[]> certificateChain,
@@ -217,17 +204,16 @@ internal sealed class TimestampRevocationConfirmer
                                            DateTime now,
                                            CancellationToken cancellationToken)
     {
-        // The authority's time checks are repeated, so the acceptance rule also holds for custom authorities; issuer and
-        // size remain the authority's checks.
+        // The authority's time checks are repeated, so the acceptance rule also holds for custom authorities; size remains
+        // the authority's check.
         var issuedAt = DateTime.MaxValue;
-        var entries = new List<RevokedCertificate>();
         foreach (var crl in lists)
         {
             CertificateRevocationListHeader header;
             try
             {
                 header = CertificateRevocationListHeader.Decode(crl);
-                entries.AddRange(RevokedCertificate.DecodeAll(crl));
+                RevokedCertificate.DecodeAll(crl);
             }
             catch (AsnContentException ex)
             {
@@ -249,9 +235,37 @@ internal sealed class TimestampRevocationConfirmer
             issuedAt = header.ThisUpdate.UtcDateTime < issuedAt ? header.ThisUpdate.UtcDateTime : issuedAt;
         }
 
-        var statuses = timestamps.Where(timestamp => timestamp.TimestampUtc + _options.RevocationGracePeriod <= issuedAt)
-                                 .Select(timestamp => (Timestamp: timestamp, Revoked: FindRevokedCertificate(certificateChain, entries, timestamp.TimestampUtc)))
+        var chain = new X509Certificate2Collection();
+        List<(UnconfirmedTimestamp Timestamp, String? Revoked)> statuses;
+        try
+        {
+            foreach (var certificate in certificateChain)
+            {
+                chain.Add(X509CertificateLoader.LoadCertificate(certificate));
+            }
+
+            var sources = TimestampTokenValidation.GetCrlSources(certificateChain);
+            var evaluation = RevocationEvidence.Evaluate(sources, lists, chain, new DateTimeOffset(issuedNotBefore, TimeSpan.Zero));
+            statuses = timestamps.Where(timestamp => timestamp.TimestampUtc + _options.RevocationGracePeriod <= issuedAt)
+                                 .Select(timestamp => (Timestamp: timestamp,
+                                                       Revoked: RevocationEvidence.FindRevoked(chain, evaluation.Entries, new DateTimeOffset(timestamp.TimestampUtc, TimeSpan.Zero))
+                                                                                  ?.Subject))
                                  .ToList();
+            var unconfirmed = sources.Where((source, index) => source.Issuer is not null && !evaluation.Covered[index]).ToList();
+            if (unconfirmed.Count > 0 && statuses.Any(status => status.Revoked is null))
+            {
+                throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned no CRL that is complete for the distribution point at " +
+                                               $"{String.Join(", ", unconfirmed[0].Locations)} and verifies against its issuer.");
+            }
+        }
+        finally
+        {
+            foreach (var certificate in chain)
+            {
+                certificate.Dispose();
+            }
+        }
+
         var listHashes = new List<Byte[]>(lists.Count);
         foreach (var crl in lists)
         {

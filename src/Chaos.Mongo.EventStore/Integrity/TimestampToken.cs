@@ -5,8 +5,22 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// A validated RFC 3161 timestamp token together with the evidence captured at stamping time.
 /// </summary>
-internal sealed class TimestampToken
+public sealed class TimestampToken
 {
+    /// <summary>
+    /// Creates a token, as a custom <see cref="ITimestampAuthority"/> returns it after validating it.
+    /// </summary>
+    /// <param name="token">The token exactly as the authority returned it.</param>
+    /// <param name="certificateChain">
+    /// The DER-encoded certificates of the validated chain, from the signing certificate to the
+    /// root.
+    /// </param>
+    /// <param name="certificateRevocationLists">
+    /// The CRLs downloaded from the distribution points of the chain's non-root
+    /// certificates.
+    /// </param>
+    /// <param name="timestamp">The time the authority asserts in the token.</param>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is <c>null</c>.</exception>
     public TimestampToken(Byte[] token,
                           IReadOnlyList<Byte[]> certificateChain,
                           IReadOnlyList<Byte[]> certificateRevocationLists,

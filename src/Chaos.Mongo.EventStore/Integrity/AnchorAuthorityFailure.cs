@@ -9,4 +9,4 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="FailureCount">The number of failed attempts.</param>
 /// <param name="LastFailure">The message of the last failure.</param>
 /// <param name="LastFailureUtc">The time of the last failure.</param>
-internal sealed record AnchorAuthorityFailure(String Authority, Int32 FailureCount, String LastFailure, DateTime LastFailureUtc);
+public sealed record AnchorAuthorityFailure(String Authority, Int32 FailureCount, String LastFailure, DateTime LastFailureUtc);

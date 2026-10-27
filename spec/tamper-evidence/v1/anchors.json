@@ -1,0 +1,34 @@
+{
+  "trustedRoots": [
+    "tsa-root.pem"
+  ],
+  "graceHours": 24,
+  "chain": {
+    "intact": true,
+    "firstBrokenSequence": null,
+    "failure": null,
+    "anchorCount": 2
+  },
+  "anchors": [
+    {
+      "sequence": 1,
+      "digest": "8d30d89d334c4abc7607a2edaef6b0078f9c65e594214ce79dbd3ba5e50fb835",
+      "timestamps": [
+        [
+          true,
+          "Confirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 2,
+      "digest": "41c83fc4f8ef31b590e3da469405be26ff5af229dfd01002588cb3843cd45d6b",
+      "timestamps": [
+        [
+          true,
+          "Unconfirmed"
+        ]
+      ]
+    }
+  ]
+}

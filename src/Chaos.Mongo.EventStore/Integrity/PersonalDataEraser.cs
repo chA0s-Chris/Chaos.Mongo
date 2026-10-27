@@ -36,7 +36,7 @@ using MongoDB.Driver;
 ///     </para>
 /// </remarks>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, IAggregate, new()
+internal sealed class PersonalDataEraser<TAggregate> : IPersonalDataEraser<TAggregate> where TAggregate : class, IAggregate, new()
 {
     private const String PersonalDataField = EventIntegrityChain.ElementName + "." + nameof(EventIntegrity.PersonalData);
     private readonly IMongoHelper _mongoHelper;
@@ -51,75 +51,6 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
         _mongoHelper = mongoHelper;
         _options = options;
         _store = store;
-    }
-
-    /// <summary>
-    /// Erases the selected personal data values of a stream in one transaction. Values already erased are skipped;
-    /// when nothing is left to erase, no event is appended.
-    /// </summary>
-    /// <param name="aggregateId">The aggregate identifier.</param>
-    /// <param name="request">The selection and the reference to record.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The erased paths per event version, empty when nothing was left to erase.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="aggregateId"/> is empty.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when integrity protection is disabled.</exception>
-    /// <exception cref="MongoEventStoreException">
-    /// Thrown when the stream has no events, when a requested version does not exist or has no recorded personal data,
-    /// when a requested path is recorded in none of the selected events, when a selected event is not sealed or its
-    /// integrity data is malformed or of an unsupported format, when a selected value does not match its commitment, or
-    /// when the read model cannot be rebuilt consistently.
-    /// </exception>
-    /// <exception cref="MongoConcurrencyException">
-    /// Thrown when the stream or a selected salt changed concurrently, or when a request without explicit versions
-    /// finds events appended after its selection.
-    /// </exception>
-    public async Task<IReadOnlyList<PersonalDataErasureEntry>> ErasePersonalDataAsync(Guid aggregateId,
-                                                                                      ErasureRequest request,
-                                                                                      CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (aggregateId == Guid.Empty)
-        {
-            throw new ArgumentException("The aggregate identifier must not be empty.", nameof(aggregateId));
-        }
-
-        if (!_options.IntegrityProtectionEnabled)
-        {
-            throw new InvalidOperationException(
-                $"Personal data of aggregate type {typeof(TAggregate).Name} cannot be erased, because integrity protection is disabled.");
-        }
-
-        var (entries, lastSelectedVersion, firstAffectedVersion) = await SelectAsync(aggregateId, request, cancellationToken);
-        if (entries.Count == 0)
-        {
-            return entries;
-        }
-
-        // A whole-stream request covers the stream as selected; an event appended since would escape it.
-        var expectedErasureVersion = request.Versions is null ? lastSelectedVersion + 1 : (Int64?)null;
-
-        var erasure = new PersonalDataErased<TAggregate>
-        {
-            AggregateId = aggregateId,
-            Reference = request.Reference,
-            Entries = entries
-        };
-
-        await _store.AppendEventsAsync(
-            [erasure],
-            onBeforeCommit: (session, aggregate, _, ct) =>
-            {
-                if (expectedErasureVersion is { } expectedVersion && erasure.Version != expectedVersion)
-                {
-                    throw new MongoConcurrencyException(
-                        $"Aggregate '{aggregateId}' received events after the personal data to erase was selected.");
-                }
-
-                return EraseAsync(session, aggregate, entries, firstAffectedVersion, ct);
-            },
-            cancellationToken: cancellationToken);
-
-        return entries;
     }
 
     private static MongoEventStoreException CreateCheckpointException(Guid aggregateId, Int64 checkpointVersion)
@@ -570,5 +501,75 @@ internal sealed class PersonalDataEraser<TAggregate> where TAggregate : class, I
                 document.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Erases the selected personal data values of a stream in one transaction. Values already erased are skipped;
+    /// when nothing is left to erase, no event is appended.
+    /// </summary>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="request">The selection and the reference to record.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The erased paths per event version, empty when nothing was left to erase.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="aggregateId"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when integrity protection is disabled.</exception>
+    /// <exception cref="MongoEventStoreException">
+    /// Thrown when the stream has no events, when a requested version does not exist or has no recorded personal data,
+    /// when a requested path is recorded in none of the selected events, when a selected event is not sealed or its
+    /// integrity data is malformed or of an unsupported format, when a selected value does not match its commitment, or
+    /// when the read model cannot be rebuilt consistently.
+    /// </exception>
+    /// <exception cref="MongoConcurrencyException">
+    /// Thrown when the stream or a selected salt changed concurrently, or when a request without explicit versions
+    /// finds events appended after its selection.
+    /// </exception>
+    public async Task<IReadOnlyList<PersonalDataErasureEntry>> ErasePersonalDataAsync(Guid aggregateId,
+                                                                                      ErasureRequest request,
+                                                                                      CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (aggregateId == Guid.Empty)
+        {
+            throw new ArgumentException("The aggregate identifier must not be empty.", nameof(aggregateId));
+        }
+
+        if (!_options.IntegrityProtectionEnabled)
+        {
+            throw new InvalidOperationException(
+                $"Personal data of aggregate type {typeof(TAggregate).Name} cannot be erased, because integrity protection is disabled.");
+        }
+
+        var (entries, lastSelectedVersion, firstAffectedVersion) = await SelectAsync(aggregateId, request, cancellationToken);
+        if (entries.Count == 0)
+        {
+            return entries;
+        }
+
+        // A whole-stream request covers the stream as selected; an event appended since would escape it.
+        var expectedErasureVersion = request.Versions is null ? lastSelectedVersion + 1 : (Int64?)null;
+
+        var erasure = new PersonalDataErased<TAggregate>
+        {
+            AggregateId = aggregateId,
+            Reference = request.Reference,
+            Entries = entries,
+            CreatedByEraser = true
+        };
+
+        await _store.AppendEventsAsync(
+            [erasure],
+            onBeforeCommit: (session, aggregate, _, ct) =>
+            {
+                if (expectedErasureVersion is { } expectedVersion && erasure.Version != expectedVersion)
+                {
+                    throw new MongoConcurrencyException(
+                        $"Aggregate '{aggregateId}' received events after the personal data to erase was selected.");
+                }
+
+                return EraseAsync(session, aggregate, entries, firstAffectedVersion, ct);
+            },
+            cancellationToken: cancellationToken);
+
+        return entries;
     }
 }

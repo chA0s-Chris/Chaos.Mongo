@@ -87,7 +87,7 @@ public class IntegrityAnchoringRegistrationTests
         services.GetServices<IHostedService>().Should().ContainSingle(service => service is IntegrityAnchoringHostedService);
         services.GetServices<IMongoConfigurator>().Should().ContainSingle(configurator => configurator is IntegrityAnchoringConfigurator);
         services.GetRequiredService<AnchoringRun>().Should().NotBeNull();
-        services.GetRequiredService<AnchorLeafReader>().Should().NotBeNull();
+        services.GetRequiredService<IAnchorLeafReader>().Should().NotBeNull();
         services.GetRequiredService<SealingAnchorLookup>().Should().NotBeNull();
         services.GetRequiredService<AnchorEvidenceResolver>().Should().NotBeNull();
     }
@@ -101,7 +101,6 @@ public class IntegrityAnchoringRegistrationTests
         act.Should().Throw<ArgumentException>().WithMessage("*'tsa' is used more than once*");
     }
 
-    [TestCase(0, 72)]
     [TestCase(24, 24)]
     [TestCase(48, 24)]
     public void WithIntegrityAnchoring_InvalidRevocationSettings_ThrowsInvalidOperationException(Int32 gracePeriodHours, Int32 thresholdHours)
@@ -110,7 +109,7 @@ public class IntegrityAnchoringRegistrationTests
                                                                                      .WithRevocationGracePeriod(TimeSpan.FromHours(gracePeriodHours))
                                                                                      .WithRevocationConfirmationDelayThreshold(TimeSpan.FromHours(thresholdHours)));
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*revocation grace period must be positive and less than*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*revocation grace period must be less than*");
     }
 
     [Test]
@@ -119,7 +118,7 @@ public class IntegrityAnchoringRegistrationTests
         var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
                                                                                      .WithMinimumTimestampTokens(2));
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*between 1 and the number of authorities (1)*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*must not exceed the number of authorities (1)*");
     }
 
     [Test]
@@ -131,12 +130,29 @@ public class IntegrityAnchoringRegistrationTests
     }
 
     [Test]
-    public void WithIntegrityAnchoring_NonPositiveInterval_ThrowsInvalidOperationException()
+    [TestCase("interval")]
+    [TestCase("delayThreshold")]
+    [TestCase("maxLeaves")]
+    [TestCase("minimumTokens")]
+    [TestCase("gracePeriod")]
+    [TestCase("confirmationThreshold")]
+    public void WithIntegrityAnchoring_NonPositiveSetting_ThrowsArgumentOutOfRangeException(String setting)
     {
-        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
-                                                                                     .WithInterval(TimeSpan.Zero));
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring =>
+        {
+            anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
+            _ = setting switch
+            {
+                "interval" => anchoring.WithInterval(TimeSpan.Zero),
+                "delayThreshold" => anchoring.WithDelayThreshold(TimeSpan.Zero),
+                "maxLeaves" => anchoring.WithMaxLeavesPerAnchor(0),
+                "minimumTokens" => anchoring.WithMinimumTimestampTokens(0),
+                "gracePeriod" => anchoring.WithRevocationGracePeriod(TimeSpan.Zero),
+                _ => anchoring.WithRevocationConfirmationDelayThreshold(TimeSpan.Zero)
+            };
+        });
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*must be positive*");
+        act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
     private static MongoBuilder CreateBuilder()

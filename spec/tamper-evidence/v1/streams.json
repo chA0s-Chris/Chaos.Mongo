@@ -1,0 +1,213 @@
+{
+  "streams": [
+    {
+      "name": "appended",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e01",
+      "genesis": "9b48b7940e512806721730931c5ca02b3295ea1c4f18264b504e0b855be260a7",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "events": [
+          {
+            "version": 1,
+            "hash": "83350c2053fbc68bbeec8456830d14f823d9ea8ce55194d33d69eca574d01b02",
+            "previousHash": "9b48b7940e512806721730931c5ca02b3295ea1c4f18264b504e0b855be260a7",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 2,
+            "hash": "43f3b9a77cf90f51078e42f3fd4d3c6b450d7473e9fa78f944899ba282ed81dd",
+            "previousHash": "83350c2053fbc68bbeec8456830d14f823d9ea8ce55194d33d69eca574d01b02",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 3,
+            "hash": "241a7f85c50cf8ce08ba6fdb37a6419c40c07ba99f32dd52bbb3e8dd048ee051",
+            "previousHash": "43f3b9a77cf90f51078e42f3fd4d3c6b450d7473e9fa78f944899ba282ed81dd",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 4,
+            "hash": "b888c35215e8e988c1237e4486b7756d5b8df5dd5044b8c760a62d996c2101d9",
+            "previousHash": "241a7f85c50cf8ce08ba6fdb37a6419c40c07ba99f32dd52bbb3e8dd048ee051",
+            "sealMode": "Append",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "personal-data",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e02",
+      "genesis": "389eaf2f6ab7796ccef45547c41cfd25ce9f0027c411390345883f6c023f5c09",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "events": [
+          {
+            "version": 1,
+            "hash": "94a86019229473203e3554b932b8a1e1866fff82a96329cf7e6ed821b722cd78",
+            "previousHash": "389eaf2f6ab7796ccef45547c41cfd25ce9f0027c411390345883f6c023f5c09",
+            "sealMode": "Append",
+            "personalData": [
+              {
+                "path": "Memo",
+                "status": "ErasedWithRecord"
+              },
+              {
+                "path": "Counterparty.Name",
+                "status": "Present"
+              }
+            ]
+          },
+          {
+            "version": 2,
+            "hash": "0c4aa56a8b841385d8dc7262dad39da59db671a19161023f68aced84b4471425",
+            "previousHash": "94a86019229473203e3554b932b8a1e1866fff82a96329cf7e6ed821b722cd78",
+            "sealMode": "Append",
+            "personalData": [
+              {
+                "path": "Memo",
+                "status": "ErasedWithoutRecord"
+              },
+              {
+                "path": "Counterparty.Name",
+                "status": "Present"
+              }
+            ]
+          },
+          {
+            "version": 3,
+            "hash": "5572e727c76a62292944a7447228e024010cfe0ba5a8c8720c85426b8900ab85",
+            "previousHash": "0c4aa56a8b841385d8dc7262dad39da59db671a19161023f68aced84b4471425",
+            "sealMode": "Append",
+            "personalData": [
+              {
+                "path": "Memo",
+                "status": "Present"
+              },
+              {
+                "path": "Counterparty.Name",
+                "status": "Present"
+              }
+            ]
+          },
+          {
+            "version": 4,
+            "hash": "ba31795ed7a09c31a3df1f9feca10dc6142c1008443865a13dee964e543dcda1",
+            "previousHash": "5572e727c76a62292944a7447228e024010cfe0ba5a8c8720c85426b8900ab85",
+            "sealMode": "Append",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": [
+          [
+            2,
+            "Memo"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "retroactive",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e03",
+      "genesis": "91ed05faa95a43a0637bdb786ef263cb9a718ff10e09eb8928412ffc56d41774",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "events": [
+          {
+            "version": 1,
+            "hash": "725e87089c9fd27e5e2d4df64185257a3c7c053f4408e7c4459026eb818eccd1",
+            "previousHash": "91ed05faa95a43a0637bdb786ef263cb9a718ff10e09eb8928412ffc56d41774",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 2,
+            "hash": "96a19af1e93925e7e5b10b71dfa3c60d66ecf1d355ad9c37cf7870370816a22f",
+            "previousHash": "725e87089c9fd27e5e2d4df64185257a3c7c053f4408e7c4459026eb818eccd1",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 3,
+            "hash": "a22de48feacb5229199a13e134dc12ff1bb3fb70c39e18614f90012b8481a7ac",
+            "previousHash": "96a19af1e93925e7e5b10b71dfa3c60d66ecf1d355ad9c37cf7870370816a22f",
+            "sealMode": "Retroactive",
+            "personalData": []
+          },
+          {
+            "version": 4,
+            "hash": "ebab8eb253ce4f2ae8f646c9802d3e9beff72dc77634af73b8f1f67da19fbd3e",
+            "previousHash": "a22de48feacb5229199a13e134dc12ff1bb3fb70c39e18614f90012b8481a7ac",
+            "sealMode": "Retroactive",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [
+          3
+        ],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "tampered",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e04",
+      "genesis": "d06532cc559f7dfae579c46ac95ff2a1797b778a105de60a9730aaba5e6649d9",
+      "result": {
+        "intact": false,
+        "firstBrokenVersion": 2,
+        "failure": "HashMismatch",
+        "events": [
+          {
+            "version": 1,
+            "hash": "3822151f2cde432c21ca4db26f698e9338907298a03f9d32e464aa5340cbfd41",
+            "previousHash": "d06532cc559f7dfae579c46ac95ff2a1797b778a105de60a9730aaba5e6649d9",
+            "sealMode": "Append",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "renamed",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e05",
+      "genesis": "823cf68c5b248722d13bfc92d9645f3654e16e7cb7961b01ba79a5c34af2ef12",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "events": [
+          {
+            "version": 1,
+            "hash": "bbe0b7a54d315155090eecb668fda18c003c21009bd87db0ed02a708b93c2959",
+            "previousHash": "823cf68c5b248722d13bfc92d9645f3654e16e7cb7961b01ba79a5c34af2ef12",
+            "sealMode": "Retroactive",
+            "personalData": []
+          },
+          {
+            "version": 2,
+            "hash": "cd1a5379aee097a11c513cbfc295d8e6c20b388e392746660f706d03ae0eb11c",
+            "previousHash": "bbe0b7a54d315155090eecb668fda18c003c21009bd87db0ed02a708b93c2959",
+            "sealMode": "Retroactive",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    }
+  ]
+}

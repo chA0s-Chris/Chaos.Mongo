@@ -11,13 +11,13 @@ using System.Reflection;
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 /// <typeparam name="TEvent">The event type.</typeparam>
-internal sealed class EventRegistrationBuilder<TAggregate, TEvent>
+public sealed class EventRegistrationBuilder<TAggregate, TEvent>
     where TAggregate : class, IAggregate, new()
     where TEvent : Event<TAggregate>
 {
     private readonly List<PersonalDataMark> _marks;
 
-    public EventRegistrationBuilder(List<PersonalDataMark> marks)
+    internal EventRegistrationBuilder(List<PersonalDataMark> marks)
     {
         ArgumentNullException.ThrowIfNull(marks);
         _marks = marks;

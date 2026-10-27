@@ -37,5 +37,6 @@ public enum TestTimestampAuthorityMode
     Sha1Digest,
     CrlWithoutNextUpdate,
     CrlIssuedInFuture,
-    CrlIssuedAfterToken
+    CrlIssuedAfterToken,
+    ImprintWithParameters
 }

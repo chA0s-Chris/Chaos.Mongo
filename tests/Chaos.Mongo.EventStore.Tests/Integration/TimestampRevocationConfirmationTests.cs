@@ -296,6 +296,8 @@ public class TimestampRevocationConfirmationTests
     [TestCase("malformed", "not a single DER-encoded CRL")]
     [TestCase("issued too early", "before the required")]
     [TestCase("without next update", "states no next update")]
+    [TestCase("broken signature", "verifies against its issuer")]
+    [TestCase("delta CRL", "verifies against its issuer")]
     public async Task RunAsync_CustomAuthorityReturnsUnusableCrl_CountsTheFailure(String kind, String reason)
     {
         var fixture = await CreateFixtureAsync();
@@ -305,6 +307,9 @@ public class TimestampRevocationConfirmationTests
         {
             "malformed" => "not a CRL"u8.ToArray(),
             "issued too early" => fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod - TimeSpan.FromMinutes(1)),
+            "broken signature" => BreakSignature(fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1))),
+            "delta CRL" => fixture.TestAuthority.BuildCrlWithExtensions(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1),
+                                                                        ("2.5.29.27", true, [0x02, 0x01, 0x01])),
             _ => fixture.TestAuthority.BuildCrlWithoutNextUpdate(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1))
         };
         var authority = new FixedRevocationListsAuthority(fixture.Authority, RevocationLists.Issued([crl]));
@@ -393,6 +398,12 @@ public class TimestampRevocationConfirmationTests
 
         _contexts.Clear();
         _testAuthorities.Clear();
+    }
+
+    private static Byte[] BreakSignature(Byte[] crl)
+    {
+        crl[^1] ^= 0x01;
+        return crl;
     }
 
     private async Task<Fixture> CreateFixtureAsync(TestTimestampAuthority? testAuthority = null)

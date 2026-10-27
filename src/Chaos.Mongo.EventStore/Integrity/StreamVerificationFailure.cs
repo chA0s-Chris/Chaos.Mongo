@@ -5,7 +5,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// Describes why the verification of an event in a stream failed.
 /// </summary>
-internal enum StreamVerificationFailure
+public enum StreamVerificationFailure
 {
     /// <summary>
     /// The expected version is missing, so an event was deleted or versions were changed.
@@ -16,6 +16,11 @@ internal enum StreamVerificationFailure
     /// The event carries no integrity data.
     /// </summary>
     NotSealed,
+
+    /// <summary>
+    /// The version-1 event stores no aggregate type as a string, so the stream's genesis value cannot be derived.
+    /// </summary>
+    MissingAggregateType,
 
     /// <summary>
     /// The event's integrity data cannot be read, for example because elements have unexpected types.
@@ -45,5 +50,22 @@ internal enum StreamVerificationFailure
     /// <summary>
     /// A personal data value whose salt is absent is not <c>null</c>, so the value was kept while its salt was removed.
     /// </summary>
-    ErasedPersonalDataPresent
+    ErasedPersonalDataPresent,
+
+    /// <summary>
+    /// A version that a completed anchor covers no longer exists, so the stream was truncated or deleted.
+    /// </summary>
+    AnchoredVersionMissing,
+
+    /// <summary>
+    /// The stored hash of a version that a completed anchor covers differs from the anchor's leaf, so the stream was
+    /// rewritten or rolled back.
+    /// </summary>
+    AnchoredHashMismatch,
+
+    /// <summary>
+    /// A leaf of the stream in a completed anchor does not prove its inclusion in the anchor's Merkle root, so the
+    /// leaf was changed, or a leaf of the stream, or the committed anchor it belongs to, cannot be read.
+    /// </summary>
+    AnchoredLeafInvalid
 }

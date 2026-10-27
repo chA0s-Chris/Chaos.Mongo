@@ -120,7 +120,11 @@ internal static class CrlDistributionPoints
             }
 
             var value = fullName.ReadCharacterString(UniversalTagNumber.IA5String, UriTag);
-            if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && ((uri.Scheme == Uri.UriSchemeHttp) || (uri.Scheme == Uri.UriSchemeHttps)))
+            // A location counts only when it has a normalized form, so the specification's rule decides, and .NET can
+            // also fetch it.
+            if (CrlLocation.Normalize(value) is not null &&
+                Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+                ((uri.Scheme == Uri.UriSchemeHttp) || (uri.Scheme == Uri.UriSchemeHttps)))
             {
                 uris.Add(uri);
             }

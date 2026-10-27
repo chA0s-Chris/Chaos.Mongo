@@ -306,6 +306,13 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                         ? await SealEventDocumentsAsync(session, eventList, eventDocuments, ct)
                         : eventDocuments;
 
+                    // The checkpoint records the chain hash of the event at its version, a state-changing event of this
+                    // batch, so it can be validated against the stream later.
+                    if (checkpoint is not null && _options.IntegrityProtectionEnabled)
+                    {
+                        checkpoint.ChainHash = eventList.First(e => e.Version == checkpoint.Id.Version).Integrity?.Hash;
+                    }
+
                     // Documents always exist when the bulk write is enabled; the null check only proves it.
                     if (_options.BulkWriteOptimizationEnabled && documents is not null)
                     {
@@ -570,7 +577,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         var aggregateId = eventList[0].AggregateId;
         var firstVersion = eventList[0].Version;
         var previousHash = firstVersion == 1
-            ? EventIntegrityChain.ComputeGenesis(_aggregateTypeName, aggregateId)
+            ? EventDocumentFields<TAggregate>.ComputeGenesis(eventDocuments[0], aggregateId)
             : await ReadPredecessorHashAsync(session, aggregateId, firstVersion - 1, cancellationToken);
 
         var sealedDocuments = new List<BsonDocument>(eventDocuments.Count);
@@ -629,6 +636,15 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
         if (eventList.Count == 0)
             throw new ArgumentException("At least one event is required.", nameof(events));
+
+        // A forged erasure event would document erasures that never happened; only the eraser appends one.
+        if (eventList.Any(e => e is PersonalDataErased<TAggregate> { CreatedByEraser: false }))
+        {
+            throw new ArgumentException(
+                $"{nameof(PersonalDataErased<TAggregate>)} events are appended only by {nameof(IPersonalDataEraser<TAggregate>)}." +
+                $"{nameof(IPersonalDataEraser<TAggregate>.ErasePersonalDataAsync)}.",
+                nameof(events));
+        }
 
         var now = DateTime.UtcNow;
         PrepareEvents(eventList, _aggregateTypeName, now);

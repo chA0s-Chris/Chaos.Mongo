@@ -13,7 +13,20 @@ using MongoDB.Bson.Serialization.Serializers;
 /// </summary>
 public static class MongoEventStoreSerializationSetup
 {
+    /// <summary>
+    /// Guards the ownership check and the registration of a checkpoint class map with its ownership record, so a
+    /// concurrent registration of the same aggregate sees either no class map or an owned one.
+    /// </summary>
+    private static readonly Object CheckpointClassMapLock = new();
+
     private static readonly GuidSerializer GuidStandardSerializer = new(GuidRepresentation.Standard);
+
+    /// <summary>
+    /// The checkpoint class maps the event store registered itself. Class maps are process-global, so later
+    /// registrations, for example in a separate container, reuse them, while a class map registered by a consumer is
+    /// rejected under protection. Read and written only under <see cref="CheckpointClassMapLock"/>.
+    /// </summary>
+    private static readonly HashSet<Type> OwnCheckpointClassMaps = [];
 
     /// <summary>
     /// Ensures a <see cref="GuidSerializer"/> with <see cref="GuidRepresentation.Standard"/> is registered globally.
@@ -42,8 +55,11 @@ public static class MongoEventStoreSerializationSetup
     /// Thrown when an event type maps a member to the reserved <c>_integrity</c> element, when an event type uses the
     /// discriminator reserved for the personal data erasure event, when two registered event class maps of the
     /// aggregate share a discriminator, when integrity protection is enabled but the event base class map was
-    /// registered without the integrity member, or when the event base class map or the class map declaring
-    /// <see cref="IAggregate.Revision"/> was registered without the revision member. In each of these cases, no event
+    /// registered without the integrity member, when the event base class map or the class map declaring
+    /// <see cref="IAggregate.Revision"/> was registered without the revision member, when integrity protection is
+    /// enabled but the checkpoint class map was registered before the event store, or when a class map of the personal
+    /// data erasure event or its entries was registered before the event store with another discriminator, other
+    /// element names or the eraser's marker mapped. In each of these cases, no event
     /// class map of the call is registered, so a retry with corrected options can succeed unless the failure was caused
     /// by a class map registered before the event store.
     /// </exception>
@@ -61,6 +77,9 @@ public static class MongoEventStoreSerializationSetup
                 "itself. Register the concrete or intermediate observational event types instead.",
                 nameof(options));
         }
+
+        EnsureCheckpointClassMapOwned(options);
+        EnsurePersonalDataErasedClassMapsMatch<TAggregate>();
 
         // Register the concrete aggregate type
         var aggregateType = typeof(TAggregate);
@@ -180,17 +199,32 @@ public static class MongoEventStoreSerializationSetup
             });
         }
 
-        // Register CheckpointDocument<TAggregate>
+        // Register CheckpointDocument<TAggregate>. The chain hash is mapped regardless of whether protection is enabled,
+        // so a protected store can reuse a class map registered for an unprotected one.
         var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
-        if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
+        lock (CheckpointClassMapLock)
         {
-            BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
+            if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
             {
-                cm.AutoMap();
-                cm.MapIdMember(c => c.Id);
-            });
+                BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
+                {
+                    cm.AutoMap();
+                    cm.MapIdMember(c => c.Id);
+                    cm.MapMember(c => c.ChainHash)
+                      .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
+                      .SetIgnoreIfNull(true);
+                });
+                OwnCheckpointClassMaps.Add(checkpointDocumentType);
+            }
         }
     }
+
+    /// <summary>
+    /// Gets a value indicating whether a class map of the erasure entries maps the element names the verifier reads.
+    /// </summary>
+    internal static Boolean ErasureEntryClassMapMatches(BsonClassMap classMap)
+        => HasElementName(classMap, nameof(PersonalDataErasureEntry.Version), PersonalDataErasureEntry.VersionElement) &&
+           HasElementName(classMap, nameof(PersonalDataErasureEntry.Paths), PersonalDataErasureEntry.PathsElement);
 
     /// <summary>
     /// Builds the class map of <paramref name="classType"/> on top of the class map of its direct base type, so
@@ -261,6 +295,30 @@ public static class MongoEventStoreSerializationSetup
             $"Map {nameof(IAggregate.Revision)}, for example with AutoMap().");
     }
 
+    /// <summary>
+    /// Under protection, checkpoints record the chain hash in a non-public member that only the event store's own
+    /// class map maps. A checkpoint class map registered by a consumer is rejected before anything is registered.
+    /// </summary>
+    private static void EnsureCheckpointClassMapOwned<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
+        lock (CheckpointClassMapLock)
+        {
+            if (!options.IntegrityProtectionEnabled ||
+                !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
+                OwnCheckpointClassMaps.Contains(checkpointDocumentType))
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Integrity protection is enabled for aggregate type {typeof(TAggregate).Name}, but the class map of " +
+            $"{nameof(CheckpointDocument<TAggregate>)} was registered before the event store. Checkpoints record their chain hash " +
+            "through the event store's own class map; let the event store register it.");
+    }
+
     private static void EnsureEventBaseMapsIntegrity<TAggregate>(MongoEventStoreOptions<TAggregate> options)
         where TAggregate : class, IAggregate, new()
     {
@@ -329,6 +387,45 @@ public static class MongoEventStoreSerializationSetup
     }
 
     /// <summary>
+    /// Checks the class maps of the erasure event and its entries that were registered before the event store, before
+    /// anything is registered: they must pin the discriminator and element names the verifier reads and must not map
+    /// the eraser's marker.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a class map of the erasure event or its entries was registered before the event store with another
+    /// discriminator, other element names or the marker mapped.
+    /// </exception>
+    private static void EnsurePersonalDataErasedClassMapsMatch<TAggregate>()
+        where TAggregate : class, IAggregate, new()
+    {
+        var eventType = typeof(PersonalDataErased<TAggregate>);
+        if (BsonClassMap.IsClassMapRegistered(eventType))
+        {
+            var registered = GetRegisteredClassMap(eventType);
+            if (!String.Equals(registered.Discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal) ||
+                !HasElementName(registered, nameof(PersonalDataErased<TAggregate>.Reference), PersonalDataErased<TAggregate>.ReferenceElement) ||
+                !HasElementName(registered, nameof(PersonalDataErased<TAggregate>.Entries), PersonalDataErased<TAggregate>.EntriesElement) ||
+                registered.GetMemberMap(nameof(PersonalDataErased<TAggregate>.CreatedByEraser)) is not null)
+            {
+                throw new InvalidOperationException(
+                    $"The class map of {eventType.Name} for {typeof(TAggregate).Name} was registered before the event store with another discriminator, " +
+                    "other element names or the eraser's marker mapped, so verification would not recognize its erasure records. Let the event " +
+                    "store register it.");
+            }
+        }
+
+        if (BsonClassMap.IsClassMapRegistered(typeof(PersonalDataErasureEntry)))
+        {
+            if (!ErasureEntryClassMapMatches(GetRegisteredClassMap(typeof(PersonalDataErasureEntry))))
+            {
+                throw new InvalidOperationException(
+                    $"The class map of {nameof(PersonalDataErasureEntry)} was registered before the event store with other element names, so " +
+                    "verification would not recognize erasure records. Let the event store register it.");
+            }
+        }
+    }
+
+    /// <summary>
     /// Registering class maps for intermediate types adds their discriminators to the driver's registry. The driver
     /// accepts a discriminator shared by two types of one hierarchy, but then fails every read of it as ambiguous.
     /// Class maps are process-global, so every registered event class map of the aggregate is checked together with
@@ -359,6 +456,9 @@ public static class MongoEventStoreSerializationSetup
 
     private static BsonClassMap GetRegisteredClassMap(Type classType)
         => BsonClassMap.GetRegisteredClassMaps().First(classMap => classMap.ClassType == classType);
+
+    private static Boolean HasElementName(BsonClassMap classMap, String memberName, String elementName)
+        => String.Equals(classMap.GetMemberMap(memberName)?.ElementName, elementName, StringComparison.Ordinal);
 
     /// <summary>
     /// Registers class maps built by <see cref="BuildClassMapHierarchy"/>, base types first.
@@ -425,6 +525,7 @@ public static class MongoEventStoreSerializationSetup
             cm.GetMemberMap(s => s.PassCompletedUtc).SetElementName(nameof(IntegritySealingState.PassCompletedUtc));
             cm.GetMemberMap(s => s.StreamsChecked).SetElementName(nameof(IntegritySealingState.StreamsChecked));
             cm.GetMemberMap(s => s.StreamsSealed).SetElementName(nameof(IntegritySealingState.StreamsSealed));
+            cm.GetMemberMap(s => s.StreamsFailed).SetElementName(nameof(IntegritySealingState.StreamsFailed));
             cm.GetMemberMap(s => s.EventsSealed).SetElementName(nameof(IntegritySealingState.EventsSealed));
         });
     }
@@ -449,12 +550,25 @@ public static class MongoEventStoreSerializationSetup
 
     /// <summary>
     /// Registers the erasure event for the aggregate type, whether or not protection is enabled, so streams
-    /// containing it still deserialize. Element names are pinned because the verifier reads the event raw.
+    /// containing it still deserialize. Element names are pinned because the verifier reads the event raw, and the
+    /// eraser's marker is never mapped, even by a convention that maps non-public members, so it cannot be stored and
+    /// read back to pass the append guard. Class maps registered before the event store were checked by
+    /// <see cref="EnsurePersonalDataErasedClassMapsMatch{TAggregate}"/>.
     /// </summary>
     private static void RegisterPersonalDataErasedClassMap<TAggregate>()
         where TAggregate : class, IAggregate, new()
     {
-        RegisterPersonalDataErasureEntryClassMap();
+        if (!BsonClassMap.IsClassMapRegistered(typeof(PersonalDataErasureEntry)))
+        {
+            BsonClassMap.RegisterClassMap<PersonalDataErasureEntry>(cm =>
+            {
+                cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
+                cm.GetMemberMap(e => e.Version).SetElementName(PersonalDataErasureEntry.VersionElement);
+                cm.GetMemberMap(e => e.Paths).SetElementName(PersonalDataErasureEntry.PathsElement);
+            });
+        }
+
         var eventType = typeof(PersonalDataErased<TAggregate>);
         if (BsonClassMap.IsClassMapRegistered(eventType))
         {
@@ -466,22 +580,11 @@ public static class MongoEventStoreSerializationSetup
         classMap.SetDiscriminator(PersonalDataErased<TAggregate>.Discriminator);
         classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.Reference)).SetElementName(PersonalDataErased<TAggregate>.ReferenceElement);
         classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.Entries)).SetElementName(PersonalDataErased<TAggregate>.EntriesElement);
-        BsonClassMap.RegisterClassMap(classMap);
-    }
-
-    private static void RegisterPersonalDataErasureEntryClassMap()
-    {
-        if (BsonClassMap.IsClassMapRegistered(typeof(PersonalDataErasureEntry)))
+        if (classMap.GetMemberMap(nameof(PersonalDataErased<TAggregate>.CreatedByEraser)) is { } marker)
         {
-            return;
+            classMap.UnmapMember(marker.MemberInfo);
         }
 
-        BsonClassMap.RegisterClassMap<PersonalDataErasureEntry>(cm =>
-        {
-            cm.AutoMap();
-            cm.SetIgnoreExtraElements(true);
-            cm.GetMemberMap(e => e.Version).SetElementName(PersonalDataErasureEntry.VersionElement);
-            cm.GetMemberMap(e => e.Paths).SetElementName(PersonalDataErasureEntry.PathsElement);
-        });
+        BsonClassMap.RegisterClassMap(classMap);
     }
 }

@@ -3,9 +3,9 @@
 namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
-/// A completed anchor as passed to the completion hook: its stored fields and its tokens with their evidence, without
-/// its leaves; it is resolved through <see cref="AnchorEvidenceResolver"/>. A hook that needs the leaves, for example
-/// to replicate them to WORM storage, streams them through <see cref="AnchorLeafReader"/>.
+/// A completed anchor as passed to the completion hook: its stored fields and its tokens with their evidence resolved
+/// from the evidence store, without its leaves. A hook that needs the leaves, for example to replicate them to WORM
+/// storage, streams them through <see cref="IAnchorLeafReader"/>.
 /// The revocation status of its tokens is usually still unconfirmed: the CRLs that confirm it are issued at least a grace
 /// period after the tokens' time and are added to the stored anchor later.
 /// </summary>
@@ -24,7 +24,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <param name="AuthorityFailures">The failed attempts per authority recorded while the anchor awaited its tokens.</param>
 /// <param name="CreatedUtc">The time the attempt created the anchor.</param>
 /// <param name="CompletedUtc">The time the anchor completed.</param>
-internal sealed record CompletedAnchor(
+public sealed record CompletedAnchor(
     Guid Id,
     Int64 Sequence,
     Int32 FormatVersion,
@@ -50,7 +50,7 @@ internal sealed record CompletedAnchor(
     /// <exception cref="ArgumentException">
     /// Thrown when the anchor is not completed or the timestamps do not match the anchor's entries.
     /// </exception>
-    public static CompletedAnchor From(AnchorRecord anchor, IReadOnlyList<AnchorTimestamp> timestamps)
+    internal static CompletedAnchor From(AnchorRecord anchor, IReadOnlyList<AnchorTimestamp> timestamps)
     {
         ArgumentNullException.ThrowIfNull(anchor);
         ArgumentNullException.ThrowIfNull(timestamps);

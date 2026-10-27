@@ -18,11 +18,7 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_DefaultHttpClientFactory_CreatesAuthority()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
-        {
-            Name = "default",
-            Uri = TestTimestampAuthority.TimestampUri
-        };
+        var options = new Rfc3161TimestampAuthorityOptions("default", TestTimestampAuthority.TimestampUri);
 
         var authority = new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
@@ -33,10 +29,8 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_HttpClientFactoryReturnsNull_ThrowsInvalidOperationException()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("null-client", TestTimestampAuthority.TimestampUri)
         {
-            Name = "null-client",
-            Uri = TestTimestampAuthority.TimestampUri,
             HttpClientFactory = _ => null!
         };
 
@@ -50,10 +44,8 @@ public class Rfc3161TimestampAuthorityTests
     {
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
         IServiceProvider? received = null;
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("factory", TestTimestampAuthority.TimestampUri)
         {
-            Name = "factory",
-            Uri = TestTimestampAuthority.TimestampUri,
             HttpClientFactory = provider =>
             {
                 received = provider;
@@ -71,10 +63,8 @@ public class Rfc3161TimestampAuthorityTests
     [TestCase("1")]
     public void Constructor_InvalidPolicyId_ThrowsArgumentException(String policyId)
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("invalid-policy", TestTimestampAuthority.TimestampUri)
         {
-            Name = "invalid-policy",
-            Uri = TestTimestampAuthority.TimestampUri,
             PolicyId = policyId
         };
 
@@ -87,11 +77,7 @@ public class Rfc3161TimestampAuthorityTests
     [TestCase(" ")]
     public void Constructor_MissingName_ThrowsArgumentException(String name)
     {
-        var options = new Rfc3161TimestampAuthorityOptions
-        {
-            Name = name,
-            Uri = TestTimestampAuthority.TimestampUri
-        };
+        var options = new Rfc3161TimestampAuthorityOptions(name, TestTimestampAuthority.TimestampUri);
 
         var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
@@ -101,11 +87,7 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_NonHttpUri_ThrowsArgumentException()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
-        {
-            Name = "ftp",
-            Uri = new Uri("ftp://tsa.test/timestamp")
-        };
+        var options = new Rfc3161TimestampAuthorityOptions("ftp", new Uri("ftp://tsa.test/timestamp"));
 
         var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
@@ -115,10 +97,8 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_NonPositiveAttemptTimeout_ThrowsArgumentOutOfRangeException()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("no-attempt-timeout", TestTimestampAuthority.TimestampUri)
         {
-            Name = "no-attempt-timeout",
-            Uri = TestTimestampAuthority.TimestampUri,
             AttemptTimeout = TimeSpan.Zero
         };
 
@@ -130,10 +110,8 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_NonPositiveClockSkew_ThrowsArgumentOutOfRangeException()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("no-skew", TestTimestampAuthority.TimestampUri)
         {
-            Name = "no-skew",
-            Uri = TestTimestampAuthority.TimestampUri,
             MaximumClockSkew = TimeSpan.Zero
         };
 
@@ -146,10 +124,8 @@ public class Rfc3161TimestampAuthorityTests
     [TestCase(-1)]
     public void Constructor_NonPositiveMaximumResponseSize_ThrowsArgumentOutOfRangeException(Int32 maximumResponseSize)
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("no-response-size", TestTimestampAuthority.TimestampUri)
         {
-            Name = "no-response-size",
-            Uri = TestTimestampAuthority.TimestampUri,
             MaximumResponseSize = maximumResponseSize
         };
 
@@ -161,10 +137,8 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_NonPositiveRevocationCheckTimeout_ThrowsArgumentOutOfRangeException()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("no-revocation-timeout", TestTimestampAuthority.TimestampUri)
         {
-            Name = "no-revocation-timeout",
-            Uri = TestTimestampAuthority.TimestampUri,
             RevocationCheckTimeout = TimeSpan.Zero
         };
 
@@ -176,11 +150,7 @@ public class Rfc3161TimestampAuthorityTests
     [Test]
     public void Constructor_RelativeUri_ThrowsArgumentException()
     {
-        var options = new Rfc3161TimestampAuthorityOptions
-        {
-            Name = "relative",
-            Uri = new Uri("/timestamp", UriKind.Relative)
-        };
+        var options = new Rfc3161TimestampAuthorityOptions("relative", new Uri("/timestamp", UriKind.Relative));
 
         var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
@@ -366,6 +336,14 @@ public class Rfc3161TimestampAuthorityTests
 
         exception.AuthorityName.Should().Be("test-tsa");
         exception.Message.Should().Contain("timestamp request failed");
+    }
+
+    [Test]
+    public async Task TimestampAsync_ImprintAlgorithmWithParameters_Throws()
+    {
+        var exception = await TimestampExpectingFailureAsync(TestTimestampAuthorityMode.ImprintWithParameters);
+
+        exception.Message.Should().Contain("parameters other than NULL");
     }
 
     [TestCase(TestTimestampAuthorityMode.WrongImprint)]
@@ -567,10 +545,8 @@ public class Rfc3161TimestampAuthorityTests
     public async Task TimestampAsync_SystemTrustWithoutTrustedRoots_RejectsTestRoot()
     {
         var testAuthority = CreateTestAuthority();
-        var options = new Rfc3161TimestampAuthorityOptions
+        var options = new Rfc3161TimestampAuthorityOptions("system-trust", TestTimestampAuthority.TimestampUri)
         {
-            Name = "system-trust",
-            Uri = TestTimestampAuthority.TimestampUri,
             HttpClientFactory = _ => new HttpClient(testAuthority, false),
             RevocationMode = X509RevocationMode.NoCheck
         };

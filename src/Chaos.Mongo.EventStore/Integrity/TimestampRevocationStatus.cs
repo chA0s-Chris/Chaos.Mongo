@@ -6,7 +6,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The revocation status of a timestamp token's certificate chain at the token's time, as shown by CRLs issued at
 /// least a grace period after it.
 /// </summary>
-internal enum TimestampRevocationStatus
+public enum TimestampRevocationStatus
 {
     /// <summary>
     /// No CRLs issued late enough have been obtained yet.
@@ -20,7 +20,12 @@ internal enum TimestampRevocationStatus
 
     /// <summary>
     /// A CRL issued late enough lists a certificate of the chain as revoked at or before the token's time, so the token
-    /// is no evidence. CRL signatures are not verified, so this is an alert, not a final verdict.
+    /// is no evidence.
     /// </summary>
+    /// <remarks>
+    /// The status recorded during anchoring rests on CRLs whose signatures are not verified, so a recorded
+    /// <see cref="Revoked"/> is an alert, not a final verdict. Verification recomputes the status from the stored CRLs
+    /// and counts only CRLs whose signatures verify.
+    /// </remarks>
     Revoked
 }

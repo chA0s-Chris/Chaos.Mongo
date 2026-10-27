@@ -78,18 +78,167 @@ public static class MongoBuilderExtensions
                                            sp.GetRequiredService<IMongoHelper>(),
                                            options,
                                            sp.GetRequiredService<IEventStore<TAggregate>>()));
+            builder.Services.AddScoped<IPersonalDataEraser<TAggregate>>(sp => sp.GetRequiredService<PersonalDataEraser<TAggregate>>());
 
-            // Retroactively seal events stored without integrity data
-            builder.Services.AddSingleton(sp => new EventStreamSealingSweep<TAggregate>(
+            // Verification compares streams with anchors when anchoring or verification is configured at module level.
+            builder.Services.AddSingleton(sp => new EventStreamVerifier<TAggregate>(
                                               sp.GetRequiredService<IMongoHelper>(),
                                               options,
-                                              sp.GetService<TimeProvider>() ?? TimeProvider.System,
-                                              sp.GetService<ILogger<EventStreamSealingSweep<TAggregate>>>() ??
-                                              NullLogger<EventStreamSealingSweep<TAggregate>>.Instance));
-            builder.Services.AddHostedService(sp => new EventStreamSealingHostedService<TAggregate>(
-                                                  sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+                                              sp.GetService<AnchorVerifier>()));
+            builder.Services.AddSingleton(sp => new DerivedDataVerifier<TAggregate>(
+                                              sp.GetRequiredService<IMongoHelper>(),
+                                              options,
+                                              sp.GetRequiredService<EventStreamVerifier<TAggregate>>()));
+            builder.Services.AddSingleton(sp => new CompletenessChecker<TAggregate>(
+                                              sp.GetRequiredService<IMongoHelper>(),
+                                              options,
+                                              sp.GetService<AnchorVerifier>(),
+                                              sp.GetService<TimeProvider>() ?? TimeProvider.System));
+            // Without the sweep, the integrity service still reads the sealing state through a sweep it never runs.
+            builder.Services.AddSingleton<IEventStoreIntegrity<TAggregate>>(sp => new EventStoreIntegrity<TAggregate>(
+                                                                                sp.GetRequiredService<EventStreamVerifier<TAggregate>>(),
+                                                                                sp.GetRequiredService<DerivedDataVerifier<TAggregate>>(),
+                                                                                sp.GetRequiredService<CompletenessChecker<TAggregate>>(),
+                                                                                options.SealingSweepEnabled
+                                                                                    ? sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()
+                                                                                    : CreateSealingSweep(sp, options)));
+
+            // Retroactively seal events stored without integrity data
+            if (options.SealingSweepEnabled)
+            {
+                builder.Services.AddSingleton(sp => CreateSealingSweep(sp, options));
+                builder.Services.AddHostedService(sp => new EventStreamSealingHostedService<TAggregate>(
+                                                      sp.GetRequiredService<EventStreamSealingSweep<TAggregate>>()));
+            }
         }
 
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the anchoring pipeline once at module level: a hosted service anchors the changed stream heads of all
+    /// protected aggregate types at the configured interval and has the anchors timestamped, collecting the changed
+    /// stream heads from a database-wide change stream.
+    /// </summary>
+    /// <param name="builder">The Mongo builder.</param>
+    /// <param name="configure">Configures the authorities, the completion hook and the run settings.</param>
+    /// <returns>The Mongo builder for method chaining.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown by the builder's methods when a duration, count or threshold is not positive.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when anchoring is already configured, when no timestamp authority is configured, when settings
+    /// contradict each other, or when the verification configuration names other anchor collections.
+    /// </exception>
+    public static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityAnchoringService)))
+        {
+            throw new InvalidOperationException("Integrity anchoring is already configured; configure it once at module level.");
+        }
+
+        var options = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
+        var configured = builder.Services.Select(s => s.ImplementationInstance).OfType<IntegrityVerificationRegistration>().FirstOrDefault()?.Builder;
+
+        // Collections named for verification never pre-fill the anchoring configuration, so the outcome does not depend
+        // on the registration order.
+        configured?.RestoreDefaultAnchorCollections();
+        var anchoring = new IntegrityAnchoringBuilder(options);
+        configure(anchoring);
+        anchoring.Validate();
+        configured?.EnsureAnchorCollectionsMatch();
+
+        // The trust settings of RFC 3161 authorities also apply when their stored tokens are verified.
+        var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
+        foreach (var authority in anchoring.Rfc3161Authorities)
+        {
+            var trust = new TimestampAuthorityTrust
+            {
+                PolicyId = authority.PolicyId
+            };
+            trust.TrustedRoots.AddRange(authority.TrustedRoots);
+            verification.AnchoringAuthorities[authority.Name] = trust;
+        }
+
+        AddAnchorVerifier(builder.Services);
+        builder.WithAnchorCandidates();
+        builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
+        builder.Services.AddSingleton<IAnchorLeafReader>(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton(sp => new SealingAnchorLookup(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton(sp => new AnchorEvidenceResolver(sp.GetRequiredService<IMongoHelper>(), options));
+        builder.Services.AddSingleton(sp =>
+        {
+            var timeProvider = sp.GetService<TimeProvider>() ?? TimeProvider.System;
+            var notifier = anchoring.CompletionHook is { } hook
+                ? new AnchorCompletionNotifier(sp.GetRequiredService<IMongoHelper>(),
+                                               options,
+                                               sp.GetRequiredService<IServiceScopeFactory>(),
+                                               hook,
+                                               timeProvider,
+                                               sp.GetService<ILogger<AnchorCompletionNotifier>>() ?? NullLogger<AnchorCompletionNotifier>.Instance)
+                : null;
+            return new AnchoringRun(sp.GetRequiredService<IMongoHelper>(),
+                                    sp.GetRequiredService<IAnchorCandidateSource>(),
+                                    anchoring.CreateAuthorities(sp),
+                                    options,
+                                    timeProvider,
+                                    sp.GetService<ILogger<AnchoringRun>>() ?? NullLogger<AnchoringRun>.Instance,
+                                    notifier,
+                                    verification);
+        });
+        builder.Services.AddSingleton(sp => new IntegrityAnchoringService(sp.GetRequiredService<AnchoringRun>(),
+                                                                          sp.GetRequiredService<IMongoHelper>(),
+                                                                          options,
+                                                                          sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                                                                          sp.GetService<ILogger<IntegrityAnchoringService>>() ??
+                                                                          NullLogger<IntegrityAnchoringService>.Instance));
+        builder.Services.AddHostedService(sp => new IntegrityAnchoringHostedService(sp.GetRequiredService<IntegrityAnchoringService>()));
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures how anchors and their stored timestamp tokens are verified, once at module level. It registers the
+    /// anchor verification without the anchoring run, so a container that only verifies, for example an audit tool
+    /// with read-only credentials, needs no timestamp authority. With anchoring configured as well, the trust settings
+    /// of its RFC 3161 authorities apply unless configured here; trust configured here for an authority's name replaces
+    /// them for verification, roots and policy alike. Anchoring accepts a new token only when it passes both, the
+    /// authority's own settings and the trust configured here, so a root rotation updates both.
+    /// </summary>
+    /// <param name="builder">The Mongo builder.</param>
+    /// <param name="configure">Configures the trust settings, the revocation grace period and the anchor collections.</param>
+    /// <returns>The Mongo builder for method chaining.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when verification is already configured, or when it names other anchor collections than the anchoring
+    /// configuration.
+    /// </exception>
+    public static MongoBuilder WithIntegrityVerification(this MongoBuilder builder, Action<IntegrityVerificationBuilder>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        var verification = GetOrAddSingleton<IntegrityVerificationOptions>(builder.Services);
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityVerificationRegistration)))
+        {
+            throw new InvalidOperationException("Integrity verification is already configured; configure it once at module level.");
+        }
+
+        var verificationBuilder = new IntegrityVerificationBuilder(verification, GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services));
+        configure?.Invoke(verificationBuilder);
+
+        // Verification must not redirect where an anchoring configuration writes.
+        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityAnchoringService)))
+        {
+            verificationBuilder.EnsureAnchorCollectionsMatch();
+        }
+        else
+        {
+            verificationBuilder.ApplyAnchorCollections();
+        }
+
+        // Registered to detect a second configuration and an anchoring configuration with other collections, without
+        // making the public builder resolvable.
+        builder.Services.AddSingleton(new IntegrityVerificationRegistration(verificationBuilder));
+        AddAnchorVerifier(builder.Services);
         return builder;
     }
 
@@ -118,65 +267,25 @@ public static class MongoBuilderExtensions
         return builder;
     }
 
-    /// <summary>
-    /// Configures the anchoring pipeline once at module level: a hosted service anchors the changed stream heads of all
-    /// protected aggregate types at the configured interval and has the anchors timestamped. It registers the
-    /// change-stream candidate source through <see cref="WithAnchorCandidates"/>.
-    /// </summary>
-    /// <param name="builder">The Mongo builder.</param>
-    /// <param name="configure">Configures the authorities, the completion hook and the run settings.</param>
-    /// <returns>The Mongo builder for method chaining.</returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when anchoring is already configured, when no timestamp authority is configured, or when a setting is out
-    /// of range.
-    /// </exception>
-    internal static MongoBuilder WithIntegrityAnchoring(this MongoBuilder builder, Action<IntegrityAnchoringBuilder> configure)
+    private static void AddAnchorVerifier(IServiceCollection services)
     {
-        ArgumentNullException.ThrowIfNull(builder);
-        ArgumentNullException.ThrowIfNull(configure);
-        if (builder.Services.Any(s => s.ServiceType == typeof(IntegrityAnchoringService)))
+        if (services.Any(s => s.ServiceType == typeof(AnchorVerifier)))
         {
-            throw new InvalidOperationException("Integrity anchoring is already configured; configure it once at module level.");
+            return;
         }
 
-        var options = GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services);
-        var anchoring = new IntegrityAnchoringBuilder(options);
-        configure(anchoring);
-        anchoring.Validate();
-
-        builder.WithAnchorCandidates();
-        builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
-        builder.Services.AddSingleton(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
-        builder.Services.AddSingleton(sp => new SealingAnchorLookup(sp.GetRequiredService<IMongoHelper>(), options));
-        builder.Services.AddSingleton(sp => new AnchorEvidenceResolver(sp.GetRequiredService<IMongoHelper>(), options));
-        builder.Services.AddSingleton(sp =>
-        {
-            var timeProvider = sp.GetService<TimeProvider>() ?? TimeProvider.System;
-            var notifier = anchoring.CompletionHook is { } hook
-                ? new AnchorCompletionNotifier(sp.GetRequiredService<IMongoHelper>(),
-                                               options,
-                                               sp.GetRequiredService<IServiceScopeFactory>(),
-                                               hook,
-                                               timeProvider,
-                                               sp.GetService<ILogger<AnchorCompletionNotifier>>() ?? NullLogger<AnchorCompletionNotifier>.Instance)
-                : null;
-            return new AnchoringRun(sp.GetRequiredService<IMongoHelper>(),
-                                    sp.GetRequiredService<IAnchorCandidateSource>(),
-                                    anchoring.CreateAuthorities(sp),
-                                    options,
-                                    timeProvider,
-                                    sp.GetService<ILogger<AnchoringRun>>() ?? NullLogger<AnchoringRun>.Instance,
-                                    notifier);
-        });
-        builder.Services.AddSingleton(sp => new IntegrityAnchoringService(sp.GetRequiredService<AnchoringRun>(),
-                                                                          sp.GetRequiredService<IMongoHelper>(),
-                                                                          options,
-                                                                          sp.GetService<TimeProvider>() ?? TimeProvider.System,
-                                                                          sp.GetService<ILogger<IntegrityAnchoringService>>() ??
-                                                                          NullLogger<IntegrityAnchoringService>.Instance));
-        builder.Services.AddHostedService(sp => new IntegrityAnchoringHostedService(sp.GetRequiredService<IntegrityAnchoringService>()));
-        return builder;
+        var anchoring = GetOrAddSingleton<IntegrityAnchoringOptions>(services);
+        var verification = GetOrAddSingleton<IntegrityVerificationOptions>(services);
+        services.AddSingleton(sp => new AnchorVerifier(sp.GetRequiredService<IMongoHelper>(), anchoring, verification));
+        services.AddSingleton<IAnchorVerifier>(sp => sp.GetRequiredService<AnchorVerifier>());
     }
+
+    private static EventStreamSealingSweep<TAggregate> CreateSealingSweep<TAggregate>(IServiceProvider services, MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+        => new(services.GetRequiredService<IMongoHelper>(),
+               options,
+               services.GetService<TimeProvider>() ?? TimeProvider.System,
+               services.GetService<ILogger<EventStreamSealingSweep<TAggregate>>>() ?? NullLogger<EventStreamSealingSweep<TAggregate>>.Instance);
 
     /// <summary>
     /// Returns the instance registered for <typeparamref name="T"/>, registering a new one first if needed. Shared

@@ -64,7 +64,8 @@ Resolve `IMongoHelper` to access the configured database and mapped collections.
 | [Message Queues](docs/queues.md) | Typed queues, retries, recovery, retention, and diagnostics |
 | [Transactions](docs/transactions.md) | Transaction helpers and optional transaction support |
 | [Index Management](docs/index-management.md) | Safe index creation and replacement |
-| [Event Store](docs/event-store.md) | Event sourcing, aggregates, checkpoints, and concurrency |
+| [Event Store](docs/event-store.md) | Event sourcing, aggregates, checkpoints, concurrency, and tamper evidence |
+| [Tamper Evidence Specification](docs/tamper-evidence-specification.md) | Byte-level format of the tamper evidence, for independent verification |
 | [Transactional Outbox](docs/transactional-outbox.md) | Atomic message persistence and background delivery |
 
 ## License

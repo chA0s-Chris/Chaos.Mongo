@@ -19,6 +19,21 @@ public class AnchorEvidenceStoreTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    [TestCase(1_000_000)]
+    [TestCase(1)]
+    public async Task ReadAsync_ChunkCountNotMatchingTheLength_ThrowsAnchorEvidenceException(Int32 chunkCount)
+    {
+        var store = await CreateStoreAsync();
+        var hash = await store.StoreAsync(RandomNumberGenerator.GetBytes(AnchorEvidenceStore.ChunkSize + 1), CancellationToken.None);
+        await store.Evidence.UpdateOneAsync(new BsonDocument("_id", new BsonBinaryData(hash)),
+                                            new BsonDocument("$set", new BsonDocument(AnchorEvidenceStore.ChunkCountField, chunkCount)));
+
+        var act = () => store.ReadAsync(hash, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<AnchorEvidenceException>()).Which.Message.Should().Contain("malformed");
+    }
+
+    [Test]
     public async Task ReadAsync_ChunkCountNotPositive_ThrowsAnchorEvidenceException()
     {
         var store = await CreateStoreAsync();
@@ -47,9 +62,12 @@ public class AnchorEvidenceStoreTests
     public async Task ReadAsync_ChunkNotMatchingTheHash_ThrowsAnchorEvidenceException()
     {
         var store = await CreateStoreAsync();
-        var hash = await store.StoreAsync(RandomNumberGenerator.GetBytes(AnchorEvidenceStore.ChunkSize + 1), CancellationToken.None);
+        var data = RandomNumberGenerator.GetBytes(AnchorEvidenceStore.ChunkSize + 1);
+        var hash = await store.StoreAsync(data, CancellationToken.None);
+
+        // The replacement must differ from the stored byte, or the item would still match its hash.
         await store.Chunks.UpdateOneAsync(new BsonDocument("_id", AnchorEvidenceStore.ChunkId(hash, 1)),
-                                          new BsonDocument("$set", new BsonDocument(AnchorEvidenceStore.DataField, new BsonBinaryData([0x01]))));
+                                          new BsonDocument("$set", new BsonDocument(AnchorEvidenceStore.DataField, new BsonBinaryData([(Byte)(data[^1] ^ 0xFF)]))));
 
         var act = () => store.ReadAsync(hash, CancellationToken.None);
 
@@ -103,7 +121,7 @@ public class AnchorEvidenceStoreTests
 
         var thrown = (await act.Should().ThrowAsync<AnchorEvidenceException>()).Which;
         thrown.Message.Should().Contain("malformed");
-        thrown.InnerException.Should().BeOfType<InvalidCastException>();
+        thrown.InnerException.Should().BeOfType<FormatException>();
     }
 
     [Test]

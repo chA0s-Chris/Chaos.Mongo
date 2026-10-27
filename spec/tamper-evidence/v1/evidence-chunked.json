@@ -1,0 +1,13 @@
+{
+  "length": 8388731,
+  "multiplier": 31,
+  "increment": 7,
+  "modulus": 251,
+  "chunkSize": 4194304,
+  "hash": "592eb3d8165e391e15e2d81a714f939c6bd9e7161c65387a23a2874a5993e20c",
+  "chunkHashes": [
+    "053ede97406a271dbf208248b2070ccf79b9517431d994a2e79d146ffa760aa1",
+    "2c1528dc1cc45aec79d82e4f8e1848cfb7d99544f1ed6a3d7db6169091231473",
+    "09684ec6fe49477636c77bef71c7397f51b2aa6e471961fbbfc8f97d23e4da28"
+  ]
+}

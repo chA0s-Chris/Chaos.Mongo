@@ -55,6 +55,11 @@ internal sealed class IntegritySealingState
     public Int64 StreamsChecked { get; set; }
 
     /// <summary>
+    /// Gets or sets the number of streams the current or last pass could not seal and skipped.
+    /// </summary>
+    public Int64 StreamsFailed { get; set; }
+
+    /// <summary>
     /// Gets or sets the number of streams in which the current or last pass sealed events.
     /// </summary>
     public Int64 StreamsSealed { get; set; }

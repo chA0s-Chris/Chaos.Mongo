@@ -26,6 +26,33 @@ public class PersonalDataErasureIntegrationTests
     private MongoDbContainer _container;
 
     [Test]
+    public async Task AppendEventsAsync_ErasureEventNotCreatedByTheEraser_ThrowsArgumentExceptionAndPersistsNothing()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(1);
+        var forged = new PersonalDataErased<LedgerAggregate>
+        {
+            AggregateId = aggregateId,
+            Reference = "forged",
+            Entries =
+            [
+                new PersonalDataErasureEntry
+                {
+                    Version = 1,
+                    Paths = [MemoPath]
+                }
+            ]
+        };
+
+        var act = () => context.Store.AppendEventsAsync([forged]);
+
+        await act.Should().ThrowAsync<ArgumentException>().WithMessage("*appended only by*");
+        (await context.CountEventsAsync(aggregateId)).Should().Be(1);
+        (await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket", [1], [MemoPath]))).Should().ContainSingle();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(2);
+    }
+
+    [Test]
     public async Task ErasePersonalDataAsync_AlreadyErasedValues_SkipsThemAndAppendsNothingWhenNoneLeft()
     {
         var context = await CreateContextAsync();
@@ -625,11 +652,13 @@ public class PersonalDataErasureIntegrationTests
         var aggregateId = Guid.NewGuid();
         await unprotected.Store.AppendEventsAsync([
             LedgerStoreContext.CreateEntry(aggregateId, 1, memo: null),
+            // Crafted like a tampered erasure event; only the eraser may append one, so the test acts as it.
             new PersonalDataErased<LedgerAggregate>
             {
                 AggregateId = aggregateId,
                 Version = 2,
-                Reference = "ticket"
+                Reference = "ticket",
+                CreatedByEraser = true
             },
             LedgerStoreContext.CreateEntry(aggregateId, 3, memo: null)
         ]);
