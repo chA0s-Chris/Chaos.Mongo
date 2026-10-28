@@ -45,7 +45,9 @@ categories:
         - test
         - refactor
 
+  # A breaking change is listed only here, not again under the categories its other labels match.
   - title: '💥 Breaking Changes'
+    exclusive: true
     when:
       labels:
         - breaking
