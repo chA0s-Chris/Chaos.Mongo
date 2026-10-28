@@ -36,6 +36,9 @@ internal partial class BuildPipeline
         target.DependsOn(Restore)
               .Executes(() =>
               {
+                  AssertReleaseKeyFileExists();
+                  ClearSourceBuildOutputs();
+
                   var packageCount = 0;
 
                   foreach (var project in SourceDirectory.GlobFiles("**/*.csproj"))
@@ -45,9 +48,9 @@ internal partial class BuildPipeline
                                        .SetOutputDirectory(PublishDirectory)
                                        .DisablePackageRequireLicenseAcceptance()
                                        .EnableContinuousIntegrationBuild()
-                                       .AddProperty("AdditionalConstants", "NUGET_RELEASE")
                                        .AddProperty("SignAssembly", "true")
-                                       .AddProperty("AssemblyOriginatorKeyFile", "../../Chaos.Mongo.snk")
+                                       .AddProperty("PublicSign", "false")
+                                       .AddProperty("AssemblyOriginatorKeyFile", ReleaseKeyFile)
                                        .EnableIncludeSymbols()
                                        .SetSymbolPackageFormat(DotNetSymbolPackageFormat.snupkg)
                                        .SetVersion(SemanticVersion)
@@ -56,6 +59,8 @@ internal partial class BuildPipeline
 
                       packageCount++;
                   }
+
+                  VerifyPackageSignatures();
 
                   ReportSummary(c => c.AddPair("Packages", packageCount)
                                       .AddPair("Version", SemanticVersion));

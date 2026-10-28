@@ -1,0 +1,670 @@
+#nullable enable
+Chaos.Mongo.EventStore.Aggregate
+Chaos.Mongo.EventStore.Aggregate.Aggregate() -> void
+Chaos.Mongo.EventStore.Aggregate.CreatedUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Aggregate.CreatedUtc.set -> void
+Chaos.Mongo.EventStore.Aggregate.Id.get -> System.Guid
+Chaos.Mongo.EventStore.Aggregate.Id.set -> void
+Chaos.Mongo.EventStore.Aggregate.Revision.get -> long
+Chaos.Mongo.EventStore.Aggregate.Revision.set -> void
+Chaos.Mongo.EventStore.Aggregate.Version.get -> long
+Chaos.Mongo.EventStore.Aggregate.Version.set -> void
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.CheckpointDocument() -> void
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.Id.get -> Chaos.Mongo.EventStore.CheckpointId
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.Id.set -> void
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.Revision.get -> long
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.Revision.set -> void
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.State.get -> TAggregate!
+Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.State.set -> void
+Chaos.Mongo.EventStore.CheckpointId
+Chaos.Mongo.EventStore.CheckpointId.AggregateId.get -> System.Guid
+Chaos.Mongo.EventStore.CheckpointId.AggregateId.init -> void
+Chaos.Mongo.EventStore.CheckpointId.CheckpointId() -> void
+Chaos.Mongo.EventStore.CheckpointId.CheckpointId(System.Guid AggregateId, long Version) -> void
+Chaos.Mongo.EventStore.CheckpointId.Deconstruct(out System.Guid AggregateId, out long Version) -> void
+Chaos.Mongo.EventStore.CheckpointId.Equals(Chaos.Mongo.EventStore.CheckpointId other) -> bool
+Chaos.Mongo.EventStore.CheckpointId.Version.get -> long
+Chaos.Mongo.EventStore.CheckpointId.Version.init -> void
+Chaos.Mongo.EventStore.Errors.MongoConcurrencyException
+Chaos.Mongo.EventStore.Errors.MongoConcurrencyException.MongoConcurrencyException(string! message, System.Exception? innerException = null) -> void
+Chaos.Mongo.EventStore.Errors.MongoDuplicateEventException
+Chaos.Mongo.EventStore.Errors.MongoDuplicateEventException.MongoDuplicateEventException(string! message, System.Exception? innerException = null) -> void
+Chaos.Mongo.EventStore.Errors.MongoEventStoreException
+Chaos.Mongo.EventStore.Errors.MongoEventStoreException.MongoEventStoreException(string! message, System.Exception? innerException = null) -> void
+Chaos.Mongo.EventStore.Errors.MongoEventValidationException
+Chaos.Mongo.EventStore.Errors.MongoEventValidationException.MongoEventValidationException(string! message, System.Exception? innerException = null) -> void
+Chaos.Mongo.EventStore.Event<TAggregate>
+Chaos.Mongo.EventStore.Event<TAggregate>.AggregateId.get -> System.Guid
+Chaos.Mongo.EventStore.Event<TAggregate>.AggregateId.set -> void
+Chaos.Mongo.EventStore.Event<TAggregate>.AggregateType.get -> string!
+Chaos.Mongo.EventStore.Event<TAggregate>.AggregateType.set -> void
+Chaos.Mongo.EventStore.Event<TAggregate>.CreatedUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Event<TAggregate>.CreatedUtc.set -> void
+Chaos.Mongo.EventStore.Event<TAggregate>.Event() -> void
+Chaos.Mongo.EventStore.Event<TAggregate>.Id.get -> System.Guid
+Chaos.Mongo.EventStore.Event<TAggregate>.Id.set -> void
+Chaos.Mongo.EventStore.Event<TAggregate>.Revision.get -> long
+Chaos.Mongo.EventStore.Event<TAggregate>.Revision.set -> void
+Chaos.Mongo.EventStore.Event<TAggregate>.Version.get -> long
+Chaos.Mongo.EventStore.Event<TAggregate>.Version.set -> void
+Chaos.Mongo.EventStore.EventRegistrationBuilder<TAggregate, TEvent>
+Chaos.Mongo.EventStore.EventRegistrationBuilder<TAggregate, TEvent>.WithPersonalData<TMember>(System.Linq.Expressions.Expression<System.Func<TEvent!, TMember>!>! member) -> Chaos.Mongo.EventStore.EventRegistrationBuilder<TAggregate!, TEvent!>!
+Chaos.Mongo.EventStore.IAggregate
+Chaos.Mongo.EventStore.IAggregate.CreatedUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.IAggregate.CreatedUtc.set -> void
+Chaos.Mongo.EventStore.IAggregate.Id.get -> System.Guid
+Chaos.Mongo.EventStore.IAggregate.Id.set -> void
+Chaos.Mongo.EventStore.IAggregate.Revision.get -> long
+Chaos.Mongo.EventStore.IAggregate.Revision.set -> void
+Chaos.Mongo.EventStore.IAggregate.Version.get -> long
+Chaos.Mongo.EventStore.IAggregate.Version.set -> void
+Chaos.Mongo.EventStore.IAggregateRepository<TAggregate>
+Chaos.Mongo.EventStore.IAggregateRepository<TAggregate>.Collection.get -> MongoDB.Driver.IMongoCollection<TAggregate!>!
+Chaos.Mongo.EventStore.IAggregateRepository<TAggregate>.GetAsync(System.Guid aggregateId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate?>!
+Chaos.Mongo.EventStore.IAggregateRepository<TAggregate>.GetAtRevisionAsync(System.Guid aggregateId, long revision, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate?>!
+Chaos.Mongo.EventStore.IAggregateRepository<TAggregate>.GetAtVersionAsync(System.Guid aggregateId, long version, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate?>!
+Chaos.Mongo.EventStore.IEventStore<TAggregate>
+Chaos.Mongo.EventStore.IEventStore<TAggregate>.AppendEventsAsync(System.Collections.Generic.IEnumerable<Chaos.Mongo.EventStore.Event<TAggregate!>!>! events, long? expectedRevision = null, System.Func<MongoDB.Driver.IClientSessionHandle!, TAggregate!, Chaos.Mongo.IMongoHelper!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>? onBeforeCommit = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate!>!
+Chaos.Mongo.EventStore.IEventStore<TAggregate>.GetEventStream(System.Guid aggregateId, long fromVersion = 0, long? toVersion = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Chaos.Mongo.EventStore.Event<TAggregate!>!>!
+Chaos.Mongo.EventStore.IEventStore<TAggregate>.GetExpectedNextVersionAsync(System.Guid aggregateId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
+Chaos.Mongo.EventStore.IndexNames
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure!
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.AnchorAuthorityFailure(string! Authority, int FailureCount, string! LastFailure, System.DateTime LastFailureUtc) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.Authority.get -> string!
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.Authority.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.Deconstruct(out string! Authority, out int FailureCount, out string! LastFailure, out System.DateTime LastFailureUtc) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.Equals(Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure? other) -> bool
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.FailureCount.get -> int
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.FailureCount.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.LastFailure.get -> string!
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.LastFailure.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.LastFailureUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.LastFailureUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.AnchorDigestMismatch = 3 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.LeafSetMismatch = 6 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.MalformedAnchor = 1 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.PreviousDigestMismatch = 2 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.SequenceGap = 0 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.TrustedHeadMismatch = 5 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainFailure.TrustedHeadMissing = 4 -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult!
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.AnchorChainVerificationResult(long? FirstBrokenSequence, Chaos.Mongo.EventStore.Integrity.AnchorChainFailure? Failure, long AnchorCount) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.AnchorCount.get -> long
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.AnchorCount.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.Deconstruct(out long? FirstBrokenSequence, out Chaos.Mongo.EventStore.Integrity.AnchorChainFailure? Failure, out long AnchorCount) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.Equals(Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? other) -> bool
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.Failure.get -> Chaos.Mongo.EventStore.Integrity.AnchorChainFailure?
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.Failure.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.FirstBrokenSequence.get -> long?
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.FirstBrokenSequence.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.IsIntact.get -> bool
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.AnchorLeaf!
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AggregateId.get -> System.Guid
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AggregateId.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AggregateType.get -> string!
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AggregateType.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AnchorId.get -> System.Guid
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AnchorId.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AnchorLeaf(System.Guid AnchorId, long AnchorSequence, int Index, string! AggregateType, System.Guid AggregateId, long Version, byte[]! Hash, System.Collections.Generic.IReadOnlyList<byte[]!>! Proof) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AnchorSequence.get -> long
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.AnchorSequence.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Deconstruct(out System.Guid AnchorId, out long AnchorSequence, out int Index, out string! AggregateType, out System.Guid AggregateId, out long Version, out byte[]! Hash, out System.Collections.Generic.IReadOnlyList<byte[]!>! Proof) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Equals(Chaos.Mongo.EventStore.Integrity.AnchorLeaf? other) -> bool
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Hash.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Hash.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Index.get -> int
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Index.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Proof.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Proof.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Version.get -> long
+Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Version.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorReference
+Chaos.Mongo.EventStore.Integrity.AnchorReference.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.AnchorReference!
+Chaos.Mongo.EventStore.Integrity.AnchorReference.AnchorId.get -> System.Guid
+Chaos.Mongo.EventStore.Integrity.AnchorReference.AnchorId.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorReference.AnchorReference(System.Guid AnchorId, long Sequence) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorReference.Deconstruct(out System.Guid AnchorId, out long Sequence) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorReference.Equals(Chaos.Mongo.EventStore.Integrity.AnchorReference? other) -> bool
+Chaos.Mongo.EventStore.Integrity.AnchorReference.Sequence.get -> long
+Chaos.Mongo.EventStore.Integrity.AnchorReference.Sequence.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.AnchorTimestamp!
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.AnchorTimestamp(string! Authority, byte[]! Token, System.Collections.Generic.IReadOnlyList<byte[]!>! CertificateChain, System.Collections.Generic.IReadOnlyList<byte[]!>! CertificateRevocationLists, System.DateTime TimestampUtc, System.DateTime ObtainedUtc) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Authority.get -> string!
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Authority.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.CertificateChain.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.CertificateChain.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.CertificateRevocationLists.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.CertificateRevocationLists.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ConfirmationFailure.get -> Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure?
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ConfirmationFailure.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ConfirmationNotBeforeUtc.get -> System.DateTime?
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ConfirmationNotBeforeUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ConfirmingRevocationLists.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ConfirmingRevocationLists.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Deconstruct(out string! Authority, out byte[]! Token, out System.Collections.Generic.IReadOnlyList<byte[]!>! CertificateChain, out System.Collections.Generic.IReadOnlyList<byte[]!>! CertificateRevocationLists, out System.DateTime TimestampUtc, out System.DateTime ObtainedUtc) -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Equals(Chaos.Mongo.EventStore.Integrity.AnchorTimestamp? other) -> bool
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ObtainedUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ObtainedUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.RevocationStatus.get -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.RevocationStatus.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.RevocationStatusUtc.get -> System.DateTime?
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.RevocationStatusUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.TimestampUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.TimestampUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Token.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Token.init -> void
+Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus
+Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus.Matches = 0 -> Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus
+Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus.Mismatch = 2 -> Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus
+Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus.Unverifiable = 1 -> Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.CheckpointVerification!
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.CheckpointVerification(long Version, Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus HashStatus, bool StateMatches) -> void
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.Deconstruct(out long Version, out Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus HashStatus, out bool StateMatches) -> void
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.Equals(Chaos.Mongo.EventStore.Integrity.CheckpointVerification? other) -> bool
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.HashStatus.get -> Chaos.Mongo.EventStore.Integrity.CheckpointHashStatus
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.HashStatus.init -> void
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.IsConsistent.get -> bool
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.StateMatches.get -> bool
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.StateMatches.init -> void
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.Version.get -> long
+Chaos.Mongo.EventStore.Integrity.CheckpointVerification.Version.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.CompletedAnchor!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.AnchorDigest.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.AnchorDigest.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.AuthorityFailures.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure!>!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.AuthorityFailures.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.CompletedAnchor(System.Guid Id, long Sequence, int FormatVersion, string! HashAlgorithm, byte[]! PreviousDigest, byte[]! MerkleRoot, byte[]! AnchorDigest, int LeafCount, System.DateTime PeriodStartUtc, System.DateTime PeriodEndUtc, System.DateTime OldestCandidateUtc, System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.AnchorTimestamp!>! Timestamps, System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure!>! AuthorityFailures, System.DateTime CreatedUtc, System.DateTime CompletedUtc) -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.CompletedUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.CompletedUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.CreatedUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.CreatedUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Deconstruct(out System.Guid Id, out long Sequence, out int FormatVersion, out string! HashAlgorithm, out byte[]! PreviousDigest, out byte[]! MerkleRoot, out byte[]! AnchorDigest, out int LeafCount, out System.DateTime PeriodStartUtc, out System.DateTime PeriodEndUtc, out System.DateTime OldestCandidateUtc, out System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.AnchorTimestamp!>! Timestamps, out System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure!>! AuthorityFailures, out System.DateTime CreatedUtc, out System.DateTime CompletedUtc) -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Equals(Chaos.Mongo.EventStore.Integrity.CompletedAnchor? other) -> bool
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.FormatVersion.get -> int
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.FormatVersion.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.HashAlgorithm.get -> string!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.HashAlgorithm.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Id.get -> System.Guid
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Id.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.LeafCount.get -> int
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.LeafCount.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.MerkleRoot.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.MerkleRoot.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.OldestCandidateUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.OldestCandidateUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.PeriodEndUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.PeriodEndUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.PeriodStartUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.PeriodStartUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.PreviousDigest.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.PreviousDigest.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Sequence.get -> long
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Sequence.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Timestamps.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.AnchorTimestamp!>!
+Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Timestamps.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.CompletenessFinding!
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Age.get -> System.TimeSpan?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Age.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.AggregateId.get -> System.Guid?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.AggregateId.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Anchor.get -> Chaos.Mongo.EventStore.Integrity.AnchorReference?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Anchor.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.AnchorChain.get -> Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.AnchorChain.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.CompletenessFinding(Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind Kind, System.Guid? AggregateId, long? FirstVersion, long? LastVersion, long? HeadVersion, System.TimeSpan? Age, Chaos.Mongo.EventStore.Integrity.AnchorReference? Anchor, Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? AnchorChain) -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Deconstruct(out Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind Kind, out System.Guid? AggregateId, out long? FirstVersion, out long? LastVersion, out long? HeadVersion, out System.TimeSpan? Age, out Chaos.Mongo.EventStore.Integrity.AnchorReference? Anchor, out Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? AnchorChain) -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Equals(Chaos.Mongo.EventStore.Integrity.CompletenessFinding? other) -> bool
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.FirstVersion.get -> long?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.FirstVersion.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.HeadVersion.get -> long?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.HeadVersion.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Kind.get -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Kind.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.LastVersion.get -> long?
+Chaos.Mongo.EventStore.Integrity.CompletenessFinding.LastVersion.init -> void
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.AnchorChainBroken = 0 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.MalformedEvent = 6 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.RetroactivelyProtected = 4 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.StreamDeleted = 2 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.StreamTruncated = 3 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.Unanchored = 1 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind.Unsealed = 5 -> Chaos.Mongo.EventStore.Integrity.CompletenessFindingKind
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult!
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Checkpoints.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.CheckpointVerification!>!
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Checkpoints.init -> void
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.CreationTimeConsistent.get -> bool
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.CreationTimeConsistent.init -> void
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Deconstruct(out Chaos.Mongo.EventStore.Integrity.StreamVerificationResult! Stream, out Chaos.Mongo.EventStore.Integrity.ReadModelStatus ReadModel, out System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.CheckpointVerification!>! Checkpoints, out bool CreationTimeConsistent) -> void
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.DerivedDataVerificationResult(Chaos.Mongo.EventStore.Integrity.StreamVerificationResult! Stream, Chaos.Mongo.EventStore.Integrity.ReadModelStatus ReadModel, System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.CheckpointVerification!>! Checkpoints, bool CreationTimeConsistent) -> void
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Equals(Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult? other) -> bool
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.IsConsistent.get -> bool
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.ReadModel.get -> Chaos.Mongo.EventStore.Integrity.ReadModelStatus
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.ReadModel.init -> void
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Stream.get -> Chaos.Mongo.EventStore.Integrity.StreamVerificationResult!
+Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Stream.init -> void
+Chaos.Mongo.EventStore.Integrity.ErasureRequest
+Chaos.Mongo.EventStore.Integrity.ErasureRequest.ErasureRequest(string! reference, System.Collections.Generic.IReadOnlyCollection<long>? versions = null, System.Collections.Generic.IReadOnlyCollection<string!>? paths = null) -> void
+Chaos.Mongo.EventStore.Integrity.ErasureRequest.Paths.get -> System.Collections.Generic.IReadOnlyCollection<string!>?
+Chaos.Mongo.EventStore.Integrity.ErasureRequest.Reference.get -> string!
+Chaos.Mongo.EventStore.Integrity.ErasureRequest.Versions.get -> System.Collections.Generic.IReadOnlyCollection<long>?
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure.AnchorDataUnreadable = 5 -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure.AnchorDigestMismatch = 3 -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure.ChainBroken = 0 -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure.InclusionProofInvalid = 2 -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure.LeafHashMismatch = 1 -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorFailure.NoValidTimestamp = 4 -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure
+Chaos.Mongo.EventStore.Integrity.EventAnchorStatus
+Chaos.Mongo.EventStore.Integrity.EventAnchorStatus.Anchored = 2 -> Chaos.Mongo.EventStore.Integrity.EventAnchorStatus
+Chaos.Mongo.EventStore.Integrity.EventAnchorStatus.Failed = 3 -> Chaos.Mongo.EventStore.Integrity.EventAnchorStatus
+Chaos.Mongo.EventStore.Integrity.EventAnchorStatus.NotAnchored = 1 -> Chaos.Mongo.EventStore.Integrity.EventAnchorStatus
+Chaos.Mongo.EventStore.Integrity.EventAnchorStatus.NotChecked = 0 -> Chaos.Mongo.EventStore.Integrity.EventAnchorStatus
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult!
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Anchor.get -> Chaos.Mongo.EventStore.Integrity.AnchorReference?
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Anchor.init -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Deconstruct(out Chaos.Mongo.EventStore.Integrity.EventAnchorStatus Status, out Chaos.Mongo.EventStore.Integrity.EventAnchorFailure? Failure, out Chaos.Mongo.EventStore.Integrity.AnchorReference? Anchor, out long? LeafVersion, out System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult!>! Timestamps) -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Equals(Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult? other) -> bool
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.EventAnchorVerificationResult(Chaos.Mongo.EventStore.Integrity.EventAnchorStatus Status, Chaos.Mongo.EventStore.Integrity.EventAnchorFailure? Failure, Chaos.Mongo.EventStore.Integrity.AnchorReference? Anchor, long? LeafVersion, System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult!>! Timestamps) -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Failure.get -> Chaos.Mongo.EventStore.Integrity.EventAnchorFailure?
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Failure.init -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.LeafVersion.get -> long?
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.LeafVersion.init -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Status.get -> Chaos.Mongo.EventStore.Integrity.EventAnchorStatus
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Status.init -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Timestamps.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult!>!
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Timestamps.init -> void
+Chaos.Mongo.EventStore.Integrity.IAnchorLeafReader
+Chaos.Mongo.EventStore.Integrity.IAnchorLeafReader.ReadLeavesAsync(System.Guid anchorId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Chaos.Mongo.EventStore.Integrity.AnchorLeaf!>!
+Chaos.Mongo.EventStore.Integrity.IAnchorVerifier
+Chaos.Mongo.EventStore.Integrity.IAnchorVerifier.VerifyAnchorChainAsync(Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? trustedHead = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult!>!
+Chaos.Mongo.EventStore.Integrity.IEventStoreIntegrity<TAggregate>
+Chaos.Mongo.EventStore.Integrity.IEventStoreIntegrity<TAggregate>.CheckCompletenessAsync(Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? trustedHead = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Chaos.Mongo.EventStore.Integrity.CompletenessFinding!>!
+Chaos.Mongo.EventStore.Integrity.IEventStoreIntegrity<TAggregate>.GetSealingStatusAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus?>!
+Chaos.Mongo.EventStore.Integrity.IEventStoreIntegrity<TAggregate>.VerifyDerivedDataAsync(System.Guid aggregateId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult!>!
+Chaos.Mongo.EventStore.Integrity.IEventStoreIntegrity<TAggregate>.VerifyEventAnchorAsync(System.Guid aggregateId, long version, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult!>!
+Chaos.Mongo.EventStore.Integrity.IEventStoreIntegrity<TAggregate>.VerifyStreamAsync(System.Guid aggregateId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.StreamVerificationResult!>!
+Chaos.Mongo.EventStore.Integrity.IPersonalDataEraser<TAggregate>
+Chaos.Mongo.EventStore.Integrity.IPersonalDataEraser<TAggregate>.ErasePersonalDataAsync(System.Guid aggregateId, Chaos.Mongo.EventStore.Integrity.ErasureRequest! request, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry!>!>!
+Chaos.Mongo.EventStore.Integrity.ITimestampAuthority
+Chaos.Mongo.EventStore.Integrity.ITimestampAuthority.GetRevocationListsAsync(System.Collections.Generic.IReadOnlyList<byte[]!>! certificateChain, System.DateTimeOffset issuedNotBefore, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.RevocationLists!>!
+Chaos.Mongo.EventStore.Integrity.ITimestampAuthority.Name.get -> string!
+Chaos.Mongo.EventStore.Integrity.ITimestampAuthority.TimestampAsync(System.ReadOnlyMemory<byte> digest, System.Security.Cryptography.HashAlgorithmName algorithm, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.TimestampToken!>!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.OnAnchorCompleted(System.Func<System.IServiceProvider!, Chaos.Mongo.EventStore.Integrity.CompletedAnchor!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! hook) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithDelayThreshold(System.TimeSpan threshold) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithInterval(System.TimeSpan interval) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithMaxLeavesPerAnchor(int maximum) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithMinimumTimestampTokens(int minimum) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithRevocationConfirmationDelayThreshold(System.TimeSpan threshold) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithRevocationGracePeriod(System.TimeSpan gracePeriod) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithRfc3161TimestampAuthority(string! name, System.Uri! uri, System.Action<Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions!>? configure = null) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithTimestampAuthority(System.Func<System.IServiceProvider!, Chaos.Mongo.EventStore.Integrity.ITimestampAuthority!>! factory) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegritySealMode
+Chaos.Mongo.EventStore.Integrity.IntegritySealMode.Append = 0 -> Chaos.Mongo.EventStore.Integrity.IntegritySealMode
+Chaos.Mongo.EventStore.Integrity.IntegritySealMode.Retroactive = 1 -> Chaos.Mongo.EventStore.Integrity.IntegritySealMode
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus!
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.Deconstruct(out long StreamsChecked, out long StreamsSealed, out long StreamsFailed, out long EventsSealed, out System.DateTime? PassStartedUtc, out System.DateTime? PassCompletedUtc) -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.Equals(Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus? other) -> bool
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.EventsSealed.get -> long
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.EventsSealed.init -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.IntegritySealingStatus(long StreamsChecked, long StreamsSealed, long StreamsFailed, long EventsSealed, System.DateTime? PassStartedUtc, System.DateTime? PassCompletedUtc) -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.IsCompleteWithoutFailures.get -> bool
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.IsPassInProgress.get -> bool
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.PassCompletedUtc.get -> System.DateTime?
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.PassCompletedUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.PassStartedUtc.get -> System.DateTime?
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.PassStartedUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.StreamsChecked.get -> long
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.StreamsChecked.init -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.StreamsFailed.get -> long
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.StreamsFailed.init -> void
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.StreamsSealed.get -> long
+Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.StreamsSealed.init -> void
+Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder
+Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder.WithAnchorCollections(string! anchors, string! leaves, string! evidence, string! evidenceChunks) -> Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder.WithRevocationGracePeriod(System.TimeSpan gracePeriod) -> Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder!
+Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder.WithTimestampAuthorityTrust(string! name, System.Action<Chaos.Mongo.EventStore.Integrity.TimestampAuthorityTrust!>? configure = null) -> Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder!
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Entries.get -> System.Collections.Generic.List<Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry!>!
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Entries.set -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.PersonalDataErased() -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Reference.get -> string!
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Reference.set -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Paths.get -> System.Collections.Generic.List<string!>!
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Paths.set -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.PersonalDataErasureEntry() -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Version.get -> long
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Version.set -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus!
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Deconstruct(out string! Path, out Chaos.Mongo.EventStore.Integrity.PersonalDataStatus Status) -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Equals(Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus? other) -> bool
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Path.get -> string!
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Path.init -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.PersonalDataPathStatus(string! Path, Chaos.Mongo.EventStore.Integrity.PersonalDataStatus Status) -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Status.get -> Chaos.Mongo.EventStore.Integrity.PersonalDataStatus
+Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Status.init -> void
+Chaos.Mongo.EventStore.Integrity.PersonalDataStatus
+Chaos.Mongo.EventStore.Integrity.PersonalDataStatus.ErasedWithRecord = 1 -> Chaos.Mongo.EventStore.Integrity.PersonalDataStatus
+Chaos.Mongo.EventStore.Integrity.PersonalDataStatus.ErasedWithoutRecord = 2 -> Chaos.Mongo.EventStore.Integrity.PersonalDataStatus
+Chaos.Mongo.EventStore.Integrity.PersonalDataStatus.Present = 0 -> Chaos.Mongo.EventStore.Integrity.PersonalDataStatus
+Chaos.Mongo.EventStore.Integrity.ReadModelStatus
+Chaos.Mongo.EventStore.Integrity.ReadModelStatus.Differs = 2 -> Chaos.Mongo.EventStore.Integrity.ReadModelStatus
+Chaos.Mongo.EventStore.Integrity.ReadModelStatus.Matches = 1 -> Chaos.Mongo.EventStore.Integrity.ReadModelStatus
+Chaos.Mongo.EventStore.Integrity.ReadModelStatus.Missing = 3 -> Chaos.Mongo.EventStore.Integrity.ReadModelStatus
+Chaos.Mongo.EventStore.Integrity.ReadModelStatus.NotChecked = 0 -> Chaos.Mongo.EventStore.Integrity.ReadModelStatus
+Chaos.Mongo.EventStore.Integrity.RevocationLists
+Chaos.Mongo.EventStore.Integrity.RevocationLists.IsIssuedTooEarly.get -> bool
+Chaos.Mongo.EventStore.Integrity.RevocationLists.Lists.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.RevocationLists.NextUpdate.get -> System.DateTimeOffset?
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.AttemptTimeout.get -> System.TimeSpan
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.AttemptTimeout.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.HttpClientFactory.get -> System.Func<System.IServiceProvider!, System.Net.Http.HttpClient!>!
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.HttpClientFactory.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.MaximumClockSkew.get -> System.TimeSpan
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.MaximumClockSkew.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.MaximumResponseSize.get -> int
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.MaximumResponseSize.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.Name.get -> string!
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.PolicyId.get -> string?
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.PolicyId.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.RevocationCheckTimeout.get -> System.TimeSpan
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.RevocationCheckTimeout.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.RevocationMode.get -> System.Security.Cryptography.X509Certificates.X509RevocationMode
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.RevocationMode.set -> void
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.TrustedRoots.get -> System.Security.Cryptography.X509Certificates.X509Certificate2Collection!
+Chaos.Mongo.EventStore.Integrity.Rfc3161TimestampAuthorityOptions.Uri.get -> System.Uri!
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.AnchoredHashMismatch = 10 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.AnchoredLeafInvalid = 11 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.AnchoredVersionMissing = 9 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.ErasedPersonalDataPresent = 8 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.HashMismatch = 6 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.MalformedIntegrity = 3 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.MissingAggregateType = 2 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.NotSealed = 1 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.PersonalDataMismatch = 7 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.PreviousHashMismatch = 5 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.UnsupportedFormat = 4 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.VersionGap = 0 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.StreamVerificationResult!
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.AnchorCoverageChecked.get -> bool
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.AnchorCoverageChecked.init -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Deconstruct(out long? FirstBrokenVersion, out Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure? Failure, out System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.UnrecordedErasure!>! UnrecordedErasures) -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Equals(Chaos.Mongo.EventStore.Integrity.StreamVerificationResult? other) -> bool
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Events.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.VerifiedEvent!>!
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Events.init -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Failure.get -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure?
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Failure.init -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.FirstBrokenVersion.get -> long?
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.FirstBrokenVersion.init -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.IsIntact.get -> bool
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.SealModeTransitions.get -> System.Collections.Generic.IReadOnlyList<long>!
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.SealModeTransitions.init -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.StreamVerificationResult(long? FirstBrokenVersion, Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure? Failure, System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.UnrecordedErasure!>! UnrecordedErasures) -> void
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.UnrecordedErasures.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.UnrecordedErasure!>!
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.UnrecordedErasures.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityException
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityException.AuthorityName.get -> string!
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityException.TimestampAuthorityException(string! authorityName, string! message, System.Exception? innerException = null) -> void
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityTrust
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityTrust.PolicyId.get -> string?
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityTrust.PolicyId.set -> void
+Chaos.Mongo.EventStore.Integrity.TimestampAuthorityTrust.TrustedRoots.get -> System.Security.Cryptography.X509Certificates.X509Certificate2Collection!
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure!
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.Deconstruct(out int FailureCount, out string! LastFailure, out System.DateTime LastFailureUtc) -> void
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.Equals(Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure? other) -> bool
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.FailureCount.get -> int
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.FailureCount.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.LastFailure.get -> string!
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.LastFailure.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.LastFailureUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.LastFailureUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.TimestampConfirmationFailure(int FailureCount, string! LastFailure, System.DateTime LastFailureUtc) -> void
+Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus.Confirmed = 1 -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus.Revoked = 2 -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus.Unconfirmed = 0 -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampToken
+Chaos.Mongo.EventStore.Integrity.TimestampToken.CertificateChain.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.TimestampToken.CertificateRevocationLists.get -> System.Collections.Generic.IReadOnlyList<byte[]!>!
+Chaos.Mongo.EventStore.Integrity.TimestampToken.Timestamp.get -> System.DateTimeOffset
+Chaos.Mongo.EventStore.Integrity.TimestampToken.TimestampToken(byte[]! token, System.Collections.Generic.IReadOnlyList<byte[]!>! certificateChain, System.Collections.Generic.IReadOnlyList<byte[]!>! certificateRevocationLists, System.DateTimeOffset timestamp) -> void
+Chaos.Mongo.EventStore.Integrity.TimestampToken.Token.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult!
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Authority.get -> string!
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Authority.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Deconstruct(out string! Authority, out System.DateTime TimestampUtc, out bool IsValid, out string? Failure, out Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus RevocationStatus, out Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus StoredRevocationStatus) -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Equals(Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult? other) -> bool
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Failure.get -> string?
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Failure.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.IsValid.get -> bool
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.IsValid.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.RevocationStatus.get -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.RevocationStatus.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.StoredRevocationStatus.get -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.StoredRevocationStatus.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.TimestampUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.TimestampUtc.init -> void
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.TimestampVerificationResult(string! Authority, System.DateTime TimestampUtc, bool IsValid, string? Failure, Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus RevocationStatus, Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus StoredRevocationStatus) -> void
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead!
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.AnchorDigest.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.AnchorDigest.init -> void
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.Deconstruct(out long Sequence, out byte[]! AnchorDigest) -> void
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.Equals(Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? other) -> bool
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.Sequence.get -> long
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.Sequence.init -> void
+Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.TrustedAnchorHead(long Sequence, byte[]! AnchorDigest) -> void
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.UnrecordedErasure!
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Deconstruct(out long Version, out string! Path) -> void
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Equals(Chaos.Mongo.EventStore.Integrity.UnrecordedErasure? other) -> bool
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Path.get -> string!
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Path.init -> void
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.UnrecordedErasure(long Version, string! Path) -> void
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Version.get -> long
+Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Version.init -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.<Clone>$() -> Chaos.Mongo.EventStore.Integrity.VerifiedEvent!
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Deconstruct(out long Version, out byte[]! Hash, out byte[]! PreviousHash, out Chaos.Mongo.EventStore.Integrity.IntegritySealMode SealMode, out Chaos.Mongo.EventStore.Integrity.AnchorReference? SealingAnchor, out System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus!>! PersonalData) -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Equals(Chaos.Mongo.EventStore.Integrity.VerifiedEvent? other) -> bool
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Hash.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Hash.init -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.PersonalData.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus!>!
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.PersonalData.init -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.PreviousHash.get -> byte[]!
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.PreviousHash.init -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.SealMode.get -> Chaos.Mongo.EventStore.Integrity.IntegritySealMode
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.SealMode.init -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.SealingAnchor.get -> Chaos.Mongo.EventStore.Integrity.AnchorReference?
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.SealingAnchor.init -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.VerifiedEvent(long Version, byte[]! Hash, byte[]! PreviousHash, Chaos.Mongo.EventStore.Integrity.IntegritySealMode SealMode, Chaos.Mongo.EventStore.Integrity.AnchorReference? SealingAnchor, System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus!>! PersonalData) -> void
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Version.get -> long
+Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Version.init -> void
+Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate>
+Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate>.WithSealingChunkSize(int chunkSize) -> Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate>.WithSealingSweepInterval(System.TimeSpan interval) -> Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate>.WithSealingSweepRetryDelay(System.TimeSpan retryDelay) -> Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate>.WithoutSealingSweep() -> Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoAggregateRepository<TAggregate>
+Chaos.Mongo.EventStore.MongoAggregateRepository<TAggregate>.Collection.get -> MongoDB.Driver.IMongoCollection<TAggregate!>!
+Chaos.Mongo.EventStore.MongoAggregateRepository<TAggregate>.GetAsync(System.Guid aggregateId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate?>!
+Chaos.Mongo.EventStore.MongoAggregateRepository<TAggregate>.GetAtRevisionAsync(System.Guid aggregateId, long revision, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate?>!
+Chaos.Mongo.EventStore.MongoAggregateRepository<TAggregate>.GetAtVersionAsync(System.Guid aggregateId, long version, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate?>!
+Chaos.Mongo.EventStore.MongoAggregateRepository<TAggregate>.MongoAggregateRepository(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate!>! options) -> void
+Chaos.Mongo.EventStore.MongoBuilderExtensions
+Chaos.Mongo.EventStore.MongoEventStore<TAggregate>
+Chaos.Mongo.EventStore.MongoEventStore<TAggregate>.AppendEventsAsync(System.Collections.Generic.IEnumerable<Chaos.Mongo.EventStore.Event<TAggregate!>!>! events, long? expectedRevision = null, System.Func<MongoDB.Driver.IClientSessionHandle!, TAggregate!, Chaos.Mongo.IMongoHelper!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>? onBeforeCommit = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStore<TAggregate>.GetEventStream(System.Guid aggregateId, long fromVersion = 0, long? toVersion = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Chaos.Mongo.EventStore.Event<TAggregate!>!>!
+Chaos.Mongo.EventStore.MongoEventStore<TAggregate>.GetExpectedNextVersionAsync(System.Guid aggregateId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
+Chaos.Mongo.EventStore.MongoEventStore<TAggregate>.MongoEventStore(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate!>! options) -> void
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.MongoEventStoreBuilder() -> void
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.Options.get -> Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithBulkWriteOptimization() -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithCheckpointCollectionSuffix(string! suffix) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithCheckpoints(int interval) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithCollectionPrefix(string! prefix) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithEvent<TEvent>(string? discriminator = null) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithEvent<TEvent>(string? discriminator, System.Action<Chaos.Mongo.EventStore.EventRegistrationBuilder<TAggregate!, TEvent!>!>! configure) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithEventsCollectionSuffix(string! suffix) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithIntegrityProtection(System.Action<Chaos.Mongo.EventStore.IntegrityProtectionBuilder<TAggregate!>!>? configure = null) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithMaxAppendRetries(int retries) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreConfigurator<TAggregate>
+Chaos.Mongo.EventStore.MongoEventStoreConfigurator<TAggregate>.ConfigureAsync(Chaos.Mongo.IMongoHelper! helper, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.EventStore.MongoEventStoreConfigurator<TAggregate>.MongoEventStoreConfigurator(Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate!>! options) -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.BulkWriteOptimizationEnabled.get -> bool
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.BulkWriteOptimizationEnabled.set -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CheckpointCollectionName.get -> string!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CheckpointCollectionSuffix.get -> string!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CheckpointCollectionSuffix.set -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CheckpointInterval.get -> int
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CheckpointInterval.set -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CheckpointsEnabled.get -> bool
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CollectionPrefix.get -> string!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.CollectionPrefix.set -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.EventTypes.get -> System.Collections.Generic.Dictionary<System.Type!, string!>!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.EventsCollectionName.get -> string!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.EventsCollectionSuffix.get -> string!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.EventsCollectionSuffix.set -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.IntegrityProtectionEnabled.get -> bool
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.MaxAppendRetries.get -> int
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.MaxAppendRetries.set -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.MongoEventStoreOptions() -> void
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.ReadModelCollectionName.get -> string!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.SealingChunkSize.get -> int
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.SealingSweepEnabled.get -> bool
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.SealingSweepInterval.get -> System.TimeSpan
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.SealingSweepRetryDelay.get -> System.TimeSpan
+Chaos.Mongo.EventStore.MongoEventStoreSerializationSetup
+Chaos.Mongo.EventStore.ObservationalEvent<TAggregate>
+Chaos.Mongo.EventStore.ObservationalEvent<TAggregate>.ObservationalEvent() -> void
+abstract Chaos.Mongo.EventStore.Event<TAggregate>.Execute(TAggregate! aggregate) -> void
+const Chaos.Mongo.EventStore.IndexNames.AggregateIdWithVersionUnique = "AggregateId_with_Version_Unique" -> string!
+const Chaos.Mongo.EventStore.IndexNames.CheckpointAggregateIdWithRevision = "Checkpoint_AggregateId_with_Revision" -> string!
+const Chaos.Mongo.EventStore.IndexNames.CheckpointAggregateIdWithVersion = "Checkpoint_AggregateId_with_Version" -> string!
+const Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Discriminator = "Chaos.Mongo.EventStore.PersonalDataErased" -> string!
+override Chaos.Mongo.EventStore.CheckpointId.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.AnchorLeaf.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.AnchorLeaf.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.AnchorLeaf.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.AnchorReference.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.AnchorReference.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.AnchorReference.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.CheckpointVerification.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.CheckpointVerification.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.CheckpointVerification.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.CompletedAnchor.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.CompletedAnchor.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.CompletedAnchor.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.CompletenessFinding.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.CompletenessFinding.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.CompletenessFinding.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.ToString() -> string!
+override Chaos.Mongo.EventStore.Integrity.VerifiedEvent.Equals(object? obj) -> bool
+override Chaos.Mongo.EventStore.Integrity.VerifiedEvent.GetHashCode() -> int
+override Chaos.Mongo.EventStore.Integrity.VerifiedEvent.ToString() -> string!
+override sealed Chaos.Mongo.EventStore.ObservationalEvent<TAggregate>.Execute(TAggregate! aggregate) -> void
+static Chaos.Mongo.EventStore.CheckpointId.operator !=(Chaos.Mongo.EventStore.CheckpointId left, Chaos.Mongo.EventStore.CheckpointId right) -> bool
+static Chaos.Mongo.EventStore.CheckpointId.operator ==(Chaos.Mongo.EventStore.CheckpointId left, Chaos.Mongo.EventStore.CheckpointId right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.operator !=(Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure? left, Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure.operator ==(Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure? left, Chaos.Mongo.EventStore.Integrity.AnchorAuthorityFailure? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.operator !=(Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? left, Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult.operator ==(Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? left, Chaos.Mongo.EventStore.Integrity.AnchorChainVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorLeaf.operator !=(Chaos.Mongo.EventStore.Integrity.AnchorLeaf? left, Chaos.Mongo.EventStore.Integrity.AnchorLeaf? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorLeaf.operator ==(Chaos.Mongo.EventStore.Integrity.AnchorLeaf? left, Chaos.Mongo.EventStore.Integrity.AnchorLeaf? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorReference.operator !=(Chaos.Mongo.EventStore.Integrity.AnchorReference? left, Chaos.Mongo.EventStore.Integrity.AnchorReference? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorReference.operator ==(Chaos.Mongo.EventStore.Integrity.AnchorReference? left, Chaos.Mongo.EventStore.Integrity.AnchorReference? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.operator !=(Chaos.Mongo.EventStore.Integrity.AnchorTimestamp? left, Chaos.Mongo.EventStore.Integrity.AnchorTimestamp? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.AnchorTimestamp.operator ==(Chaos.Mongo.EventStore.Integrity.AnchorTimestamp? left, Chaos.Mongo.EventStore.Integrity.AnchorTimestamp? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.CheckpointVerification.operator !=(Chaos.Mongo.EventStore.Integrity.CheckpointVerification? left, Chaos.Mongo.EventStore.Integrity.CheckpointVerification? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.CheckpointVerification.operator ==(Chaos.Mongo.EventStore.Integrity.CheckpointVerification? left, Chaos.Mongo.EventStore.Integrity.CheckpointVerification? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.CompletedAnchor.operator !=(Chaos.Mongo.EventStore.Integrity.CompletedAnchor? left, Chaos.Mongo.EventStore.Integrity.CompletedAnchor? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.CompletedAnchor.operator ==(Chaos.Mongo.EventStore.Integrity.CompletedAnchor? left, Chaos.Mongo.EventStore.Integrity.CompletedAnchor? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.CompletenessFinding.operator !=(Chaos.Mongo.EventStore.Integrity.CompletenessFinding? left, Chaos.Mongo.EventStore.Integrity.CompletenessFinding? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.CompletenessFinding.operator ==(Chaos.Mongo.EventStore.Integrity.CompletenessFinding? left, Chaos.Mongo.EventStore.Integrity.CompletenessFinding? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.operator !=(Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult? left, Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.operator ==(Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult? left, Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.operator !=(Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult? left, Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.operator ==(Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult? left, Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.operator !=(Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus? left, Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.operator ==(Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus? left, Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.operator !=(Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus? left, Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.operator ==(Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus? left, Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.RevocationLists.Issued(System.Collections.Generic.IReadOnlyList<byte[]!>! lists) -> Chaos.Mongo.EventStore.Integrity.RevocationLists!
+static Chaos.Mongo.EventStore.Integrity.RevocationLists.IssuedTooEarly(System.DateTimeOffset nextUpdate) -> Chaos.Mongo.EventStore.Integrity.RevocationLists!
+static Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.operator !=(Chaos.Mongo.EventStore.Integrity.StreamVerificationResult? left, Chaos.Mongo.EventStore.Integrity.StreamVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.operator ==(Chaos.Mongo.EventStore.Integrity.StreamVerificationResult? left, Chaos.Mongo.EventStore.Integrity.StreamVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.operator !=(Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure? left, Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.operator ==(Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure? left, Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.operator !=(Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult? left, Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.operator ==(Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult? left, Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.operator !=(Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? left, Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.operator ==(Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? left, Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.operator !=(Chaos.Mongo.EventStore.Integrity.UnrecordedErasure? left, Chaos.Mongo.EventStore.Integrity.UnrecordedErasure? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.operator ==(Chaos.Mongo.EventStore.Integrity.UnrecordedErasure? left, Chaos.Mongo.EventStore.Integrity.UnrecordedErasure? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.VerifiedEvent.operator !=(Chaos.Mongo.EventStore.Integrity.VerifiedEvent? left, Chaos.Mongo.EventStore.Integrity.VerifiedEvent? right) -> bool
+static Chaos.Mongo.EventStore.Integrity.VerifiedEvent.operator ==(Chaos.Mongo.EventStore.Integrity.VerifiedEvent? left, Chaos.Mongo.EventStore.Integrity.VerifiedEvent? right) -> bool
+static Chaos.Mongo.EventStore.MongoBuilderExtensions.WithEventStore<TAggregate>(this Chaos.Mongo.MongoBuilder! builder, System.Action<Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!>! configure) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.EventStore.MongoBuilderExtensions.WithIntegrityAnchoring(this Chaos.Mongo.MongoBuilder! builder, System.Action<Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!>! configure) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.EventStore.MongoBuilderExtensions.WithIntegrityVerification(this Chaos.Mongo.MongoBuilder! builder, System.Action<Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder!>? configure = null) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.EventStore.MongoEventStoreSerializationSetup.EnsureGuidSerializer() -> void
+static Chaos.Mongo.EventStore.MongoEventStoreSerializationSetup.RegisterClassMaps<TAggregate>(Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate!>! options) -> void
+virtual Chaos.Mongo.EventStore.ObservationalEvent<TAggregate>.Validate(TAggregate! aggregate) -> void
+~override Chaos.Mongo.EventStore.CheckpointId.Equals(object obj) -> bool
+~override Chaos.Mongo.EventStore.CheckpointId.ToString() -> string

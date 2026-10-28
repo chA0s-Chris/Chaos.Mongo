@@ -1,0 +1,317 @@
+#nullable enable
+Chaos.Mongo.CollectionTypeMap
+Chaos.Mongo.CollectionTypeMap.CollectionTypeMap(Microsoft.Extensions.Options.IOptions<Chaos.Mongo.MongoOptions!>! options) -> void
+Chaos.Mongo.CollectionTypeMap.GetCollectionName(System.Type! type) -> string!
+Chaos.Mongo.CollectionTypeMapExtensions
+Chaos.Mongo.Configuration.IMongoConfigurator
+Chaos.Mongo.Configuration.IMongoConfigurator.ConfigureAsync(Chaos.Mongo.IMongoHelper! helper, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Configuration.IMongoConfiguratorRunner
+Chaos.Mongo.Configuration.IMongoConfiguratorRunner.RunConfiguratorsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Configuration.MongoConfiguratorRunner
+Chaos.Mongo.Configuration.MongoConfiguratorRunner.MongoConfiguratorRunner(Chaos.Mongo.IMongoHelper! mongoHelper, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.Configuration.MongoConfiguratorRunner!>! logger, System.Collections.Generic.IEnumerable<Chaos.Mongo.Configuration.IMongoConfigurator!>! configurators) -> void
+Chaos.Mongo.Configuration.MongoConfiguratorRunner.RunConfiguratorsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.ICollectionTypeMap
+Chaos.Mongo.ICollectionTypeMap.GetCollectionName(System.Type! type) -> string!
+Chaos.Mongo.IMongoClientSettingsFactory
+Chaos.Mongo.IMongoClientSettingsFactory.CreateMongoClientSettings(MongoDB.Driver.MongoUrl! url) -> MongoDB.Driver.MongoClientSettings!
+Chaos.Mongo.IMongoConnection
+Chaos.Mongo.IMongoConnection.Client.get -> MongoDB.Driver.IMongoClient!
+Chaos.Mongo.IMongoConnection.Database.get -> MongoDB.Driver.IMongoDatabase!
+Chaos.Mongo.IMongoConnectionFactory
+Chaos.Mongo.IMongoConnectionFactory.CreateConnection(MongoDB.Driver.MongoUrl! url, string? databaseName = null) -> Chaos.Mongo.IMongoConnection!
+Chaos.Mongo.IMongoHelper
+Chaos.Mongo.IMongoHelper.GetCollection<TDocument>(MongoDB.Driver.MongoCollectionSettings? settings = null) -> MongoDB.Driver.IMongoCollection<TDocument>!
+Chaos.Mongo.IMongoHelper.TryAcquireLockAsync(string! lockName, System.TimeSpan? leaseTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.IMongoLock?>!
+Chaos.Mongo.IMongoLock
+Chaos.Mongo.IMongoLock.Id.get -> string!
+Chaos.Mongo.IMongoLock.IsValid.get -> bool
+Chaos.Mongo.IMongoLock.TryExtendAsync(System.TimeSpan? leaseTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Chaos.Mongo.IMongoLock.ValidUntilUtc.get -> System.DateTime
+Chaos.Mongo.Migrations.IMongoMigration
+Chaos.Mongo.Migrations.IMongoMigration.ApplyAsync(Chaos.Mongo.IMongoHelper! mongoHelper, MongoDB.Driver.IClientSessionHandle? session = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Migrations.IMongoMigration.Description.get -> string?
+Chaos.Mongo.Migrations.IMongoMigration.Id.get -> string!
+Chaos.Mongo.Migrations.IMongoMigrationRunner
+Chaos.Mongo.Migrations.IMongoMigrationRunner.RunMigrationsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.AppliedUtc.get -> System.DateTime
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.AppliedUtc.init -> void
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.Description.get -> string?
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.Description.init -> void
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.DurationMs.get -> long
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.DurationMs.init -> void
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.Id.get -> string!
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.Id.init -> void
+Chaos.Mongo.Migrations.MongoMigrationHistoryItem.MongoMigrationHistoryItem() -> void
+Chaos.Mongo.Migrations.MongoMigrationRunner
+Chaos.Mongo.Migrations.MongoMigrationRunner.MongoMigrationRunner(System.Collections.Generic.IEnumerable<Chaos.Mongo.Migrations.IMongoMigration!>! migrations, Chaos.Mongo.IMongoHelper! mongoHelper, Microsoft.Extensions.Options.IOptions<Chaos.Mongo.MongoOptions!>! options, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.Migrations.MongoMigrationRunner!>! logger, System.TimeProvider! timeProvider) -> void
+Chaos.Mongo.Migrations.MongoMigrationRunner.RunMigrationsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoBuilder
+Chaos.Mongo.MongoBuilder.ConfigureOptions(System.Action<System.IServiceProvider!, Chaos.Mongo.MongoOptions!>! configure) -> Chaos.Mongo.MongoBuilder!
+Chaos.Mongo.MongoBuilder.DiscoveredConfigurators.get -> System.Collections.Immutable.ImmutableArray<System.Type!>
+Chaos.Mongo.MongoBuilder.DiscoveredMigrations.get -> System.Collections.Immutable.ImmutableArray<System.Type!>
+Chaos.Mongo.MongoBuilder.MongoBuilder(Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> void
+Chaos.Mongo.MongoBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Chaos.Mongo.MongoBuilder.WithConfigurator<T>() -> Chaos.Mongo.MongoBuilder!
+Chaos.Mongo.MongoBuilder.WithConfiguratorAutoDiscovery(System.Collections.Generic.IEnumerable<System.Reflection.Assembly!>? assembliesToScan = null) -> Chaos.Mongo.MongoBuilder!
+Chaos.Mongo.MongoBuilder.WithMigration<T>() -> Chaos.Mongo.MongoBuilder!
+Chaos.Mongo.MongoBuilder.WithMigrationAutoDiscovery(System.Collections.Generic.IEnumerable<System.Reflection.Assembly!>? assembliesToScan = null) -> Chaos.Mongo.MongoBuilder!
+Chaos.Mongo.MongoBuilder.WithQueue<TPayload>(System.Action<Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!>! configure) -> Chaos.Mongo.MongoBuilder!
+Chaos.Mongo.MongoClientSettingsFactory
+Chaos.Mongo.MongoClientSettingsFactory.CreateMongoClientSettings(MongoDB.Driver.MongoUrl! url) -> MongoDB.Driver.MongoClientSettings!
+Chaos.Mongo.MongoClientSettingsFactory.MongoClientSettingsFactory(Microsoft.Extensions.Options.IOptions<Chaos.Mongo.MongoOptions!>? options) -> void
+Chaos.Mongo.MongoConnection
+Chaos.Mongo.MongoConnection.Client.get -> MongoDB.Driver.IMongoClient!
+Chaos.Mongo.MongoConnection.Database.get -> MongoDB.Driver.IMongoDatabase!
+Chaos.Mongo.MongoConnection.MongoConnection(MongoDB.Driver.IMongoClient! client, MongoDB.Driver.IMongoDatabase! database) -> void
+Chaos.Mongo.MongoConnectionFactory
+Chaos.Mongo.MongoConnectionFactory.CreateConnection(MongoDB.Driver.MongoUrl! url, string? databaseName = null) -> Chaos.Mongo.IMongoConnection!
+Chaos.Mongo.MongoConnectionFactory.MongoConnectionFactory(Chaos.Mongo.IMongoClientSettingsFactory! clientSettingsFactory) -> void
+Chaos.Mongo.MongoDefaults
+Chaos.Mongo.MongoHelper
+Chaos.Mongo.MongoHelper.Client.get -> MongoDB.Driver.IMongoClient!
+Chaos.Mongo.MongoHelper.Database.get -> MongoDB.Driver.IMongoDatabase!
+Chaos.Mongo.MongoHelper.GetCollection<T>(MongoDB.Driver.MongoCollectionSettings? settings = null) -> MongoDB.Driver.IMongoCollection<T>!
+Chaos.Mongo.MongoHelper.MongoHelper(Chaos.Mongo.IMongoConnection! connection, Chaos.Mongo.ICollectionTypeMap! collectionTypeMap, System.TimeProvider! timeProvider, Microsoft.Extensions.Options.IOptions<Chaos.Mongo.MongoOptions!>? options) -> void
+Chaos.Mongo.MongoHelper.TryAcquireLockAsync(string! lockName, System.TimeSpan? leaseTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.IMongoLock?>!
+Chaos.Mongo.MongoHelperExtensions
+Chaos.Mongo.MongoHostedService
+Chaos.Mongo.MongoHostedService.MongoHostedService(System.Collections.Generic.IEnumerable<Chaos.Mongo.Queues.IMongoQueue!>! queues, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! serviceScopeFactory, Microsoft.Extensions.Options.IOptions<Chaos.Mongo.MongoOptions!>! options, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.MongoHostedService!>! logger) -> void
+Chaos.Mongo.MongoHostedService.StartAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoHostedService.StartedAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoHostedService.StartingAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoHostedService.StopAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoHostedService.StoppedAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoHostedService.StoppingAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.MongoIndexManagerExtensions
+Chaos.Mongo.MongoLock
+Chaos.Mongo.MongoLock.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Chaos.Mongo.MongoLock.Id.get -> string!
+Chaos.Mongo.MongoLock.IsValid.get -> bool
+Chaos.Mongo.MongoLock.MongoLock(string! id, System.DateTime validUntilUtc, System.TimeSpan leaseTime, System.TimeProvider! timeProvider, System.Func<System.DateTime, System.Threading.Tasks.Task!>! releaseAction, System.Func<System.DateTime, System.TimeSpan, System.Threading.CancellationToken, System.Threading.Tasks.Task<System.DateTime?>!>! extendAction) -> void
+Chaos.Mongo.MongoLock.TryExtendAsync(System.TimeSpan? leaseTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Chaos.Mongo.MongoLock.ValidUntilUtc.get -> System.DateTime
+Chaos.Mongo.MongoLockDocument
+Chaos.Mongo.MongoLockDocument.Holder.get -> string?
+Chaos.Mongo.MongoLockDocument.Holder.set -> void
+Chaos.Mongo.MongoLockDocument.Id.get -> string!
+Chaos.Mongo.MongoLockDocument.Id.set -> void
+Chaos.Mongo.MongoLockDocument.LeaseUntilUtc.get -> System.DateTime
+Chaos.Mongo.MongoLockDocument.LeaseUntilUtc.set -> void
+Chaos.Mongo.MongoLockDocument.MongoLockDocument() -> void
+Chaos.Mongo.MongoLockExtensions
+Chaos.Mongo.MongoOptions
+Chaos.Mongo.MongoOptions.<Clone>$() -> Chaos.Mongo.MongoOptions!
+Chaos.Mongo.MongoOptions.AddMapping(System.Type! type, string? collectionName) -> Chaos.Mongo.MongoOptions!
+Chaos.Mongo.MongoOptions.AddMapping<T>(string? collectionName) -> Chaos.Mongo.MongoOptions!
+Chaos.Mongo.MongoOptions.ApplyMigrationsOnStartup.get -> bool
+Chaos.Mongo.MongoOptions.ApplyMigrationsOnStartup.set -> void
+Chaos.Mongo.MongoOptions.CollectionTypeMap.get -> System.Collections.Generic.Dictionary<System.Type!, string!>!
+Chaos.Mongo.MongoOptions.CollectionTypeMap.init -> void
+Chaos.Mongo.MongoOptions.ConfigureClientSettings.get -> System.Action<MongoDB.Driver.MongoClientSettings!>?
+Chaos.Mongo.MongoOptions.ConfigureClientSettings.set -> void
+Chaos.Mongo.MongoOptions.DefaultDatabase.get -> string?
+Chaos.Mongo.MongoOptions.DefaultDatabase.set -> void
+Chaos.Mongo.MongoOptions.Equals(Chaos.Mongo.MongoOptions? other) -> bool
+Chaos.Mongo.MongoOptions.HolderId.get -> string?
+Chaos.Mongo.MongoOptions.HolderId.set -> void
+Chaos.Mongo.MongoOptions.LockCollectionName.get -> string!
+Chaos.Mongo.MongoOptions.LockCollectionName.set -> void
+Chaos.Mongo.MongoOptions.MigrationHistoryCollectionName.get -> string!
+Chaos.Mongo.MongoOptions.MigrationHistoryCollectionName.set -> void
+Chaos.Mongo.MongoOptions.MigrationLockLeaseTime.get -> System.TimeSpan
+Chaos.Mongo.MongoOptions.MigrationLockLeaseTime.set -> void
+Chaos.Mongo.MongoOptions.MigrationsLockName.get -> string!
+Chaos.Mongo.MongoOptions.MigrationsLockName.set -> void
+Chaos.Mongo.MongoOptions.MongoOptions() -> void
+Chaos.Mongo.MongoOptions.RunConfiguratorsOnStartup.get -> bool
+Chaos.Mongo.MongoOptions.RunConfiguratorsOnStartup.set -> void
+Chaos.Mongo.MongoOptions.Url.get -> MongoDB.Driver.MongoUrl?
+Chaos.Mongo.MongoOptions.Url.set -> void
+Chaos.Mongo.MongoOptions.UseDefaultCollectionNames.get -> bool
+Chaos.Mongo.MongoOptions.UseDefaultCollectionNames.set -> void
+Chaos.Mongo.MongoOptions.UseTransactionsForMigrationsIfAvailable.get -> bool
+Chaos.Mongo.MongoOptions.UseTransactionsForMigrationsIfAvailable.set -> void
+Chaos.Mongo.MongoOptionsValidation
+Chaos.Mongo.MongoOptionsValidation.MongoOptionsValidation() -> void
+Chaos.Mongo.MongoOptionsValidation.Validate(string? name, Chaos.Mongo.MongoOptions? options) -> Microsoft.Extensions.Options.ValidateOptionsResult!
+Chaos.Mongo.Queues.IMongoQueue
+Chaos.Mongo.Queues.IMongoQueue.IsRunning.get -> bool
+Chaos.Mongo.Queues.IMongoQueue.PublishAsync(object! payload, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueue.QueueDefinition.get -> Chaos.Mongo.Queues.MongoQueueDefinition!
+Chaos.Mongo.Queues.IMongoQueue.StartSubscriptionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueue.StopSubscriptionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueue<TPayload>
+Chaos.Mongo.Queues.IMongoQueue<TPayload>.PublishAsync(TPayload! payload, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueueCollectionNameGenerator
+Chaos.Mongo.Queues.IMongoQueueCollectionNameGenerator.GenerateQueueCollectionName(System.Type! payloadType) -> string!
+Chaos.Mongo.Queues.IMongoQueuePayloadHandler<TPayload>
+Chaos.Mongo.Queues.IMongoQueuePayloadHandler<TPayload>.HandlePayloadAsync(TPayload! payload, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueuePayloadHandlerFactory
+Chaos.Mongo.Queues.IMongoQueuePayloadHandlerFactory.CreateHandler<TPayload>() -> Chaos.Mongo.Queues.IMongoQueuePayloadHandler<TPayload!>!
+Chaos.Mongo.Queues.IMongoQueuePayloadPrioritizer
+Chaos.Mongo.Queues.IMongoQueuePayloadPrioritizer.CreateSortDefinition<TPayload>() -> MongoDB.Driver.SortDefinition<Chaos.Mongo.Queues.MongoQueueItem<TPayload!>!>!
+Chaos.Mongo.Queues.IMongoQueuePublisher
+Chaos.Mongo.Queues.IMongoQueuePublisher.PublishAsync<TPayload>(Chaos.Mongo.Queues.MongoQueueDefinition! queueDefinition, TPayload! payload, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>
+Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>.IsActive.get -> bool
+Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>.StartAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.IMongoQueueSubscriptionFactory
+Chaos.Mongo.Queues.IMongoQueueSubscriptionFactory.CreateAndRunAsync<TPayload>(Chaos.Mongo.Queues.MongoQueueDefinition! queueDefinition) -> System.Threading.Tasks.Task<Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload!>!>!
+Chaos.Mongo.Queues.MongoQueue<TPayload>
+Chaos.Mongo.Queues.MongoQueue<TPayload>.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Chaos.Mongo.Queues.MongoQueue<TPayload>.IsRunning.get -> bool
+Chaos.Mongo.Queues.MongoQueue<TPayload>.MongoQueue(Chaos.Mongo.Queues.MongoQueueDefinition! queueDefinition, Chaos.Mongo.Queues.IMongoQueueSubscriptionFactory! subscriptionFactory, Chaos.Mongo.Queues.IMongoQueuePublisher! publisher) -> void
+Chaos.Mongo.Queues.MongoQueue<TPayload>.PublishAsync(TPayload! payload, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueue<TPayload>.PublishAsync(object! payload, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueue<TPayload>.QueueDefinition.get -> Chaos.Mongo.Queues.MongoQueueDefinition!
+Chaos.Mongo.Queues.MongoQueue<TPayload>.StartSubscriptionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueue<TPayload>.StopSubscriptionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.MongoQueueBuilder(Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> void
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.RegisterQueue() -> void
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithAutoStartSubscription() -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithClosedItemRetention(System.TimeSpan retention) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithCollectionName(string! collectionName) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithImmediateDelete() -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithLockLeaseTime(System.TimeSpan leaseTime) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithMaxRetries(int maxRetries) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithNoRetry() -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithPayloadHandler(System.Func<System.IServiceProvider!, Chaos.Mongo.Queues.IMongoQueuePayloadHandler<TPayload!>!>! payloadHandlerFactory) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithPayloadHandler(System.Type! payloadHandlerType) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithPayloadHandler<TPayloadHandler>() -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithQueryLimit(int queryLimit) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithoutAutoStartSubscription() -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueCollectionNameGenerator
+Chaos.Mongo.Queues.MongoQueueCollectionNameGenerator.GenerateQueueCollectionName(System.Type! payloadType) -> string!
+Chaos.Mongo.Queues.MongoQueueCollectionNameGenerator.MongoQueueCollectionNameGenerator() -> void
+Chaos.Mongo.Queues.MongoQueueDefinition
+Chaos.Mongo.Queues.MongoQueueDefinition.AutoStartSubscription.get -> bool
+Chaos.Mongo.Queues.MongoQueueDefinition.AutoStartSubscription.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.ClosedItemRetention.get -> System.TimeSpan?
+Chaos.Mongo.Queues.MongoQueueDefinition.ClosedItemRetention.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.CollectionName.get -> string!
+Chaos.Mongo.Queues.MongoQueueDefinition.CollectionName.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.LockLeaseTime.get -> System.TimeSpan
+Chaos.Mongo.Queues.MongoQueueDefinition.LockLeaseTime.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.MaxRetries.get -> int?
+Chaos.Mongo.Queues.MongoQueueDefinition.MaxRetries.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.MongoQueueDefinition() -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.MongoQueueDefinition(Chaos.Mongo.Queues.MongoQueueDefinition! original) -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.PayloadHandlerType.get -> System.Type!
+Chaos.Mongo.Queues.MongoQueueDefinition.PayloadHandlerType.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.PayloadType.get -> System.Type!
+Chaos.Mongo.Queues.MongoQueueDefinition.PayloadType.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.QueryLimit.get -> int
+Chaos.Mongo.Queues.MongoQueueDefinition.QueryLimit.init -> void
+Chaos.Mongo.Queues.MongoQueueItem
+Chaos.Mongo.Queues.MongoQueueItem.ClosedUtc.get -> System.DateTime?
+Chaos.Mongo.Queues.MongoQueueItem.ClosedUtc.set -> void
+Chaos.Mongo.Queues.MongoQueueItem.CreatedUtc.get -> System.DateTime
+Chaos.Mongo.Queues.MongoQueueItem.CreatedUtc.init -> void
+Chaos.Mongo.Queues.MongoQueueItem.Id.get -> MongoDB.Bson.ObjectId
+Chaos.Mongo.Queues.MongoQueueItem.Id.init -> void
+Chaos.Mongo.Queues.MongoQueueItem.IsClosed.get -> bool
+Chaos.Mongo.Queues.MongoQueueItem.IsClosed.set -> void
+Chaos.Mongo.Queues.MongoQueueItem.IsLocked.get -> bool
+Chaos.Mongo.Queues.MongoQueueItem.IsLocked.set -> void
+Chaos.Mongo.Queues.MongoQueueItem.IsTerminal.get -> bool
+Chaos.Mongo.Queues.MongoQueueItem.IsTerminal.set -> void
+Chaos.Mongo.Queues.MongoQueueItem.LockedUtc.get -> System.DateTime?
+Chaos.Mongo.Queues.MongoQueueItem.LockedUtc.set -> void
+Chaos.Mongo.Queues.MongoQueueItem.MongoQueueItem() -> void
+Chaos.Mongo.Queues.MongoQueueItem.RetryCount.get -> int
+Chaos.Mongo.Queues.MongoQueueItem.RetryCount.set -> void
+Chaos.Mongo.Queues.MongoQueueItem<TPayload>
+Chaos.Mongo.Queues.MongoQueueItem<TPayload>.MongoQueueItem() -> void
+Chaos.Mongo.Queues.MongoQueueItem<TPayload>.Payload.get -> TPayload!
+Chaos.Mongo.Queues.MongoQueueItem<TPayload>.Payload.init -> void
+Chaos.Mongo.Queues.MongoQueueItem<TPayload>.PayloadType.get -> string!
+Chaos.Mongo.Queues.MongoQueueItem<TPayload>.PayloadType.init -> void
+Chaos.Mongo.Queues.MongoQueueMetrics
+Chaos.Mongo.Queues.MongoQueueMetrics.Instruments
+Chaos.Mongo.Queues.MongoQueueMetrics.Tags
+Chaos.Mongo.Queues.MongoQueuePayloadHandlerFactory
+Chaos.Mongo.Queues.MongoQueuePayloadHandlerFactory.CreateHandler<TPayload>() -> Chaos.Mongo.Queues.IMongoQueuePayloadHandler<TPayload!>!
+Chaos.Mongo.Queues.MongoQueuePayloadHandlerFactory.MongoQueuePayloadHandlerFactory(System.IServiceProvider! serviceProvider) -> void
+Chaos.Mongo.Queues.MongoQueuePayloadPrioritizer
+Chaos.Mongo.Queues.MongoQueuePayloadPrioritizer.CreateSortDefinition<TPayload>() -> MongoDB.Driver.SortDefinition<Chaos.Mongo.Queues.MongoQueueItem<TPayload!>!>!
+Chaos.Mongo.Queues.MongoQueuePayloadPrioritizer.MongoQueuePayloadPrioritizer() -> void
+Chaos.Mongo.Queues.MongoQueuePublisher
+Chaos.Mongo.Queues.MongoQueuePublisher.MongoQueuePublisher(Chaos.Mongo.IMongoHelper! mongoHelper, System.TimeProvider! timeProvider) -> void
+Chaos.Mongo.Queues.MongoQueuePublisher.PublishAsync<TPayload>(Chaos.Mongo.Queues.MongoQueueDefinition! queueDefinition, TPayload! payload, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueueSubscription<TPayload>
+Chaos.Mongo.Queues.MongoQueueSubscription<TPayload>.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Chaos.Mongo.Queues.MongoQueueSubscription<TPayload>.IsActive.get -> bool
+Chaos.Mongo.Queues.MongoQueueSubscription<TPayload>.MongoQueueSubscription(Chaos.Mongo.Queues.MongoQueueDefinition! queueDefinition, Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Queues.IMongoQueuePayloadHandlerFactory! payloadHandlerFactory, Chaos.Mongo.Queues.IMongoQueuePayloadPrioritizer! payloadPrioritizer, System.TimeProvider! timeProvider, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.Queues.MongoQueueSubscription<TPayload!>!>! logger) -> void
+Chaos.Mongo.Queues.MongoQueueSubscription<TPayload>.StartAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueueSubscription<TPayload>.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Queues.MongoQueueSubscriptionFactory
+Chaos.Mongo.Queues.MongoQueueSubscriptionFactory.CreateAndRunAsync<TPayload>(Chaos.Mongo.Queues.MongoQueueDefinition! queueDefinition) -> System.Threading.Tasks.Task<Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload!>!>!
+Chaos.Mongo.Queues.MongoQueueSubscriptionFactory.MongoQueueSubscriptionFactory(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Queues.IMongoQueuePayloadHandlerFactory! payloadHandlerFactory, Chaos.Mongo.Queues.IMongoQueuePayloadPrioritizer! payloadPrioritizer, System.TimeProvider! timeProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory) -> void
+Chaos.Mongo.Reflection.ReflectionHelper
+Chaos.Mongo.ServiceCollectionExtensions
+const Chaos.Mongo.MongoDefaults.ApplyMigrationsOnStartup = false -> bool
+const Chaos.Mongo.MongoDefaults.AutoStartSubscription = false -> bool
+const Chaos.Mongo.MongoDefaults.LockCollectionName = "_locks" -> string!
+const Chaos.Mongo.MongoDefaults.MigrationHistoryCollectionName = "_migrations" -> string!
+const Chaos.Mongo.MongoDefaults.MigrationsLockName = "ChaosMongoMigrations" -> string!
+const Chaos.Mongo.MongoDefaults.QueryLimit = 1 -> int
+const Chaos.Mongo.MongoDefaults.RunConfiguratorsOnStartup = false -> bool
+const Chaos.Mongo.MongoDefaults.UseDefaultCollectionNames = true -> bool
+const Chaos.Mongo.MongoDefaults.UseTransactionsForMigrationsIfAvailable = true -> bool
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.LockRecovered = "chaos.mongo.queue.lock.recovered" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.LockRecoveryAge = "chaos.mongo.queue.lock.recovery_age" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.ProcessingDuration = "chaos.mongo.queue.processing.duration" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.ProcessingFailed = "chaos.mongo.queue.processing.failed" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.ProcessingQueueAge = "chaos.mongo.queue.processing.queue_age" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.ProcessingSucceeded = "chaos.mongo.queue.processing.succeeded" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Instruments.Published = "chaos.mongo.queue.published" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.MeterName = "Chaos.Mongo.Queues" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Tags.CleanupMode = "queue.cleanup_mode" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Tags.PayloadType = "queue.payload_type" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Tags.QueueCollection = "queue.collection" -> string!
+const Chaos.Mongo.Queues.MongoQueueMetrics.Tags.Result = "queue.result" -> string!
+override Chaos.Mongo.MongoOptions.Equals(object? obj) -> bool
+override Chaos.Mongo.MongoOptions.GetHashCode() -> int
+override Chaos.Mongo.MongoOptions.ToString() -> string!
+override Chaos.Mongo.Queues.MongoQueueDefinition.Equals(object? obj) -> bool
+override Chaos.Mongo.Queues.MongoQueueDefinition.GetHashCode() -> int
+override Chaos.Mongo.Queues.MongoQueueDefinition.ToString() -> string!
+static Chaos.Mongo.CollectionTypeMapExtensions.GetCollectionName<T>(this Chaos.Mongo.ICollectionTypeMap! map) -> string!
+static Chaos.Mongo.MongoDefaults.LockLeaseTime.get -> System.TimeSpan
+static Chaos.Mongo.MongoDefaults.MigrationLockLeaseTime.get -> System.TimeSpan
+static Chaos.Mongo.MongoDefaults.QueueClosedItemRetention.get -> System.TimeSpan?
+static Chaos.Mongo.MongoDefaults.QueueLockLeaseTime.get -> System.TimeSpan
+static Chaos.Mongo.MongoDefaults.QueueMaxRetries.get -> int?
+static Chaos.Mongo.MongoDefaults.RetryDelay.get -> System.TimeSpan
+static Chaos.Mongo.MongoHelperExtensions.AcquireLockAsync(this Chaos.Mongo.IMongoHelper! helper, string! lockName, System.TimeSpan? leaseTime = null, System.TimeSpan? retryDelay = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.IMongoLock!>!
+static Chaos.Mongo.MongoHelperExtensions.ExecuteInTransaction(this Chaos.Mongo.IMongoHelper! helper, System.Func<Chaos.Mongo.IMongoHelper!, MongoDB.Driver.IClientSessionHandle!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! callback, MongoDB.Driver.TransactionOptions? transactionOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Chaos.Mongo.MongoHelperExtensions.ExecuteInTransaction<TResult>(this Chaos.Mongo.IMongoHelper! helper, System.Func<Chaos.Mongo.IMongoHelper!, MongoDB.Driver.IClientSessionHandle!, System.Threading.CancellationToken, System.Threading.Tasks.Task<TResult>!>! callback, MongoDB.Driver.TransactionOptions? transactionOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResult>!
+static Chaos.Mongo.MongoHelperExtensions.TryStartSessionAsync(this Chaos.Mongo.IMongoHelper! helper, MongoDB.Driver.ClientSessionOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<MongoDB.Driver.IClientSessionHandle?>!
+static Chaos.Mongo.MongoHelperExtensions.TryStartTransactionAsync(this Chaos.Mongo.IMongoHelper! helper, MongoDB.Driver.ClientSessionOptions? sessionOptions = null, MongoDB.Driver.TransactionOptions? transactionOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<MongoDB.Driver.IClientSessionHandle?>!
+static Chaos.Mongo.MongoIndexManagerExtensions.CreateOneOrUpdateAsync<TDocument>(this MongoDB.Driver.IMongoIndexManager<TDocument>! indexManager, MongoDB.Driver.CreateIndexModel<TDocument>! model, MongoDB.Driver.CreateOneIndexOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string?>!
+static Chaos.Mongo.MongoIndexManagerExtensions.CreateOneOrUpdateAsync<TDocument>(this MongoDB.Driver.IMongoIndexManager<TDocument>! indexManager, MongoDB.Driver.IClientSessionHandle! session, MongoDB.Driver.CreateIndexModel<TDocument>! model, MongoDB.Driver.CreateOneIndexOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string?>!
+static Chaos.Mongo.MongoIndexManagerExtensions.DropOneIfExistsAsync<TDocument>(this MongoDB.Driver.IMongoIndexManager<TDocument>! indexManager, MongoDB.Driver.IClientSessionHandle! session, string! name, MongoDB.Driver.DropIndexOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Chaos.Mongo.MongoIndexManagerExtensions.DropOneIfExistsAsync<TDocument>(this MongoDB.Driver.IMongoIndexManager<TDocument>! indexManager, MongoDB.Driver.IClientSessionHandle! session, string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Chaos.Mongo.MongoIndexManagerExtensions.DropOneIfExistsAsync<TDocument>(this MongoDB.Driver.IMongoIndexManager<TDocument>! indexManager, string! name, MongoDB.Driver.DropIndexOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Chaos.Mongo.MongoIndexManagerExtensions.DropOneIfExistsAsync<TDocument>(this MongoDB.Driver.IMongoIndexManager<TDocument>! indexManager, string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Chaos.Mongo.MongoLockExtensions.EnsureValid(this Chaos.Mongo.IMongoLock! mongoLock) -> Chaos.Mongo.IMongoLock!
+static Chaos.Mongo.MongoLockExtensions.ExtendAsync(this Chaos.Mongo.IMongoLock! mongoLock, System.TimeSpan? leaseTime = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.IMongoLock!>!
+static Chaos.Mongo.MongoOptions.operator !=(Chaos.Mongo.MongoOptions? left, Chaos.Mongo.MongoOptions? right) -> bool
+static Chaos.Mongo.MongoOptions.operator ==(Chaos.Mongo.MongoOptions? left, Chaos.Mongo.MongoOptions? right) -> bool
+static Chaos.Mongo.Queues.MongoQueueDefinition.operator !=(Chaos.Mongo.Queues.MongoQueueDefinition? left, Chaos.Mongo.Queues.MongoQueueDefinition? right) -> bool
+static Chaos.Mongo.Queues.MongoQueueDefinition.operator ==(Chaos.Mongo.Queues.MongoQueueDefinition? left, Chaos.Mongo.Queues.MongoQueueDefinition? right) -> bool
+static Chaos.Mongo.Reflection.ReflectionHelper.GetInterfaceImplementations(System.Type! interfaceType, System.Collections.Generic.IEnumerable<System.Reflection.Assembly!>? assemblies = null) -> System.Collections.Generic.IEnumerable<System.Type!>!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration, string! sectionName) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, MongoDB.Driver.MongoUrl! url, string? databaseName = null, System.Action<Chaos.Mongo.MongoOptions!>? configure = null) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, MongoDB.Driver.MongoUrl! url, string? databaseName, System.Action<System.IServiceProvider!, Chaos.Mongo.MongoOptions!>! configure) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Chaos.Mongo.MongoOptions!>? configure = null) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<System.IServiceProvider!, Chaos.Mongo.MongoOptions!>! configure) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! connectionString, string? databaseName = null, System.Action<Chaos.Mongo.MongoOptions!>? configure = null) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.ServiceCollectionExtensions.AddMongo(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! connectionString, string? databaseName, System.Action<System.IServiceProvider!, Chaos.Mongo.MongoOptions!>! configure) -> Chaos.Mongo.MongoBuilder!
+virtual Chaos.Mongo.Queues.MongoQueueDefinition.<Clone>$() -> Chaos.Mongo.Queues.MongoQueueDefinition!
+virtual Chaos.Mongo.Queues.MongoQueueDefinition.EqualityContract.get -> System.Type!
+virtual Chaos.Mongo.Queues.MongoQueueDefinition.Equals(Chaos.Mongo.Queues.MongoQueueDefinition? other) -> bool
+virtual Chaos.Mongo.Queues.MongoQueueDefinition.PrintMembers(System.Text.StringBuilder! builder) -> bool

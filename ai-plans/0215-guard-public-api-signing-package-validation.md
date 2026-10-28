@@ -8,18 +8,18 @@ The owner decided that the private key stays secret ([#215](https://github.com/c
 
 ## Acceptance Criteria
 
-- [ ] The repository contains a public-key-only key file extracted from the published 0.9.0 assemblies; it contains no private key and its token is `258e5594a5dc8a36`.
-- [ ] Every project under `src/`, `tests/` and `benchmarks/` builds with `SignAssembly=true`, `PublicSign=true` and that key file in Debug and Release, so local and CI builds produce assemblies with token `258e5594a5dc8a36`.
-- [ ] The Nuke `Pack` target signs fully with the private key and `PublicSign=false`. It fails with a clear message when the private key file is missing or empty, and it never falls back to public signing.
-- [ ] `Pack` recompiles the packable projects, so a `Pack` after an ordinary `Build` or `Test` packages freshly signed assemblies rather than stale public-signed outputs.
-- [ ] `Pack` verifies every assembly in every `.nupkg` it leaves for publishing before it succeeds: it fails unless the token is `258e5594a5dc8a36` and the strong-name signature is cryptographically valid for the committed public key. Public-signed assemblies and assemblies signed with any other key are rejected, and Nuke `Publish` cannot push a package that failed verification.
-- [ ] Every `InternalsVisibleTo` declaration names the friend assembly with the full public key, works in Debug, Release and the release pack, and is present in the packed assemblies.
-- [ ] The `NUGET_RELEASE` constant, its `#if` guards and the `AdditionalConstants` plumbing that only existed to pass it are gone.
-- [ ] `Chaos.Mongo`, `Chaos.Mongo.EventStore` and `Chaos.Mongo.Outbox` reference `Microsoft.CodeAnalysis.PublicApiAnalyzers` and each has `PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt`, starting from the current public API.
-- [ ] Adding, removing or changing a public API without a matching `PublicAPI.*.txt` change fails the build in Debug and Release.
-- [ ] `EnablePackageValidation=true` is set for the packable projects, package validation runs during `Pack`, and `PackageValidationBaselineVersion` is not set.
-- [ ] Each test project contains a test asserting that the product assembly it covers has token `258e5594a5dc8a36`.
-- [ ] `dotnet build -c Release Chaos.Mongo.slnx`, the complete test suite and `bash ./build.sh Test` succeed, and merged line coverage stays at or above 95%.
+- [x] The repository contains a public-key-only key file extracted from the published 0.9.0 assemblies; it contains no private key and its token is `258e5594a5dc8a36`.
+- [x] Every project under `src/`, `tests/` and `benchmarks/` builds with `SignAssembly=true`, `PublicSign=true` and that key file in Debug and Release, so local and CI builds produce assemblies with token `258e5594a5dc8a36`.
+- [x] The Nuke `Pack` target signs fully with the private key and `PublicSign=false`. It fails with a clear message when the private key file is missing or empty, and it never falls back to public signing.
+- [x] `Pack` recompiles the packable projects, so a `Pack` after an ordinary `Build` or `Test` packages freshly signed assemblies rather than stale public-signed outputs.
+- [x] `Pack` verifies every assembly in every `.nupkg` it leaves for publishing before it succeeds: it fails unless the token is `258e5594a5dc8a36` and the strong-name signature is cryptographically valid for the committed public key. Public-signed assemblies and assemblies signed with any other key are rejected, and Nuke `Publish` cannot push a package that failed verification.
+- [x] Every `InternalsVisibleTo` declaration names the friend assembly with the full public key, works in Debug, Release and the release pack, and is present in the packed assemblies.
+- [x] The `NUGET_RELEASE` constant, its `#if` guards and the `AdditionalConstants` plumbing that only existed to pass it are gone.
+- [x] `Chaos.Mongo`, `Chaos.Mongo.EventStore` and `Chaos.Mongo.Outbox` reference `Microsoft.CodeAnalysis.PublicApiAnalyzers` and each has `PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt`, starting from the current public API.
+- [x] Adding, removing or changing a public API without a matching `PublicAPI.*.txt` change fails the build in Debug and Release.
+- [x] `EnablePackageValidation=true` is set for the packable projects, package validation runs during `Pack`, and `PackageValidationBaselineVersion` is not set.
+- [x] Each test project contains a test asserting that the product assembly it covers has token `258e5594a5dc8a36`.
+- [x] `dotnet build -c Release Chaos.Mongo.slnx`, the complete test suite and `bash ./build.sh Test` succeed, and merged line coverage stays at or above 95%.
 
 ## Technical Details
 
