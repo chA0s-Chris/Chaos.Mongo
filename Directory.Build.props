@@ -14,4 +14,15 @@
     <NoWarn>1591</NoWarn>
     <PreferredUILang>en</PreferredUILang>
   </PropertyGroup>
+
+  <!-- Strong naming: ordinary builds are public-signed with the committed public key, so every
+       build carries the released identity (PublicKeyToken=258e5594a5dc8a36). Only the Nuke Pack
+       target signs fully; it overrides PublicSign and AssemblyOriginatorKeyFile with the private key. -->
+  <PropertyGroup>
+    <SignAssembly>true</SignAssembly>
+    <PublicSign>true</PublicSign>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)Chaos.Mongo.Public.snk</AssemblyOriginatorKeyFile>
+    <!-- Contents of Chaos.Mongo.Public.snk. The SDK appends it to every InternalsVisibleTo item. -->
+    <PublicKey>0024000004800000940000000602000000240000525341310004000001000100192c28f3d57aaf38a7f22e8e2ec4e395d99ee1fccc6f55a0f5c3754c660921616f537cb42141d919319ec395e333d38993ee0cd62084f582d6de1632d7465ae5757e7bba992e10ffd1c3b5d0fcf730899e7cb0e2b5ee380be79e687f1062c2a08c7c17400f202c3e66b01a4eb3efed7d1c7afb090df61e9cc0bc2aee97441ce6</PublicKey>
+  </PropertyGroup>
 </Project>

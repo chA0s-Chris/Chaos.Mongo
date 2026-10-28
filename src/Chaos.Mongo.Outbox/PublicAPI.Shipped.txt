@@ -1,0 +1,124 @@
+#nullable enable
+Chaos.Mongo.Outbox.IOutbox
+Chaos.Mongo.Outbox.IOutbox.AddMessageAsync<TPayload>(MongoDB.Driver.IClientSessionHandle! session, TPayload! payload, string? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.IOutbox<TOutbox>
+Chaos.Mongo.Outbox.IOutboxConfiguratorRunner
+Chaos.Mongo.Outbox.IOutboxConfiguratorRunner.RunAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.IOutboxProcessor
+Chaos.Mongo.Outbox.IOutboxProcessor.StartAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.IOutboxProcessor.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.IOutboxProcessor<TOutbox>
+Chaos.Mongo.Outbox.IOutboxPublisher
+Chaos.Mongo.Outbox.IOutboxPublisher.PublishAsync(Chaos.Mongo.Outbox.OutboxMessage! message, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.MongoBuilderExtensions
+Chaos.Mongo.Outbox.MongoOutbox
+Chaos.Mongo.Outbox.MongoOutbox.AddMessageAsync<TPayload>(MongoDB.Driver.IClientSessionHandle! session, TPayload! payload, string? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.MongoOutbox.MongoOutbox(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Outbox.OutboxOptions! options, System.TimeProvider! timeProvider) -> void
+Chaos.Mongo.Outbox.OutboxBuilder
+Chaos.Mongo.Outbox.OutboxBuilder.Build() -> Chaos.Mongo.Outbox.OutboxOptions!
+Chaos.Mongo.Outbox.OutboxBuilder.OutboxBuilder() -> void
+Chaos.Mongo.Outbox.OutboxBuilder.PublisherFactory.get -> System.Func<System.IServiceProvider!, Chaos.Mongo.Outbox.IOutboxPublisher!>?
+Chaos.Mongo.Outbox.OutboxBuilder.PublisherLifetime.get -> Microsoft.Extensions.DependencyInjection.ServiceLifetime
+Chaos.Mongo.Outbox.OutboxBuilder.PublisherType.get -> System.Type?
+Chaos.Mongo.Outbox.OutboxBuilder.Validate() -> void
+Chaos.Mongo.Outbox.OutboxBuilder.WithAutoStartProcessor() -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithBatchSize(int batchSize) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithCollectionName(string! collectionName) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithLockTimeout(System.TimeSpan lockTimeout) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithMaxRetries(int maxRetries) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithMessage<TPayload>(string? discriminator = null) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithPollingInterval(System.TimeSpan pollingInterval) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithProcessingFilter(MongoDB.Driver.FilterDefinition<Chaos.Mongo.Outbox.OutboxMessage!>! filter) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithPublisher(System.Func<System.IServiceProvider!, Chaos.Mongo.Outbox.IOutboxPublisher!>! factory, Microsoft.Extensions.DependencyInjection.ServiceLifetime lifetime = Microsoft.Extensions.DependencyInjection.ServiceLifetime.Transient) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithPublisher<TPublisher>() -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithPublisher<TPublisher>(Microsoft.Extensions.DependencyInjection.ServiceLifetime lifetime) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithRetentionPeriod(System.TimeSpan retentionPeriod) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxBuilder.WithRetryBackoff(System.TimeSpan initialDelay, System.TimeSpan maxDelay) -> Chaos.Mongo.Outbox.OutboxBuilder!
+Chaos.Mongo.Outbox.OutboxConfigurator
+Chaos.Mongo.Outbox.OutboxConfigurator.ConfigureAsync(Chaos.Mongo.IMongoHelper! helper, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxConfigurator.OutboxConfigurator(Chaos.Mongo.Outbox.OutboxOptions! options) -> void
+Chaos.Mongo.Outbox.OutboxConfiguratorRunner
+Chaos.Mongo.Outbox.OutboxConfiguratorRunner.OutboxConfiguratorRunner(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Outbox.OutboxConfigurator! configurator, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.Outbox.OutboxConfiguratorRunner!>! logger) -> void
+Chaos.Mongo.Outbox.OutboxConfiguratorRunner.RunAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxHostedService
+Chaos.Mongo.Outbox.OutboxHostedService.OutboxHostedService(Chaos.Mongo.Outbox.IOutboxProcessor! outboxProcessor, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! serviceScopeFactory, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.Outbox.OutboxHostedService!>! logger) -> void
+Chaos.Mongo.Outbox.OutboxHostedService.StartAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxHostedService.StartedAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxHostedService.StartingAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxHostedService.StopAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxHostedService.StoppedAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxHostedService.StoppingAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxMessage
+Chaos.Mongo.Outbox.OutboxMessage.CorrelationId.get -> string?
+Chaos.Mongo.Outbox.OutboxMessage.CorrelationId.init -> void
+Chaos.Mongo.Outbox.OutboxMessage.CreatedUtc.get -> System.DateTime
+Chaos.Mongo.Outbox.OutboxMessage.CreatedUtc.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.DeserializePayload<TPayload>() -> TPayload
+Chaos.Mongo.Outbox.OutboxMessage.Error.get -> string?
+Chaos.Mongo.Outbox.OutboxMessage.Error.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.FailedUtc.get -> System.DateTime?
+Chaos.Mongo.Outbox.OutboxMessage.FailedUtc.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.Id.get -> MongoDB.Bson.ObjectId
+Chaos.Mongo.Outbox.OutboxMessage.Id.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.IsLocked.get -> bool
+Chaos.Mongo.Outbox.OutboxMessage.IsLocked.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.LockId.get -> string?
+Chaos.Mongo.Outbox.OutboxMessage.LockId.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.LockedUtc.get -> System.DateTime?
+Chaos.Mongo.Outbox.OutboxMessage.LockedUtc.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.NextAttemptUtc.get -> System.DateTime?
+Chaos.Mongo.Outbox.OutboxMessage.NextAttemptUtc.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.OutboxMessage() -> void
+Chaos.Mongo.Outbox.OutboxMessage.Payload.get -> MongoDB.Bson.BsonDocument!
+Chaos.Mongo.Outbox.OutboxMessage.Payload.init -> void
+Chaos.Mongo.Outbox.OutboxMessage.ProcessedUtc.get -> System.DateTime?
+Chaos.Mongo.Outbox.OutboxMessage.ProcessedUtc.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.RetryCount.get -> int
+Chaos.Mongo.Outbox.OutboxMessage.RetryCount.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.State.get -> Chaos.Mongo.Outbox.OutboxMessageState
+Chaos.Mongo.Outbox.OutboxMessage.State.init -> void
+Chaos.Mongo.Outbox.OutboxMessage.Type.get -> string!
+Chaos.Mongo.Outbox.OutboxMessage.Type.init -> void
+Chaos.Mongo.Outbox.OutboxMessageState
+Chaos.Mongo.Outbox.OutboxMessageState.Failed = 2 -> Chaos.Mongo.Outbox.OutboxMessageState
+Chaos.Mongo.Outbox.OutboxMessageState.Pending = 0 -> Chaos.Mongo.Outbox.OutboxMessageState
+Chaos.Mongo.Outbox.OutboxMessageState.Processed = 1 -> Chaos.Mongo.Outbox.OutboxMessageState
+Chaos.Mongo.Outbox.OutboxOptions
+Chaos.Mongo.Outbox.OutboxOptions.AutoStartProcessor.get -> bool
+Chaos.Mongo.Outbox.OutboxOptions.AutoStartProcessor.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.BatchSize.get -> int
+Chaos.Mongo.Outbox.OutboxOptions.BatchSize.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.CollectionName.get -> string!
+Chaos.Mongo.Outbox.OutboxOptions.CollectionName.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.LockTimeout.get -> System.TimeSpan
+Chaos.Mongo.Outbox.OutboxOptions.LockTimeout.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.MaxRetries.get -> int
+Chaos.Mongo.Outbox.OutboxOptions.MaxRetries.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.MessageTypeLookup.get -> System.Collections.Immutable.ImmutableDictionary<System.Type!, string!>!
+Chaos.Mongo.Outbox.OutboxOptions.MessageTypeLookup.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.OutboxOptions() -> void
+Chaos.Mongo.Outbox.OutboxOptions.PollingInterval.get -> System.TimeSpan
+Chaos.Mongo.Outbox.OutboxOptions.PollingInterval.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.ProcessingFilter.get -> MongoDB.Driver.FilterDefinition<Chaos.Mongo.Outbox.OutboxMessage!>?
+Chaos.Mongo.Outbox.OutboxOptions.ProcessingFilter.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.RetentionPeriod.get -> System.TimeSpan?
+Chaos.Mongo.Outbox.OutboxOptions.RetentionPeriod.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.RetryBackoffInitialDelay.get -> System.TimeSpan
+Chaos.Mongo.Outbox.OutboxOptions.RetryBackoffInitialDelay.init -> void
+Chaos.Mongo.Outbox.OutboxOptions.RetryBackoffMaxDelay.get -> System.TimeSpan
+Chaos.Mongo.Outbox.OutboxOptions.RetryBackoffMaxDelay.init -> void
+Chaos.Mongo.Outbox.OutboxProcessor
+Chaos.Mongo.Outbox.OutboxProcessor.OutboxProcessor(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Outbox.OutboxOptions! options, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! serviceScopeFactory, System.TimeProvider! timeProvider, Microsoft.Extensions.Logging.ILogger<Chaos.Mongo.Outbox.OutboxProcessor!>! logger) -> void
+Chaos.Mongo.Outbox.OutboxProcessor.StartAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxProcessor.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Outbox.OutboxSerializationSetup
+const Chaos.Mongo.Outbox.OutboxOptions.DefaultBatchSize = 100 -> int
+const Chaos.Mongo.Outbox.OutboxOptions.DefaultCollectionName = "Outbox" -> string!
+const Chaos.Mongo.Outbox.OutboxOptions.DefaultMaxRetries = 5 -> int
+static Chaos.Mongo.Outbox.MongoBuilderExtensions.WithOutbox(this Chaos.Mongo.MongoBuilder! builder, System.Action<Chaos.Mongo.Outbox.OutboxBuilder!>! configure) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.Outbox.MongoBuilderExtensions.WithOutbox<TOutbox>(this Chaos.Mongo.MongoBuilder! builder, System.Action<Chaos.Mongo.Outbox.OutboxBuilder!>! configure) -> Chaos.Mongo.MongoBuilder!
+static Chaos.Mongo.Outbox.OutboxSerializationSetup.RegisterClassMaps(System.Collections.Generic.IDictionary<System.Type!, string!>! messageTypes) -> void
+static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultLockTimeout -> System.TimeSpan
+static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultPollingInterval -> System.TimeSpan
+static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultRetryBackoffInitialDelay -> System.TimeSpan
+static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultRetryBackoffMaxDelay -> System.TimeSpan

@@ -9,6 +9,7 @@
     <PackageVersion Include="JUnitTestLogger" Version="1.1.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" />

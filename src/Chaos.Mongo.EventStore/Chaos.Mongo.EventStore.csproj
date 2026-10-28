@@ -13,4 +13,9 @@
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chaos.Mongo.EventStore.Tests" />
+    <InternalsVisibleTo Include="Chaos.Mongo.EventStore.Benchmarks" />
+    <InternalsVisibleTo Include="Chaos.Mongo.EventStore.LoadTests" />
+  </ItemGroup>
 </Project>

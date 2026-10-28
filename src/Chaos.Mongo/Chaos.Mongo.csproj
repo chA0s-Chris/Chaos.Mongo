@@ -18,4 +18,7 @@
     <PackageReference Include="MongoDB.Driver" />
     <PackageReference Include="System.IO.Hashing" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chaos.Mongo.Tests" />
+  </ItemGroup>
 </Project>

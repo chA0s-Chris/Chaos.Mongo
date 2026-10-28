@@ -10,10 +10,17 @@
     <Copyright>Copyright © 2025 Christian Flessa</Copyright>
     <PackageProjectUrl>https://github.com/chA0s-Chris/Chaos.Mongo</PackageProjectUrl>
     <PackageTags>MongoDB</PackageTags>
-    <DefineConstants>$(DefineConstants);$(AdditionalConstants)</DefineConstants>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <!-- Undeclared public API (RS0016) and declared API that no longer exists (RS0017) fail every
+         build, not only Release builds. -->
+    <WarningsAsErrors>$(WarningsAsErrors);RS0016;RS0017</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.SourceLink.GitHub">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
