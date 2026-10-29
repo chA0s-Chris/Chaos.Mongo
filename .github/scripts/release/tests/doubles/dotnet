@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Test double for "dotnet nuget push" against the fake feed in $DOUBLE_STATE/nuget, which the curl double serves.
+#
+# Like the real client, it first logs the package file name, and with --skip-duplicate it reports a duplicate and
+# succeeds. A fake package file contains "<id> <version>". An accepted package gets a nuspec with the commit in
+# DOUBLE_PACKED_COMMIT (default: GITHUB_SHA) and stays hidden for DOUBLE_INDEX_DELAY requests (default: 0).
+# DOUBLE_DOTNET_FAIL_PACKAGE=<id> fails the push of that package, DOUBLE_DOTNET_FAIL_SYMBOLS=<message> every symbol push
+# with that error message.
+set -euo pipefail
+
+{
+    printf 'dotnet'
+    printf ' %q' "$@"
+    printf '\n'
+} >>"$DOUBLE_CALLS"
+
+[[ ${1-} == nuget && ${2-} == push ]] || { printf 'dotnet double: unsupported call\n' >&2; exit 2; }
+
+file="$3"
+source_url=""
+skip_duplicate=false
+previous=""
+for argument in "$@"; do
+    [[ $argument != --skip-duplicate ]] || skip_duplicate=true
+    [[ $previous != --source ]] || source_url="$argument"
+    previous="$argument"
+done
+
+read -r id version <"$file"
+directory="$DOUBLE_STATE/nuget/${id,,}/${version,,}"
+
+printf "Pushing %s to '%s'...\n" "$(basename "$file")" "$source_url"
+
+# Reports an existing package like the real client: skipped with --skip-duplicate, an error without it.
+duplicate() {
+    if [[ $skip_duplicate == true ]]; then
+        printf "Package '%s' already exists at feed '%s'.\n" "$file" "$source_url"
+        exit 0
+    fi
+    printf 'error: Response status code does not indicate success: 409 (Conflict).\n' >&2
+    exit 1
+}
+
+if [[ $file == *.snupkg ]]; then
+    [[ -f $directory/nuspec ]] || { printf 'error: Response status code does not indicate success: 404 (Not Found).\n' >&2; exit 1; }
+    [[ -z ${DOUBLE_DOTNET_FAIL_SYMBOLS:-} ]] || { printf 'error: %s\n' "$DOUBLE_DOTNET_FAIL_SYMBOLS" >&2; exit 1; }
+    [[ ! -f $directory/symbols ]] || duplicate
+
+    : >"$directory/symbols"
+    printf 'Your symbols package was pushed.\n'
+    exit 0
+fi
+
+[[ ! -f $directory/nuspec ]] || duplicate
+
+if [[ ${DOUBLE_DOTNET_FAIL_PACKAGE:-} == "$id" ]]; then
+    printf 'error: Response status code does not indicate success: 503 (Service Unavailable).\n' >&2
+    exit 1
+fi
+
+mkdir -p "$directory"
+printf '<?xml version="1.0" encoding="utf-8"?>\n<package><metadata><id>%s</id><version>%s</version><repository type="git" url="https://github.com/chA0s-Chris/Chaos.Mongo" commit="%s" /></metadata></package>\n' \
+    "$id" "$version" "${DOUBLE_PACKED_COMMIT:-$GITHUB_SHA}" >"$directory/nuspec"
+printf '%s\n' "${DOUBLE_INDEX_DELAY:-0}" >"$directory/hidden"
+printf 'Your package was pushed.\n'

@@ -11,6 +11,8 @@
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
+# The release workflow scripts are sources, not build results.
+!/.github/scripts/release/
 [Rr]eleases/
 x64/
 x86/

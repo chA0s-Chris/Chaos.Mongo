@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# Test double for the gh calls of the release scripts, backed by the fake repository state in $DOUBLE_STATE.
+#
+# A release is a directory $DOUBLE_STATE/releases/<tag> with the files draft, prerelease, latest and body and an
+# assets directory. An asset with a marker file of the same name in the starter directory is the empty, incomplete
+# asset that GitHub leaves behind when an upload fails upstream. A pull request is a file $DOUBLE_STATE/pulls/<number> whose lines are its head branch and its state
+# (open, closed or merged).
+# "--json <field>" prints what the scripts' "--jq" expression extracts from that field.
+# DOUBLE_GH_HIDE_DRAFTS=1 hides drafts like a read-only token does. DOUBLE_GH_FAIL_UPLOAD=1 fails every upload.
+# DOUBLE_GH_STARTER_UPLOAD=<asset name> fails the upload of that asset after leaving an incomplete asset behind.
+# DOUBLE_GH_FAIL_PR=1 fails pull request creation.
+# Deleting a complete asset is recorded in $DOUBLE_STATE/deleted-uploaded-assets, so the tests can reject it.
+set -euo pipefail
+
+{
+    printf 'gh'
+    printf ' %q' "$@"
+    printf '\n'
+} >>"$DOUBLE_CALLS"
+
+releases="$DOUBLE_STATE/releases"
+pulls="$DOUBLE_STATE/pulls"
+mkdir -p "$releases" "$pulls"
+
+die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+# Sets the flags of release $1 from the remaining arguments.
+apply_flags() {
+    local release="$1"
+    shift
+    for argument in "$@"; do
+        case "$argument" in
+            --draft=false) printf 'false\n' >"$release/draft" ;;
+            --prerelease | --prerelease=true) printf 'true\n' >"$release/prerelease" ;;
+            --prerelease=false) printf 'false\n' >"$release/prerelease" ;;
+            --latest | --latest=true) printf 'true\n' >"$release/latest" ;;
+            --latest=false) printf 'false\n' >"$release/latest" ;;
+        esac
+    done
+}
+
+release_view() {
+    local tag="$1" field="" expression="" release asset name state
+    shift
+    while (($# > 0)); do
+        case "$1" in
+            --json) field="$2"; shift ;;
+            --jq) expression="$2"; shift ;;
+        esac
+        shift
+    done
+
+    release="$releases/$tag"
+    [[ -d $release ]] || die "release not found"
+    [[ -z ${DOUBLE_GH_HIDE_DRAFTS:-} || $(<"$release/draft") == false ]] || die "release not found"
+
+    case "$field" in
+        isDraft) cat "$release/draft" ;;
+        body) cat "$release/body" ;;
+        assets)
+            [[ $expression == '.assets[] | [.name, .state] | @tsv' ]] ||
+                die "gh double: unsupported assets expression $expression"
+            while IFS= read -r asset; do
+                name="$(basename "$asset")"
+                state=uploaded
+                [[ ! -e $release/starter/$name ]] || state=starter
+                printf '%s\t%s\n' "$name" "$state"
+            done < <(find "$release/assets" -type f | LC_ALL=C sort)
+            ;;
+        *) die "gh double: unsupported field $field" ;;
+    esac
+}
+
+release_create() {
+    local tag="$1" notes="" verify=false release
+    shift
+    local -a arguments=("$@")
+    while (($# > 0)); do
+        case "$1" in
+            --notes-file) notes="$2"; shift ;;
+            --verify-tag) verify=true ;;
+            --title) shift ;;
+            --* ) ;;
+            *) die "gh double: release create does not support assets" ;;
+        esac
+        shift
+    done
+
+    release="$releases/$tag"
+    [[ ! -e $release ]] || die "a release with the same tag name already exists: $tag"
+    if [[ $verify == true ]]; then
+        "$REAL_GIT" --git-dir="$DOUBLE_ORIGIN" rev-parse --quiet --verify "refs/tags/$tag" >/dev/null ||
+            die "tag $tag doesn't exist in the repo"
+    fi
+
+    mkdir -p "$release/assets"
+    printf 'false\n' >"$release/draft"
+    printf 'false\n' >"$release/prerelease"
+    printf 'false\n' >"$release/latest"
+    cp "$notes" "$release/body"
+    apply_flags "$release" "${arguments[@]}"
+    printf 'https://github.com/chA0s-Chris/Chaos.Mongo/releases/tag/%s\n' "$tag"
+}
+
+release_upload() {
+    local tag="$1" clobber=false release
+    shift
+    local -a files=()
+    for argument in "$@"; do
+        case "$argument" in
+            --clobber) clobber=true ;;
+            *) files+=("$argument") ;;
+        esac
+    done
+
+    release="$releases/$tag"
+    [[ -d $release ]] || die "release not found"
+    [[ -z ${DOUBLE_GH_FAIL_UPLOAD:-} ]] || die "HTTP 502: Server Error"
+
+    for file in "${files[@]}"; do
+        [[ $clobber == true || ! -e $release/assets/$(basename "$file") ]] ||
+            die "asset under the same name already exists: [$(basename "$file")]"
+        if [[ $(basename "$file") == "${DOUBLE_GH_STARTER_UPLOAD:-}" ]]; then
+            mkdir -p "$release/starter"
+            : >"$release/assets/$(basename "$file")"
+            : >"$release/starter/$(basename "$file")"
+            die "HTTP 502: Server Error"
+        fi
+        cp "$file" "$release/assets/"
+    done
+}
+
+release_delete_asset() {
+    local tag="$1" name="$2" confirmed=false release
+    shift 2
+    for argument in "$@"; do
+        [[ $argument != --yes && $argument != -y ]] || confirmed=true
+    done
+
+    release="$releases/$tag"
+    [[ $confirmed == true ]] || die "--yes required when not running interactively"
+    [[ -d $release ]] || die "release not found"
+    [[ -e $release/assets/$name ]] || die "asset $name not found in release $tag"
+
+    if [[ -e $release/starter/$name ]]; then
+        rm "$release/starter/$name"
+    else
+        printf '%s %s\n' "$tag" "$name" >>"$DOUBLE_STATE/deleted-uploaded-assets"
+    fi
+    rm "$release/assets/$name"
+}
+
+release_edit() {
+    local tag="$1"
+    shift
+    [[ -d $releases/$tag ]] || die "release not found"
+    apply_flags "$releases/$tag" "$@"
+}
+
+pr_list() {
+    local head="" state=open count=0 pull pull_head pull_state
+    while (($# > 0)); do
+        case "$1" in
+            --head) head="$2"; shift ;;
+            --state) state="$2"; shift ;;
+        esac
+        shift
+    done
+    for pull in "$pulls"/*; do
+        [[ -f $pull ]] || continue
+        { read -r pull_head; read -r pull_state; } <"$pull"
+        [[ $pull_head == "$head" && ($state == all || $state == "$pull_state") ]] && count=$((count + 1))
+    done
+    printf '%s\n' "$count"
+}
+
+pr_create() {
+    local head="" number
+    while (($# > 0)); do
+        [[ $1 != --head ]] || head="$2"
+        shift
+    done
+    [[ -z ${DOUBLE_GH_FAIL_PR:-} ]] || die "HTTP 502: Server Error"
+    "$REAL_GIT" --git-dir="$DOUBLE_ORIGIN" rev-parse --quiet --verify "refs/heads/$head" >/dev/null ||
+        die "Head ref must be a branch"
+
+    number=$(($(find "$pulls" -type f | wc -l) + 1))
+    printf '%s\nopen\n' "$head" >"$pulls/$number"
+    printf 'https://github.com/chA0s-Chris/Chaos.Mongo/pull/%s\n' "$number"
+}
+
+case "${1-} ${2-}" in
+    "release view") shift 2; release_view "$@" ;;
+    "release create") shift 2; release_create "$@" ;;
+    "release upload") shift 2; release_upload "$@" ;;
+    "release edit") shift 2; release_edit "$@" ;;
+    "release delete-asset") shift 2; release_delete_asset "$@" ;;
+    "pr list") shift 2; pr_list "$@" ;;
+    "pr create") shift 2; pr_create "$@" ;;
+    *) die "gh double: unsupported call $*" ;;
+esac

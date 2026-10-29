@@ -7,8 +7,13 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageIcon>mongo.png</PackageIcon>
     <Authors>Christian Flessa</Authors>
-    <Copyright>Copyright © 2025 Christian Flessa</Copyright>
+    <Copyright>Copyright © 2025-$([System.DateTime]::UtcNow.Year) Christian Flessa</Copyright>
     <PackageProjectUrl>https://github.com/chA0s-Chris/Chaos.Mongo</PackageProjectUrl>
+    <!-- Set explicitly so that the nuspec does not depend on the remote of the clone. SourceLink adds the commit. -->
+    <RepositoryUrl>https://github.com/chA0s-Chris/Chaos.Mongo</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <!-- Projects append their own tags. -->
     <PackageTags>MongoDB</PackageTags>
     <EnablePackageValidation>true</EnablePackageValidation>
     <!-- Undeclared public API (RS0016) and declared API that no longer exists (RS0017) fail every

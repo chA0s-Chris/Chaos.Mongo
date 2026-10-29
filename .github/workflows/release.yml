@@ -4,131 +4,205 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Semantic version to release (e.g. 1.2.3 or 1.2.3-dev)'
+        description: 'Semantic version to release, without a leading v (e.g. 1.2.3 or 1.2.3-rc.1)'
         required: true
-        default: '0.1.0'
+        type: string
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+# Untrusted values reach the scripts only through env and are quoted there. The scripts are covered by
+# .github/scripts/release/tests/run.sh, which ci.yml runs.
+env:
+  VERSION: ${{ inputs.version }}
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-latest
-
-    env:
-      VERSION: ${{ github.event.inputs.version }}
-      IS_PRERELEASE: ${{ contains(github.event.inputs.version, '-') }}
-
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      prerelease: ${{ steps.validate.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate ref and version
+        id: validate
+        run: bash .github/scripts/release/validate.sh
+
+      - name: Check existing tags and packages
+        run: bash .github/scripts/release/preflight.sh
+
+      - name: Draft release notes
+        id: drafter
+        uses: release-drafter/release-drafter@978bb0b30c5ee8cdd332ced253758157150d43f0 # v7.10.0
+        with:
+          config-name: release-drafter.yml
+          tag: v${{ inputs.version }}
+          name: v${{ inputs.version }}
+          commitish: ${{ github.sha }}
+          dry-run: true
+
+      - name: Write release notes
+        env:
+          DRAFTED_BODY: ${{ steps.drafter.outputs.body }}
+          NOTES_DIR: release-notes
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/release/release-notes.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes/
+          if-no-files-found: error
+          overwrite: true
+
+  test:
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    secrets:
+      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+      DOCKERHUB_PAT: ${{ secrets.DOCKERHUB_PAT }}
+
+  pack:
+    needs: [ prepare, test ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: |
             8.0.x
             9.0.x
             10.0.x
 
-      - name: Initialize git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Decode SNK
-        run: |
-          echo "${{ secrets.CHAOSMONGO_SNK }}" | base64 --decode > Chaos.Mongo.snk
-
-      - name: Create local tag v${{ env.VERSION }}
-        run: |
-          git tag -a "v${{ env.VERSION }}" -m "Release v${{ env.VERSION }}"
-
-      - name: Draft PR-level release notes
-        id: drafter
-        uses: release-drafter/release-drafter@v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          config-name: release-drafter.yml
-          tag: v${{ env.VERSION }}
-          name: v${{ env.VERSION }}
-          publish: false
+          name: release-notes
+          path: release-notes
+
+      - name: Provide ReleaseNotes.md for packing
+        run: cp release-notes/ReleaseNotes.md ReleaseNotes.md
+
+      - name: Decode the signing key
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHAOSMONGO_SNK: ${{ secrets.CHAOSMONGO_SNK }}
+        run: printf '%s' "$CHAOSMONGO_SNK" | base64 --decode > Chaos.Mongo.snk
 
-      - name: Create ReleaseNotes.md (used by packing)
-        run: |
-          echo "# ${{ steps.drafter.outputs.tag_name }} ($(date +%Y-%m-%d))" > ReleaseNotes.md
-          echo "" >> ReleaseNotes.md
-          echo "${{ steps.drafter.outputs.body }}" >> ReleaseNotes.md
+      - name: Pack
+        run: bash build.sh Pack --release-version "$VERSION"
 
-      - name: Restore & Pack
-        run: |
-          bash build.sh Pack --release-version ${{ env.VERSION }}
-
-      - name: Push tag v${{ env.VERSION }}
-        run: |
-          git push origin "v${{ env.VERSION }}"
-
-      - name: Update CHANGELOG.md
-        if: ${{ env.IS_PRERELEASE == 'false' }}
-        run: |
-          HEADER_FILE="$(mktemp)"
-          CHANGES_FILE="$(mktemp)"
-
-          # keep header lines until first '## '
-          sed -n '/^## /q; p' CHANGELOG.md > "$HEADER_FILE"
-          sed -n '/^## /,$p' CHANGELOG.md > "$CHANGES_FILE"
-
-          cat "$HEADER_FILE" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "## ${{ steps.drafter.outputs.tag_name }} ($(date +%Y-%m-%d))" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "${{ steps.drafter.outputs.body }}" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          cat "$CHANGES_FILE" >> CHANGELOG.md
-
-      - name: Commit CHANGELOG.md to new release branch
-        if: ${{ env.IS_PRERELEASE == 'false' }}
-        uses: EndBug/add-and-commit@v11
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          author_name: 'github-actions[bot]'
-          author_email: 'github-actions[bot]@users.noreply.github.com'
-          message: "docs: update CHANGELOG for ${{ env.VERSION }} [skip ci]"
-          add: 'CHANGELOG.md'
-          new_branch: "release/changelog-v${{ env.VERSION }}"
-          push: true
-
-      - name: Open PR
-        if: ${{ env.IS_PRERELEASE == 'false' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BRANCH="release/changelog-v${{ env.VERSION }}"
-          TITLE="docs: update CHANGELOG.md for ${{ steps.drafter.outputs.tag_name }}"
-          BODY="Automatic CHANGELOG.md update for ${{ steps.drafter.outputs.tag_name }}."
-          gh pr view "$BRANCH" --json url >/dev/null 2>&1 || \
-            gh pr create --title "$TITLE" --body "$BODY" --base main --head "$BRANCH"
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.drafter.outputs.tag_name }}
-          name: ${{ steps.drafter.outputs.name }}
-          body: ${{ steps.drafter.outputs.body }}
-          draft: false
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          make_latest: ${{ env.IS_PRERELEASE == 'false' }}
-          files: |
+          name: packages
+          path: |
             artifacts/packages/*.nupkg
             artifacts/packages/*.snupkg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    needs: [ prepare, pack ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: artifacts/packages
+
+      # Trusted publishing: exchanges the OIDC token for a short-lived nuget.org key. The nuget.org account
+      # chAos-Chris (letter O) owns the packages; it differs from the GitHub account chA0s-Chris.
+      - name: Log in to nuget.org
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: chAos-Chris
 
       - name: Push to nuget.org
-        run: |
-          dotnet nuget push artifacts/packages/*.nupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+        env:
+          NUGET_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          PACKAGE_DIR: artifacts/packages
+        run: bash .github/scripts/release/publish.sh
+
+  release:
+    needs: [ prepare, publish ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: artifacts/packages
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: release-notes
+
+      - name: Verify the published packages
+        run: bash .github/scripts/release/verify-published.sh
+
+      - name: Tag and publish the GitHub release
+        env:
+          PACKAGE_DIR: artifacts/packages
+          NOTES_FILE: release-notes/body.md
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/release/release.sh
+
+  changelog:
+    needs: [ prepare, release ]
+    if: needs.prepare.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: release-notes
+
+      - name: Open the CHANGELOG.md pull request
+        env:
+          NOTES_FILE: release-notes/body.md
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/release/changelog.sh
