@@ -42,13 +42,14 @@ internal sealed class AnchorEvidenceResolver
         var timestamps = new List<AnchorTimestamp>(anchor.Timestamps.Count);
         foreach (var timestamp in anchor.Timestamps)
         {
-            timestamps.Add(new AnchorTimestamp(timestamp.Authority,
-                                               await ReadAsync(timestamp.TokenHash, resolved, cancellationToken),
-                                               await ReadAllAsync(timestamp.CertificateChainHashes, resolved, cancellationToken),
-                                               await ReadAllAsync(timestamp.CertificateRevocationListHashes, resolved, cancellationToken),
-                                               timestamp.TimestampUtc,
-                                               timestamp.ObtainedUtc)
+            timestamps.Add(new AnchorTimestamp
             {
+                Authority = timestamp.Authority,
+                Token = await ReadAsync(timestamp.TokenHash, resolved, cancellationToken),
+                CertificateChain = await ReadAllAsync(timestamp.CertificateChainHashes, resolved, cancellationToken),
+                CertificateRevocationLists = await ReadAllAsync(timestamp.CertificateRevocationListHashes, resolved, cancellationToken),
+                TimestampUtc = timestamp.TimestampUtc,
+                ObtainedUtc = timestamp.ObtainedUtc,
                 RevocationStatus = timestamp.RevocationStatus,
                 RevocationStatusUtc = timestamp.RevocationStatusUtc,
                 ConfirmingRevocationLists = await ReadAllAsync(timestamp.ConfirmingRevocationListHashes, resolved, cancellationToken),

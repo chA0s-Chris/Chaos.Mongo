@@ -8,16 +8,16 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// </summary>
 public sealed class RevocationLists
 {
-    private RevocationLists(IReadOnlyList<Byte[]> lists, DateTimeOffset? nextUpdate)
+    private RevocationLists(IReadOnlyList<Byte[]> lists, DateTime? nextUpdateUtc)
     {
         Lists = lists;
-        NextUpdate = nextUpdate;
+        NextUpdateUtc = nextUpdateUtc;
     }
 
     /// <summary>
     /// Gets a value indicating whether a distribution point offers only a CRL issued too early.
     /// </summary>
-    public Boolean IsIssuedTooEarly => NextUpdate is not null;
+    public Boolean IsIssuedTooEarly => NextUpdateUtc is not null;
 
     /// <summary>
     /// Gets the CRLs, one per distribution point of the chain's non-root certificates; empty when the CRLs were issued
@@ -27,8 +27,9 @@ public sealed class RevocationLists
 
     /// <summary>
     /// Gets the earliest next update among the CRLs issued too early, or <c>null</c> when the CRLs are available.
+    /// Its <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Utc"/>.
     /// </summary>
-    public DateTimeOffset? NextUpdate { get; }
+    public DateTime? NextUpdateUtc { get; }
 
     /// <summary>
     /// Creates the result for CRLs that were all issued late enough.
@@ -44,7 +45,21 @@ public sealed class RevocationLists
     /// <summary>
     /// Creates the result for a distribution point whose current CRL was issued too early.
     /// </summary>
-    /// <param name="nextUpdate">The earliest next update among the CRLs issued too early.</param>
+    /// <param name="nextUpdateUtc">
+    /// The earliest next update among the CRLs issued too early. Its <see cref="DateTime.Kind"/> must be
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </param>
     /// <returns>The result.</returns>
-    public static RevocationLists IssuedTooEarly(DateTimeOffset nextUpdate) => new([], nextUpdate);
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="nextUpdateUtc"/>'s <see cref="DateTime.Kind"/> is not <see cref="DateTimeKind.Utc"/>.
+    /// </exception>
+    public static RevocationLists IssuedTooEarly(DateTime nextUpdateUtc)
+    {
+        if (nextUpdateUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException($"{nameof(nextUpdateUtc)} must have {nameof(DateTimeKind.Utc)} kind.", nameof(nextUpdateUtc));
+        }
+
+        return new RevocationLists([], nextUpdateUtc);
+    }
 }

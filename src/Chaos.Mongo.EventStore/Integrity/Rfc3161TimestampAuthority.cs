@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Integrity;
 
+using Chaos.Mongo.EventStore.Errors;
 using System.Formats.Asn1;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -221,7 +222,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             }
         }
 
-        return tooEarlyNextUpdate is { } nextUpdate ? RevocationLists.IssuedTooEarly(nextUpdate) : RevocationLists.Issued(crls);
+        return tooEarlyNextUpdate is { } nextUpdate ? RevocationLists.IssuedTooEarly(nextUpdate.UtcDateTime) : RevocationLists.Issued(crls);
     }
 
     /// <summary>
@@ -338,7 +339,7 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
             crls.Add(downloaded.Crl ?? throw new InvalidOperationException("A CRL download without a minimum issue time returned no CRL."));
         }
 
-        return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp);
+        return new TimestampToken(rawToken, chain.Certificates, crls, token.TokenInfo.Timestamp.UtcDateTime);
     }
 
     private (Rfc3161TimestampToken Token, Byte[] RawToken) ValidateResponse(Rfc3161TimestampRequest request, Byte[] response)
@@ -375,10 +376,16 @@ internal sealed class Rfc3161TimestampAuthority : ITimestampAuthority
 
     /// <inheritdoc/>
     public Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
-                                                         DateTimeOffset issuedNotBefore,
+                                                         DateTime issuedNotBeforeUtc,
                                                          CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(certificateChain);
+        if (issuedNotBeforeUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException($"{nameof(issuedNotBeforeUtc)} must have {nameof(DateTimeKind.Utc)} kind.", nameof(issuedNotBeforeUtc));
+        }
+
+        var issuedNotBefore = new DateTimeOffset(issuedNotBeforeUtc, TimeSpan.Zero);
         return RunAttemptAsync(attemptToken => GetRevocationListsCoreAsync(certificateChain, issuedNotBefore, attemptToken), cancellationToken);
     }
 

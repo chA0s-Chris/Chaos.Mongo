@@ -13,16 +13,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// equal; compare hashes and digests with <c>SequenceEqual</c>, and lists of byte arrays or records item by item,
 /// field by field, since <c>SequenceEqual</c> on them compares references too.
 /// </remarks>
-/// <param name="FirstBrokenVersion">The first version whose verification failed, or <c>null</c> when the stream is intact.</param>
-/// <param name="Failure">Why the first broken version failed, or <c>null</c> when the stream is intact.</param>
-/// <param name="UnrecordedErasures">
-/// The erased values that no later erasure event records. They do not break the chain and are only collected for
-/// an intact stream.
-/// </param>
-public sealed record StreamVerificationResult(
-    Int64? FirstBrokenVersion,
-    StreamVerificationFailure? Failure,
-    IReadOnlyList<UnrecordedErasure> UnrecordedErasures)
+public sealed record StreamVerificationResult
 {
     /// <summary>
     /// Gets a value indicating whether the stream was compared with its leaves in completed anchors and the sealing
@@ -34,6 +25,16 @@ public sealed record StreamVerificationResult(
     /// Gets the integrity data of every version verified before the chain ended or broke, in version order.
     /// </summary>
     public IReadOnlyList<VerifiedEvent> Events { get; init; } = [];
+
+    /// <summary>
+    /// Gets why the first broken version failed, or <c>null</c> when the stream is intact.
+    /// </summary>
+    public StreamVerificationFailure? Failure { get; init; }
+
+    /// <summary>
+    /// Gets the first version whose verification failed, or <c>null</c> when the stream is intact.
+    /// </summary>
+    public Int64? FirstBrokenVersion { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the stream's hash chain is intact.
@@ -48,9 +49,18 @@ public sealed record StreamVerificationResult(
     public IReadOnlyList<Int64> SealModeTransitions { get; init; } = [];
 
     /// <summary>
+    /// Gets the erased values that no later erasure event records. They do not break the chain and are only collected
+    /// for an intact stream.
+    /// </summary>
+    public required IReadOnlyList<UnrecordedErasure> UnrecordedErasures { get; init; }
+
+    /// <summary>
     /// Gets a result describing an intact stream without unrecorded erasures.
     /// </summary>
-    internal static StreamVerificationResult Intact { get; } = new(null, null, []);
+    internal static StreamVerificationResult Intact { get; } = new()
+    {
+        UnrecordedErasures = []
+    };
 
     /// <summary>
     /// Gets a hash code of the verdict, consistent with <see cref="Equals(StreamVerificationResult)"/>.
@@ -66,7 +76,12 @@ public sealed record StreamVerificationResult(
     /// <param name="failure">Why the version failed.</param>
     /// <returns>The result.</returns>
     internal static StreamVerificationResult Broken(Int64 version, StreamVerificationFailure failure)
-        => new(version, failure, []);
+        => new()
+        {
+            FirstBrokenVersion = version,
+            Failure = failure,
+            UnrecordedErasures = []
+        };
 
     /// <summary>
     /// Creates a result describing an intact stream with the given unrecorded erasures.
@@ -76,7 +91,12 @@ public sealed record StreamVerificationResult(
     internal static StreamVerificationResult IntactWith(IReadOnlyList<UnrecordedErasure> unrecordedErasures)
     {
         ArgumentNullException.ThrowIfNull(unrecordedErasures);
-        return unrecordedErasures.Count == 0 ? Intact : new StreamVerificationResult(null, null, unrecordedErasures);
+        return unrecordedErasures.Count == 0
+            ? Intact
+            : new StreamVerificationResult
+            {
+                UnrecordedErasures = unrecordedErasures
+            };
     }
 
     /// <summary>

@@ -75,7 +75,13 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
 
         if (!stream.IsIntact)
         {
-            return new DerivedDataVerificationResult(stream, ReadModelStatus.NotChecked, [], true);
+            return new DerivedDataVerificationResult
+            {
+                Stream = stream,
+                ReadModel = ReadModelStatus.NotChecked,
+                Checkpoints = [],
+                CreationTimeConsistent = true
+            };
         }
 
         var idFilter = new BsonDocument("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard));
@@ -124,10 +130,26 @@ internal sealed class DerivedDataVerifier<TAggregate> where TAggregate : class, 
         // A checkpoint document that cannot be read, or whose version cannot be read, counts as a mismatch of its hash
         // and state.
         var results = checkpoints.Select(checkpoint => (checkpoint.Document, checkpoint.Version) is ({ } document, { } version)
-                                             ? new CheckpointVerification(version, VerifyHash(document, version, hashes), replay.CheckpointStates.GetValueOrDefault(document))
-                                             : new CheckpointVerification(checkpoint.Version.GetValueOrDefault(), CheckpointHashStatus.Mismatch, false))
+                                             ? new CheckpointVerification
+                                             {
+                                                 Version = version,
+                                                 HashStatus = VerifyHash(document, version, hashes),
+                                                 StateMatches = replay.CheckpointStates.GetValueOrDefault(document)
+                                             }
+                                             : new CheckpointVerification
+                                             {
+                                                 Version = checkpoint.Version.GetValueOrDefault(),
+                                                 HashStatus = CheckpointHashStatus.Mismatch,
+                                                 StateMatches = false
+                                             })
                                  .ToList();
-        return new DerivedDataVerificationResult(stream, readModelStatus, results, CreationTimesAgree(readModel, checkpointDocuments));
+        return new DerivedDataVerificationResult
+        {
+            Stream = stream,
+            ReadModel = readModelStatus,
+            Checkpoints = results,
+            CreationTimeConsistent = CreationTimesAgree(readModel, checkpointDocuments)
+        };
     }
 
     private static String CheckpointElement(String memberName) => ElementNameOf(typeof(CheckpointDocument<TAggregate>), memberName);

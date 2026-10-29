@@ -117,11 +117,28 @@ public class PersonalDataErasureRegistrationTests
     [Test]
     public void StreamVerificationResult_Equality_ComparesUnrecordedErasuresByValue()
     {
-        var erasure = new UnrecordedErasure(2, "Memo");
+        var erasure = new UnrecordedErasure
+        {
+            Version = 2,
+            Path = "Memo"
+        };
 
         StreamVerificationResult.IntactWith([]).Should().BeSameAs(StreamVerificationResult.Intact);
-        StreamVerificationResult.IntactWith([erasure]).Should().Be(new StreamVerificationResult(null, null, [new UnrecordedErasure(2, "Memo")]));
-        StreamVerificationResult.IntactWith([erasure]).GetHashCode().Should().Be(new StreamVerificationResult(null, null, [erasure]).GetHashCode());
+        StreamVerificationResult.IntactWith([erasure]).Should().Be(new StreamVerificationResult
+        {
+            UnrecordedErasures =
+            [
+                new UnrecordedErasure
+                {
+                    Version = 2,
+                    Path = "Memo"
+                }
+            ]
+        });
+        StreamVerificationResult.IntactWith([erasure]).GetHashCode().Should().Be(new StreamVerificationResult
+        {
+            UnrecordedErasures = [erasure]
+        }.GetHashCode());
         StreamVerificationResult.IntactWith([erasure]).Should().NotBe(StreamVerificationResult.Intact);
         StreamVerificationResult.IntactWith([erasure]).IsIntact.Should().BeTrue();
         StreamVerificationResult.Broken(2, StreamVerificationFailure.HashMismatch)

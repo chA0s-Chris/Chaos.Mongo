@@ -27,31 +27,31 @@ documentation additions the issue also asks for.
 
 ## Acceptance Criteria
 
-- [ ] `MongoEventStore<TAggregate>`, `MongoAggregateRepository<TAggregate>`,
+- [x] `MongoEventStore<TAggregate>`, `MongoAggregateRepository<TAggregate>`,
       `MongoEventStoreConfigurator<TAggregate>`, `MongoEventStoreSerializationSetup`,
       `CheckpointDocument<TAggregate>`, and `CheckpointId` are `internal`.
-- [ ] `MongoEventStoreBuilder<TAggregate>`'s constructor and its `Options`
+- [x] `MongoEventStoreBuilder<TAggregate>`'s constructor and its `Options`
       property getter are `internal`; the class itself stays `public sealed`.
-- [ ] `MongoEventStoreOptions<TAggregate>` stays `public sealed`; every
+- [x] `MongoEventStoreOptions<TAggregate>` stays `public sealed`; every
       property setter (`BulkWriteOptimizationEnabled`, `CheckpointCollectionSuffix`,
       `CheckpointInterval`, `CollectionPrefix`, `EventsCollectionSuffix`,
       `MaxAppendRetries`) becomes `internal set`, and `EventTypes` becomes
       `IReadOnlyDictionary<Type, String>` instead of `Dictionary<Type, String>`.
-- [ ] `IEventStore<TAggregate>.GetEventStream` is renamed to `GetEventStreamAsync`,
+- [x] `IEventStore<TAggregate>.GetEventStream` is renamed to `GetEventStreamAsync`,
       with its implementation, every call site across `src/`, `tests/`, and
       `docs/event-store.md`, and the type's `IAsyncEnumerable<T>`-returning-method
       naming convention documented consistently with `IEventStore<TAggregate>`'s
       other `…Async` members.
-- [ ] `TimestampAuthorityException` moves from `Chaos.Mongo.EventStore.Integrity`
+- [x] `TimestampAuthorityException` moves from `Chaos.Mongo.EventStore.Integrity`
       to `Chaos.Mongo.EventStore.Errors`, alongside `MongoEventStoreException`.
-- [ ] `IntegrityProtectionBuilder<TAggregate>` moves from `Chaos.Mongo.EventStore`
+- [x] `IntegrityProtectionBuilder<TAggregate>` moves from `Chaos.Mongo.EventStore`
       to `Chaos.Mongo.EventStore.Integrity`.
-- [ ] `ITimestampAuthority.GetRevocationListsAsync`'s `issuedNotBefore` parameter,
+- [x] `ITimestampAuthority.GetRevocationListsAsync`'s `issuedNotBefore` parameter,
       `RevocationLists.NextUpdate`, `RevocationLists.IssuedTooEarly`'s parameter,
       and `TimestampToken`'s constructor parameter and `Timestamp` property are
       `DateTime` with a `…Utc` suffix (`issuedNotBeforeUtc`, `NextUpdateUtc`,
       `nextUpdateUtc`, `timestampUtc`/`TimestampUtc`) instead of `DateTimeOffset`.
-- [ ] `Rfc3161TimestampAuthority.GetRevocationListsAsync` throws `ArgumentException`
+- [x] `Rfc3161TimestampAuthority.GetRevocationListsAsync` throws `ArgumentException`
       when `issuedNotBeforeUtc.Kind != DateTimeKind.Utc`, `RevocationLists.IssuedTooEarly`
       throws `ArgumentException` when `nextUpdateUtc.Kind != DateTimeKind.Utc`,
       and `TimestampToken`'s constructor throws `ArgumentException` when
@@ -63,7 +63,7 @@ documentation additions the issue also asks for.
       `nextUpdateUtc` is recorded as an ordinary confirmation failure by
       `TimestampRevocationConfirmer`, not an unhandled exception, alongside a positive test
       that a UTC `nextUpdateUtc` is accepted and used unchanged.
-- [ ] `AnchorAuthorityFailure`, `AnchorChainVerificationResult`, `AnchorLeaf`,
+- [x] `AnchorAuthorityFailure`, `AnchorChainVerificationResult`, `AnchorLeaf`,
       `AnchorReference`, `AnchorTimestamp`, `CheckpointVerification`,
       `CompletedAnchor`, `CompletenessFinding`, `DerivedDataVerificationResult`,
       `EventAnchorVerificationResult`, `IntegritySealingStatus`,
@@ -73,7 +73,7 @@ documentation additions the issue also asks for.
       with `init`-only properties instead of a positional primary constructor,
       with every field that is always present marked `required`; no production
       or test code constructs any of them positionally afterwards.
-- [ ] A fixed BSON fixture captured from the current, pre-conversion
+- [x] A fixed BSON fixture captured from the current, pre-conversion
       `AnchorStore`/`AnchorEvidenceStore` output exists for each hand-serialized
       record (`AnchorAuthorityFailure`, `AnchorLeaf`, `TimestampConfirmationFailure`)
       and for one evidence blob, committed under
@@ -81,42 +81,42 @@ documentation additions the issue also asks for.
       fixture with the converted code and confirms every decoded value
       (including UTC timestamps, failure reasons, and resolved evidence bytes)
       matches what was captured before the conversion.
-- [ ] `CompletenessFinding`'s XML documentation states, for each
+- [x] `CompletenessFinding`'s XML documentation states, for each
       `CompletenessFindingKind` value, which of its properties are populated and
       which stay at their default.
-- [ ] A public `IntegrityMetrics` static class exposes `MeterName`, a nested
+- [x] A public `IntegrityMetrics` static class exposes `MeterName`, a nested
       `Instruments` class with the five existing instrument name constants, and
       a nested `Tags` class with an `Authority` tag constant that
       `IntegrityAnchoringDiagnostics.RecordRevokedTimestamp` applies, mirroring
       `Chaos.Mongo.Queues.MongoQueueMetrics`'s shape; `IntegrityAnchoringDiagnostics`
       stays `internal` and sources its instrument names from `IntegrityMetrics`
       instead of declaring its own constants.
-- [ ] `IntegritySealMode`'s XML documentation states that it is persisted as a
+- [x] `IntegritySealMode`'s XML documentation states that it is persisted as a
       string through `MongoEventStoreSerializationSetup`'s explicit
       `EnumSerializer<IntegritySealMode>(BsonType.String)`, so its member names
       (not the hash-chain's separate fixed byte encoding) are the storage
       contract and must not be renamed.
-- [ ] A test demonstrates that a `TAggregate` read-model document, an `Event<TAggregate>`
+- [x] A test demonstrates that a `TAggregate` read-model document, an `Event<TAggregate>`
       document, a `CheckpointDocument<TAggregate>` document, and a document for each of
       `EventIntegrity`, `IntegritySealingState`, `PersonalDataCommitment`, and
       `PersonalDataErasureEntry` each still deserialize successfully — through an actual
       `BsonSerializer.Deserialize` call, not a mapping-flag or serialized-field-name
       assertion — from a BSON document containing an extra, unrecognized element, with
       every known value preserved.
-- [ ] Every public class in `Chaos.Mongo.EventStore` is sealed except `Aggregate`,
+- [x] Every public class in `Chaos.Mongo.EventStore` is sealed except `Aggregate`,
       `Event<TAggregate>`, `ObservationalEvent<TAggregate>`, and `MongoEventStoreException`.
-- [ ] `src/Chaos.Mongo.EventStore/PublicAPI.Unshipped.txt` records a `*REMOVED*`
+- [x] `src/Chaos.Mongo.EventStore/PublicAPI.Unshipped.txt` records a `*REMOVED*`
       entry for every shipped type, member, and accessor this plan moves to
       `internal` or removes, and a new entry for every renamed, moved, or
       reshaped public symbol, and the `Microsoft.CodeAnalysis.PublicApiAnalyzers`
       checks (RS0016/RS0017) report no errors.
-- [ ] `tests/Chaos.Mongo.EventStore.Tests/Integrity/PublicIntegritySurface.approved.txt`
+- [x] `tests/Chaos.Mongo.EventStore.Tests/Integrity/PublicIntegritySurface.approved.txt`
       is regenerated to match the new public surface and the diff is reviewed to
       confirm it reflects only this plan's changes.
-- [ ] `docs/event-store.md` uses `GetEventStreamAsync` throughout and no longer
+- [x] `docs/event-store.md` uses `GetEventStreamAsync` throughout and no longer
       warns against pre-registering a `CheckpointDocument<TAggregate>` class map,
       since consumers can no longer reference that now-internal type at all.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no
       warnings, and `bash ./build.sh Test` passes the complete suite with at
       least 95% merged line coverage, per `tests/AGENTS.md`.
 

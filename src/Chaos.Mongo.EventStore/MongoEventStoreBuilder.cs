@@ -2,16 +2,20 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore;
 
+using Chaos.Mongo.EventStore.Integrity;
+
 /// <summary>
 /// Fluent builder for configuring an event store for a specific aggregate type.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class, IAggregate, new()
 {
+    internal MongoEventStoreBuilder() { }
+
     /// <summary>
     /// Gets the options being configured by this builder.
     /// </summary>
-    public MongoEventStoreOptions<TAggregate> Options { get; } = new();
+    internal MongoEventStoreOptions<TAggregate> Options { get; } = new();
 
     /// <summary>
     /// Enables the MongoDB 8+ client bulk-write optimization for append operations.
@@ -104,7 +108,7 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
         else
             discriminator = eventType.Name;
 
-        Options.EventTypes[eventType] = discriminator;
+        Options.AddEventType(eventType, discriminator);
         return this;
     }
 

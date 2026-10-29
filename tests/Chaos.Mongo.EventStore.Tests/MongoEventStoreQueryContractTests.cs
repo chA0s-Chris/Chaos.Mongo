@@ -11,7 +11,6 @@ using MongoDB.Driver;
 using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
-using System.Reflection;
 
 public class MongoEventStoreQueryContractTests
 {
@@ -242,7 +241,7 @@ public class MongoEventStoreQueryContractTests
         var sut = CreateEventStore(options, eventsCollection);
 
         // Act
-        await foreach (var _ in sut.GetEventStream(aggregateId, 4, 8)) { }
+        await foreach (var _ in sut.GetEventStreamAsync(aggregateId, 4, 8)) { }
 
         // Assert
         queryCapture.CapturedFilter.Should().NotBeNull();
@@ -347,35 +346,12 @@ public class MongoEventStoreQueryContractTests
         return new MongoAggregateRepository<OrderAggregate>(mongoHelperMock.Object, options);
     }
 
+    /// <summary>
+    /// Creates a cursor without Moq, because Moq's dynamically generated proxy assembly cannot access an internal
+    /// <typeparamref name="TDocument"/>, such as <see cref="CheckpointDocument{TAggregate}"/>.
+    /// </summary>
     private static IAsyncCursor<TDocument> CreateCursor<TDocument>(params TDocument[] documents)
-    {
-        var returned = false;
-        var cursorMock = new Mock<IAsyncCursor<TDocument>>();
-        cursorMock.Setup(c => c.MoveNext(It.IsAny<CancellationToken>()))
-                  .Returns(() =>
-                  {
-                      if (returned)
-                      {
-                          return false;
-                      }
-
-                      returned = true;
-                      return documents.Length > 0;
-                  });
-        cursorMock.Setup(c => c.MoveNextAsync(It.IsAny<CancellationToken>()))
-                  .ReturnsAsync(() =>
-                  {
-                      if (returned)
-                      {
-                          return false;
-                      }
-
-                      returned = true;
-                      return documents.Length > 0;
-                  });
-        cursorMock.Setup(c => c.Current).Returns(documents);
-        return cursorMock.Object;
-    }
+        => new SingleBatchAsyncCursor<TDocument>(documents);
 
     private static MongoEventStore<OrderAggregate> CreateEventStore(
         MongoEventStoreOptions<OrderAggregate> options,
@@ -428,7 +404,7 @@ public class MongoEventStoreQueryContractTests
             CollectionPrefix = "Orders",
             CheckpointInterval = 3
         };
-        options.EventTypes[typeof(OrderViewedEvent)] = "OrderViewed";
+        options.AddEventType(typeof(OrderViewedEvent), "OrderViewed");
         return options;
     }
 
@@ -473,16 +449,22 @@ public class MongoEventStoreQueryContractTests
         Int32? Limit,
         ProjectionDefinition<TDocument, BsonDocument>? Projection);
 
-    private class CapturingMongoCollectionProxy<TDocument> : DispatchProxy
+    /// <summary>
+    /// Implemented directly on <see cref="NotSupportedMongoCollection{TDocument}"/>, instead of through
+    /// <see cref="System.Reflection.DispatchProxy"/>, because <see cref="System.Reflection.DispatchProxy"/>'s
+    /// dynamically generated proxy assembly cannot access an internal <typeparamref name="TDocument"/>, such as
+    /// <see cref="CheckpointDocument{TAggregate}"/>.
+    /// </summary>
+    private sealed class CapturingMongoCollectionProxy<TDocument> : NotSupportedMongoCollection<TDocument>
     {
-        private static readonly IMongoIndexManager<TDocument> IndexManager = Mock.Of<IMongoIndexManager<TDocument>>();
+        private readonly IAsyncCursor<TDocument> _cursor;
         private readonly IMongoDatabase _database = Mock.Of<IMongoDatabase>();
+        private readonly IMongoIndexManager<TDocument> _indexManager = new PlaceholderMongoIndexManager<TDocument>();
 
         private readonly Queue<BsonDocument[]> _projectedResults = new();
         private readonly MongoCollectionSettings _settings = new();
 
-        private IMongoCollection<TDocument> _collection = null!;
-        private IAsyncCursor<TDocument> _cursor = null!;
+        private CapturingMongoCollectionProxy(IAsyncCursor<TDocument> cursor) => _cursor = cursor;
 
         public FilterDefinition<TDocument>? CapturedFilter { get; private set; }
 
@@ -497,15 +479,23 @@ public class MongoEventStoreQueryContractTests
 
         public SortDefinition<TDocument>? CapturedSort { get; private set; }
 
+        public override CollectionNamespace CollectionNamespace { get; } = new(new DatabaseNamespace("Tests"), typeof(TDocument).Name);
+
+        public override IMongoDatabase Database => _database;
+
+        public override IBsonSerializer<TDocument> DocumentSerializer => BsonSerializer.SerializerRegistry.GetSerializer<TDocument>();
+
+        public override IMongoIndexManager<TDocument> Indexes => _indexManager;
+
+        public override IMongoSearchIndexManager SearchIndexes { get; } = Mock.Of<IMongoSearchIndexManager>();
+
+        public override MongoCollectionSettings Settings => _settings;
+
         public static (IMongoCollection<TDocument> Collection, CapturingMongoCollectionProxy<TDocument> Proxy) Create(
             IAsyncCursor<TDocument> cursor)
         {
-            var instance = Create(typeof(IMongoCollection<TDocument>), typeof(CapturingMongoCollectionProxy<TDocument>));
-            var collection = (IMongoCollection<TDocument>)instance;
-            var proxy = (CapturingMongoCollectionProxy<TDocument>)instance;
-            proxy._collection = collection;
-            proxy._cursor = cursor;
-            return (collection, proxy);
+            var proxy = new CapturingMongoCollectionProxy<TDocument>(cursor);
+            return (proxy, proxy);
         }
 
         /// <summary>
@@ -514,24 +504,29 @@ public class MongoEventStoreQueryContractTests
         /// </summary>
         public void EnqueueProjectedResult(params BsonDocument[] documents) => _projectedResults.Enqueue(documents);
 
-        protected override Object? Invoke(MethodInfo? targetMethod, Object?[]? args)
-        {
-            ArgumentNullException.ThrowIfNull(targetMethod);
+        public override Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(
+            FilterDefinition<TDocument> filter, FindOptions<TDocument, TProjection> options, CancellationToken cancellationToken)
+            => Task.FromResult(HandleFind<TProjection>(filter, options));
 
-            return targetMethod.Name switch
-            {
-                "FindAsync" when targetMethod.IsGenericMethod => HandleFindAsync(targetMethod.GetGenericArguments()[0], args),
-                "FindSync" when targetMethod.IsGenericMethod => HandleFindSync(targetMethod.GetGenericArguments()[0], args),
-                "get_CollectionNamespace" => new CollectionNamespace(new DatabaseNamespace("Tests"), typeof(TDocument).Name),
-                "get_Database" => _database,
-                "get_DocumentSerializer" => BsonSerializer.SerializerRegistry.GetSerializer<TDocument>(),
-                "get_Indexes" => IndexManager,
-                "get_SearchIndexes" => Mock.Of<IMongoSearchIndexManager>(),
-                "get_Settings" => _settings,
-                "WithReadConcern" or "WithReadPreference" or "WithWriteConcern" => _collection,
-                _ => throw new NotSupportedException($"Method '{targetMethod.Name}' is not supported by the capturing test collection.")
-            };
-        }
+        public override Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(
+            IClientSessionHandle session, FilterDefinition<TDocument> filter, FindOptions<TDocument, TProjection> options,
+            CancellationToken cancellationToken)
+            => Task.FromResult(HandleFind<TProjection>(filter, options));
+
+        public override IAsyncCursor<TProjection> FindSync<TProjection>(
+            FilterDefinition<TDocument> filter, FindOptions<TDocument, TProjection> options, CancellationToken cancellationToken)
+            => HandleFind<TProjection>(filter, options);
+
+        public override IAsyncCursor<TProjection> FindSync<TProjection>(
+            IClientSessionHandle session, FilterDefinition<TDocument> filter, FindOptions<TDocument, TProjection> options,
+            CancellationToken cancellationToken)
+            => HandleFind<TProjection>(filter, options);
+
+        public override IMongoCollection<TDocument> WithReadConcern(ReadConcern readConcern) => this;
+
+        public override IMongoCollection<TDocument> WithReadPreference(ReadPreference readPreference) => this;
+
+        public override IMongoCollection<TDocument> WithWriteConcern(WriteConcern writeConcern) => this;
 
         private static NotSupportedException UnsupportedProjection(Type projectionType)
             => new($"Projection '{projectionType}' is not supported by the capturing test collection.");
@@ -540,27 +535,20 @@ public class MongoEventStoreQueryContractTests
         /// Captures typed finds and finds that project elements into a <see cref="BsonDocument"/>, such as
         /// the stream-head read.
         /// </summary>
-        private void CaptureFind(Object?[]? args)
+        private void CaptureFind(FilterDefinition<TDocument> filter, Object? options)
         {
-            var (filterIndex, optionsIndex) = args?.Length switch
+            CapturedFilter = filter;
+            switch (options)
             {
-                3 => (0, 1),
-                4 => (1, 2),
-                _ => throw new NotSupportedException("Unexpected Find invocation shape.")
-            };
-
-            CapturedFilter = (FilterDefinition<TDocument>)args[filterIndex]!;
-            switch (args[optionsIndex])
-            {
-                case FindOptions<TDocument, TDocument> options:
-                    CapturedSort = options.Sort;
-                    CapturedLimit = options.Limit;
+                case FindOptions<TDocument, TDocument> typed:
+                    CapturedSort = typed.Sort;
+                    CapturedLimit = typed.Limit;
                     CapturedProjection = null;
                     break;
-                case FindOptions<TDocument, BsonDocument> options:
-                    CapturedSort = options.Sort;
-                    CapturedLimit = options.Limit;
-                    CapturedProjection = options.Projection;
+                case FindOptions<TDocument, BsonDocument> projected:
+                    CapturedSort = projected.Sort;
+                    CapturedLimit = projected.Limit;
+                    CapturedProjection = projected.Projection;
                     break;
                 default:
                     throw new NotSupportedException("Unexpected Find options.");
@@ -569,33 +557,51 @@ public class MongoEventStoreQueryContractTests
             CapturedFinds.Add(new CapturedFind<TDocument>(CapturedFilter, CapturedSort, CapturedLimit, CapturedProjection));
         }
 
-        private Object HandleFindAsync(Type projectionType, Object?[]? args)
+        private IAsyncCursor<TProjection> HandleFind<TProjection>(FilterDefinition<TDocument> filter, Object? options)
         {
-            CaptureFind(args);
-            if (projectionType == typeof(TDocument))
+            CaptureFind(filter, options);
+            if (typeof(TProjection) == typeof(TDocument))
             {
-                return Task.FromResult(_cursor);
+                return (IAsyncCursor<TProjection>)_cursor;
             }
 
-            return projectionType == typeof(BsonDocument)
-                ? Task.FromResult(NextProjectedCursor())
-                : throw UnsupportedProjection(projectionType);
-        }
-
-        private Object HandleFindSync(Type projectionType, Object?[]? args)
-        {
-            CaptureFind(args);
-            if (projectionType == typeof(TDocument))
-            {
-                return _cursor;
-            }
-
-            return projectionType == typeof(BsonDocument)
-                ? NextProjectedCursor()
-                : throw UnsupportedProjection(projectionType);
+            return typeof(TProjection) == typeof(BsonDocument)
+                ? (IAsyncCursor<TProjection>)NextProjectedCursor()
+                : throw UnsupportedProjection(typeof(TProjection));
         }
 
         private IAsyncCursor<BsonDocument> NextProjectedCursor()
             => CreateCursor(_projectedResults.Count > 0 ? _projectedResults.Dequeue() : []);
+    }
+
+    /// <summary>
+    /// A minimal <see cref="IAsyncCursor{TDocument}"/> that returns its documents in a single batch, hand-written
+    /// instead of mocked, because Moq's dynamically generated proxy assembly cannot access an internal
+    /// <typeparamref name="TDocument"/>, such as <see cref="CheckpointDocument{TAggregate}"/>.
+    /// </summary>
+    private sealed class SingleBatchAsyncCursor<TDocument> : IAsyncCursor<TDocument>
+    {
+        private readonly TDocument[] _documents;
+        private Boolean _returned;
+
+        public SingleBatchAsyncCursor(TDocument[] documents) => _documents = documents;
+
+        public IEnumerable<TDocument> Current => _documents;
+
+        public Boolean MoveNext(CancellationToken cancellationToken = default)
+        {
+            if (_returned)
+            {
+                return false;
+            }
+
+            _returned = true;
+            return _documents.Length > 0;
+        }
+
+        public Task<Boolean> MoveNextAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(MoveNext(cancellationToken));
+
+        public void Dispose() { }
     }
 }

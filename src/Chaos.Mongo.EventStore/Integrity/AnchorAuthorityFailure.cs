@@ -5,8 +5,25 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// The failed attempts of one authority to stamp an anchor, kept on the anchor so gaps stay visible.
 /// </summary>
-/// <param name="Authority">The name of the authority.</param>
-/// <param name="FailureCount">The number of failed attempts.</param>
-/// <param name="LastFailure">The message of the last failure.</param>
-/// <param name="LastFailureUtc">The time of the last failure.</param>
-public sealed record AnchorAuthorityFailure(String Authority, Int32 FailureCount, String LastFailure, DateTime LastFailureUtc);
+public sealed record AnchorAuthorityFailure
+{
+    /// <summary>
+    /// Gets the name of the authority.
+    /// </summary>
+    public required String Authority { get; init; }
+
+    /// <summary>
+    /// Gets the number of failed attempts.
+    /// </summary>
+    public required Int32 FailureCount { get; init; }
+
+    /// <summary>
+    /// Gets the message of the last failure.
+    /// </summary>
+    public required String LastFailure { get; init; }
+
+    /// <summary>
+    /// Gets the time of the last failure.
+    /// </summary>
+    public required DateTime LastFailureUtc { get; init; }
+}

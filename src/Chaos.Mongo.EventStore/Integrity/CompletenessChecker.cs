@@ -121,38 +121,55 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         // may have been deleted as well.
         if (highest is not null && FirstMissingVersion(events, anchoredVersion) is { } firstMissing)
         {
-            yield return new CompletenessFinding(head == 0 ? CompletenessFindingKind.StreamDeleted : CompletenessFindingKind.StreamTruncated,
-                                                 aggregateId,
-                                                 firstMissing,
-                                                 anchoredVersion,
-                                                 head,
-                                                 null,
-                                                 highest.Anchor,
-                                                 null);
+            yield return new CompletenessFinding
+            {
+                Kind = head == 0 ? CompletenessFindingKind.StreamDeleted : CompletenessFindingKind.StreamTruncated,
+                AggregateId = aggregateId,
+                FirstVersion = firstMissing,
+                LastVersion = anchoredVersion,
+                HeadVersion = head,
+                Anchor = highest.Anchor
+            };
         }
 
         if (events.FirstOrDefault(e => !e.IsSealed) is { } firstUnsealed)
         {
-            yield return new CompletenessFinding(CompletenessFindingKind.Unsealed, aggregateId, firstUnsealed.Version, head, head, null, null, null);
+            yield return new CompletenessFinding
+            {
+                Kind = CompletenessFindingKind.Unsealed,
+                AggregateId = aggregateId,
+                FirstVersion = firstUnsealed.Version,
+                LastVersion = head,
+                HeadVersion = head
+            };
         }
 
         if (events.FirstOrDefault(e => e.Version > anchoredVersion) is { } firstUnanchored)
         {
             var oldest = events.Where(e => e.Version > anchoredVersion).Min(e => e.CreatedUtc);
             var age = oldest is { } createdUtc ? now - createdUtc : (TimeSpan?)null;
-            yield return new CompletenessFinding(CompletenessFindingKind.Unanchored, aggregateId, firstUnanchored.Version, head, head, age, null, null);
+            yield return new CompletenessFinding
+            {
+                Kind = CompletenessFindingKind.Unanchored,
+                AggregateId = aggregateId,
+                FirstVersion = firstUnanchored.Version,
+                LastVersion = head,
+                HeadVersion = head,
+                Age = age
+            };
         }
 
         foreach (var range in FindRetroactiveRanges(events, AssignSealingAnchors(events, leaves)))
         {
-            yield return new CompletenessFinding(CompletenessFindingKind.RetroactivelyProtected,
-                                                 aggregateId,
-                                                 range.First,
-                                                 range.Last,
-                                                 head,
-                                                 null,
-                                                 range.Anchor,
-                                                 null);
+            yield return new CompletenessFinding
+            {
+                Kind = CompletenessFindingKind.RetroactivelyProtected,
+                AggregateId = aggregateId,
+                FirstVersion = range.First,
+                LastVersion = range.Last,
+                HeadVersion = head,
+                Anchor = range.Anchor
+            };
         }
     }
 
@@ -270,7 +287,11 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
         var chain = await anchors.VerifyAnchorChainAsync(trustedHead, cancellationToken);
         if (!chain.IsIntact)
         {
-            yield return new CompletenessFinding(CompletenessFindingKind.AnchorChainBroken, null, null, null, null, null, null, chain);
+            yield return new CompletenessFinding
+            {
+                Kind = CompletenessFindingKind.AnchorChainBroken,
+                AnchorChain = chain
+            };
         }
 
         var completedAnchors = await anchors.Store.ReadCompletedAnchorReferencesAsync(cancellationToken);
@@ -381,7 +402,13 @@ internal sealed class CompletenessChecker<TAggregate> where TAggregate : class, 
                 {
                     var malformed = new WalkItem(readId,
                                                  [],
-                                                 new CompletenessFinding(CompletenessFindingKind.MalformedEvent, readId, readVersion, readVersion, null, null, null, null));
+                                                 new CompletenessFinding
+                                                 {
+                                                     Kind = CompletenessFindingKind.MalformedEvent,
+                                                     AggregateId = readId,
+                                                     FirstVersion = readVersion,
+                                                     LastVersion = readVersion
+                                                 });
                     if (currentId is not null && readId is null)
                     {
                         unidentified.Add(malformed);

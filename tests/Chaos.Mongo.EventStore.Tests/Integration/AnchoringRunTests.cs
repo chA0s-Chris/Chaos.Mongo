@@ -221,17 +221,20 @@ public class AnchoringRunTests
     [TestCase("otherTime", "time differs")]
     [TestCase("otherSigner", "does not start with its signing certificate")]
     [TestCase("withoutRoot", "end with a self-issued root")]
+    [TestCase("nonUtc", "Utc kind")]
     public async Task RunAsync_CustomAuthorityReturnsInvalidToken_RecordsTheFailureWithoutStoringIt(String change, String failure)
     {
         var context = await CreateContextAsync();
         var testAuthority = CreateTestAuthority();
         var custom = new ChangingAuthority(testAuthority.CreateAuthority(name: "custom"), token => change switch
         {
-            "garbage" => new TimestampToken([0x30, 0x03, 0x02, 0x01, 0x01], token.CertificateChain, token.CertificateRevocationLists, token.Timestamp),
-            "noChain" => new TimestampToken(token.Token, [], token.CertificateRevocationLists, token.Timestamp),
-            "otherTime" => new TimestampToken(token.Token, token.CertificateChain, token.CertificateRevocationLists, token.Timestamp.AddSeconds(1)),
-            "withoutRoot" => new TimestampToken(token.Token, token.CertificateChain.Take(1).ToList(), token.CertificateRevocationLists, token.Timestamp),
-            _ => new TimestampToken(token.Token, token.CertificateChain.Reverse().ToList(), token.CertificateRevocationLists, token.Timestamp)
+            "garbage" => new TimestampToken([0x30, 0x03, 0x02, 0x01, 0x01], token.CertificateChain, token.CertificateRevocationLists, token.TimestampUtc),
+            "noChain" => new TimestampToken(token.Token, [], token.CertificateRevocationLists, token.TimestampUtc),
+            "otherTime" => new TimestampToken(token.Token, token.CertificateChain, token.CertificateRevocationLists, token.TimestampUtc.AddSeconds(1)),
+            "withoutRoot" => new TimestampToken(token.Token, token.CertificateChain.Take(1).ToList(), token.CertificateRevocationLists, token.TimestampUtc),
+            "nonUtc" => new TimestampToken(token.Token, token.CertificateChain, token.CertificateRevocationLists,
+                                           DateTime.SpecifyKind(token.TimestampUtc, DateTimeKind.Unspecified)),
+            _ => new TimestampToken(token.Token, token.CertificateChain.Reverse().ToList(), token.CertificateRevocationLists, token.TimestampUtc)
         });
         var run = CreateRun(context, CreateTestAuthority().CreateAuthority(name: "reliable"), custom);
         await context.AppendStreamAsync(1);
@@ -252,8 +255,8 @@ public class AnchoringRunTests
                                            token => new TimestampToken(token.Token,
                                                                        token.CertificateChain,
                                                                        token.CertificateRevocationLists,
-                                                                       new DateTimeOffset(token.Timestamp.UtcTicks - (token.Timestamp.UtcTicks % TimeSpan.TicksPerMillisecond),
-                                                                                          TimeSpan.Zero)));
+                                                                       new DateTime(token.TimestampUtc.Ticks - (token.TimestampUtc.Ticks % TimeSpan.TicksPerMillisecond),
+                                                                                    DateTimeKind.Utc)));
         var run = CreateRun(context, custom);
         await context.AppendStreamAsync(1);
 
@@ -287,8 +290,28 @@ public class AnchoringRunTests
 
         // A superseded run may still write leaves after its attempt was discarded.
         await store.InsertLeavesAsync([
-                                          new AnchorLeaf(discarded, 1, 0, nameof(LedgerAggregate), Guid.NewGuid(), 1, new Byte[32], []),
-                                          new AnchorLeaf(longDiscarded, 1, 0, nameof(LedgerAggregate), Guid.NewGuid(), 1, new Byte[32], [])
+                                          new AnchorLeaf
+                                          {
+                                              AnchorId = discarded,
+                                              AnchorSequence = 1,
+                                              Index = 0,
+                                              AggregateType = nameof(LedgerAggregate),
+                                              AggregateId = Guid.NewGuid(),
+                                              Version = 1,
+                                              Hash = new Byte[32],
+                                              Proof = []
+                                          },
+                                          new AnchorLeaf
+                                          {
+                                              AnchorId = longDiscarded,
+                                              AnchorSequence = 1,
+                                              Index = 0,
+                                              AggregateType = nameof(LedgerAggregate),
+                                              AggregateId = Guid.NewGuid(),
+                                              Version = 1,
+                                              Hash = new Byte[32],
+                                              Proof = []
+                                          }
                                       ],
                                       CancellationToken.None);
 
@@ -868,9 +891,9 @@ public class AnchoringRunTests
         public String Name => _inner.Name;
 
         public Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
-                                                             DateTimeOffset issuedNotBefore,
+                                                             DateTime issuedNotBeforeUtc,
                                                              CancellationToken cancellationToken)
-            => _inner.GetRevocationListsAsync(certificateChain, issuedNotBefore, cancellationToken);
+            => _inner.GetRevocationListsAsync(certificateChain, issuedNotBeforeUtc, cancellationToken);
 
         public async Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
             => _change(await _inner.TimestampAsync(digest, algorithm, cancellationToken));

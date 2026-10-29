@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Christian Flessa. All rights reserved.
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
-namespace Chaos.Mongo.EventStore;
+namespace Chaos.Mongo.EventStore.Integrity;
 
 /// <summary>
 /// Configures the integrity protection of an aggregate type: the background sweep that seals events stored without

@@ -18,7 +18,7 @@ public class InheritedMemberRegistrationTests
     public void RegisterClassMaps_ObservationalEventBaseInEventTypes_ThrowsArgumentException()
     {
         var options = new MongoEventStoreOptions<InheritanceObservationalBaseRegistrationAggregate>();
-        options.EventTypes[typeof(ObservationalEvent<InheritanceObservationalBaseRegistrationAggregate>)] = "Observational";
+        options.AddEventType(typeof(ObservationalEvent<InheritanceObservationalBaseRegistrationAggregate>), "Observational");
 
         var act = () => MongoEventStoreSerializationSetup.RegisterClassMaps(options);
 

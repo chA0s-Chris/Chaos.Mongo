@@ -8,7 +8,7 @@ namespace Chaos.Mongo.EventStore;
 /// of the last state-changing event it contains.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-public sealed class CheckpointDocument<TAggregate> where TAggregate : class, IAggregate, new()
+internal sealed class CheckpointDocument<TAggregate> where TAggregate : class, IAggregate, new()
 {
     /// <summary>
     /// The reserved element name that stores the chain hash of the event at the checkpoint's version.

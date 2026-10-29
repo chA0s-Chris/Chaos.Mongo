@@ -9,7 +9,7 @@ using MongoDB.Driver;
 /// MongoDB-backed repository for reading aggregate state.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-public sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<TAggregate>
+internal sealed class MongoAggregateRepository<TAggregate> : IAggregateRepository<TAggregate>
     where TAggregate : class, IAggregate, new()
 {
     private readonly IMongoHelper _mongoHelper;

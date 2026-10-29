@@ -11,7 +11,7 @@ using MongoDB.Bson.Serialization.Serializers;
 /// Handles BsonClassMap registration for aggregates and events, including discriminator configuration
 /// and GuidSerializer setup.
 /// </summary>
-public static class MongoEventStoreSerializationSetup
+internal static class MongoEventStoreSerializationSetup
 {
     /// <summary>
     /// Guards the ownership check and the registration of a checkpoint class map with its ownership record, so a
@@ -93,6 +93,7 @@ public static class MongoEventStoreSerializationSetup
                     BsonClassMap.RegisterClassMap<Aggregate>(cm =>
                     {
                         cm.AutoMap();
+                        cm.SetIgnoreExtraElements(true);
                         cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
                     });
                 }
@@ -107,6 +108,7 @@ public static class MongoEventStoreSerializationSetup
                 BsonClassMap.RegisterClassMap<TAggregate>(cm =>
                 {
                     cm.AutoMap();
+                    cm.SetIgnoreExtraElements(true);
                     cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
                 });
             }
@@ -124,6 +126,7 @@ public static class MongoEventStoreSerializationSetup
             BsonClassMap.RegisterClassMap<Event<TAggregate>>(cm =>
             {
                 cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
                 cm.MapIdMember(e => e.Id).SetSerializer(GuidStandardSerializer);
                 cm.MapMember(e => e.AggregateId).SetSerializer(GuidStandardSerializer);
                 cm.MapMember(e => e.Integrity)
@@ -195,6 +198,7 @@ public static class MongoEventStoreSerializationSetup
             BsonClassMap.RegisterClassMap<CheckpointId>(cm =>
             {
                 cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
                 cm.MapMember(c => c.AggregateId).SetSerializer(GuidStandardSerializer);
             });
         }
@@ -209,6 +213,7 @@ public static class MongoEventStoreSerializationSetup
                 BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
                 {
                     cm.AutoMap();
+                    cm.SetIgnoreExtraElements(true);
                     cm.MapIdMember(c => c.Id);
                     cm.MapMember(c => c.ChainHash)
                       .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
@@ -265,6 +270,7 @@ public static class MongoEventStoreSerializationSetup
             : builtClassMaps.Find(classMap => classMap.ClassType == baseType) ?? GetRegisteredClassMap(baseType);
         var classMap = new BsonClassMap(classType, baseClassMap);
         classMap.AutoMap();
+        classMap.SetIgnoreExtraElements(true);
         configure(classMap);
         builtClassMaps.Add(classMap);
     }

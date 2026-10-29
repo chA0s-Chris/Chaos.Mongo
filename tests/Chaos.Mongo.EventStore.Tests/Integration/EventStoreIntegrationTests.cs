@@ -122,7 +122,7 @@ public class EventStoreIntegrationTests
 
         // Verify all events were persisted
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().HaveCount(3);
@@ -264,7 +264,7 @@ public class EventStoreIntegrationTests
         ]);
 
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events[0].AggregateType.Should().Be("OrderAggregate");
@@ -289,7 +289,7 @@ public class EventStoreIntegrationTests
         ]);
 
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().HaveCount(1);
@@ -496,7 +496,7 @@ public class EventStoreIntegrationTests
 
         // Verify the event was not persisted
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().HaveCount(2);
@@ -584,7 +584,7 @@ public class EventStoreIntegrationTests
 
         // Verify no events were persisted
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().BeEmpty();
@@ -635,7 +635,7 @@ public class EventStoreIntegrationTests
 
         // Verify the event was also persisted
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().HaveCount(1);
@@ -645,7 +645,7 @@ public class EventStoreIntegrationTests
     public async Task GetEventStream_NonExistentAggregate_ReturnsEmptyStream()
     {
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(Guid.NewGuid()))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(Guid.NewGuid()))
             events.Add(evt);
 
         events.Should().BeEmpty();
@@ -689,7 +689,7 @@ public class EventStoreIntegrationTests
         ]);
 
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().HaveCount(3);
@@ -739,7 +739,7 @@ public class EventStoreIntegrationTests
         ]);
 
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId, 2, 2))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId, 2, 2))
             events.Add(evt);
 
         events.Should().HaveCount(1);

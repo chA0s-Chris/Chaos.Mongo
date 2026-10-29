@@ -35,12 +35,15 @@ internal sealed class EventStoreIntegrity<TAggregate> : IEventStoreIntegrity<TAg
     /// <inheritdoc/>
     public async Task<IntegritySealingStatus?> GetSealingStatusAsync(CancellationToken cancellationToken = default)
         => await _sweep.GetStatusAsync(cancellationToken) is { } state
-            ? new IntegritySealingStatus(state.StreamsChecked,
-                                         state.StreamsSealed,
-                                         state.StreamsFailed,
-                                         state.EventsSealed,
-                                         state.PassStartedUtc,
-                                         state.PassCompletedUtc)
+            ? new IntegritySealingStatus
+            {
+                StreamsChecked = state.StreamsChecked,
+                StreamsSealed = state.StreamsSealed,
+                StreamsFailed = state.StreamsFailed,
+                EventsSealed = state.EventsSealed,
+                PassStartedUtc = state.PassStartedUtc,
+                PassCompletedUtc = state.PassCompletedUtc
+            }
             : null;
 
     /// <inheritdoc/>

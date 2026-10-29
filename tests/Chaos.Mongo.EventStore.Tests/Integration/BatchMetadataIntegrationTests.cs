@@ -110,7 +110,7 @@ public class BatchMetadataIntegrationTests
         (await _aggregateRepository.GetAsync(aggregateId)).Should().BeEquivalentTo(aggregate, options => options.Excluding(a => a.CreatedUtc));
 
         var revisions = new List<Int64>();
-        await foreach (var @event in _eventStore.GetEventStream(aggregateId))
+        await foreach (var @event in _eventStore.GetEventStreamAsync(aggregateId))
         {
             revisions.Add(@event.Revision);
         }

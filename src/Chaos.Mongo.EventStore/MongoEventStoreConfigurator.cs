@@ -11,7 +11,7 @@ using MongoDB.Driver;
 /// in the checkpoint collection when checkpoints are enabled.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-public sealed class MongoEventStoreConfigurator<TAggregate> : IMongoConfigurator
+internal sealed class MongoEventStoreConfigurator<TAggregate> : IMongoConfigurator
     where TAggregate : class, IAggregate, new()
 {
     private readonly MongoEventStoreOptions<TAggregate> _options;

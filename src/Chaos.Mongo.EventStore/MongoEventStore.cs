@@ -13,7 +13,7 @@ using System.Runtime.CompilerServices;
 /// MongoDB-backed event store implementation for a specific aggregate type.
 /// </summary>
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
-public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
+internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     where TAggregate : class, IAggregate, new()
 {
     private readonly String _aggregateTypeName;
@@ -687,7 +687,7 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<Event<TAggregate>> GetEventStream(
+    public async IAsyncEnumerable<Event<TAggregate>> GetEventStreamAsync(
         Guid aggregateId,
         Int64 fromVersion = 0,
         Int64? toVersion = null,

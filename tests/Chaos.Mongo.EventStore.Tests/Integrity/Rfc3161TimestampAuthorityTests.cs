@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integrity;
 
+using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -260,7 +261,7 @@ public class Rfc3161TimestampAuthorityTests
         var token = await testAuthority.CreateAuthority().TimestampAsync(CreateDigest(), HashAlgorithmName.SHA256, CancellationToken.None);
 
         token.CertificateRevocationLists.Should().HaveCount(1);
-        CertificateRevocationListHeader.Decode(token.CertificateRevocationLists[0]).ThisUpdate.Should().BeAfter(token.Timestamp);
+        CertificateRevocationListHeader.Decode(token.CertificateRevocationLists[0]).ThisUpdate.Should().BeAfter(token.TimestampUtc);
     }
 
     [TestCase(TestTimestampAuthorityMode.CrlNotACrl, "not a single DER-encoded CRL")]
@@ -670,7 +671,7 @@ public class Rfc3161TimestampAuthorityTests
     {
         var testAuthority = CreateTestAuthority();
         var digest = CreateDigest();
-        var before = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var before = DateTime.UtcNow.AddSeconds(-1);
 
         var token = await testAuthority.CreateAuthority().TimestampAsync(digest, HashAlgorithmName.SHA256, CancellationToken.None);
 
@@ -682,7 +683,7 @@ public class Rfc3161TimestampAuthorityTests
         token.CertificateChain[0].Should().Equal(testAuthority.SigningCertificate.RawData);
         token.CertificateChain[1].Should().Equal(testAuthority.Root.RawData);
         token.CertificateRevocationLists.Should().ContainSingle().Which.Should().Equal(testAuthority.Crl);
-        token.Timestamp.Should().Be(decoded.TokenInfo.Timestamp).And.BeOnOrAfter(before);
+        token.TimestampUtc.Should().Be(decoded.TokenInfo.Timestamp.UtcDateTime).And.BeOnOrAfter(before);
     }
 
     [TestCase(31)]

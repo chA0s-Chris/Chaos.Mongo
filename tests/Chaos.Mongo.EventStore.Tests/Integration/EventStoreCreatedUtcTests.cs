@@ -41,7 +41,7 @@ public class EventStoreCreatedUtcTests
         ]);
 
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
             events.Add(evt);
 
         events.Should().HaveCount(1);

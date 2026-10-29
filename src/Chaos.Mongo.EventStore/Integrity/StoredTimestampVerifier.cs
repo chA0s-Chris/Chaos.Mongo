@@ -78,7 +78,14 @@ internal static class StoredTimestampVerifier
 
             return FindInconsistency(timestamp, storedCertificates, tokenTime) is { } inconsistency
                 ? Invalid(timestamp, TimestampRevocationStatus.Unconfirmed, $"the stored revocation evidence is inconsistent: {inconsistency}")
-                : new TimestampVerificationResult(timestamp.Authority, timestamp.TimestampUtc, true, null, status, timestamp.RevocationStatus);
+                : new TimestampVerificationResult
+                {
+                    Authority = timestamp.Authority,
+                    TimestampUtc = timestamp.TimestampUtc,
+                    IsValid = true,
+                    RevocationStatus = status,
+                    StoredRevocationStatus = timestamp.RevocationStatus
+                };
         }
         catch (CryptographicException)
         {
@@ -132,7 +139,15 @@ internal static class StoredTimestampVerifier
     }
 
     private static TimestampVerificationResult Invalid(AnchorTimestamp timestamp, TimestampRevocationStatus status, String failure)
-        => new(timestamp.Authority, timestamp.TimestampUtc, false, failure, status, timestamp.RevocationStatus);
+        => new()
+        {
+            Authority = timestamp.Authority,
+            TimestampUtc = timestamp.TimestampUtc,
+            IsValid = false,
+            Failure = failure,
+            RevocationStatus = status,
+            StoredRevocationStatus = timestamp.RevocationStatus
+        };
 
     /// <summary>
     /// Recomputes the revocation status of the stored chain at the token's time from the stored confirming CRLs, matched

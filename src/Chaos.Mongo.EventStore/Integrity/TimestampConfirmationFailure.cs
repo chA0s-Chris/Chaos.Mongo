@@ -6,7 +6,20 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// The failed attempts to confirm the revocation status of a timestamp token, kept on its entry so gaps stay visible.
 /// CRLs that were only issued too early do not count as failures.
 /// </summary>
-/// <param name="FailureCount">The number of failed attempts.</param>
-/// <param name="LastFailure">The message of the last failure.</param>
-/// <param name="LastFailureUtc">The time of the last failure.</param>
-public sealed record TimestampConfirmationFailure(Int32 FailureCount, String LastFailure, DateTime LastFailureUtc);
+public sealed record TimestampConfirmationFailure
+{
+    /// <summary>
+    /// Gets the number of failed attempts.
+    /// </summary>
+    public required Int32 FailureCount { get; init; }
+
+    /// <summary>
+    /// Gets the message of the last failure.
+    /// </summary>
+    public required String LastFailure { get; init; }
+
+    /// <summary>
+    /// Gets the time of the last failure.
+    /// </summary>
+    public required DateTime LastFailureUtc { get; init; }
+}

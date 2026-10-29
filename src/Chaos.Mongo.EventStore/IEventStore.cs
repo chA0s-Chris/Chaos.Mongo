@@ -124,7 +124,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// <param name="toVersion">The maximum version (inclusive). Defaults to null (no upper bound).</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>An async enumerable of events ordered by version.</returns>
-    IAsyncEnumerable<Event<TAggregate>> GetEventStream(
+    IAsyncEnumerable<Event<TAggregate>> GetEventStreamAsync(
         Guid aggregateId,
         Int64 fromVersion = 0,
         Int64? toVersion = null,

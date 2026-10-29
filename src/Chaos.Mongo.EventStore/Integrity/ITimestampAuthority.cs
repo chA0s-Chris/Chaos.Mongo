@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Integrity;
 
+using Chaos.Mongo.EventStore.Errors;
 using System.Security.Cryptography;
 
 /// <summary>
@@ -23,7 +24,10 @@ public interface ITimestampAuthority
     /// issued no earlier than a given time, to confirm the chain's revocation status after a token's time.
     /// </summary>
     /// <param name="certificateChain">The DER-encoded certificates from the signing certificate to the root.</param>
-    /// <param name="issuedNotBefore">The time the CRLs must be issued at or after.</param>
+    /// <param name="issuedNotBeforeUtc">
+    /// The time the CRLs must be issued at or after. Its <see cref="DateTime.Kind"/> must be
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <remarks>
     /// Return one CRL for each distribution point with an HTTP or HTTPS location that the chain's non-root certificates
@@ -35,9 +39,13 @@ public interface ITimestampAuthority
     /// The CRLs, an empty list when the chain names no distribution points, or the information that a point's CRL
     /// was issued too early.
     /// </returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown by a built-in implementation when <paramref name="issuedNotBeforeUtc"/>'s
+    /// <see cref="DateTime.Kind"/> is not <see cref="DateTimeKind.Utc"/>.
+    /// </exception>
     /// <exception cref="TimestampAuthorityException">Thrown when a CRL could not be obtained.</exception>
     Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
-                                                  DateTimeOffset issuedNotBefore,
+                                                  DateTime issuedNotBeforeUtc,
                                                   CancellationToken cancellationToken);
 
     /// <summary>
@@ -51,7 +59,7 @@ public interface ITimestampAuthority
     /// Anchoring checks every returned token before storing it: it must be one DER-encoded RFC 3161 token over the
     /// digest whose signature verifies with the returned chain, which starts with the signing certificate, names each
     /// next certificate's subject as its issuer and ends with a self-issued root; its time must equal
-    /// <see cref="TimestampToken.Timestamp"/> to the millisecond, and its signer and algorithms must meet the
+    /// <see cref="TimestampToken.TimestampUtc"/> to the millisecond, and its signer and algorithms must meet the
     /// verification rules. Names are compared after decoding, so an issuer name in another string type or ASCII case
     /// than the issuer's subject still links. A token
     /// that fails counts as a failed request. When trust settings for the authority's name are configured for

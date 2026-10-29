@@ -73,7 +73,12 @@ public class CompletenessCheckIntegrationTests
         var findings = await CheckAsync(context);
 
         findings[0].Kind.Should().Be(CompletenessFindingKind.AnchorChainBroken);
-        findings[0].AnchorChain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.SequenceGap, 0));
+        findings[0].AnchorChain.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 1,
+            Failure = AnchorChainFailure.SequenceGap,
+            AnchorCount = 0
+        });
     }
 
     [Test]
@@ -117,7 +122,12 @@ public class CompletenessCheckIntegrationTests
 
         var findings = await CheckAsync(context);
 
-        findings.Should().ContainSingle().Which.AnchorChain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.LeafSetMismatch, 0));
+        findings.Should().ContainSingle().Which.AnchorChain.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 1,
+            Failure = AnchorChainFailure.LeafSetMismatch,
+            AnchorCount = 0
+        });
     }
 
     [Test]
@@ -208,7 +218,12 @@ public class CompletenessCheckIntegrationTests
 
         var findings = await CheckAsync(context);
 
-        findings[0].AnchorChain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.LeafSetMismatch, 0));
+        findings[0].AnchorChain.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 1,
+            Failure = AnchorChainFailure.LeafSetMismatch,
+            AnchorCount = 0
+        });
     }
 
     [Test]
@@ -256,8 +271,17 @@ public class CompletenessCheckIntegrationTests
 
         findings.Where(f => f.Kind == CompletenessFindingKind.MalformedEvent)
                 .Should().BeEquivalentTo([
-                    new CompletenessFinding(CompletenessFindingKind.MalformedEvent, withStringVersion, null, null, null, null, null, null),
-                    new CompletenessFinding(CompletenessFindingKind.MalformedEvent, null, 1, 1, null, null, null, null)
+                    new CompletenessFinding
+                    {
+                        Kind = CompletenessFindingKind.MalformedEvent,
+                        AggregateId = withStringVersion
+                    },
+                    new CompletenessFinding
+                    {
+                        Kind = CompletenessFindingKind.MalformedEvent,
+                        FirstVersion = 1,
+                        LastVersion = 1
+                    }
                 ]);
         findings.Should().Contain(f => f.Kind == CompletenessFindingKind.Unanchored && f.AggregateId == withStringVersion && f.LastVersion == 1);
     }
@@ -276,14 +300,15 @@ public class CompletenessCheckIntegrationTests
 
         var findings = await CheckAsync(context);
 
-        findings.Should().ContainSingle().Which.Should().Be(new CompletenessFinding(CompletenessFindingKind.Unanchored,
-                                                                                    aggregateId,
-                                                                                    1,
-                                                                                    2,
-                                                                                    2,
-                                                                                    TimeSpan.FromHours(3),
-                                                                                    null,
-                                                                                    null));
+        findings.Should().ContainSingle().Which.Should().Be(new CompletenessFinding
+        {
+            Kind = CompletenessFindingKind.Unanchored,
+            AggregateId = aggregateId,
+            FirstVersion = 1,
+            LastVersion = 2,
+            HeadVersion = 2,
+            Age = TimeSpan.FromHours(3)
+        });
     }
 
     [Test]
@@ -299,10 +324,19 @@ public class CompletenessCheckIntegrationTests
         await context.Events.DeleteManyAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(newest));
 
         var withoutHead = await CheckAsync(context);
-        var withHead = await CheckAsync(context, new TrustedAnchorHead(2, head.AnchorDigest));
+        var withHead = await CheckAsync(context, new TrustedAnchorHead
+        {
+            Sequence = 2,
+            AnchorDigest = head.AnchorDigest
+        });
 
         withoutHead.Should().BeEmpty("without a trusted head the shortened chain is consistent");
-        withHead.Should().ContainSingle().Which.AnchorChain.Should().Be(new AnchorChainVerificationResult(2, AnchorChainFailure.TrustedHeadMissing, 1));
+        withHead.Should().ContainSingle().Which.AnchorChain.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 2,
+            Failure = AnchorChainFailure.TrustedHeadMissing,
+            AnchorCount = 1
+        });
     }
 
     [Test]
@@ -365,14 +399,15 @@ public class CompletenessCheckIntegrationTests
 
         var findings = await CheckAsync(context);
 
-        findings.Should().ContainSingle().Which.Should().Be(new CompletenessFinding(CompletenessFindingKind.RetroactivelyProtected,
-                                                                                    aggregateId,
-                                                                                    1,
-                                                                                    3,
-                                                                                    4,
-                                                                                    null,
-                                                                                    anchor,
-                                                                                    null));
+        findings.Should().ContainSingle().Which.Should().Be(new CompletenessFinding
+        {
+            Kind = CompletenessFindingKind.RetroactivelyProtected,
+            AggregateId = aggregateId,
+            FirstVersion = 1,
+            LastVersion = 3,
+            HeadVersion = 4,
+            Anchor = anchor
+        });
     }
 
     [Test]
@@ -380,7 +415,11 @@ public class CompletenessCheckIntegrationTests
     {
         var context = await CreateAnchoredContextAsync();
 
-        var act = () => context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync(new TrustedAnchorHead(0, new Byte[32]));
+        var act = () => context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync(new TrustedAnchorHead
+        {
+            Sequence = 0,
+            AnchorDigest = new Byte[32]
+        });
 
         act.Should().Throw<ArgumentException>().WithParameterName("trustedHead");
     }
