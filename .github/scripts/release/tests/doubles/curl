@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Test double for curl that serves the nuget.org flat-container nuspecs of the fake feed in $DOUBLE_STATE/nuget.
+#
+# A version directory $DOUBLE_STATE/nuget/<id>/<version> holds the nuspec, an optional "hidden" counter of requests
+# that still answer 404 because the package is not indexed yet, and an optional fixed HTTP "status".
+set -euo pipefail
+
+{
+    printf 'curl'
+    printf ' %q' "$@"
+    printf '\n'
+} >>"$DOUBLE_CALLS"
+
+output=""
+url=""
+
+while (($# > 0)); do
+    case "$1" in
+        --output) output="$2"; shift ;;
+        --write-out) shift ;;
+        http://* | https://*) url="$1" ;;
+    esac
+    shift
+done
+
+[[ -n $url && -n $output ]] || { printf 'curl double: unsupported call\n' >&2; exit 2; }
+
+# .../<id>/<version>/<id>.nuspec
+path="${url%/*}"
+version="${path##*/}"
+path="${path%/*}"
+id="${path##*/}"
+directory="$DOUBLE_STATE/nuget/$id/$version"
+
+if [[ -f $directory/status ]]; then
+    : >"$output"
+    printf '%s' "$(<"$directory/status")"
+    exit 0
+fi
+
+if [[ -f $directory/hidden ]]; then
+    hidden="$(<"$directory/hidden")"
+    if ((hidden > 0)); then
+        printf '%s\n' "$((hidden - 1))" >"$directory/hidden"
+        printf 'BlobNotFound' >"$output"
+        printf '404'
+        exit 0
+    fi
+fi
+
+if [[ -f $directory/nuspec ]]; then
+    cp "$directory/nuspec" "$output"
+    printf '200'
+else
+    printf 'BlobNotFound' >"$output"
+    printf '404'
+fi

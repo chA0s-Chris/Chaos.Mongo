@@ -1,8 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>Chaos.Mongo.EventStore</PackageId>
-    <Description>Event sourcing extension for Chaos.Mongo, providing aggregate-based event stores with MongoDB.</Description>
+    <Description>Event sourcing extension for Chaos.Mongo, providing aggregate-based event stores with MongoDB and opt-in tamper evidence: hash-chained event streams anchored with RFC 3161 timestamps.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>$(PackageTags);event-sourcing;event-store;aggregates;tamper-evidence;hash-chain;rfc3161</PackageTags>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" Visible="false" PackagePath="" />

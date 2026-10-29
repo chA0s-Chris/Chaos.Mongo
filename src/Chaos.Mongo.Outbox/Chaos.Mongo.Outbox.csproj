@@ -3,6 +3,7 @@
     <PackageId>Chaos.Mongo.Outbox</PackageId>
     <Description>Transactional outbox pattern extension for Chaos.Mongo, providing reliable at-least-once message delivery with MongoDB.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>$(PackageTags);outbox;transactional-outbox;messaging</PackageTags>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" Visible="false" PackagePath="" />

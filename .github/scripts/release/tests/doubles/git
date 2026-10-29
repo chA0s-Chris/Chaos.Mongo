@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Test double for git: records the call, then runs the real git against the local repositories of the test.
+# DOUBLE_GIT_FAIL_PUSH=1 makes every push fail.
+set -euo pipefail
+
+{
+    printf 'git'
+    printf ' %q' "$@"
+    printf '\n'
+} >>"$DOUBLE_CALLS"
+
+for argument in "$@"; do
+    if [[ $argument == push && -n ${DOUBLE_GIT_FAIL_PUSH:-} ]]; then
+        printf 'fatal: unable to access origin: The requested URL returned error: 503\n' >&2
+        exit 128
+    fi
+done
+
+exec "$REAL_GIT" "$@"
