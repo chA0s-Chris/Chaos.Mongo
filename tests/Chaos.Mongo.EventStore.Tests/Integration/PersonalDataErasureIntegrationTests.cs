@@ -507,9 +507,21 @@ public class PersonalDataErasureIntegrationTests
         Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(null, null, null, null, null, null);
         (await context.CreateVerifier().VerifyStreamAsync(aggregateId))
             .Should().Be(StreamVerificationResult.IntactWith([
-                new UnrecordedErasure(1, MemoPath),
-                new UnrecordedErasure(2, MemoPath),
-                new UnrecordedErasure(3, MemoPath)
+                new UnrecordedErasure
+                {
+                    Version = 1,
+                    Path = MemoPath
+                },
+                new UnrecordedErasure
+                {
+                    Version = 2,
+                    Path = MemoPath
+                },
+                new UnrecordedErasure
+                {
+                    Version = 3,
+                    Path = MemoPath
+                }
             ]));
     }
 
@@ -553,7 +565,7 @@ public class PersonalDataErasureIntegrationTests
         LedgerStoreContext.ReadIntegrity(erasure).SealMode.Should().Be(IntegritySealMode.Append);
 
         var events = new List<Event<LedgerAggregate>>();
-        await foreach (var @event in context.Store.GetEventStream(aggregateId))
+        await foreach (var @event in context.Store.GetEventStreamAsync(aggregateId))
         {
             events.Add(@event);
         }
@@ -637,9 +649,21 @@ public class PersonalDataErasureIntegrationTests
         await context.Eraser.ErasePersonalDataAsync(aggregateId, new ErasureRequest("ticket"));
         var afterErasure = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
 
-        beforeErasure.Should().Be(StreamVerificationResult.IntactWith([new UnrecordedErasure(2, MemoPath)]));
+        beforeErasure.Should().Be(StreamVerificationResult.IntactWith([
+            new UnrecordedErasure
+            {
+                Version = 2,
+                Path = MemoPath
+            }
+        ]));
         beforeErasure.IsIntact.Should().BeTrue();
-        afterErasure.Should().Be(StreamVerificationResult.IntactWith([new UnrecordedErasure(2, MemoPath)]),
+        afterErasure.Should().Be(StreamVerificationResult.IntactWith([
+                                     new UnrecordedErasure
+                                     {
+                                         Version = 2,
+                                         Path = MemoPath
+                                     }
+                                 ]),
                                  "the erasure event records only the values it erased");
     }
 
@@ -723,7 +747,13 @@ public class PersonalDataErasureIntegrationTests
 
         var result = await sealing.CreateVerifier().VerifyStreamAsync(aggregateId);
 
-        result.Should().Be(StreamVerificationResult.IntactWith([new UnrecordedErasure(3, MemoPath)]),
+        result.Should().Be(StreamVerificationResult.IntactWith([
+                               new UnrecordedErasure
+                               {
+                                   Version = 3,
+                                   Path = MemoPath
+                               }
+                           ]),
                            "only a well-formed record of an earlier version documents an erasure");
     }
 

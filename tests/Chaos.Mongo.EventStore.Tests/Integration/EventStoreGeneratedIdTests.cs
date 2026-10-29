@@ -95,7 +95,7 @@ public class EventStoreGeneratedIdTests
         Guid aggregateId)
     {
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var @event in eventStore.GetEventStream(aggregateId))
+        await foreach (var @event in eventStore.GetEventStreamAsync(aggregateId))
         {
             events.Add(@event);
         }

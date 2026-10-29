@@ -186,7 +186,7 @@ public class LegacyRevisionIntegrationTests
         var aggregateId = await CreateLegacyStreamAsync();
 
         var events = new List<Event<OrderAggregate>>();
-        await foreach (var @event in _eventStore.GetEventStream(aggregateId))
+        await foreach (var @event in _eventStore.GetEventStreamAsync(aggregateId))
         {
             events.Add(@event);
         }

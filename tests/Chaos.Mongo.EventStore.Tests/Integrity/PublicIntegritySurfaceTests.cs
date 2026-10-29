@@ -117,7 +117,6 @@ public class PublicIntegritySurfaceTests
                                                            .Where(t => t.Namespace == typeof(IEventStoreIntegrity<>).Namespace)
                                                            .Append(typeof(EventRegistrationBuilder<,>))
                                                            .Append(typeof(IEventStore<>))
-                                                           .Append(typeof(IntegrityProtectionBuilder<>))
                                                            .Append(typeof(MongoBuilderExtensions))
                                                            .Append(typeof(MongoEventStoreBuilder<>))
                                                            .Append(typeof(MongoEventStoreOptions<>))

@@ -89,7 +89,7 @@ public class PersonalDataCommitmentIntegrationTests
         }
 
         var events = new List<Event<LedgerAggregate>>();
-        await foreach (var @event in context.Store.GetEventStream(aggregateId))
+        await foreach (var @event in context.Store.GetEventStreamAsync(aggregateId))
         {
             events.Add(@event);
         }

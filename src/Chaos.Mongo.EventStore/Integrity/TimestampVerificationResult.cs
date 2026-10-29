@@ -5,20 +5,37 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// The result of verifying one stored timestamp token of an anchor.
 /// </summary>
-/// <param name="Authority">The name of the authority that issued the token.</param>
-/// <param name="TimestampUtc">The token's time as stored on the anchor.</param>
-/// <param name="IsValid">Whether the token is valid evidence for the anchor digest.</param>
-/// <param name="Failure">Why the token is not valid, or <c>null</c> when it is.</param>
-/// <param name="RevocationStatus">
-/// The revocation status of the token's chain at the token's time, recomputed from the stored confirming CRLs.
-/// </param>
-/// <param name="StoredRevocationStatus">
-/// The revocation status stored on the anchor, for comparison only; anyone who can write the anchors can change it.
-/// </param>
-public sealed record TimestampVerificationResult(
-    String Authority,
-    DateTime TimestampUtc,
-    Boolean IsValid,
-    String? Failure,
-    TimestampRevocationStatus RevocationStatus,
-    TimestampRevocationStatus StoredRevocationStatus);
+public sealed record TimestampVerificationResult
+{
+    /// <summary>
+    /// Gets the name of the authority that issued the token.
+    /// </summary>
+    public required String Authority { get; init; }
+
+    /// <summary>
+    /// Gets why the token is not valid, or <c>null</c> when it is.
+    /// </summary>
+    public String? Failure { get; init; }
+
+    /// <summary>
+    /// Gets whether the token is valid evidence for the anchor digest.
+    /// </summary>
+    public required Boolean IsValid { get; init; }
+
+    /// <summary>
+    /// Gets the revocation status of the token's chain at the token's time, recomputed from the stored confirming
+    /// CRLs.
+    /// </summary>
+    public required TimestampRevocationStatus RevocationStatus { get; init; }
+
+    /// <summary>
+    /// Gets the revocation status stored on the anchor, for comparison only; anyone who can write the anchors can
+    /// change it.
+    /// </summary>
+    public required TimestampRevocationStatus StoredRevocationStatus { get; init; }
+
+    /// <summary>
+    /// Gets the token's time as stored on the anchor.
+    /// </summary>
+    public required DateTime TimestampUtc { get; init; }
+}

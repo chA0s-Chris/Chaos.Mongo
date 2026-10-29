@@ -17,7 +17,7 @@ internal sealed class AnchoringMetricsCollector : IDisposable
     {
         _listener.InstrumentPublished = (instrument, listener) =>
         {
-            if (instrument.Meter.Name == IntegrityAnchoringDiagnostics.MeterName)
+            if (instrument.Meter.Name == IntegrityMetrics.MeterName)
             {
                 listener.EnableMeasurementEvents(instrument);
             }

@@ -245,7 +245,7 @@ public class ItemAddedEvent : Event<CartAggregate>
 Every event has two numbers:
 
 - **`Version`** is the event's position in the stream. Positions start at 1 and have no gaps. The unique
-  `(AggregateId, Version)` index, `GetEventStream`, `GetExpectedNextVersionAsync` and the concurrency checks operate on
+  `(AggregateId, Version)` index, `GetEventStreamAsync`, `GetExpectedNextVersionAsync` and the concurrency checks operate on
   positions.
 - **`Revision`** is the aggregate revision: the number of state-changing events up to and including this one. An
   [observational event](#observational-events) records the revision it observed.
@@ -323,7 +323,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
         Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
         CancellationToken ct = default);
 
-    IAsyncEnumerable<Event<TAggregate>> GetEventStream(
+    IAsyncEnumerable<Event<TAggregate>> GetEventStreamAsync(
         Guid aggregateId,
         long fromVersion = 0,
         long? toVersion = null,
@@ -337,7 +337,7 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 
 > **Breaking change:** `expectedRevision` was inserted as the second parameter of `AppendEventsAsync`. Callers that
 > passed `onBeforeCommit` positionally must pass it by name (`onBeforeCommit: ...`) or supply `expectedRevision` first.
-- **`GetEventStream`**: Returns events for an aggregate, optionally bounded by version range
+- **`GetEventStreamAsync`**: Returns events for an aggregate, optionally bounded by version range
 
 ### Aggregate Repository
 
@@ -642,19 +642,19 @@ var aggregate = await _eventStore.AppendEventsAsync(
 
 ```csharp
 // Get all events
-await foreach (var evt in _eventStore.GetEventStream(aggregateId))
+await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
 {
     Console.WriteLine($"Version {evt.Version}: {evt.GetType().Name}");
 }
 
 // Get events from version 5 onwards
-await foreach (var evt in _eventStore.GetEventStream(aggregateId, fromVersion: 5))
+await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId, fromVersion: 5))
 {
     // Process event...
 }
 
 // Get events between versions 5 and 10
-await foreach (var evt in _eventStore.GetEventStream(aggregateId, fromVersion: 5, toVersion: 10))
+await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId, fromVersion: 5, toVersion: 10))
 {
     // Process event...
 }
@@ -812,7 +812,7 @@ appends cross the interval.
 Events, read models and checkpoints stored before `Revision` existed lack the element and would deserialize with
 `Revision == 0`. A non-empty stream always has a revision of at least 1, so `Revision == 0 && Version > 0` identifies
 exactly these documents. Such streams contain only state-changing events, so every library read path — appends,
-`GetEventStream`, `GetAsync` and `GetAtVersionAsync` — loads them with `Revision == Version` (for checkpoints, the
+`GetEventStreamAsync`, `GetAsync` and `GetAtVersionAsync` — loads them with `Revision == Version` (for checkpoints, the
 source is `_id.Version`).
 
 The normalization is in memory only; no migration is needed and stored event documents are never rewritten. Adding an
@@ -902,8 +902,6 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 **Mark personal data before enabling protection.** Each marked value is committed to with a random salt instead of being hashed itself, which is what makes erasure possible later. A value sealed while it was not marked can never be erased without breaking the chain. Marked members must be mapped and nullable; paths may traverse embedded documents but not arrays, and arrays and complex objects are marked and erased as a whole. Element names are resolved through the class maps, so `[BsonElement]` renames are respected.
 
 **Register class maps, serializers and conventions before the event store.** Marking personal data resolves the class maps of the marked members' types when the event store is registered, which freezes them. Register custom class maps, serializers and convention packs for those types first.
-
-**Do not pre-register checkpoint class maps.** With protection enabled, checkpoints record the chain hash at their version through the event store's own class map, so a `CheckpointDocument<TAggregate>` class map registered before the event store fails the registration.
 
 **Existing events** are sealed retroactively by a background sweep that runs once at startup and then at the configured interval, on one instance at a time. It is resumable and reports its progress through `IEventStoreIntegrity<TAggregate>.GetSealingStatusAsync`. An append to a stream with unsealed events seals up to one chunk of them first; a stream with more fails to append until the sweep caught it up.
 
@@ -1010,7 +1008,7 @@ await eraser.ErasePersonalDataAsync(documentId, new ErasureRequest("GDPR-2026-00
 In one transaction, erasure sets the selected values to `null`, removes their salts, appends a `PersonalDataErased<TAggregate>` event that records them and the reference, and rebuilds the read model and the affected checkpoints by replay. The chain and every anchor stay verifiable, and verification distinguishes recorded erasures from values nulled without a record. The reference must not contain personal data itself.
 
 - **Replay contract.** Event `Execute` implementations must handle `null` in marked members, because replay keeps working on erased events. Read-model fields written outside `Execute` are reset by an erasure.
-- **Event streams** returned by `GetEventStream` contain the `PersonalDataErased<TAggregate>` event; it is observational and changes no state. Only the eraser appends it: `AppendEventsAsync` rejects one created elsewhere, so no erasure record can be forged through the event store. The guard applies to every event store, protected or not, so tooling that copies or migrates streams containing a past erasure must write their documents directly instead of appending them.
+- **Event streams** returned by `GetEventStreamAsync` contain the `PersonalDataErased<TAggregate>` event; it is observational and changes no state. Only the eraser appends it: `AppendEventsAsync` rejects one created elsewhere, so no erasure record can be forged through the event store. The guard applies to every event store, protected or not, so tooling that copies or migrates streams containing a past erasure must write their documents directly instead of appending them.
 - Mapping a data subject to its streams, and erasing from backups, outbox messages, external blobs and logs, remain the application's responsibility.
 
 ### MongoDB Roles

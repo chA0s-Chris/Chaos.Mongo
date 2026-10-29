@@ -258,7 +258,7 @@ public class IntegrityChainIntegrationTests
 
         var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
         var events = new List<Event<LedgerAggregate>>();
-        await foreach (var @event in context.Store.GetEventStream(aggregateId))
+        await foreach (var @event in context.Store.GetEventStreamAsync(aggregateId))
         {
             events.Add(@event);
         }

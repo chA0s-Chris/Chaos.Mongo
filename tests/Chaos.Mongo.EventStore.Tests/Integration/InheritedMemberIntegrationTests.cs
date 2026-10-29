@@ -133,7 +133,7 @@ public class InheritedMemberIntegrationTests
     private async Task<List<Event<InheritedLedgerAggregate>>> ReadEventsAsync(Guid aggregateId)
     {
         var events = new List<Event<InheritedLedgerAggregate>>();
-        await foreach (var @event in _eventStore.GetEventStream(aggregateId))
+        await foreach (var @event in _eventStore.GetEventStreamAsync(aggregateId))
         {
             events.Add(@event);
         }

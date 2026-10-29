@@ -128,12 +128,12 @@ internal sealed class TimestampRevocationConfirmer
                                                   CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var issuedNotBefore = timestamps[0].TimestampUtc + _options.RevocationGracePeriod;
+        var issuedNotBeforeUtc = timestamps[0].TimestampUtc + _options.RevocationGracePeriod;
         try
         {
             var certificateChain = await ReadChainAsync(timestamps[0].CertificateChainHashes, cancellationToken);
             var result = await authority.GetRevocationListsAsync(certificateChain,
-                                                                 new DateTimeOffset(issuedNotBefore, TimeSpan.Zero),
+                                                                 issuedNotBeforeUtc,
                                                                  cancellationToken);
 
             // The authority may answer after the lease ran out; another instance may then hold the lock.
@@ -142,17 +142,17 @@ internal sealed class TimestampRevocationConfirmer
                 return false;
             }
 
-            if (result.NextUpdate is { } nextUpdate)
+            if (result.NextUpdateUtc is { } nextUpdateUtc)
             {
-                var retryUtc = nextUpdate.UtcDateTime < now + MaximumRetryDelay ? nextUpdate.UtcDateTime : now + MaximumRetryDelay;
+                var retryUtc = nextUpdateUtc < now + MaximumRetryDelay ? nextUpdateUtc : now + MaximumRetryDelay;
                 await _store.DeferTimestampConfirmationAsync(timestamps, retryUtc, cancellationToken);
                 _logger.LogDebug("The CRLs of timestamp authority {AuthorityName} were issued before {IssuedNotBefore:O}; " +
                                  "confirming {TimestampCount} timestamps is attempted again from {RetryUtc:O}",
-                                 authority.Name, issuedNotBefore, timestamps.Count, retryUtc);
+                                 authority.Name, issuedNotBeforeUtc, timestamps.Count, retryUtc);
                 return true;
             }
 
-            await RecordStatusesAsync(authority, timestamps, certificateChain, result.Lists, issuedNotBefore, now, cancellationToken);
+            await RecordStatusesAsync(authority, timestamps, certificateChain, result.Lists, issuedNotBeforeUtc, now, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -200,7 +200,7 @@ internal sealed class TimestampRevocationConfirmer
                                            IReadOnlyList<UnconfirmedTimestamp> timestamps,
                                            IReadOnlyList<Byte[]> certificateChain,
                                            IReadOnlyList<Byte[]> lists,
-                                           DateTime issuedNotBefore,
+                                           DateTime issuedNotBeforeUtc,
                                            DateTime now,
                                            CancellationToken cancellationToken)
     {
@@ -220,16 +220,16 @@ internal sealed class TimestampRevocationConfirmer
                 throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned data that is not a single DER-encoded CRL.", ex);
             }
 
-            if (header.ThisUpdate.UtcDateTime < issuedNotBefore)
+            if (header.ThisUpdate.UtcDateTime < issuedNotBeforeUtc)
             {
                 throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned a CRL issued at {header.ThisUpdate:O}, " +
-                                               $"before the required {issuedNotBefore:O}.");
+                                               $"before the required {issuedNotBeforeUtc:O}.");
             }
 
-            if (header.NextUpdate is not { } nextUpdate || (nextUpdate.UtcDateTime < issuedNotBefore))
+            if (header.NextUpdate is not { } nextUpdate || (nextUpdate.UtcDateTime < issuedNotBeforeUtc))
             {
                 throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned a CRL that states no next update, " +
-                                               $"or one before the required {issuedNotBefore:O}.");
+                                               $"or one before the required {issuedNotBeforeUtc:O}.");
             }
 
             issuedAt = header.ThisUpdate.UtcDateTime < issuedAt ? header.ThisUpdate.UtcDateTime : issuedAt;
@@ -245,7 +245,7 @@ internal sealed class TimestampRevocationConfirmer
             }
 
             var sources = TimestampTokenValidation.GetCrlSources(certificateChain);
-            var evaluation = RevocationEvidence.Evaluate(sources, lists, chain, new DateTimeOffset(issuedNotBefore, TimeSpan.Zero));
+            var evaluation = RevocationEvidence.Evaluate(sources, lists, chain, new DateTimeOffset(issuedNotBeforeUtc, TimeSpan.Zero));
             statuses = timestamps.Where(timestamp => timestamp.TimestampUtc + _options.RevocationGracePeriod <= issuedAt)
                                  .Select(timestamp => (Timestamp: timestamp,
                                                        Revoked: RevocationEvidence.FindRevoked(chain, evaluation.Entries, new DateTimeOffset(timestamp.TimestampUtc, TimeSpan.Zero))
@@ -280,7 +280,7 @@ internal sealed class TimestampRevocationConfirmer
                                             cancellationToken);
         foreach (var (timestamp, revoked) in statuses.Where(status => status.Revoked is not null))
         {
-            IntegrityAnchoringDiagnostics.RecordRevokedTimestamp();
+            IntegrityAnchoringDiagnostics.RecordRevokedTimestamp(authority.Name);
             _logger.LogError("A CRL of timestamp authority {AuthorityName} lists the certificate '{Certificate}' as revoked at or before the time " +
                              "{TimestampUtc:O} of the token on anchor {AnchorSequence}; the token is no evidence for that time",
                              authority.Name, revoked, timestamp.TimestampUtc, timestamp.AnchorSequence);

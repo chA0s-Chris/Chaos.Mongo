@@ -315,12 +315,12 @@ public class IntegrityAnchoringIntegrationTests
         await context.AppendStreamAsync(1);
         await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.Outcome == AnchoringRunOutcome.AwaitingTimestamps);
         context.ServiceProvider.GetRequiredService<AnchoringRun>().PhaseCompleted = (_, _) => throw new InvalidOperationException("The run failed.");
-        var exceededBefore = metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument);
+        var exceededBefore = metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelayExceeded);
 
         var result = await service.RunOnceAsync(CancellationToken.None);
 
         result.Should().BeNull();
-        metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument)
+        metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelayExceeded)
                .Should().Be(exceededBefore + 1);
     }
 
@@ -354,7 +354,7 @@ public class IntegrityAnchoringIntegrationTests
 
         reported.Should().BeTrue();
 
-        Int32 CountExceeded() => metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayExceededInstrument);
+        Int32 CountExceeded() => metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityMetrics.Instruments.RevocationConfirmationDelayExceeded);
     }
 
     [Test]
@@ -391,7 +391,7 @@ public class IntegrityAnchoringIntegrationTests
         await WaitUntilAsync(async () =>
         {
             await service.RunOnceAsync(CancellationToken.None);
-            return metrics.Measurements.Any(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument);
+            return metrics.Measurements.Any(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelayExceeded);
         });
 
         (await GetStore(context).Anchors.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(0, "the run fails before its commit point");
@@ -412,9 +412,9 @@ public class IntegrityAnchoringIntegrationTests
         await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.OldestCandidateUtc is not null);
 
         logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("above the anchor delay threshold"));
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument &&
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelayExceeded &&
                                                              measurement.Value > 0);
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayInstrument);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelay);
     }
 
     [Test]
@@ -431,8 +431,8 @@ public class IntegrityAnchoringIntegrationTests
         await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.OldestCandidateUtc is not null);
 
         logger.Entries.Should().NotContain(entry => entry.Level == LogLevel.Warning);
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayInstrument);
-        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.AnchorDelayExceededInstrument);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelay);
+        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelayExceeded);
     }
 
     [Test]
@@ -450,8 +450,8 @@ public class IntegrityAnchoringIntegrationTests
 
         await WaitUntilAsync(async () => (await service.RunOnceAsync(CancellationToken.None))?.Outcome == AnchoringRunOutcome.Completed);
 
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayInstrument);
-        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayExceededInstrument);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.RevocationConfirmationDelay);
+        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.RevocationConfirmationDelayExceeded);
         logger.Entries.Should().NotContain(entry => entry.Level == LogLevel.Warning);
 
         // The CRL the authority serves stays issued too early, so the token remains unconfirmed.
@@ -459,8 +459,8 @@ public class IntegrityAnchoringIntegrationTests
         await service.RunOnceAsync(CancellationToken.None);
 
         logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("above the revocation confirmation delay threshold"));
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayExceededInstrument);
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevocationConfirmationDelayInstrument &&
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.RevocationConfirmationDelayExceeded);
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.RevocationConfirmationDelay &&
                                                              measurement.Value > TimeSpan.FromHours(72).TotalSeconds);
     }
 

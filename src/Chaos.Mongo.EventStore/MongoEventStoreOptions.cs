@@ -10,11 +10,13 @@ using Chaos.Mongo.EventStore.Integrity;
 /// <typeparam name="TAggregate">The aggregate type.</typeparam>
 public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class, IAggregate, new()
 {
+    private readonly Dictionary<Type, String> _eventTypes = new();
+
     /// <summary>
     /// Gets or sets a value indicating whether the MongoDB 8+ client bulk-write optimization is enabled.
     /// Defaults to <c>false</c>.
     /// </summary>
-    public Boolean BulkWriteOptimizationEnabled { get; set; }
+    public Boolean BulkWriteOptimizationEnabled { get; internal set; }
 
     /// <summary>
     /// Gets the name of the checkpoint collection.
@@ -25,14 +27,14 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets or sets the suffix appended to the collection prefix for the checkpoint collection.
     /// Defaults to <c>"_Checkpoints"</c>.
     /// </summary>
-    public String CheckpointCollectionSuffix { get; set; } = "_Checkpoints";
+    public String CheckpointCollectionSuffix { get; internal set; } = "_Checkpoints";
 
     /// <summary>
     /// Gets or sets the checkpoint interval. When set to a value greater than 0,
     /// checkpoints are created every N versions.
     /// A value of 0 or less means checkpoints are disabled.
     /// </summary>
-    public Int32 CheckpointInterval { get; set; }
+    public Int32 CheckpointInterval { get; internal set; }
 
     /// <summary>
     /// Gets a value indicating whether checkpoints are enabled.
@@ -43,12 +45,12 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets the collection prefix used to derive collection names.
     /// Defaults to the aggregate type name.
     /// </summary>
-    public String CollectionPrefix { get; set; } = typeof(TAggregate).Name;
+    public String CollectionPrefix { get; internal set; } = typeof(TAggregate).Name;
 
     /// <summary>
     /// Gets the event types registered for this aggregate, mapped to their discriminator names.
     /// </summary>
-    public Dictionary<Type, String> EventTypes { get; } = new();
+    public IReadOnlyDictionary<Type, String> EventTypes => _eventTypes;
 
     /// <summary>
     /// Gets the name of the events collection.
@@ -59,7 +61,7 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets or sets the suffix appended to the collection prefix for the events collection.
     /// Defaults to <c>"_Events"</c>.
     /// </summary>
-    public String EventsCollectionSuffix { get; set; } = "_Events";
+    public String EventsCollectionSuffix { get; internal set; } = "_Events";
 
     /// <summary>
     /// Gets a value indicating whether appended events are sealed into a per-stream hash chain. Enabled with
@@ -71,7 +73,7 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// Gets or sets the number of additional attempts an append with store-assigned versions makes after the
     /// first one, when another writer commits to the same stream concurrently. Defaults to 3.
     /// </summary>
-    public Int32 MaxAppendRetries { get; set; } = 3;
+    public Int32 MaxAppendRetries { get; internal set; } = 3;
 
     /// <summary>
     /// Gets the name of the read-model collection.
@@ -129,4 +131,10 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     /// can verify the same events.
     /// </summary>
     internal IReadOnlyDictionary<Type, IReadOnlyList<String>> PersonalDataPaths { get; set; } = new Dictionary<Type, IReadOnlyList<String>>();
+
+    /// <summary>
+    /// Registers an event type's discriminator, overwriting any existing registration for the same type.
+    /// </summary>
+    internal void AddEventType(Type eventType, String discriminator)
+        => _eventTypes[eventType] = discriminator;
 }

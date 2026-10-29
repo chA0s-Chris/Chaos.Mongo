@@ -310,14 +310,17 @@ internal sealed class AnchoringRun
             }
 
             var chunk = Enumerable.Range(offset, Math.Min(LeafInsertBatchSize, leaves.Count - offset))
-                                  .Select(index => new AnchorLeaf(anchor.Id,
-                                                                  sequence,
-                                                                  index,
-                                                                  leaves[index].Candidate.AggregateType,
-                                                                  leaves[index].Candidate.AggregateId,
-                                                                  leaves[index].Candidate.Version,
-                                                                  leaves[index].Candidate.Hash,
-                                                                  tree.GetInclusionProof(index)));
+                                  .Select(index => new AnchorLeaf
+                                  {
+                                      AnchorId = anchor.Id,
+                                      AnchorSequence = sequence,
+                                      Index = index,
+                                      AggregateType = leaves[index].Candidate.AggregateType,
+                                      AggregateId = leaves[index].Candidate.AggregateId,
+                                      Version = leaves[index].Candidate.Version,
+                                      Hash = leaves[index].Candidate.Hash,
+                                      Proof = tree.GetInclusionProof(index)
+                                  });
             await _store.InsertLeavesAsync(chunk, cancellationToken);
         }
 
@@ -454,7 +457,13 @@ internal sealed class AnchoringRun
             {
                 _logger.LogWarning(ex, "Timestamp authority {AuthorityName} failed to stamp anchor {AnchorSequence}", authority.Name, anchor.Sequence);
                 failures.TryGetValue(authority.Name, out var previous);
-                failures[authority.Name] = new AnchorAuthorityFailure(authority.Name, (previous?.FailureCount ?? 0) + 1, ex.Message, _timeProvider.GetUtcNow().UtcDateTime);
+                failures[authority.Name] = new AnchorAuthorityFailure
+                {
+                    Authority = authority.Name,
+                    FailureCount = (previous?.FailureCount ?? 0) + 1,
+                    LastFailure = ex.Message,
+                    LastFailureUtc = _timeProvider.GetUtcNow().UtcDateTime
+                };
                 await _store.SetAuthorityFailuresAsync(anchor.Id, failures.Values, cancellationToken);
                 continue;
             }
@@ -495,7 +504,7 @@ internal sealed class AnchoringRun
             crlHashes.Add(await _evidence.StoreAsync(crl, cancellationToken));
         }
 
-        return new AnchorTimestampReference(authority, tokenHash, certificateHashes, crlHashes, token.Timestamp.UtcDateTime, obtainedUtc);
+        return new AnchorTimestampReference(authority, tokenHash, certificateHashes, crlHashes, token.TimestampUtc, obtainedUtc);
     }
 
     private sealed record CandidateRead(IReadOnlyList<AnchorCandidate> Heads, AnchorCandidateBatch LastBatch, DateTime OldestUtc, DateTime NewestUtc);

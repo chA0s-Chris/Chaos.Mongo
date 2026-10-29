@@ -5,6 +5,15 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// The state of one personal data value recorded in an event's integrity data.
 /// </summary>
-/// <param name="Path">The dotted element path of the value.</param>
-/// <param name="Status">The value's state.</param>
-public sealed record PersonalDataPathStatus(String Path, PersonalDataStatus Status);
+public sealed record PersonalDataPathStatus
+{
+    /// <summary>
+    /// Gets the dotted element path of the value.
+    /// </summary>
+    public required String Path { get; init; }
+
+    /// <summary>
+    /// Gets the value's state.
+    /// </summary>
+    public required PersonalDataStatus Status { get; init; }
+}

@@ -96,7 +96,7 @@ public class BulkWriteOptimizationIntegrationTests
         aggregate.Status.Should().Be("Completed");
 
         var persistedEvents = new List<Event<OrderAggregate>>();
-        await foreach (var persistedEvent in _eventStore.GetEventStream(aggregateId))
+        await foreach (var persistedEvent in _eventStore.GetEventStreamAsync(aggregateId))
         {
             persistedEvents.Add(persistedEvent);
         }

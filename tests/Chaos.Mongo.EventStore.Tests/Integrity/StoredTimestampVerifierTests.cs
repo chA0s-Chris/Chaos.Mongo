@@ -103,12 +103,14 @@ public class StoredTimestampVerifierTests
 
         var result = StoredTimestampVerifier.Verify(timestamp, digest, Trust(authority), GracePeriod);
 
-        result.Should().Be(new TimestampVerificationResult("test-tsa",
-                                                           timestamp.TimestampUtc,
-                                                           true,
-                                                           null,
-                                                           TimestampRevocationStatus.Confirmed,
-                                                           TimestampRevocationStatus.Unconfirmed));
+        result.Should().Be(new TimestampVerificationResult
+        {
+            Authority = "test-tsa",
+            TimestampUtc = timestamp.TimestampUtc,
+            IsValid = true,
+            RevocationStatus = TimestampRevocationStatus.Confirmed,
+            StoredRevocationStatus = TimestampRevocationStatus.Unconfirmed
+        });
     }
 
     [Test]
@@ -534,9 +536,17 @@ public class StoredTimestampVerifierTests
     {
         var digest = SHA256.HashData(Guid.NewGuid().ToByteArray());
         var token = await authority.CreateAuthority().TimestampAsync(digest, HashAlgorithmName.SHA256, CancellationToken.None);
-        var ticks = token.Timestamp.UtcDateTime.Ticks;
+        var ticks = token.TimestampUtc.Ticks;
         var storedTime = new DateTime(ticks - (ticks % TimeSpan.TicksPerMillisecond), DateTimeKind.Utc);
-        return (new AnchorTimestamp("test-tsa", token.Token, token.CertificateChain, token.CertificateRevocationLists, storedTime, DateTime.UtcNow), digest);
+        return (new AnchorTimestamp
+        {
+            Authority = "test-tsa",
+            Token = token.Token,
+            CertificateChain = token.CertificateChain,
+            CertificateRevocationLists = token.CertificateRevocationLists,
+            TimestampUtc = storedTime,
+            ObtainedUtc = DateTime.UtcNow
+        }, digest);
     }
 
     private static TimestampAuthorityTrust Trust(TestTimestampAuthority authority)

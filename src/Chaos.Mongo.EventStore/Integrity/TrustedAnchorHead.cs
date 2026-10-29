@@ -9,6 +9,15 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <remarks>
 /// Records compare byte arrays by reference, so compare digests with <c>SequenceEqual</c>.
 /// </remarks>
-/// <param name="Sequence">The anchor's sequence number.</param>
-/// <param name="AnchorDigest">The anchor's digest.</param>
-public sealed record TrustedAnchorHead(Int64 Sequence, Byte[] AnchorDigest);
+public sealed record TrustedAnchorHead
+{
+    /// <summary>
+    /// Gets the anchor's digest.
+    /// </summary>
+    public required Byte[] AnchorDigest { get; init; }
+
+    /// <summary>
+    /// Gets the anchor's sequence number.
+    /// </summary>
+    public required Int64 Sequence { get; init; }
+}

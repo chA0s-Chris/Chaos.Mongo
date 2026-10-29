@@ -134,7 +134,12 @@ public class IntegrityVerificationIntegrationTests
 
         var result = await GetAnchorVerifier(context).VerifyAnchorChainAsync();
 
-        result.Should().Be(new AnchorChainVerificationResult(sequence, failure, sequence - 1));
+        result.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = sequence,
+            Failure = failure,
+            AnchorCount = sequence - 1
+        });
     }
 
     [Test]
@@ -186,7 +191,12 @@ public class IntegrityVerificationIntegrationTests
         var result = await GetAnchorVerifier(context).VerifyAnchorChainAsync();
         var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
 
-        result.Should().Be(new AnchorChainVerificationResult(2, AnchorChainFailure.LeafSetMismatch, 1));
+        result.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 2,
+            Failure = AnchorChainFailure.LeafSetMismatch,
+            AnchorCount = 1
+        });
         stream.AnchorCoverageChecked.Should().BeTrue("damaged leaves are skipped or reported, never thrown");
     }
 
@@ -216,11 +226,21 @@ public class IntegrityVerificationIntegrationTests
         switch (document)
         {
             case "anchor":
-                chain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.MalformedAnchor, 0));
+                chain.Should().Be(new AnchorChainVerificationResult
+                {
+                    FirstBrokenSequence = 1,
+                    Failure = AnchorChainFailure.MalformedAnchor,
+                    AnchorCount = 0
+                });
                 stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
                 break;
             case "leaf":
-                chain.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.LeafSetMismatch, 0));
+                chain.Should().Be(new AnchorChainVerificationResult
+                {
+                    FirstBrokenSequence = 1,
+                    Failure = AnchorChainFailure.LeafSetMismatch,
+                    AnchorCount = 0
+                });
                 stream.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredLeafInvalid));
                 break;
             default:
@@ -241,8 +261,14 @@ public class IntegrityVerificationIntegrationTests
 
         var result = await verifier.VerifyAnchorChainAsync();
 
-        empty.Should().Be(new AnchorChainVerificationResult(null, null, 0));
-        result.Should().Be(new AnchorChainVerificationResult(null, null, 2));
+        empty.Should().Be(new AnchorChainVerificationResult
+        {
+            AnchorCount = 0
+        });
+        result.Should().Be(new AnchorChainVerificationResult
+        {
+            AnchorCount = 2
+        });
         result.IsIntact.Should().BeTrue();
     }
 
@@ -259,10 +285,19 @@ public class IntegrityVerificationIntegrationTests
         var verifier = GetAnchorVerifier(context);
 
         var withoutHead = await verifier.VerifyAnchorChainAsync();
-        var withHead = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead(2, head.AnchorDigest));
+        var withHead = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead
+        {
+            Sequence = 2,
+            AnchorDigest = head.AnchorDigest
+        });
 
         withoutHead.IsIntact.Should().BeTrue("the newest anchor may await its timestamps");
-        withHead.Should().Be(new AnchorChainVerificationResult(2, AnchorChainFailure.MalformedAnchor, 1));
+        withHead.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 2,
+            Failure = AnchorChainFailure.MalformedAnchor,
+            AnchorCount = 1
+        });
     }
 
     [Test]
@@ -275,17 +310,43 @@ public class IntegrityVerificationIntegrationTests
         var head = AnchorStore.ReadAnchor(await store.Anchors.Find(new BsonDocument(AnchorStore.SequenceField, 2L)).SingleAsync());
         var verifier = GetAnchorVerifier(context);
 
-        var intact = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead(2, head.AnchorDigest));
-        var mismatch = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead(1, head.AnchorDigest));
+        var intact = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead
+        {
+            Sequence = 2,
+            AnchorDigest = head.AnchorDigest
+        });
+        var mismatch = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead
+        {
+            Sequence = 1,
+            AnchorDigest = head.AnchorDigest
+        });
         await store.Anchors.DeleteOneAsync(new BsonDocument(AnchorStore.SequenceField, 2L));
         var withoutHead = await verifier.VerifyAnchorChainAsync();
-        var missing = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead(2, head.AnchorDigest));
-        var invalidHead = () => verifier.VerifyAnchorChainAsync(new TrustedAnchorHead(0, head.AnchorDigest));
+        var missing = await verifier.VerifyAnchorChainAsync(new TrustedAnchorHead
+        {
+            Sequence = 2,
+            AnchorDigest = head.AnchorDigest
+        });
+        var invalidHead = () => verifier.VerifyAnchorChainAsync(new TrustedAnchorHead
+        {
+            Sequence = 0,
+            AnchorDigest = head.AnchorDigest
+        });
 
         intact.IsIntact.Should().BeTrue();
-        mismatch.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.TrustedHeadMismatch, 2));
+        mismatch.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 1,
+            Failure = AnchorChainFailure.TrustedHeadMismatch,
+            AnchorCount = 2
+        });
         withoutHead.IsIntact.Should().BeTrue("deleting the newest anchor leaves a consistent chain");
-        missing.Should().Be(new AnchorChainVerificationResult(2, AnchorChainFailure.TrustedHeadMissing, 1));
+        missing.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 2,
+            Failure = AnchorChainFailure.TrustedHeadMissing,
+            AnchorCount = 1
+        });
         await invalidHead.Should().ThrowAsync<ArgumentException>();
     }
 
@@ -450,7 +511,17 @@ public class IntegrityVerificationIntegrationTests
         var store = GetStore(context);
         var firstAnchor = new BsonDocument(AnchorStore.SequenceField, 1L);
         var anchorId = (await store.Anchors.Find(firstAnchor).SingleAsync())["_id"].AsBsonBinaryData.ToGuid(GuidRepresentation.Standard);
-        var root = AnchorVerifier.HashLeaf(new AnchorLeaf(anchorId, 1, 0, nameof(LedgerAggregate), aggregateId, 2, forgedHead, []));
+        var root = AnchorVerifier.HashLeaf(new AnchorLeaf
+        {
+            AnchorId = anchorId,
+            AnchorSequence = 1,
+            Index = 0,
+            AggregateType = nameof(LedgerAggregate),
+            AggregateId = aggregateId,
+            Version = 2,
+            Hash = forgedHead,
+            Proof = []
+        });
         await store.Leaves.UpdateOneAsync(new BsonDocument(AnchorStore.AnchorSequenceField, 1L),
                                           Builders<BsonDocument>.Update.Set("Hash", new BsonBinaryData(forgedHead)));
         await store.Anchors.UpdateOneAsync(firstAnchor,
@@ -650,7 +721,11 @@ public class IntegrityVerificationIntegrationTests
         StatusOf(result, 2, MemoPath).Should().Be(PersonalDataStatus.ErasedWithoutRecord);
         StatusOf(result, 3, MemoPath).Should().Be(PersonalDataStatus.Present);
         result.Events[3].PersonalData.Should().BeEmpty();
-        result.UnrecordedErasures.Should().Equal(new UnrecordedErasure(2, MemoPath));
+        result.UnrecordedErasures.Should().Equal(new UnrecordedErasure
+        {
+            Version = 2,
+            Path = MemoPath
+        });
     }
 
     [Test]

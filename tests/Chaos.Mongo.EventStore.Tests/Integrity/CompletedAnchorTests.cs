@@ -64,5 +64,13 @@ public class CompletedAnchorTests
                DateTime.UnixEpoch,
                completedUtc);
 
-    private static AnchorTimestamp CreateTimestamp() => new("tsa", [1], [[2]], [[3]], DateTime.UnixEpoch, DateTime.UnixEpoch);
+    private static AnchorTimestamp CreateTimestamp() => new()
+    {
+        Authority = "tsa",
+        Token = [1],
+        CertificateChain = [[2]],
+        CertificateRevocationLists = [[3]],
+        TimestampUtc = DateTime.UnixEpoch,
+        ObtainedUtc = DateTime.UnixEpoch
+    };
 }

@@ -137,8 +137,18 @@ public class DerivedDataIntegrationTests
 
         var result = await GetVerifier(context).VerifyAsync(aggregateId);
 
-        result.Checkpoints.Should().Equal(new CheckpointVerification(3, CheckpointHashStatus.Mismatch, false),
-                                          new CheckpointVerification(4, CheckpointHashStatus.Matches, true));
+        result.Checkpoints.Should().Equal(new CheckpointVerification
+                                          {
+                                              Version = 3,
+                                              HashStatus = CheckpointHashStatus.Mismatch,
+                                              StateMatches = false
+                                          },
+                                          new CheckpointVerification
+                                          {
+                                              Version = 4,
+                                              HashStatus = CheckpointHashStatus.Matches,
+                                              StateMatches = true
+                                          });
         result.IsConsistent.Should().BeFalse();
     }
 
@@ -173,14 +183,57 @@ public class DerivedDataIntegrationTests
 
         CheckpointVerification[] expected = change switch
         {
-            "versionNaN" => [new CheckpointVerification(0, CheckpointHashStatus.Mismatch, false), new CheckpointVerification(4, CheckpointHashStatus.Matches, true)],
+            "versionNaN" =>
+            [
+                new CheckpointVerification
+                {
+                    Version = 0,
+                    HashStatus = CheckpointHashStatus.Mismatch,
+                    StateMatches = false
+                },
+                new CheckpointVerification
+                {
+                    Version = 4,
+                    HashStatus = CheckpointHashStatus.Matches,
+                    StateMatches = true
+                }
+            ],
             "versionFraction" =>
             [
-                new CheckpointVerification(2, CheckpointHashStatus.Matches, true),
-                new CheckpointVerification(0, CheckpointHashStatus.Mismatch, false),
-                new CheckpointVerification(4, CheckpointHashStatus.Matches, true)
+                new CheckpointVerification
+                {
+                    Version = 2,
+                    HashStatus = CheckpointHashStatus.Matches,
+                    StateMatches = true
+                },
+                new CheckpointVerification
+                {
+                    Version = 0,
+                    HashStatus = CheckpointHashStatus.Mismatch,
+                    StateMatches = false
+                },
+                new CheckpointVerification
+                {
+                    Version = 4,
+                    HashStatus = CheckpointHashStatus.Matches,
+                    StateMatches = true
+                }
             ],
-            _ => [new CheckpointVerification(2, CheckpointHashStatus.Matches, false), new CheckpointVerification(4, CheckpointHashStatus.Matches, true)]
+            _ =>
+            [
+                new CheckpointVerification
+                {
+                    Version = 2,
+                    HashStatus = CheckpointHashStatus.Matches,
+                    StateMatches = false
+                },
+                new CheckpointVerification
+                {
+                    Version = 4,
+                    HashStatus = CheckpointHashStatus.Matches,
+                    StateMatches = true
+                }
+            ]
         };
 
         result.IsConsistent.Should().BeFalse();
@@ -200,8 +253,18 @@ public class DerivedDataIntegrationTests
 
         var result = await GetVerifier(protectedContext).VerifyAsync(aggregateId);
 
-        result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Unverifiable, true),
-                                          new CheckpointVerification(4, CheckpointHashStatus.Matches, true));
+        result.Checkpoints.Should().Equal(new CheckpointVerification
+                                          {
+                                              Version = 2,
+                                              HashStatus = CheckpointHashStatus.Unverifiable,
+                                              StateMatches = true
+                                          },
+                                          new CheckpointVerification
+                                          {
+                                              Version = 4,
+                                              HashStatus = CheckpointHashStatus.Matches,
+                                              StateMatches = true
+                                          });
         result.ReadModel.Should().Be(ReadModelStatus.Matches);
         result.IsConsistent.Should().BeTrue();
     }
@@ -257,8 +320,18 @@ public class DerivedDataIntegrationTests
         else
         {
             result.ReadModel.Should().Be(ReadModelStatus.Matches);
-            result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Mismatch, false),
-                                              new CheckpointVerification(4, CheckpointHashStatus.Matches, true));
+            result.Checkpoints.Should().Equal(new CheckpointVerification
+                                              {
+                                                  Version = 2,
+                                                  HashStatus = CheckpointHashStatus.Mismatch,
+                                                  StateMatches = false
+                                              },
+                                              new CheckpointVerification
+                                              {
+                                                  Version = 4,
+                                                  HashStatus = CheckpointHashStatus.Matches,
+                                                  StateMatches = true
+                                              });
         }
     }
 
@@ -307,8 +380,18 @@ public class DerivedDataIntegrationTests
 
         result.Stream.IsIntact.Should().BeTrue();
         result.ReadModel.Should().Be(readModelDeleted ? ReadModelStatus.Missing : ReadModelStatus.Differs);
-        result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Matches, true),
-                                          new CheckpointVerification(4, CheckpointHashStatus.Matches, false));
+        result.Checkpoints.Should().Equal(new CheckpointVerification
+                                          {
+                                              Version = 2,
+                                              HashStatus = CheckpointHashStatus.Matches,
+                                              StateMatches = true
+                                          },
+                                          new CheckpointVerification
+                                          {
+                                              Version = 4,
+                                              HashStatus = CheckpointHashStatus.Matches,
+                                              StateMatches = false
+                                          });
     }
 
     [Test]
@@ -322,8 +405,18 @@ public class DerivedDataIntegrationTests
 
         var result = await GetVerifier(context).VerifyAsync(aggregateId);
 
-        result.Checkpoints.Should().Equal(new CheckpointVerification(2, CheckpointHashStatus.Matches, false),
-                                          new CheckpointVerification(4, CheckpointHashStatus.Matches, true));
+        result.Checkpoints.Should().Equal(new CheckpointVerification
+                                          {
+                                              Version = 2,
+                                              HashStatus = CheckpointHashStatus.Matches,
+                                              StateMatches = false
+                                          },
+                                          new CheckpointVerification
+                                          {
+                                              Version = 4,
+                                              HashStatus = CheckpointHashStatus.Matches,
+                                              StateMatches = true
+                                          });
         result.ReadModel.Should().Be(ReadModelStatus.Matches);
     }
 

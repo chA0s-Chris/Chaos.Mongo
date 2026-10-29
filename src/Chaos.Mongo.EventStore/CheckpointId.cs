@@ -6,4 +6,4 @@ namespace Chaos.Mongo.EventStore;
 /// Composite identifier for checkpoint documents, combining aggregate ID and version.
 /// Used as the MongoDB <c>_id</c> field for checkpoint storage.
 /// </summary>
-public readonly record struct CheckpointId(Guid AggregateId, Int64 Version);
+internal readonly record struct CheckpointId(Guid AggregateId, Int64 Version);

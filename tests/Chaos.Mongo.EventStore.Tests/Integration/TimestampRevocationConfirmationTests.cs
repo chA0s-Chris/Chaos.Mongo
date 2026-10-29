@@ -293,6 +293,22 @@ public class TimestampRevocationConfirmationTests
         fixture.Logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("revocation status"));
     }
 
+    [Test]
+    public async Task RunAsync_CustomAuthorityReturnsNonUtcNextUpdate_RecordsConfirmationFailure()
+    {
+        var fixture = await CreateFixtureAsync();
+        var anchor = await fixture.AnchorAsync();
+        var authority = new NonUtcNextUpdateAuthority(fixture.Authority);
+        fixture.Time.SetUtcNow(anchor.Timestamps[0].TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+
+        await fixture.CreateRun(authority).RunAsync();
+
+        var failed = await fixture.ReadTimestampAsync(anchor);
+        failed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        failed.ConfirmationFailure.Should().NotBeNull();
+        failed.ConfirmationFailure.LastFailure.Should().Contain("Utc kind");
+    }
+
     [TestCase("malformed", "not a single DER-encoded CRL")]
     [TestCase("issued too early", "before the required")]
     [TestCase("without next update", "states no next update")]
@@ -321,6 +337,21 @@ public class TimestampRevocationConfirmationTests
         failed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
         failed.ConfirmationFailure.Should().NotBeNull();
         failed.ConfirmationFailure.LastFailure.Should().Contain(reason);
+    }
+
+    [Test]
+    public async Task RunAsync_CustomAuthorityReturnsUtcNextUpdate_IsAcceptedAndUsedUnchanged()
+    {
+        var fixture = await CreateFixtureAsync();
+        var anchor = await fixture.AnchorAsync();
+        var timestamp = anchor.Timestamps[0];
+        var nextUpdateUtc = timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(20);
+        var authority = new FixedRevocationListsAuthority(fixture.Authority, RevocationLists.IssuedTooEarly(nextUpdateUtc));
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+
+        await fixture.CreateRun(authority).RunAsync();
+
+        (await fixture.ReadTimestampAsync(anchor)).ConfirmationNotBeforeUtc.Should().Be(nextUpdateUtc);
     }
 
     [Test]
@@ -377,7 +408,7 @@ public class TimestampRevocationConfirmationTests
         var recorded = await fixture.ReadTimestampAsync(anchor);
         recorded.RevocationStatus.Should().Be(revoked ? TimestampRevocationStatus.Revoked : TimestampRevocationStatus.Confirmed);
         recorded.ConfirmingRevocationLists.Should().ContainSingle().Which.Should().Equal(crl);
-        metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityAnchoringDiagnostics.RevokedTimestampsInstrument)
+        metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityMetrics.Instruments.RevokedTimestamps)
                .Should().Be(revoked ? 1 : 0);
         fixture.Logger.Entries.Any(entry => entry.Level == LogLevel.Error && entry.Message.Contains("as revoked")).Should().Be(revoked);
         (await fixture.ReadAnchorAsync(anchor)).Status.Should().Be(AnchorStatus.Completed);
@@ -436,7 +467,7 @@ public class TimestampRevocationConfirmationTests
         public String Name => _inner.Name;
 
         public Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
-                                                             DateTimeOffset issuedNotBefore,
+                                                             DateTime issuedNotBeforeUtc,
                                                              CancellationToken cancellationToken)
             => Task.FromResult(_lists);
 
@@ -480,5 +511,30 @@ public class TimestampRevocationConfirmationTests
         /// </summary>
         public async Task<AnchorTimestamp> ReadTimestampAsync(AnchorRecord anchor)
             => (await new AnchorEvidenceResolver(Context.MongoHelper, Options).ResolveAsync(await ReadAnchorAsync(anchor))).Timestamps.Single();
+    }
+
+    /// <summary>
+    /// An authority that stamps through another one and reports its CRLs as issued too early for a non-UTC time, like a
+    /// faulty custom authority that passes the caller-supplied time across the <see cref="ITimestampAuthority"/> boundary
+    /// without preserving its UTC kind.
+    /// </summary>
+    private sealed class NonUtcNextUpdateAuthority : ITimestampAuthority
+    {
+        private readonly ITimestampAuthority _inner;
+
+        public NonUtcNextUpdateAuthority(ITimestampAuthority inner)
+        {
+            _inner = inner;
+        }
+
+        public String Name => _inner.Name;
+
+        public Task<RevocationLists> GetRevocationListsAsync(IReadOnlyList<Byte[]> certificateChain,
+                                                             DateTime issuedNotBeforeUtc,
+                                                             CancellationToken cancellationToken)
+            => Task.FromResult(RevocationLists.IssuedTooEarly(DateTime.SpecifyKind(issuedNotBeforeUtc, DateTimeKind.Unspecified)));
+
+        public Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
+            => _inner.TimestampAsync(digest, algorithm, cancellationToken);
     }
 }

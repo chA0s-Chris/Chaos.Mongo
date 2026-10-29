@@ -878,10 +878,19 @@ public class ReferenceVerifierIntegrationTests
 
         await DumpAsync(context);
         var (code, report) = await RunVerifierAsync([.. CheckArguments(aggregateId), "--trusted-head", $"1:{TamperEvidenceVectorTests.Hex(digest)}"]);
-        var library = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync(new TrustedAnchorHead(1, digest));
+        var library = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync(new TrustedAnchorHead
+        {
+            Sequence = 1,
+            AnchorDigest = digest
+        });
 
         code.Should().Be(1);
-        library.Should().Be(new AnchorChainVerificationResult(1, AnchorChainFailure.MalformedAnchor, 0));
+        library.Should().Be(new AnchorChainVerificationResult
+        {
+            FirstBrokenSequence = 1,
+            Failure = AnchorChainFailure.MalformedAnchor,
+            AnchorCount = 0
+        });
         (report["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.MalformedAnchor));
         (report["anchorChain"]?["firstBrokenSequence"]?.GetValue<Int64>()).Should().Be(1);
     }

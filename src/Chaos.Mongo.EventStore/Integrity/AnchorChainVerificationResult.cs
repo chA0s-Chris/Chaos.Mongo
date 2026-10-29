@@ -5,14 +5,23 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// The result of verifying the chain of anchors.
 /// </summary>
-/// <param name="FirstBrokenSequence">
-/// The first sequence number whose verification failed, or <c>null</c> when the chain is
-/// intact.
-/// </param>
-/// <param name="Failure">Why the first broken sequence number failed, or <c>null</c> when the chain is intact.</param>
-/// <param name="AnchorCount">The number of anchors verified before the chain ended or broke.</param>
-public sealed record AnchorChainVerificationResult(Int64? FirstBrokenSequence, AnchorChainFailure? Failure, Int64 AnchorCount)
+public sealed record AnchorChainVerificationResult
 {
+    /// <summary>
+    /// Gets the number of anchors verified before the chain ended or broke.
+    /// </summary>
+    public required Int64 AnchorCount { get; init; }
+
+    /// <summary>
+    /// Gets why the first broken sequence number failed, or <c>null</c> when the chain is intact.
+    /// </summary>
+    public AnchorChainFailure? Failure { get; init; }
+
+    /// <summary>
+    /// Gets the first sequence number whose verification failed, or <c>null</c> when the chain is intact.
+    /// </summary>
+    public Int64? FirstBrokenSequence { get; init; }
+
     /// <summary>
     /// Gets a value indicating whether the chain of anchors is intact.
     /// </summary>

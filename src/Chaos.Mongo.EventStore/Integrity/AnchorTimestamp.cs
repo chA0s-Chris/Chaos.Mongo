@@ -11,20 +11,23 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// of them, such as the certificate chain, item by item, since <c>SequenceEqual</c> on a list of byte arrays compares
 /// references too.
 /// </remarks>
-/// <param name="Authority">The name of the authority that issued the token.</param>
-/// <param name="Token">The raw RFC 3161 token.</param>
-/// <param name="CertificateChain">The DER-encoded certificates from the signing certificate to the root.</param>
-/// <param name="CertificateRevocationLists">The CRLs captured for the chain.</param>
-/// <param name="TimestampUtc">The time the authority asserts in the token.</param>
-/// <param name="ObtainedUtc">The time the token was obtained.</param>
-public sealed record AnchorTimestamp(
-    String Authority,
-    Byte[] Token,
-    IReadOnlyList<Byte[]> CertificateChain,
-    IReadOnlyList<Byte[]> CertificateRevocationLists,
-    DateTime TimestampUtc,
-    DateTime ObtainedUtc)
+public sealed record AnchorTimestamp
 {
+    /// <summary>
+    /// Gets the name of the authority that issued the token.
+    /// </summary>
+    public required String Authority { get; init; }
+
+    /// <summary>
+    /// Gets the DER-encoded certificates from the signing certificate to the root.
+    /// </summary>
+    public required IReadOnlyList<Byte[]> CertificateChain { get; init; }
+
+    /// <summary>
+    /// Gets the CRLs captured for the chain.
+    /// </summary>
+    public required IReadOnlyList<Byte[]> CertificateRevocationLists { get; init; }
+
     /// <summary>
     /// Gets the failed attempts to confirm the revocation status, or <c>null</c> when none failed.
     /// </summary>
@@ -43,6 +46,11 @@ public sealed record AnchorTimestamp(
     public IReadOnlyList<Byte[]> ConfirmingRevocationLists { get; init; } = [];
 
     /// <summary>
+    /// Gets the time the token was obtained.
+    /// </summary>
+    public required DateTime ObtainedUtc { get; init; }
+
+    /// <summary>
     /// Gets the revocation status of the token's chain at the token's time.
     /// </summary>
     public TimestampRevocationStatus RevocationStatus { get; init; } = TimestampRevocationStatus.Unconfirmed;
@@ -51,4 +59,14 @@ public sealed record AnchorTimestamp(
     /// Gets the time the revocation status was recorded, or <c>null</c> while it is unconfirmed.
     /// </summary>
     public DateTime? RevocationStatusUtc { get; init; }
+
+    /// <summary>
+    /// Gets the time the authority asserts in the token.
+    /// </summary>
+    public required DateTime TimestampUtc { get; init; }
+
+    /// <summary>
+    /// Gets the raw RFC 3161 token.
+    /// </summary>
+    public required Byte[] Token { get; init; }
 }

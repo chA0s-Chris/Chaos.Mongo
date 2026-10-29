@@ -605,7 +605,13 @@ internal sealed class AnchorStore
         var anchors = new Dictionary<Guid, AnchorReference>();
         foreach (var document in documents)
         {
-            if (TryRead(document, d => new AnchorReference(d["_id"].AsGuid, d[SequenceField].ToInt64()), out var anchor))
+            if (TryRead(document,
+                        d => new AnchorReference
+                        {
+                            AnchorId = d["_id"].AsGuid,
+                            Sequence = d[SequenceField].ToInt64()
+                        },
+                        out var anchor))
             {
                 anchors[anchor.AnchorId] = anchor;
             }
@@ -904,9 +910,12 @@ internal sealed class AnchorStore
 
     private static TimestampConfirmationFailure? ReadConfirmationFailure(BsonDocument document)
         => document.TryGetValue(ConfirmationFailureCountField, out var countValue) && ReadInt32(countValue) is var count and > 0
-            ? new TimestampConfirmationFailure(count,
-                                               ReadString(document[LastConfirmationFailureField]),
-                                               ReadDate(document[LastConfirmationFailureUtcField]))
+            ? new TimestampConfirmationFailure
+            {
+                FailureCount = count,
+                LastFailure = ReadString(document[LastConfirmationFailureField]),
+                LastFailureUtc = ReadDate(document[LastConfirmationFailureUtcField])
+            }
             : null;
 
     private static DateTime ReadDate(BsonValue value)
@@ -924,10 +933,13 @@ internal sealed class AnchorStore
             : throw Malformed(value, $"a {typeof(TEnum).Name} name");
 
     private static AnchorAuthorityFailure ReadFailure(BsonDocument document)
-        => new(ReadString(document[AuthorityField]),
-               ReadInt32(document["FailureCount"]),
-               ReadString(document["LastFailure"]),
-               ReadDate(document["LastFailureUtc"]));
+        => new()
+        {
+            Authority = ReadString(document[AuthorityField]),
+            FailureCount = ReadInt32(document["FailureCount"]),
+            LastFailure = ReadString(document["LastFailure"]),
+            LastFailureUtc = ReadDate(document["LastFailureUtc"])
+        };
 
     private static Guid ReadGuid(BsonValue value)
         => value is BsonBinaryData { SubType: BsonBinarySubType.UuidStandard, Bytes.Length: 16 } binary
@@ -973,14 +985,17 @@ internal sealed class AnchorStore
                ReadOptionalTime(document, CompletedField));
 
     private static AnchorLeaf ReadPreparedLeaf(BsonDocument document)
-        => new(ReadGuid(document[AnchorIdField]),
-               ReadInt64(document[AnchorSequenceField]),
-               ReadInt32(document[IndexField]),
-               ReadString(document[AggregateTypeField]),
-               ReadGuid(document[AggregateIdField]),
-               ReadLeafVersion(document[VersionField]),
-               ReadBinary(document[HashField]),
-               ReadBinaries(document["Proof"]));
+        => new()
+        {
+            AnchorId = ReadGuid(document[AnchorIdField]),
+            AnchorSequence = ReadInt64(document[AnchorSequenceField]),
+            Index = ReadInt32(document[IndexField]),
+            AggregateType = ReadString(document[AggregateTypeField]),
+            AggregateId = ReadGuid(document[AggregateIdField]),
+            Version = ReadLeafVersion(document[VersionField]),
+            Hash = ReadBinary(document[HashField]),
+            Proof = ReadBinaries(document["Proof"])
+        };
 
     private static IEnumerable<UnconfirmedTimestamp> ReadPreparedUnconfirmedTimestamps(BsonDocument anchor)
         => ReadDocuments(anchor[TimestampsField])

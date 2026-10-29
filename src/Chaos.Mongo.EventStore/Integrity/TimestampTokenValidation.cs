@@ -441,7 +441,7 @@ internal static class TimestampTokenValidation
                 }
 
                 // BSON dates keep milliseconds, so verification compares the times to the millisecond as well.
-                if (TruncateToMilliseconds(token.TokenInfo.Timestamp) != TruncateToMilliseconds(received.Timestamp))
+                if (TruncateToMilliseconds(token.TokenInfo.Timestamp) != TruncateToMilliseconds(received.TimestampUtc))
                 {
                     throw new TimestampTokenValidationException("the token's time differs from the time returned with it.");
                 }

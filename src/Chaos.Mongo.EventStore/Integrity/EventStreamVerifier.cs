@@ -57,7 +57,12 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         {
             if (unreadable || covering is null)
             {
-                return new EventAnchorVerificationResult(EventAnchorStatus.Failed, EventAnchorFailure.AnchorDataUnreadable, null, null, []);
+                return new EventAnchorVerificationResult
+                {
+                    Status = EventAnchorStatus.Failed,
+                    Failure = EventAnchorFailure.AnchorDataUnreadable,
+                    Timestamps = []
+                };
             }
 
             // A later covering leaf continues the chain from the hash already verified up to an earlier one.
@@ -136,7 +141,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         }
         else
         {
-            var unrecorded = scan.Events.SelectMany(e => e.PersonalData.Where(p => p.Erased).Select(p => new UnrecordedErasure(e.Version, p.Path)))
+            var unrecorded = scan.Events.SelectMany(e => e.PersonalData.Where(p => p.Erased).Select(p => new UnrecordedErasure
+                                 {
+                                     Version = e.Version,
+                                     Path = p.Path
+                                 }))
                                  .Where(erasure => !scan.RecordedErasures.Contains(erasure))
                                  .ToList();
             result = StreamVerificationResult.IntactWith(unrecorded);
@@ -169,23 +178,37 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                 best = best is null || candidate.Anchor.Sequence < best.Anchor.Sequence ? candidate : best;
             }
 
-            anchors[index] = best is null ? null : new AnchorReference(best.Anchor.Id, best.Anchor.Sequence);
+            anchors[index] = best is null
+                ? null
+                : new AnchorReference
+                {
+                    AnchorId = best.Anchor.Id,
+                    Sequence = best.Anchor.Sequence
+                };
         }
 
-        return scan.Events.Select((e, index) => new VerifiedEvent(
-                                      e.Version,
-                                      e.Hash,
-                                      e.PreviousHash,
-                                      e.SealMode,
-                                      anchors[index],
-                                      e.PersonalData.Select(p => new PersonalDataPathStatus(
-                                                                p.Path,
-                                                                !p.Erased
-                                                                    ? PersonalDataStatus.Present
-                                                                    : scan.RecordedErasures.Contains(new UnrecordedErasure(e.Version, p.Path))
-                                                                        ? PersonalDataStatus.ErasedWithRecord
-                                                                        : PersonalDataStatus.ErasedWithoutRecord))
-                                       .ToList()))
+        return scan.Events.Select((e, index) => new VerifiedEvent
+                   {
+                       Version = e.Version,
+                       Hash = e.Hash,
+                       PreviousHash = e.PreviousHash,
+                       SealMode = e.SealMode,
+                       SealingAnchor = anchors[index],
+                       PersonalData = e.PersonalData.Select(p => new PersonalDataPathStatus
+                                       {
+                                           Path = p.Path,
+                                           Status = !p.Erased
+                                               ? PersonalDataStatus.Present
+                                               : scan.RecordedErasures.Contains(new UnrecordedErasure
+                                               {
+                                                   Version = e.Version,
+                                                   Path = p.Path
+                                               })
+                                                   ? PersonalDataStatus.ErasedWithRecord
+                                                   : PersonalDataStatus.ErasedWithoutRecord
+                                       })
+                                       .ToList()
+                   })
                    .ToList();
     }
 
@@ -217,7 +240,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             {
                 if (path is BsonString { Value: var erasedPath })
                 {
-                    recordedErasures.Add(new UnrecordedErasure(version, erasedPath));
+                    recordedErasures.Add(new UnrecordedErasure
+                    {
+                        Version = version,
+                        Path = erasedPath
+                    });
                 }
             }
         }
@@ -411,7 +438,11 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
                                                                                       CancellationToken cancellationToken)
     {
         var (leaf, anchor) = covering;
-        var reference = new AnchorReference(anchor.Id, anchor.Sequence);
+        var reference = new AnchorReference
+        {
+            AnchorId = anchor.Id,
+            Sequence = anchor.Sequence
+        };
         if (anchoredHash is null)
         {
             return Failed(EventAnchorFailure.ChainBroken, []);
@@ -434,11 +465,24 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         }
 
         return anchorResult.IsVerified
-            ? new EventAnchorVerificationResult(EventAnchorStatus.Anchored, null, reference, leaf.Version, anchorResult.Timestamps)
+            ? new EventAnchorVerificationResult
+            {
+                Status = EventAnchorStatus.Anchored,
+                Anchor = reference,
+                LeafVersion = leaf.Version,
+                Timestamps = anchorResult.Timestamps
+            }
             : Failed(EventAnchorFailure.NoValidTimestamp, anchorResult.Timestamps);
 
         EventAnchorVerificationResult Failed(EventAnchorFailure failure, IReadOnlyList<TimestampVerificationResult> timestamps)
-            => new(EventAnchorStatus.Failed, failure, reference, leaf.Version, timestamps);
+            => new()
+            {
+                Status = EventAnchorStatus.Failed,
+                Failure = failure,
+                Anchor = reference,
+                LeafVersion = leaf.Version,
+                Timestamps = timestamps
+            };
     }
 
     private IMongoCollection<RawBsonDocument> GetEventsCollection()

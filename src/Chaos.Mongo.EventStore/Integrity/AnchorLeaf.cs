@@ -10,20 +10,45 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// Records compare byte arrays and lists by reference, so compare the hash with <c>SequenceEqual</c> and the proof's
 /// hashes one by one, since <c>SequenceEqual</c> on a list of byte arrays compares references too.
 /// </remarks>
-/// <param name="AnchorId">The identifier of the anchor.</param>
-/// <param name="AnchorSequence">The sequence number of the anchor.</param>
-/// <param name="Index">The zero-based position of the leaf in the anchor's sorted leaves.</param>
-/// <param name="AggregateType">The aggregate type name.</param>
-/// <param name="AggregateId">The aggregate identifier.</param>
-/// <param name="Version">The anchored stream head version.</param>
-/// <param name="Hash">The chain hash of that version.</param>
-/// <param name="Proof">The inclusion proof of the leaf.</param>
-public sealed record AnchorLeaf(
-    Guid AnchorId,
-    Int64 AnchorSequence,
-    Int32 Index,
-    String AggregateType,
-    Guid AggregateId,
-    Int64 Version,
-    Byte[] Hash,
-    IReadOnlyList<Byte[]> Proof);
+public sealed record AnchorLeaf
+{
+    /// <summary>
+    /// Gets the aggregate identifier.
+    /// </summary>
+    public required Guid AggregateId { get; init; }
+
+    /// <summary>
+    /// Gets the aggregate type name.
+    /// </summary>
+    public required String AggregateType { get; init; }
+
+    /// <summary>
+    /// Gets the identifier of the anchor.
+    /// </summary>
+    public required Guid AnchorId { get; init; }
+
+    /// <summary>
+    /// Gets the sequence number of the anchor.
+    /// </summary>
+    public required Int64 AnchorSequence { get; init; }
+
+    /// <summary>
+    /// Gets the chain hash of that version.
+    /// </summary>
+    public required Byte[] Hash { get; init; }
+
+    /// <summary>
+    /// Gets the zero-based position of the leaf in the anchor's sorted leaves.
+    /// </summary>
+    public required Int32 Index { get; init; }
+
+    /// <summary>
+    /// Gets the inclusion proof of the leaf.
+    /// </summary>
+    public required IReadOnlyList<Byte[]> Proof { get; init; }
+
+    /// <summary>
+    /// Gets the anchored stream head version.
+    /// </summary>
+    public required Int64 Version { get; init; }
+}
