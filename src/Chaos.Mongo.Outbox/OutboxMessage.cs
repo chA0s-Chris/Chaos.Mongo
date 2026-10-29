@@ -12,82 +12,82 @@ using MongoDB.Bson.Serialization;
 /// The payload is stored as a <see cref="BsonDocument"/> field, keeping the outbox agnostic of payload types
 /// at the storage level. Use <see cref="DeserializePayload{TPayload}"/> for typed access.
 /// </remarks>
-public class OutboxMessage
+public sealed class OutboxMessage
 {
     /// <summary>
     /// Gets or sets an optional correlation identifier for tracing across systems.
     /// </summary>
-    public String? CorrelationId { get; init; }
+    public String? CorrelationId { get; internal init; }
 
     /// <summary>
     /// Gets or sets the timestamp when the message was written to the outbox.
     /// </summary>
-    public DateTime CreatedUtc { get; set; }
+    public DateTime CreatedUtc { get; internal set; }
 
     /// <summary>
     /// Gets or sets the last error message from a failed processing attempt.
     /// </summary>
-    public String? Error { get; set; }
+    public String? Error { get; internal set; }
 
     /// <summary>
     /// Gets or sets the timestamp when the message was permanently marked as failed.
     /// Used for TTL cleanup of failed messages.
     /// </summary>
-    public DateTime? FailedUtc { get; set; }
+    public DateTime? FailedUtc { get; internal set; }
 
     /// <summary>
     /// Gets or sets the MongoDB document identifier.
     /// Used as a tie-breaker after retry scheduling and lock timing when sorting eligible messages.
     /// </summary>
-    public ObjectId Id { get; set; }
+    public ObjectId Id { get; internal set; }
 
     /// <summary>
     /// Gets or sets whether the message is currently being processed.
     /// </summary>
-    public Boolean IsLocked { get; set; }
+    public Boolean IsLocked { get; internal set; }
 
     /// <summary>
     /// Gets or sets the opaque claim token identifying the processor's current lock ownership.
     /// A new value is generated every time a message is claimed or reclaimed.
     /// </summary>
-    public String? LockId { get; set; }
+    public String? LockId { get; internal set; }
 
     /// <summary>
     /// Gets or sets the timestamp when the lock was acquired. Used for stale lock detection.
     /// </summary>
-    public DateTime? LockedUtc { get; set; }
+    public DateTime? LockedUtc { get; internal set; }
 
     /// <summary>
     /// Gets or sets when the message becomes eligible for another processing attempt after a failure.
     /// <c>null</c> means the message is eligible immediately.
     /// </summary>
-    public DateTime? NextAttemptUtc { get; set; }
+    public DateTime? NextAttemptUtc { get; internal set; }
 
     /// <summary>
     /// Gets or sets the payload as a raw BSON document.
     /// </summary>
-    public BsonDocument Payload { get; init; } = [];
+    public BsonDocument Payload { get; internal init; } = [];
 
     /// <summary>
     /// Gets or sets the timestamp when the message was successfully published.
     /// </summary>
-    public DateTime? ProcessedUtc { get; set; }
+    public DateTime? ProcessedUtc { get; internal set; }
 
     /// <summary>
     /// Gets or sets the number of failed processing attempts so far.
     /// </summary>
-    public Int32 RetryCount { get; set; }
+    public Int32 RetryCount { get; internal set; }
 
     /// <summary>
     /// Gets or sets the processing state of the message.
     /// </summary>
-    public OutboxMessageState State { get; init; } = OutboxMessageState.Pending;
+    public OutboxMessageState State { get; internal init; } = OutboxMessageState.Pending;
 
     /// <summary>
     /// Gets or sets the message type discriminator (e.g., "OrderCreated").
     /// Set automatically from the discriminator registered via the builder API.
     /// </summary>
-    public String Type { get; init; } = String.Empty;
+    public String Type { get; internal init; } = String.Empty;
 
     /// <summary>
     /// Deserializes the <see cref="Payload"/> to a typed payload object.

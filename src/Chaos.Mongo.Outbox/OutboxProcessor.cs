@@ -11,7 +11,7 @@ using MongoDB.Driver;
 /// Polls the outbox collection for pending messages and publishes them
 /// via the user-provided <see cref="IOutboxPublisher"/>.
 /// </summary>
-public sealed class OutboxProcessor : IOutboxProcessor
+internal sealed class OutboxProcessor : IOutboxProcessor
 {
     private static readonly TimeSpan FinalizationTimeout = TimeSpan.FromSeconds(3);
     private readonly ILogger<OutboxProcessor> _logger;

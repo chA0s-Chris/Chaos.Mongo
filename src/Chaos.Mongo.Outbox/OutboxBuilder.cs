@@ -23,6 +23,16 @@ public sealed class OutboxBuilder
     private TimeSpan _retryBackoffMaxDelay = OutboxOptions.DefaultRetryBackoffMaxDelay;
 
     /// <summary>
+    /// Initializes a new instance of the <see cref="OutboxBuilder"/> class.
+    /// </summary>
+    internal OutboxBuilder() { }
+
+    /// <summary>
+    /// Gets the registered message types mapped to their discriminator names.
+    /// </summary>
+    internal Dictionary<Type, String> MessageTypes { get; } = new();
+
+    /// <summary>
     /// Gets the publisher factory configured by
     /// <see cref="WithPublisher(Func{IServiceProvider, IOutboxPublisher}, ServiceLifetime)"/>.
     /// </summary>
@@ -30,12 +40,12 @@ public sealed class OutboxBuilder
     /// Once a publisher is configured, exactly one of <see cref="PublisherType"/> and <see cref="PublisherFactory"/> is
     /// non-null.
     /// </remarks>
-    public Func<IServiceProvider, IOutboxPublisher>? PublisherFactory { get; private set; }
+    internal Func<IServiceProvider, IOutboxPublisher>? PublisherFactory { get; private set; }
 
     /// <summary>
     /// Gets the publisher service lifetime.
     /// </summary>
-    public ServiceLifetime PublisherLifetime { get; private set; } = ServiceLifetime.Transient;
+    internal ServiceLifetime PublisherLifetime { get; private set; } = ServiceLifetime.Transient;
 
     /// <summary>
     /// Gets the publisher implementation type configured by <see cref="WithPublisher{TPublisher}()"/>.
@@ -44,39 +54,11 @@ public sealed class OutboxBuilder
     /// Once a publisher is configured, exactly one of <see cref="PublisherType"/> and <see cref="PublisherFactory"/> is
     /// non-null.
     /// </remarks>
-    public Type? PublisherType { get; private set; }
-
-    /// <summary>
-    /// Gets the registered message types mapped to their discriminator names.
-    /// </summary>
-    internal Dictionary<Type, String> MessageTypes { get; } = new();
-
-    /// <summary>
-    /// Builds the immutable <see cref="OutboxOptions"/> from the current builder state.
-    /// </summary>
-    /// <returns>A frozen <see cref="OutboxOptions"/> instance.</returns>
-    public OutboxOptions Build() => Build("Default");
-
-    /// <summary>
-    /// Validates the builder configuration.
-    /// </summary>
-    public void Validate()
-    {
-        if (PublisherType is null && PublisherFactory is null)
-        {
-            throw new InvalidOperationException(
-                "An IOutboxPublisher implementation must be registered. Use WithPublisher<T>() or WithPublisher(Func<IServiceProvider, IOutboxPublisher>) to register one.");
-        }
-
-        if (MessageTypes.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "At least one message type must be registered. Use WithMessage<TPayload>() to register message types.");
-        }
-    }
+    internal Type? PublisherType { get; private set; }
 
     /// <summary>
     /// Enables automatic processor startup via the hosted service.
+    /// Omit this call to leave processor startup to the caller; defaults to disabled.
     /// </summary>
     /// <returns>This builder instance for method chaining.</returns>
     public OutboxBuilder WithAutoStartProcessor()
@@ -264,6 +246,7 @@ public sealed class OutboxBuilder
 
     /// <summary>
     /// Configures the exponential retry backoff parameters.
+    /// Defaults to a <c>5</c> second initial delay and a <c>5</c> minute maximum delay.
     /// </summary>
     /// <param name="initialDelay">The initial delay between retry attempts.</param>
     /// <param name="maxDelay">The maximum delay cap.</param>
@@ -279,6 +262,12 @@ public sealed class OutboxBuilder
         _retryBackoffMaxDelay = maxDelay;
         return this;
     }
+
+    /// <summary>
+    /// Builds the immutable <see cref="OutboxOptions"/> from the current builder state.
+    /// </summary>
+    /// <returns>A frozen <see cref="OutboxOptions"/> instance.</returns>
+    internal OutboxOptions Build() => Build("Default");
 
     internal OutboxOptions Build(String identity)
     {
@@ -297,5 +286,23 @@ public sealed class OutboxBuilder
             RetryBackoffInitialDelay = _retryBackoffInitialDelay,
             RetryBackoffMaxDelay = _retryBackoffMaxDelay
         };
+    }
+
+    /// <summary>
+    /// Validates the builder configuration.
+    /// </summary>
+    internal void Validate()
+    {
+        if (PublisherType is null && PublisherFactory is null)
+        {
+            throw new InvalidOperationException(
+                "An IOutboxPublisher implementation must be registered. Use WithPublisher<T>() or WithPublisher(Func<IServiceProvider, IOutboxPublisher>) to register one.");
+        }
+
+        if (MessageTypes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "At least one message type must be registered. Use WithMessage<TPayload>() to register message types.");
+        }
     }
 }

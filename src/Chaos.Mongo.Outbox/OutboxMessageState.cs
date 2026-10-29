@@ -5,6 +5,10 @@ namespace Chaos.Mongo.Outbox;
 /// <summary>
 /// Represents the processing state of an outbox message.
 /// </summary>
+/// <remarks>
+/// Persisted using the MongoDB driver's default enum representation, an <see cref="Int32"/>. The numeric
+/// values of each member are part of the storage contract and must not be renumbered.
+/// </remarks>
 public enum OutboxMessageState
 {
     /// <summary>

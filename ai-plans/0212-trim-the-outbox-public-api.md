@@ -21,38 +21,38 @@ without changing any runtime behavior.
 
 ## Acceptance Criteria
 
-- [ ] `MongoOutbox`, `OutboxConfigurator`, the `OutboxConfiguratorRunner`
+- [x] `MongoOutbox`, `OutboxConfigurator`, the `OutboxConfiguratorRunner`
       implementation class, `OutboxHostedService`, `OutboxProcessor`,
       `OutboxSerializationSetup`, and `OutboxOptions` are `internal`.
-- [ ] `OutboxBuilder` remains public, but its constructor, `Build()`,
+- [x] `OutboxBuilder` remains public, but its constructor, `Build()`,
       `Validate()`, `PublisherFactory`, `PublisherLifetime`, and
       `PublisherType` are `internal`.
-- [ ] `OutboxMessage` is `sealed`; all of its property setters/init accessors
+- [x] `OutboxMessage` is `sealed`; all of its property setters/init accessors
       are `internal` while every getter stays `public`.
-- [ ] `IOutbox`, `IOutbox<T>`, `IOutboxProcessor`, `IOutboxProcessor<T>`,
+- [x] `IOutbox`, `IOutbox<T>`, `IOutboxProcessor`, `IOutboxProcessor<T>`,
       `IOutboxPublisher`, `MongoBuilderExtensions`, `OutboxMessageState`, and
       `IOutboxConfiguratorRunner` remain unchanged and public.
-- [ ] `src/Chaos.Mongo.Outbox/PublicAPI.Unshipped.txt` records a `*REMOVED*`
+- [x] `src/Chaos.Mongo.Outbox/PublicAPI.Unshipped.txt` records a `*REMOVED*`
       entry for every shipped type, member, and accessor this plan moves to
       `internal`, and the `Microsoft.CodeAnalysis.PublicApiAnalyzers` checks
       (RS0016/RS0017) report no errors.
-- [ ] `Chaos.Mongo.Outbox.csproj` grants `InternalsVisibleTo` to
+- [x] `Chaos.Mongo.Outbox.csproj` grants `InternalsVisibleTo` to
       `Chaos.Mongo.Outbox.Tests`, matching the pattern used by
       `Chaos.Mongo.csproj` and `Chaos.Mongo.EventStore.csproj`.
-- [ ] A test demonstrates that an outbox document containing an unrecognized
+- [x] A test demonstrates that an outbox document containing an unrecognized
       extra BSON element still deserializes successfully.
-- [ ] `docs/transactional-outbox.md` no longer tells readers to configure the
+- [x] `docs/transactional-outbox.md` no longer tells readers to configure the
       processing filter (or anything else) through an `OutboxOptions`
       initializer, and no longer lists `OutboxOptions` as something a
       consumer interacts with directly.
-- [ ] `OutboxMessageState`'s XML documentation states that it is persisted
+- [x] `OutboxMessageState`'s XML documentation states that it is persisted
       using the driver's default `Int32` representation and that the numeric
       values are a stable storage contract.
-- [ ] Every default previously documented only on `OutboxOptions` members
+- [x] Every default previously documented only on `OutboxOptions` members
       (batch size, collection name, lock timeout, max retries, polling
       interval, retry backoff) is documented on the corresponding
       `OutboxBuilder.With*` method.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces
       no warnings, and `bash ./build.sh Test` passes the complete suite with
       at least 95% merged line coverage, per `tests/AGENTS.md`.
 

@@ -8,7 +8,7 @@ using System.Collections.Immutable;
 /// <summary>
 /// Configuration options for the transactional outbox.
 /// </summary>
-public sealed class OutboxOptions
+internal sealed class OutboxOptions
 {
     public const Int32 DefaultBatchSize = 100;
     public const String DefaultCollectionName = "Outbox";
