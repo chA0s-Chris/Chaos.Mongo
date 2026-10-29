@@ -12,7 +12,7 @@ using MongoDB.Bson.Serialization.Attributes;
 /// (default: "_migrations"). It provides an audit trail of which migrations have been applied and when.
 /// </remarks>
 [BsonIgnoreExtraElements]
-public class MongoMigrationHistoryItem
+public sealed class MongoMigrationHistoryItem
 {
     /// <summary>
     /// Gets the UTC date and time when the migration was successfully applied.

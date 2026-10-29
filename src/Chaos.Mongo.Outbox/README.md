@@ -56,7 +56,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Write the business change and message in the same transaction:
 
 ```csharp
-await mongo.ExecuteInTransaction(async (helper, session, cancellationToken) =>
+await mongo.ExecuteInTransactionAsync(async (helper, session, cancellationToken) =>
 {
     await orders.InsertOneAsync(session, order, cancellationToken: cancellationToken);
     await outbox.AddMessageAsync(

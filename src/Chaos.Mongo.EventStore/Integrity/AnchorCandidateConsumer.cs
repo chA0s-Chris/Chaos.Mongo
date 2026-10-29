@@ -40,8 +40,8 @@ internal sealed class AnchorCandidateConsumer
     {
         _source.DiscardUnacknowledgedReads();
         var batch = await _source.ReadBatchAsync(maxCandidates, cancellationToken);
-        await _mongoHelper.ExecuteInTransaction((_, session, ct) => _source.AcknowledgeAsync(session, batch, ct),
-                                                cancellationToken: cancellationToken);
+        await _mongoHelper.ExecuteInTransactionAsync((_, session, ct) => _source.AcknowledgeAsync(session, batch, ct),
+                                                     cancellationToken: cancellationToken);
         return new ConsumedAnchorCandidates(Reduce(batch.Candidates), batch.HasMore);
     }
 

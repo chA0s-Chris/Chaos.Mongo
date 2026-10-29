@@ -8,7 +8,7 @@ using MongoDB.Driver;
 /// <summary>
 /// Default implementation of <see cref="IMongoClientSettingsFactory"/> that creates MongoDB client settings from URLs.
 /// </summary>
-public class MongoClientSettingsFactory : IMongoClientSettingsFactory
+internal class MongoClientSettingsFactory : IMongoClientSettingsFactory
 {
     private readonly MongoOptions? _options;
 

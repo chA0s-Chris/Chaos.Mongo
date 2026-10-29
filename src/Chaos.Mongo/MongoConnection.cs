@@ -7,7 +7,7 @@ using MongoDB.Driver;
 /// <summary>
 /// Default implementation of <see cref="IMongoConnection"/> that holds references to a MongoDB client and database.
 /// </summary>
-public class MongoConnection : IMongoConnection
+public sealed class MongoConnection : IMongoConnection
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="MongoConnection"/> class.

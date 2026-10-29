@@ -5,7 +5,7 @@ namespace Chaos.Mongo;
 /// <summary>
 /// Default implementation of <see cref="IMongoLock"/> representing a distributed lock in MongoDB.
 /// </summary>
-public class MongoLock : IMongoLock
+internal class MongoLock : IMongoLock
 {
     private readonly Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> _extendAction;
     private readonly TimeSpan _leaseTime;

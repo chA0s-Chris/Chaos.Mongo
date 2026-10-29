@@ -5,7 +5,7 @@ namespace Chaos.Mongo.Queues;
 /// <summary>
 /// Definition of a MongoDB queue.
 /// </summary>
-public record MongoQueueDefinition
+public sealed record MongoQueueDefinition
 {
     /// <summary>
     /// Whether to automatically start the subscription.

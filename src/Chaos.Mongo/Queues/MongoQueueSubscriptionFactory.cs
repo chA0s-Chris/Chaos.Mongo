@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 /// <summary>
 /// Provides a factory implementation for creating and starting queue subscriptions.
 /// </summary>
-public class MongoQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
+internal class MongoQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly IMongoHelper _mongoHelper;
@@ -42,7 +42,7 @@ public class MongoQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
     }
 
     /// <inheritdoc/>
-    public async Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition)
+    public async Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
         where TPayload : class, new()
     {
         ArgumentNullException.ThrowIfNull(queueDefinition);
@@ -54,7 +54,7 @@ public class MongoQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
                                                                 _payloadPrioritizer,
                                                                 _timeProvider,
                                                                 logger);
-        await subscription.StartAsync();
+        await subscription.StartAsync(cancellationToken);
 
         return subscription;
     }

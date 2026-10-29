@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// <summary>
 /// Provides a factory implementation for creating payload handlers from the dependency injection container.
 /// </summary>
-public class MongoQueuePayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
+internal class MongoQueuePayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
 {
     private readonly IServiceProvider _serviceProvider;
 

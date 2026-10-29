@@ -8,7 +8,7 @@ using System.Collections.Frozen;
 /// <summary>
 /// Default implementation of <see cref="ICollectionTypeMap"/> that maps CLR types to MongoDB collection names.
 /// </summary>
-public class CollectionTypeMap : ICollectionTypeMap
+internal class CollectionTypeMap : ICollectionTypeMap
 {
     private readonly FrozenDictionary<Type, String> _typeMap;
     private readonly Boolean _useDefaultCollectionNames;

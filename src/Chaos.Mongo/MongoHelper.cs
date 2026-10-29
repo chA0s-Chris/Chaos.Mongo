@@ -8,7 +8,7 @@ using MongoDB.Driver;
 /// <summary>
 /// Provides a helper abstraction for working with MongoDB, including collection access and distributed locking.
 /// </summary>
-public sealed class MongoHelper : IMongoHelper
+internal sealed class MongoHelper : IMongoHelper
 {
     private readonly ICollectionTypeMap _collectionTypeMap;
     private readonly String _holderId;
