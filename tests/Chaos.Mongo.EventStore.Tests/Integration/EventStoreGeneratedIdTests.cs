@@ -45,7 +45,7 @@ public class EventStoreGeneratedIdTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public async Task AppendEventsAsync_WhenEventIdIsEmpty_GeneratesDistinctIds(Boolean bulkWriteOptimizationEnabled)
+    public async Task AppendEventsAsync_WhenEventIdIsEmpty_GeneratesDistinctVersion7Ids(Boolean bulkWriteOptimizationEnabled)
     {
         var eventStore = CreateEventStore(bulkWriteOptimizationEnabled);
         var aggregateId = Guid.NewGuid();
@@ -79,6 +79,7 @@ public class EventStoreGeneratedIdTests
 
         generatedIds.Should().NotContain(Guid.Empty);
         generatedIds.Should().OnlyHaveUniqueItems();
+        generatedIds.Should().OnlyContain(id => id.Version == 7);
 
         // The generated ids must be what actually reached the database, otherwise the bulk-write
         // path would have persisted Guid.Empty and collided on the unique _id index.

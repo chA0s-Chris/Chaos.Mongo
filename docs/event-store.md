@@ -60,18 +60,15 @@ dotnet add package Chaos.Mongo.EventStore
 - **Checkpoints**: Optional periodic snapshots to speed up aggregate reconstruction
 - **Transactional Callbacks**: Execute additional operations (e.g., outbox messages) within the same transaction
 
-> **Note on GUID Generation (.NET 9+):**  
+> **Note on GUID Generation:**  
 > The examples in this documentation use `Guid.CreateVersion7()` instead of `Guid.NewGuid()`. Version 7 GUIDs are recommended for event sourcing because they:
 > - **Are time-ordered**: GUIDs sort chronologically, improving MongoDB index performance and query efficiency
 > - **Reduce index fragmentation**: Sequential IDs prevent B-tree index fragmentation, especially important for high-throughput event streams
 > - **Improve locality**: Related events created close in time are stored close together on disk
 > - **Maintain uniqueness**: Still globally unique like version 4 GUIDs, but with better database performance characteristics
->
-> If you're using .NET 8 or earlier, use `Guid.NewGuid()` instead.
 
 > **Note on generated event IDs:**
-> If an event is appended with `Id` left unset, the event store generates one. The version depends on the target
-> framework the library was built for: version 7 on .NET 9 and later, version 4 on .NET 8. This applies to both the
+> If an event is appended with `Id` left unset, the event store generates a version 7 GUID. This applies to both the
 > default append path and the bulk-write path, so the two behave identically.
 >
 > The generated ID is assigned back to the event instance you passed in. Retrying an append with those same
@@ -920,7 +917,6 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithIntegrityAnchoring(anchoring => anchoring
         .WithRfc3161TimestampAuthority("qualified-tsa", new Uri("https://tsa.example/timestamp"), tsa =>
         {
-            // On .NET 8, use new X509Certificate2("tsa-root.cer").
             tsa.TrustedRoots.Add(X509CertificateLoader.LoadCertificateFromFile("tsa-root.cer"));
             tsa.PolicyId = "1.2.3.4.5";
             tsa.HttpClientFactory = sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("tsa");

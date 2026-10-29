@@ -80,14 +80,10 @@ public sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     /// <summary>
     /// Creates an identifier for an event that was appended without one. Version 7 GUIDs are
     /// time-ordered and reduce fragmentation of the unique <c>_id</c> index on the events
-    /// collection, so they are preferred wherever the target framework provides them.
+    /// collection.
     /// </summary>
     private static Guid CreateEventId()
-#if NET9_0_OR_GREATER
         => Guid.CreateVersion7();
-#else
-        => Guid.NewGuid();
-#endif
 
     private static String GetDuplicateKeyMessage(MongoException ex)
         => ex switch
