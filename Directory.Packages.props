@@ -2,6 +2,45 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
+  <!-- Dependency minimums of the src/ packages. Central package management writes these versions
+       into every published nuspec as the lowest version a consumer may resolve, so each one is the
+       lowest version that provides every API we use and has no known vulnerability. Renovate holds
+       regular updates of these packages for Dependency Dashboard approval (see renovate.json);
+       vulnerability fixes still open pull requests. Projects outside src/ that reference one of
+       these packages resolve the same minimum.
+
+         Microsoft.Extensions.DependencyInjection             8.0.0  keyed services (AddKeyedSingleton, GetRequiredKeyedService)
+         Microsoft.Extensions.Hosting.Abstractions            8.0.0  IHostedLifecycleService
+         Microsoft.Extensions.Options                         8.0.0  OptionsBuilder.ValidateOnStart
+         Microsoft.Extensions.Logging.Abstractions            8.0.0  Hosting.Abstractions 8.0.0 depends on >= 8.0.0;
+                                                                     a lower version is an NU1605 downgrade
+         Microsoft.Extensions.Configuration.Abstractions      8.0.0  IConfiguration; same constraint as Logging.Abstractions
+         Microsoft.Extensions.Options.ConfigurationExtensions 2.1.0  OptionsBuilder.Bind, first shipped in 2.1.0
+         Microsoft.Extensions.Configuration.Binder            2.1.0  Options.ConfigurationExtensions 2.1.0 depends on >= 2.1.0;
+                                                                     a lower version is an NU1605 downgrade
+         System.IO.Hashing                                    8.0.0  XxHash3
+         System.Security.Cryptography.Pkcs                    8.0.2  GHSA-846f-f764-76mx and GHSA-2fmv-rv2c-59x7 affect 8.0.0-8.0.1;
+                                                                     the 6.0 and 7.0 lines never received a fix
+         MongoDB.Driver                                       3.9.0  older 3.x releases depend on a vulnerable Snappier
+                                                                     (GHSA-pggp-6c3x-2xmx, < 3.8.1) or SharpCompress
+                                                                     (GHSA-6c8g-7p36-r338, < 3.9.0); ClientBulkWriteException
+                                                                     alone would allow 3.1.0
+
+       NuGet audit checks these versions and their transitive dependencies on every restore, and
+       Release builds treat its warnings as errors. Advisories stop listing a release line once it is
+       out of support, so review these minimums by hand when an advisory affects a newer line. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="2.1.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="2.1.0" />
+    <PackageVersion Include="MongoDB.Driver" Version="3.9.0" />
+    <PackageVersion Include="System.IO.Hashing" Version="8.0.0" />
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
+  </ItemGroup>
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="Chaos.Testing" Version="0.1.0" />
@@ -11,18 +50,10 @@
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.14" />
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.403" />
     <PackageVersion Include="Microsoft.TestPlatform.TestHost" Version="18.11.0" />
-    <PackageVersion Include="MongoDB.Driver" Version="3.13.0" />
     <PackageVersion Include="Moq" Version="4.20.72" />
     <PackageVersion Include="NUnit" Version="5.0.0" />
     <PackageVersion Include="NUnit.Analyzers" Version="4.15.0" />
@@ -31,8 +62,6 @@
     <PackageVersion Include="NuGet.Packaging" Version="6.14.3" />
     <PackageVersion Include="Nuke.Common" Version="10.1.0" />
     <PackageVersion Include="SemanticVersioning" Version="3.0.0" />
-    <PackageVersion Include="System.IO.Hashing" Version="10.0.14" />
-    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.14" />
     <PackageVersion Include="Testcontainers.MongoDb" Version="4.16.0" />
     <PackageVersion Include="coverlet.collector" Version="10.1.0" />

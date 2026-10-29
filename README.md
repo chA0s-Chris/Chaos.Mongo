@@ -33,7 +33,7 @@ dotnet add package Chaos.Mongo.EventStore
 dotnet add package Chaos.Mongo.Outbox
 ```
 
-Targets .NET 8, .NET 9, and .NET 10.
+Targets .NET 10.
 
 ## Quick start
 

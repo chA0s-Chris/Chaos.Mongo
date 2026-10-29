@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <LatestTarget>net10.0</LatestTarget>
-    <MainTargets>$(LatestTarget);net9.0;net8.0</MainTargets>
+    <MainTargets>$(LatestTarget)</MainTargets>
     <TargetFrameworks>$(MainTargets)</TargetFrameworks>
 
     <LangVersion>latest</LangVersion>

@@ -20,6 +20,26 @@
       "rangeStrategy": "bump"
     },
     {
+      "description": "Hold the dependency minimums of the src/ packages (see Directory.Packages.props) for Dependency Dashboard approval. Vulnerability fixes still open pull requests.",
+      "matchManagers": [
+        "nuget"
+      ],
+      "matchPackageNames": [
+        "Microsoft.Extensions.Configuration.Abstractions",
+        "Microsoft.Extensions.Configuration.Binder",
+        "Microsoft.Extensions.DependencyInjection",
+        "Microsoft.Extensions.Hosting.Abstractions",
+        "Microsoft.Extensions.Logging.Abstractions",
+        "Microsoft.Extensions.Options",
+        "Microsoft.Extensions.Options.ConfigurationExtensions",
+        "MongoDB.Driver",
+        "System.IO.Hashing",
+        "System.Security.Cryptography.Pkcs"
+      ],
+      "groupName": "src dependency minimums",
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "Allow FluentAssertions updates within v7 only",
       "matchPackageNames": [
         "FluentAssertions"

@@ -8,15 +8,15 @@ With central package management, the versions in `Directory.Packages.props` beco
 
 ## Acceptance Criteria
 
-- [ ] `MainTargets` is `$(LatestTarget)` (`net10.0`). Every `src/` and test project builds only for `net10.0`, and `src/`, `tests/` and the MSBuild files contain no `NET*_OR_GREATER` branches and no `TargetFramework` conditions.
-- [ ] Events appended without an `Id` receive a version 7 GUID on both the default and the bulk-write append path. Explicitly supplied IDs are kept unchanged on both paths. Automated tests cover both behaviours on both paths.
-- [ ] The `src/` dependencies in `Directory.Packages.props` are at the minimum versions listed in Technical Details. `Directory.Packages.props` documents, for each of them, the API, dependency constraint or advisory that sets its version, for example in one comment block above the `src/` minimums.
-- [ ] `Chaos.Mongo` references `Microsoft.Extensions.Configuration.Abstractions` instead of `Microsoft.Extensions.Configuration`.
-- [ ] For each of the three packages, `dotnet list package --vulnerable --include-transitive` reports no vulnerable packages. The nuspec from a Release `dotnet pack` has a single `net10.0` dependency group with exactly these minimum versions and still includes the SourceLink `repository` commit.
-- [ ] `renovate.json` makes Renovate hold regular updates of the `src/` dependencies for Dependency Dashboard approval instead of opening PRs. Vulnerability-fix PRs for them are still raised. Test-only and build-only packages update as before.
-- [ ] Every `actions/setup-dotnet` step in `ci.yml` and `release.yml` installs only `10.0.x`.
-- [ ] `dotnet build -c Release Chaos.Mongo.slnx` reports no warnings. The complete test suite, including integration tests, passes, and `bash ./build.sh Test` meets the 95% merged line coverage required by `tests/AGENTS.md`.
-- [ ] `README.md`, `docs/event-store.md` and the package READMEs describe net10.0-only support consistently, with no remaining .NET 8 or .NET 9 compatibility notes. Automatic event-ID generation is documented as GUID version 7 for both append paths, and the examples with explicitly supplied IDs remain valid.
+- [x] `MainTargets` is `$(LatestTarget)` (`net10.0`). Every `src/` and test project builds only for `net10.0`, and `src/`, `tests/` and the MSBuild files contain no `NET*_OR_GREATER` branches and no `TargetFramework` conditions.
+- [x] Events appended without an `Id` receive a version 7 GUID on both the default and the bulk-write append path. Explicitly supplied IDs are kept unchanged on both paths. Automated tests cover both behaviours on both paths.
+- [x] The `src/` dependencies in `Directory.Packages.props` are at the minimum versions listed in Technical Details. `Directory.Packages.props` documents, for each of them, the API, dependency constraint or advisory that sets its version, for example in one comment block above the `src/` minimums.
+- [x] `Chaos.Mongo` references `Microsoft.Extensions.Configuration.Abstractions` instead of `Microsoft.Extensions.Configuration`.
+- [x] For each of the three packages, `dotnet list package --vulnerable --include-transitive` reports no vulnerable packages. The nuspec from a Release `dotnet pack` has a single `net10.0` dependency group with exactly these minimum versions and still includes the SourceLink `repository` commit.
+- [x] `renovate.json` makes Renovate hold regular updates of the `src/` dependencies for Dependency Dashboard approval instead of opening PRs. Vulnerability-fix PRs for them are still raised. Test-only and build-only packages update as before.
+- [x] Every `actions/setup-dotnet` step in `ci.yml` and `release.yml` installs only `10.0.x`.
+- [x] `dotnet build -c Release Chaos.Mongo.slnx` reports no warnings. The complete test suite, including integration tests, passes, and `bash ./build.sh Test` meets the 95% merged line coverage required by `tests/AGENTS.md`.
+- [x] `README.md`, `docs/event-store.md` and the package READMEs describe net10.0-only support consistently, with no remaining .NET 8 or .NET 9 compatibility notes. Automatic event-ID generation is documented as GUID version 7 for both append paths, and the examples with explicitly supplied IDs remain valid.
 
 ## Technical Details
 

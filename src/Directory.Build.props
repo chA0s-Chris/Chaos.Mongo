@@ -9,7 +9,7 @@
     <Authors>Christian Flessa</Authors>
     <Copyright>Copyright © 2025-$([System.DateTime]::UtcNow.Year) Christian Flessa</Copyright>
     <PackageProjectUrl>https://github.com/chA0s-Chris/Chaos.Mongo</PackageProjectUrl>
-    <!-- Set explicitly so that the nuspec does not depend on the remote of the clone. SourceLink adds the commit. -->
+    <!-- Set explicitly so that the nuspec does not depend on the remote of the clone. The SDK's built-in SourceLink adds the commit. -->
     <RepositoryUrl>https://github.com/chA0s-Chris/Chaos.Mongo</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
@@ -23,10 +23,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Microsoft.SourceLink.GitHub">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
