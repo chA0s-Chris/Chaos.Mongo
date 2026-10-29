@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 /// <summary>
 /// Validates <see cref="MongoOptions"/> configuration at application startup.
 /// </summary>
-public sealed class MongoOptionsValidation : IValidateOptions<MongoOptions>
+internal sealed class MongoOptionsValidation : IValidateOptions<MongoOptions>
 {
     private static ValidateOptionsResult ValidateCollectionTypeMap(IReadOnlyDictionary<Type, String>? collectionTypeMap)
     {

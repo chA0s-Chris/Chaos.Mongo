@@ -314,6 +314,28 @@ public class MongoQueueTests
     }
 
     [Test]
+    public async Task StartSubscriptionAsync_WithNonDefaultCancellationToken_PassesItToSubscriptionFactory()
+    {
+        // Arrange
+        var queueDefinition = CreateQueueDefinition();
+        var subscription = new RecordingQueueSubscription();
+        var subscriptionFactory = new RecordingQueueSubscriptionFactory(subscription);
+        var publisher = new ThrowingQueuePublisher();
+        using var cancellationTokenSource = new CancellationTokenSource();
+        var cancellationToken = cancellationTokenSource.Token;
+
+        var queue = new MongoQueue<TestPayload>(queueDefinition, subscriptionFactory, publisher);
+
+        // Act
+        await queue.StartSubscriptionAsync(cancellationToken);
+
+        // Assert
+        subscriptionFactory.ReceivedQueueDefinition.Should().BeSameAs(queueDefinition);
+        subscriptionFactory.ReceivedCancellationToken.Should().Be(cancellationToken);
+        subscriptionFactory.CreateAndRunCallCount.Should().Be(1);
+    }
+
+    [Test]
     public async Task StopSubscriptionAsync_WhenNoSubscription_CompletesSuccessfully()
     {
         // Arrange
@@ -392,4 +414,55 @@ public class MongoQueueTests
     public class TestPayload;
 
     public class WrongPayload;
+
+    /// <summary>
+    /// Minimal hand-crafted stub for <see cref="IMongoQueueSubscription{TPayload}"/>. None of its members are
+    /// exercised by the test that uses it; the subscription is only ever created and stored.
+    /// </summary>
+    private sealed class RecordingQueueSubscription : IMongoQueueSubscription<TestPayload>
+    {
+        public Boolean IsActive => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => throw new NotSupportedException();
+
+        public Task StartAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task StopAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Hand-crafted recording double for <see cref="IMongoQueueSubscriptionFactory"/>, used instead of a
+    /// mocking framework per tests/AGENTS.md for this newly added test.
+    /// </summary>
+    private sealed class RecordingQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
+    {
+        private readonly IMongoQueueSubscription<TestPayload> _subscription;
+
+        public RecordingQueueSubscriptionFactory(IMongoQueueSubscription<TestPayload> subscription) => _subscription = subscription;
+
+        public Int32 CreateAndRunCallCount { get; private set; }
+
+        public CancellationToken ReceivedCancellationToken { get; private set; }
+
+        public MongoQueueDefinition? ReceivedQueueDefinition { get; private set; }
+
+        public Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
+            where TPayload : class, new()
+        {
+            ReceivedQueueDefinition = queueDefinition;
+            ReceivedCancellationToken = cancellationToken;
+            CreateAndRunCallCount++;
+            return Task.FromResult((IMongoQueueSubscription<TPayload>)_subscription);
+        }
+    }
+
+    /// <summary>
+    /// Hand-crafted stub for <see cref="IMongoQueuePublisher"/>. Not exercised by the test that uses it.
+    /// </summary>
+    private sealed class ThrowingQueuePublisher : IMongoQueuePublisher
+    {
+        public Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition, TPayload payload, CancellationToken cancellationToken)
+            where TPayload : class, new()
+            => throw new NotSupportedException();
+    }
 }

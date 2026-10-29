@@ -26,7 +26,7 @@ public class AnchorCandidateSourceTests
         var earlier = await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
         await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
 
-        var act = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, earlier, ct));
+        var act = () => context.MongoHelper.ExecuteInTransactionAsync((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, earlier, ct));
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -39,7 +39,7 @@ public class AnchorCandidateSourceTests
         var aggregateId = await context.AppendStreamAsync(2);
         var batch = await ReadUntilNonEmptyAsync(context.CandidateSource);
 
-        var act = () => context.MongoHelper.ExecuteInTransaction(async (_, session, ct) =>
+        var act = () => context.MongoHelper.ExecuteInTransactionAsync(async (_, session, ct) =>
         {
             await context.CandidateSource.AcknowledgeAsync(session, batch, ct);
             throw new InvalidOperationException("abort");
@@ -55,8 +55,8 @@ public class AnchorCandidateSourceTests
     {
         var context = await CreateInitializedContextAsync();
 
-        var act = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) =>
-                                                                     context.CandidateSource.AcknowledgeAsync(session, new AnchorCandidateBatch([], new Object(), false), ct));
+        var act = () => context.MongoHelper.ExecuteInTransactionAsync((_, session, ct) =>
+                                                                          context.CandidateSource.AcknowledgeAsync(session, new AnchorCandidateBatch([], new Object(), false), ct));
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -183,7 +183,7 @@ public class AnchorCandidateSourceTests
         var (again, _) = await ReadConsecutivelyUntilAsync(context.CandidateSource, 1, hasBoth);
 
         again.Should().Contain(candidate => candidate.AggregateId == first).And.Contain(candidate => candidate.AggregateId == second);
-        var acknowledgeDiscarded = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, discarded, ct));
+        var acknowledgeDiscarded = () => context.MongoHelper.ExecuteInTransactionAsync((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, discarded, ct));
         await acknowledgeDiscarded.Should().ThrowAsync<ArgumentException>();
     }
 
@@ -220,7 +220,7 @@ public class AnchorCandidateSourceTests
         var (candidates, last) = await ReadConsecutivelyUntilAsync(context.CandidateSource,
                                                                    1,
                                                                    read => read.Count(c => (c.AggregateId == first) || (c.AggregateId == second)) == 3);
-        await context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, last, ct));
+        await context.MongoHelper.ExecuteInTransactionAsync((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, last, ct));
 
         await context.DisposeAsync();
         _contexts.Remove(context);

@@ -7,7 +7,7 @@ using MongoDB.Driver;
 /// <summary>
 /// Provides a default prioritizer implementation that processes queue items in FIFO order based on their ID.
 /// </summary>
-public class MongoQueuePayloadPrioritizer : IMongoQueuePayloadPrioritizer
+public sealed class MongoQueuePayloadPrioritizer : IMongoQueuePayloadPrioritizer
 {
     /// <inheritdoc/>
     public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>()

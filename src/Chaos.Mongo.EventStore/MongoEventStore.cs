@@ -293,7 +293,7 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         // 4. Persist changes inside transaction
         try
         {
-            await _mongoHelper.ExecuteInTransaction(
+            await _mongoHelper.ExecuteInTransactionAsync(
                 async (helper, session, ct) =>
                 {
                     var eventsCollection = GetEventsCollection();

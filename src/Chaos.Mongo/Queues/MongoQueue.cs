@@ -6,7 +6,7 @@ namespace Chaos.Mongo.Queues;
 /// Provides a MongoDB-based queue implementation for publishing and subscribing to strongly-typed messages.
 /// </summary>
 /// <typeparam name="TPayload">The type of payload stored in the queue.</typeparam>
-public class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : class, new()
+internal class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : class, new()
 {
     private readonly IMongoQueuePublisher _publisher;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
@@ -78,7 +78,7 @@ public class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : class
                 await _subscription.DisposeAsync();
             }
 
-            _subscription = await _subscriptionFactory.CreateAndRunAsync<TPayload>(QueueDefinition);
+            _subscription = await _subscriptionFactory.CreateAndRunAsync<TPayload>(QueueDefinition, cancellationToken);
         }
         finally
         {

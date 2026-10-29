@@ -5,7 +5,7 @@ namespace Chaos.Mongo.Queues;
 /// <summary>
 /// Defines a publisher for adding payloads to MongoDB queue collections.
 /// </summary>
-public interface IMongoQueuePublisher
+internal interface IMongoQueuePublisher
 {
     /// <summary>
     /// Publishes a payload to the specified queue.

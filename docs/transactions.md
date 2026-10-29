@@ -6,7 +6,7 @@ MongoDB transactions require a replica set or sharded deployment. They are not a
 
 ## Execute in a transaction
 
-`ExecuteInTransaction` starts a session, commits successful work, and aborts when the callback throws:
+`ExecuteInTransactionAsync` starts a session, commits successful work, and aborts when the callback throws:
 
 ```csharp
 public sealed class OrderService(IMongoHelper mongo)
@@ -16,7 +16,7 @@ public sealed class OrderService(IMongoHelper mongo)
         Payment payment,
         CancellationToken cancellationToken = default)
     {
-        return mongo.ExecuteInTransaction(async (helper, session, ct) =>
+        return mongo.ExecuteInTransactionAsync(async (helper, session, ct) =>
         {
             var orders = helper.GetCollection<Order>();
             await orders.InsertOneAsync(session, order, cancellationToken: ct);

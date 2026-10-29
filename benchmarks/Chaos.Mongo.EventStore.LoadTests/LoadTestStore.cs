@@ -96,7 +96,7 @@ internal sealed class LoadTestStore : IAsyncDisposable
             }
 
             var batch = await source.ReadBatchAsync(ConsumerBatchSize, CancellationToken.None);
-            await MongoHelper.ExecuteInTransaction((_, session, ct) => source.AcknowledgeAsync(session, batch, ct));
+            await MongoHelper.ExecuteInTransactionAsync((_, session, ct) => source.AcknowledgeAsync(session, batch, ct));
             read += batch.Candidates.Count;
         }
 

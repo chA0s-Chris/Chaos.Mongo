@@ -5,7 +5,7 @@ namespace Chaos.Mongo.Queues;
 /// <summary>
 /// Defines a factory for creating payload handlers.
 /// </summary>
-public interface IMongoQueuePayloadHandlerFactory
+internal interface IMongoQueuePayloadHandlerFactory
 {
     /// <summary>
     /// Creates a handler for the specified payload type.

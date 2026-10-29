@@ -125,7 +125,7 @@ public class OrderService
 
     public async Task CreateOrderAsync(Order order)
     {
-        await _mongo.ExecuteInTransaction(async (helper, session, ct) =>
+        await _mongo.ExecuteInTransactionAsync(async (helper, session, ct) =>
         {
             var orders = helper.GetCollection<Order>();
             await orders.InsertOneAsync(session, order, cancellationToken: ct);

@@ -221,7 +221,7 @@ public class AnchorFixtureTests
                                       null);
         await store.InsertPreparingAsync(anchor, CancellationToken.None);
 
-        await mongoHelper.ExecuteInTransaction(async (_, session, ct) =>
+        await mongoHelper.ExecuteInTransactionAsync(async (_, session, ct) =>
         {
             var committed = await store.CommitAsync(session, FixtureAnchorId, 3, ct);
             if (!committed)

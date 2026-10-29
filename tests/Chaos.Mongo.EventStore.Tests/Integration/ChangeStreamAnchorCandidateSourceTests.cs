@@ -385,7 +385,7 @@ public class ChangeStreamAnchorCandidateSourceTests
 
         var partial = await ReadUntilAsync(context.CandidateSource, 2, read => read.Candidates.Count == 2);
         var complete = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Count == 3);
-        await context.MongoHelper.ExecuteInTransaction((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, complete, ct));
+        await context.MongoHelper.ExecuteInTransactionAsync((_, session, ct) => context.CandidateSource.AcknowledgeAsync(session, complete, ct));
         var caughtUp = await context.CandidateSource.ReadBatchAsync(10, CancellationToken.None);
 
         partial.HasMore.Should().BeTrue();
@@ -439,7 +439,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     }
 
     private static Task AcknowledgeInTransactionAsync(IMongoHelper mongoHelper, IAnchorCandidateSource source, AnchorCandidateBatch batch)
-        => mongoHelper.ExecuteInTransaction((_, session, ct) => source.AcknowledgeAsync(session, batch, ct));
+        => mongoHelper.ExecuteInTransactionAsync((_, session, ct) => source.AcknowledgeAsync(session, batch, ct));
 
     /// <summary>
     /// Makes the next <paramref name="command"/> of the client with <paramref name="applicationName"/> fail with

@@ -8,16 +8,6 @@ namespace Chaos.Mongo;
 public static class MongoDefaults
 {
     /// <summary>
-    /// The default value indicating whether migrations should run automatically on application startup.
-    /// </summary>
-    public const Boolean ApplyMigrationsOnStartup = false;
-
-    /// <summary>
-    /// The default value indicating whether queue subscriptions should start automatically on application startup.
-    /// </summary>
-    public const Boolean AutoStartSubscription = false;
-
-    /// <summary>
     /// The default name of the collection used to store distributed locks.
     /// </summary>
     public const String LockCollectionName = "_locks";
@@ -33,24 +23,14 @@ public static class MongoDefaults
     public const String MigrationsLockName = "ChaosMongoMigrations";
 
     /// <summary>
-    /// The default maximum number of queue items to fetch and process in a single query.
+    /// Gets the default value indicating whether migrations should run automatically on application startup.
     /// </summary>
-    public const Int32 QueryLimit = 1;
+    public static Boolean ApplyMigrationsOnStartup => false;
 
     /// <summary>
-    /// The default value indicating whether configurators should run automatically on application startup.
+    /// Gets the default value indicating whether queue subscriptions should start automatically on application startup.
     /// </summary>
-    public const Boolean RunConfiguratorsOnStartup = false;
-
-    /// <summary>
-    /// The default value indicating whether to use CLR type names as collection names when no mapping is found.
-    /// </summary>
-    public const Boolean UseDefaultCollectionNames = true;
-
-    /// <summary>
-    /// The default value indicating whether to use transactions for migrations when available.
-    /// </summary>
-    public const Boolean UseTransactionsForMigrationsIfAvailable = true;
+    public static Boolean AutoStartSubscription => false;
 
     /// <summary>
     /// Gets the default lease time for distributed locks.
@@ -61,6 +41,11 @@ public static class MongoDefaults
     /// Gets the default lease time for the migration distributed lock.
     /// </summary>
     public static TimeSpan MigrationLockLeaseTime => TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Gets the default maximum number of queue items to fetch and process in a single query.
+    /// </summary>
+    public static Int32 QueryLimit => 1;
 
     /// <summary>
     /// Gets the default retention time for successfully processed queue items before TTL cleanup removes them.
@@ -81,4 +66,19 @@ public static class MongoDefaults
     /// Gets the default delay between lock acquisition retry attempts.
     /// </summary>
     public static TimeSpan RetryDelay => TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Gets the default value indicating whether configurators should run automatically on application startup.
+    /// </summary>
+    public static Boolean RunConfiguratorsOnStartup => false;
+
+    /// <summary>
+    /// Gets the default value indicating whether to use CLR type names as collection names when no mapping is found.
+    /// </summary>
+    public static Boolean UseDefaultCollectionNames => true;
+
+    /// <summary>
+    /// Gets the default value indicating whether to use transactions for migrations when available.
+    /// </summary>
+    public static Boolean UseTransactionsForMigrationsIfAvailable => true;
 }

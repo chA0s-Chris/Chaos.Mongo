@@ -11,7 +11,7 @@ using System.Text;
 /// <remarks>
 /// Generated names follow the format: "_Queue.{Hash}.{TypeName}" where the hash ensures uniqueness across namespaces.
 /// </remarks>
-public class MongoQueueCollectionNameGenerator : IMongoQueueCollectionNameGenerator
+public sealed class MongoQueueCollectionNameGenerator : IMongoQueueCollectionNameGenerator
 {
     private const String NamePrefix = "_Queue.";
 

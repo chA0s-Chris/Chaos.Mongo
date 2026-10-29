@@ -7,7 +7,7 @@ using MongoDB.Bson;
 /// <summary>
 /// Provides functionality for publishing payloads to MongoDB queue collections.
 /// </summary>
-public class MongoQueuePublisher : IMongoQueuePublisher
+internal class MongoQueuePublisher : IMongoQueuePublisher
 {
     private readonly IMongoHelper _mongoHelper;
     private readonly TimeProvider _timeProvider;

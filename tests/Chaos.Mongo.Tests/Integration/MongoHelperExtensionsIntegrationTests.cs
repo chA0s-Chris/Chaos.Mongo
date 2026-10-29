@@ -269,7 +269,7 @@ public class MongoHelperExtensionsIntegrationTests
 
         var pass = 1;
 
-        await mongoHelper.ExecuteInTransaction(async (_, session, token) =>
+        await mongoHelper.ExecuteInTransactionAsync(async (_, session, token) =>
         {
             var currentCounter = await counters.Find(session, x => x.Id == "Test")
                                                .Project(x => x.Value)
@@ -336,7 +336,7 @@ public class MongoHelperExtensionsIntegrationTests
 
         try
         {
-            _ = await mongoHelper.ExecuteInTransaction(async (_, session, token) =>
+            _ = await mongoHelper.ExecuteInTransactionAsync(async (_, session, token) =>
             {
                 var result = await counters.UpdateOneAsync(session, x => x.Id == "Test",
                                                            Builders<Counter>.Update

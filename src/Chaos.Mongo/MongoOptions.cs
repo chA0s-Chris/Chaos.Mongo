@@ -7,7 +7,7 @@ using MongoDB.Driver;
 /// <summary>
 /// Configuration options for MongoDB connection and behavior.
 /// </summary>
-public sealed record MongoOptions
+public sealed class MongoOptions
 {
     /// <summary>
     /// Gets or sets a value indicating whether to automatically run registered <see cref="Migrations.IMongoMigration"/>

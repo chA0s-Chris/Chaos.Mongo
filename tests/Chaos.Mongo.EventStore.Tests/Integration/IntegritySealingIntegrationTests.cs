@@ -518,7 +518,7 @@ public class IntegritySealingIntegrationTests
         var sealer = new EventStreamSealer<LedgerAggregate>(protectedContext.MongoHelper, protectedContext.Options);
 
         // The first probe of the boundary search hits the missing version.
-        var act = () => protectedContext.MongoHelper.ExecuteInTransaction((_, session, ct) => sealer.SealNextChunkAsync(session, aggregateId, null, ct));
+        var act = () => protectedContext.MongoHelper.ExecuteInTransactionAsync((_, session, ct) => sealer.SealNextChunkAsync(session, aggregateId, null, ct));
 
         await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("Version 2 *is missing*");
     }
@@ -530,7 +530,7 @@ public class IntegritySealingIntegrationTests
         var aggregateId = await context.AppendStreamAsync(2);
         var sealer = new EventStreamSealer<LedgerAggregate>(context.MongoHelper, context.Options);
 
-        var act = () => context.MongoHelper.ExecuteInTransaction((_, session, ct) => sealer.SealNextChunkAsync(session, aggregateId, 0, ct));
+        var act = () => context.MongoHelper.ExecuteInTransactionAsync((_, session, ct) => sealer.SealNextChunkAsync(session, aggregateId, 0, ct));
 
         await act.Should().ThrowAsync<MongoConcurrencyException>().WithMessage("*sealed concurrently*");
     }

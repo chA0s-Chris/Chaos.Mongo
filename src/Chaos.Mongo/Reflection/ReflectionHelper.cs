@@ -7,7 +7,7 @@ using System.Reflection;
 /// <summary>
 /// Reflection helper for internal use.
 /// </summary>
-public static class ReflectionHelper
+internal static class ReflectionHelper
 {
     /// <summary>
     /// Scans assemblies for concrete, public implementations of the specified interface type.

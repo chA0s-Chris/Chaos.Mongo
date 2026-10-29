@@ -14,7 +14,7 @@ using System.Collections.Immutable;
 /// <summary>
 /// Hosted service used for automatic lifecycle management.
 /// </summary>
-public class MongoHostedService : IHostedLifecycleService
+internal class MongoHostedService : IHostedLifecycleService
 {
     private readonly ILogger<MongoHostedService> _logger;
     private readonly MongoOptions _options;

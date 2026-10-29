@@ -7,7 +7,7 @@ using MongoDB.Driver;
 /// <summary>
 /// Default implementation of <see cref="IMongoConnectionFactory"/> that creates MongoDB connections.
 /// </summary>
-public class MongoConnectionFactory : IMongoConnectionFactory
+internal class MongoConnectionFactory : IMongoConnectionFactory
 {
     private readonly IMongoClientSettingsFactory _clientSettingsFactory;
 

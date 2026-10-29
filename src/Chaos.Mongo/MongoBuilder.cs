@@ -13,7 +13,7 @@ using System.Reflection;
 /// <summary>
 /// Provides a fluent builder for configuring MongoDB services and configurators.
 /// </summary>
-public class MongoBuilder
+public sealed class MongoBuilder
 {
     private readonly HashSet<Type> _registeredConfiguratorTypes = [];
     private readonly HashSet<Type> _registeredMigrationTypes = [];
@@ -24,28 +24,28 @@ public class MongoBuilder
     /// </summary>
     /// <param name="services">The service collection to configure.</param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
-    public MongoBuilder(IServiceCollection services)
+    internal MongoBuilder(IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
         _services = services;
     }
 
     /// <summary>
+    /// Gets the underlying <see cref="IServiceCollection"/> to continue service registration.
+    /// </summary>
+    public IServiceCollection Services => _services;
+
+    /// <summary>
     /// Gets the list of configurator types discovered during auto-discovery.
     /// This property is populated after calling <see cref="WithConfiguratorAutoDiscovery"/>.
     /// </summary>
-    public ImmutableArray<Type> DiscoveredConfigurators { get; private set; } = [];
+    internal ImmutableArray<Type> DiscoveredConfigurators { get; set; } = [];
 
     /// <summary>
     /// Gets the list of migration types discovered during auto-discovery.
     /// This property is populated after calling <see cref="WithMigrationAutoDiscovery"/>.
     /// </summary>
-    public ImmutableArray<Type> DiscoveredMigrations { get; private set; } = [];
-
-    /// <summary>
-    /// Gets the underlying <see cref="IServiceCollection"/> to continue service registration.
-    /// </summary>
-    public IServiceCollection Services => _services;
+    internal ImmutableArray<Type> DiscoveredMigrations { get; set; } = [];
 
     /// <summary>
     /// Configures <see cref="MongoOptions"/> using services from the dependency-injection container.

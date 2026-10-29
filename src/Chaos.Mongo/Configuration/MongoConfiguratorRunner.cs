@@ -5,7 +5,7 @@ namespace Chaos.Mongo.Configuration;
 using Microsoft.Extensions.Logging;
 
 /// <inheritdoc/>
-public class MongoConfiguratorRunner : IMongoConfiguratorRunner
+internal class MongoConfiguratorRunner : IMongoConfiguratorRunner
 {
     private readonly List<IMongoConfigurator> _configurators;
     private readonly ILogger<MongoConfiguratorRunner> _logger;
