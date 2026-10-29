@@ -13,7 +13,7 @@ using MongoDB.Driver;
 /// A successful run is remembered for the lifetime of this instance, so later calls return without repeating index work.
 /// Failed or canceled runs are not remembered and may be retried. Concurrent callers wait for the run in progress.
 /// </remarks>
-public sealed class OutboxConfigurator : IMongoConfigurator
+internal sealed class OutboxConfigurator : IMongoConfigurator
 {
     private const String FailedTtlIndexName = "IX_Outbox_FailedUtc_TTL";
     private const String ProcessedTtlIndexName = "IX_Outbox_ProcessedUtc_TTL";

@@ -22,7 +22,7 @@ public interface IOutboxConfiguratorRunner
 /// <summary>
 /// Default implementation of <see cref="IOutboxConfiguratorRunner"/>.
 /// </summary>
-public sealed class OutboxConfiguratorRunner : IOutboxConfiguratorRunner
+internal sealed class OutboxConfiguratorRunner : IOutboxConfiguratorRunner
 {
     private readonly IEnumerable<OutboxConfigurator> _configurators;
     private readonly ILogger<OutboxConfiguratorRunner> _logger;

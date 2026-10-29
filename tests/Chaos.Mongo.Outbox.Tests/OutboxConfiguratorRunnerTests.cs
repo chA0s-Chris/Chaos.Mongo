@@ -16,7 +16,7 @@ public class OutboxConfiguratorRunnerTests
         var mongoHelper = Mock.Of<IMongoHelper>();
         var logger = Mock.Of<ILogger<OutboxConfiguratorRunner>>();
 
-        var act = () => new OutboxConfiguratorRunner(mongoHelper, null!, logger);
+        var act = () => new OutboxConfiguratorRunner(mongoHelper, (OutboxConfigurator)null!, logger);
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("configurator");
     }

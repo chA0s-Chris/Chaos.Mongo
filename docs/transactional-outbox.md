@@ -253,7 +253,6 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 - `IOutbox` as a singleton
 - `IOutboxProcessor` as a singleton
 - Your `IOutboxPublisher` implementation or factory
-- `OutboxOptions`
 - `OutboxConfigurator` for index creation
 - `OutboxHostedService` when `WithAutoStartProcessor()` is enabled
 
@@ -419,17 +418,16 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithAutoStartProcessor());
 ```
 
-The optional `OutboxOptions.ProcessingFilter` is ANDed with the existing pending-state,
-retry-schedule, and lock predicates. MongoDB applies it before the batch is sorted and
-limited, then rechecks it when atomically claiming each selected message. Excluded
-messages consume no batch slots or retries and retain their state, retry schedule,
+The optional filter configured through `WithProcessingFilter` is ANDed with the existing
+pending-state, retry-schedule, and lock predicates. MongoDB applies it before the batch is
+sorted and limited, then rechecks it when atomically claiming each selected message.
+Excluded messages consume no batch slots or retries and retain their state, retry schedule,
 and lock fields. They can be delivered later by a processor whose filter includes them.
 
-Configure the filter at startup through `WithProcessingFilter` or an `OutboxOptions`
-initializer. Options are registered as a singleton; runtime policy refresh is not
-supported, and the filter and its captured values must not be mutated after configuration.
-Repeated builder calls replace the previous filter; passing null to the builder throws.
-Omitting the setting (or leaving the options property null) preserves normal eligibility.
+Configure the filter at startup through `WithProcessingFilter`. Runtime policy refresh is
+not supported, and the filter and its captured values must not be mutated after
+configuration. Repeated builder calls replace the previous filter; passing null to the
+builder throws. Omitting the call preserves normal eligibility.
 
 `WithMessage<TPayload>()` registers write-side discriminators and BSON serialization;
 it does not restrict processor selection. `IOutboxPublisher` still handles delivery and

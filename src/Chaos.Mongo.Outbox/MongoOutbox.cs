@@ -10,7 +10,7 @@ using MongoDB.Driver;
 /// MongoDB-backed implementation of <see cref="IOutbox"/> that writes outbox messages
 /// within the caller's transaction.
 /// </summary>
-public sealed class MongoOutbox : IOutbox
+internal sealed class MongoOutbox : IOutbox
 {
     private readonly IMongoHelper _mongoHelper;
     private readonly OutboxOptions _options;

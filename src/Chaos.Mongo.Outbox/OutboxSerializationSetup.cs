@@ -7,7 +7,7 @@ using MongoDB.Bson.Serialization;
 /// <summary>
 /// Handles BsonClassMap registration for outbox message and payload types.
 /// </summary>
-public static class OutboxSerializationSetup
+internal static class OutboxSerializationSetup
 {
     /// <summary>
     /// Registers BsonClassMaps for <see cref="OutboxMessage"/> and all configured payload types.

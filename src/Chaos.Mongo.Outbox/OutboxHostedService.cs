@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 /// Hosted service that manages the outbox processor lifecycle when auto-start is enabled.
 /// During startup, it runs outbox configurators first and then starts the processor.
 /// </summary>
-public sealed class OutboxHostedService : IHostedLifecycleService
+internal sealed class OutboxHostedService : IHostedLifecycleService
 {
     private readonly ILogger<OutboxHostedService> _logger;
     private readonly IOutboxProcessor? _outboxProcessor;
