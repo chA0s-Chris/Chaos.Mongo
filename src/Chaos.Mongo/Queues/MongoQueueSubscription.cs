@@ -19,7 +19,7 @@ using System.Diagnostics;
 /// </list>
 /// Items are locked during processing to ensure single-consumer semantics.
 /// </remarks>
-public class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload>
+internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload>
     where TPayload : class, new()
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";

@@ -331,7 +331,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
             SealingChunkResult result;
             try
             {
-                result = await _mongoHelper.ExecuteInTransaction(
+                result = await _mongoHelper.ExecuteInTransactionAsync(
                     async (_, session, ct) =>
                     {
                         var chunk = await _sealer.SealNextChunkAsync(session, aggregateId, knownSealedVersion, ct);

@@ -28,78 +28,10 @@ public sealed class MongoQueueBuilder<TPayload>
     /// </summary>
     /// <param name="services">The service collection to register the queue with.</param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
-    public MongoQueueBuilder(IServiceCollection services)
+    internal MongoQueueBuilder(IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
         _services = services;
-    }
-
-    /// <summary>
-    /// Registers a MongoDB queue with the given payload type and configuration.
-    /// </summary>
-    /// <remarks>
-    /// The queue is registered as a singleton service and uses the provided handler factory to create a payload handler.
-    /// If no collection name is specified, a default name is generated.
-    /// <see cref="RegisterQueue"/> is automatically called when <see cref="MongoBuilder.WithQueue"/> is used.
-    /// </remarks>
-    public void RegisterQueue()
-    {
-        if (_isRegistered)
-        {
-            return;
-        }
-
-        Validate();
-
-        // Register the payload handler
-        if (_payloadHandlerType is not null)
-        {
-            _services.AddTransient(typeof(IMongoQueuePayloadHandler<TPayload>), _payloadHandlerType);
-        }
-        else if (_payloadHandlerFactory is not null)
-        {
-            _services.AddTransient(_payloadHandlerFactory);
-        }
-        else
-        {
-            // This should never happen due to Validate(), but adding for safety
-            throw new InvalidOperationException("Payload handler type or factory must be specified.");
-        }
-
-        var queueDefinition = new MongoQueueDefinition
-        {
-            CollectionName = _collectionName ?? String.Empty,
-            ClosedItemRetention = _closedItemRetention,
-            LockLeaseTime = _lockLeaseTime ?? MongoDefaults.QueueLockLeaseTime,
-            MaxRetries = _maxRetries,
-            PayloadType = _payloadType,
-            QueryLimit = _queryLimit ?? MongoDefaults.QueryLimit,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TPayload>),
-            AutoStartSubscription = _autoStartSubscription ?? MongoDefaults.AutoStartSubscription
-        };
-
-        _services.AddSingleton<IMongoQueue<TPayload>>(serviceProvider =>
-        {
-            var finalQueueDefinition = queueDefinition;
-            if (String.IsNullOrEmpty(queueDefinition.CollectionName))
-            {
-                var collectionNameGenerator = serviceProvider.GetRequiredService<IMongoQueueCollectionNameGenerator>();
-                var collectionName = collectionNameGenerator.GenerateQueueCollectionName(queueDefinition.PayloadType);
-                finalQueueDefinition = queueDefinition with
-                {
-                    CollectionName = collectionName
-                };
-            }
-
-            var subscriptionFactory = serviceProvider.GetRequiredService<IMongoQueueSubscriptionFactory>();
-            var publisher = serviceProvider.GetRequiredService<IMongoQueuePublisher>();
-            return new MongoQueue<TPayload>(finalQueueDefinition, subscriptionFactory, publisher);
-        });
-
-        _services.AddSingleton<IMongoQueue>(serviceProvider =>
-                                                serviceProvider.GetRequiredService<IMongoQueue<TPayload>>());
-
-        _isRegistered = true;
     }
 
     /// <summary>
@@ -290,6 +222,74 @@ public sealed class MongoQueueBuilder<TPayload>
     {
         _autoStartSubscription = false;
         return this;
+    }
+
+    /// <summary>
+    /// Registers a MongoDB queue with the given payload type and configuration.
+    /// </summary>
+    /// <remarks>
+    /// The queue is registered as a singleton service and uses the provided handler factory to create a payload handler.
+    /// If no collection name is specified, a default name is generated.
+    /// <see cref="RegisterQueue"/> is automatically called when <see cref="MongoBuilder.WithQueue"/> is used.
+    /// </remarks>
+    internal void RegisterQueue()
+    {
+        if (_isRegistered)
+        {
+            return;
+        }
+
+        Validate();
+
+        // Register the payload handler
+        if (_payloadHandlerType is not null)
+        {
+            _services.AddTransient(typeof(IMongoQueuePayloadHandler<TPayload>), _payloadHandlerType);
+        }
+        else if (_payloadHandlerFactory is not null)
+        {
+            _services.AddTransient(_payloadHandlerFactory);
+        }
+        else
+        {
+            // This should never happen due to Validate(), but adding for safety
+            throw new InvalidOperationException("Payload handler type or factory must be specified.");
+        }
+
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = _collectionName ?? String.Empty,
+            ClosedItemRetention = _closedItemRetention,
+            LockLeaseTime = _lockLeaseTime ?? MongoDefaults.QueueLockLeaseTime,
+            MaxRetries = _maxRetries,
+            PayloadType = _payloadType,
+            QueryLimit = _queryLimit ?? MongoDefaults.QueryLimit,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TPayload>),
+            AutoStartSubscription = _autoStartSubscription ?? MongoDefaults.AutoStartSubscription
+        };
+
+        _services.AddSingleton<IMongoQueue<TPayload>>(serviceProvider =>
+        {
+            var finalQueueDefinition = queueDefinition;
+            if (String.IsNullOrEmpty(queueDefinition.CollectionName))
+            {
+                var collectionNameGenerator = serviceProvider.GetRequiredService<IMongoQueueCollectionNameGenerator>();
+                var collectionName = collectionNameGenerator.GenerateQueueCollectionName(queueDefinition.PayloadType);
+                finalQueueDefinition = queueDefinition with
+                {
+                    CollectionName = collectionName
+                };
+            }
+
+            var subscriptionFactory = serviceProvider.GetRequiredService<IMongoQueueSubscriptionFactory>();
+            var publisher = serviceProvider.GetRequiredService<IMongoQueuePublisher>();
+            return new MongoQueue<TPayload>(finalQueueDefinition, subscriptionFactory, publisher);
+        });
+
+        _services.AddSingleton<IMongoQueue>(serviceProvider =>
+                                                serviceProvider.GetRequiredService<IMongoQueue<TPayload>>());
+
+        _isRegistered = true;
     }
 
     internal void Validate()

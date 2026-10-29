@@ -8,21 +8,21 @@ using MongoDB.Bson.Serialization.Attributes;
 /// Represents a lock document stored in MongoDB for distributed locking.
 /// </summary>
 [BsonIgnoreExtraElements]
-public class MongoLockDocument
+internal class MongoLockDocument
 {
     /// <summary>
     /// Gets or sets the holder ID that currently owns the lock.
     /// </summary>
-    public String? Holder { get; set; }
+    public String? Holder { get; internal set; }
 
     /// <summary>
     /// Gets or sets the unique identifier of the lock.
     /// </summary>
     [BsonId]
-    public required String Id { get; set; }
+    public required String Id { get; internal set; }
 
     /// <summary>
     /// Gets or sets the UTC date and time when the lock lease will expire.
     /// </summary>
-    public DateTime LeaseUntilUtc { get; set; }
+    public DateTime LeaseUntilUtc { get; internal set; }
 }

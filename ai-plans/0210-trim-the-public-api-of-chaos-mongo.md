@@ -26,7 +26,7 @@ require consumers to recompile.
 
 ## Acceptance Criteria
 
-- [ ] `CollectionTypeMap`, `MongoClientSettingsFactory`, `MongoConnectionFactory`,
+- [x] `CollectionTypeMap`, `MongoClientSettingsFactory`, `MongoConnectionFactory`,
       `MongoHelper` (already `sealed`), `MongoConfiguratorRunner`,
       `MongoMigrationRunner`, `MongoHostedService`, `MongoLock`,
       `MongoLockDocument`, `MongoOptionsValidation` (already `sealed`),
@@ -37,21 +37,21 @@ require consumers to recompile.
       `Queues.IMongoQueueSubscriptionFactory`,
       `Queues.MongoQueuePayloadHandlerFactory`, and
       `Queues.IMongoQueuePayloadHandlerFactory` are `internal`.
-- [ ] `MongoBuilder`'s constructor and its `DiscoveredConfigurators` and
+- [x] `MongoBuilder`'s constructor and its `DiscoveredConfigurators` and
       `DiscoveredMigrations` properties (getter and setter) are `internal`;
       the class itself stays `public`.
-- [ ] `Queues.MongoQueueBuilder<TPayload>`'s constructor and `RegisterQueue()`
+- [x] `Queues.MongoQueueBuilder<TPayload>`'s constructor and `RegisterQueue()`
       are `internal`.
-- [ ] `MongoBuilder`, `MongoConnection`, `Queues.MongoQueuePayloadPrioritizer`,
+- [x] `MongoBuilder`, `MongoConnection`, `Queues.MongoQueuePayloadPrioritizer`,
       `Queues.MongoQueueCollectionNameGenerator`, and
       `Migrations.MongoMigrationHistoryItem` are `sealed`; `MongoConnection`
       keeps its public `(IMongoClient, IMongoDatabase)` constructor as contract.
-- [ ] `Queues.MongoQueueDefinition` is a `sealed record`.
-- [ ] `Queues.MongoQueueItem` (the non-generic base) gets an `internal`
+- [x] `Queues.MongoQueueDefinition` is a `sealed record`.
+- [x] `Queues.MongoQueueItem` (the non-generic base) gets an `internal`
       constructor; `Queues.MongoQueueItem<TPayload>` is `sealed`.
-- [ ] `MongoOptions` is a `sealed class` (not a `sealed record`); its public
+- [x] `MongoOptions` is a `sealed class` (not a `sealed record`); its public
       members and `ConfigureClientSettings` are otherwise unchanged.
-- [ ] On `MongoLockDocument` and `Queues.MongoQueueItem`, every getter stays
+- [x] On `MongoLockDocument` and `Queues.MongoQueueItem`, every getter stays
       `public` and every mutable-state setter becomes `internal`: `Holder`,
       `Id`, `LeaseUntilUtc` on `MongoLockDocument`; `ClosedUtc`, `IsClosed`,
       `IsLocked`, `IsTerminal`, `LockedUtc`, `RetryCount` on `MongoQueueItem`.
@@ -59,7 +59,7 @@ require consumers to recompile.
       change (its members are already `required init`); only its class
       declaration gains `sealed`, per the criterion above. All three
       persisted types keep ignoring unknown BSON elements.
-- [ ] A regression test for each of `MongoLockDocument`,
+- [x] A regression test for each of `MongoLockDocument`,
       `Migrations.MongoMigrationHistoryItem`, and
       `Queues.MongoQueueItem<TPayload>` deserializes a BSON fixture matching
       that type's released 0.x shape (field names/types as shipped before this
@@ -67,44 +67,44 @@ require consumers to recompile.
       identifiers, timestamps, payload, and non-default mutable-state values
       match the fixture, including any field the 0.x shape omits taking its
       expected default.
-- [ ] `MongoHelperExtensions.ExecuteInTransaction<TResult>` and
+- [x] `MongoHelperExtensions.ExecuteInTransaction<TResult>` and
       `MongoHelperExtensions.ExecuteInTransaction` are renamed to
       `ExecuteInTransactionAsync`, with every in-repo caller (including
       `Chaos.Mongo.EventStore`, its tests and benchmarks, and `docs/`) updated
       to the new name.
-- [ ] `IMongoQueueSubscriptionFactory.CreateAndRunAsync` and its
+- [x] `IMongoQueueSubscriptionFactory.CreateAndRunAsync` and its
       implementation take a `CancellationToken cancellationToken = default`
       parameter, which is threaded through to the subscription it starts.
-- [ ] A test demonstrates that a specific, non-default `CancellationToken`
+- [x] A test demonstrates that a specific, non-default `CancellationToken`
       passed to `MongoQueue<TPayload>.StartSubscriptionAsync` reaches
       `IMongoQueueSubscriptionFactory.CreateAndRunAsync` and, from the real
       `MongoQueueSubscriptionFactory` implementation, reaches the started
       `IMongoQueueSubscription<TPayload>`'s startup/index operations, rather
       than being silently replaced by a default token. An `It.IsAny<CancellationToken>()`
       setup alone does not satisfy this criterion.
-- [ ] `MongoDefaults.QueryLimit`, `ApplyMigrationsOnStartup`,
+- [x] `MongoDefaults.QueryLimit`, `ApplyMigrationsOnStartup`,
       `AutoStartSubscription`, `RunConfiguratorsOnStartup`,
       `UseDefaultCollectionNames`, and `UseTransactionsForMigrationsIfAvailable`
       are `static` get-only properties instead of `const`;
       `LockCollectionName`, `MigrationHistoryCollectionName`, and
       `MigrationsLockName` remain `const`.
-- [ ] `Chaos.Mongo.csproj` grants `InternalsVisibleTo` to
+- [x] `Chaos.Mongo.csproj` grants `InternalsVisibleTo` to
       `DynamicProxyGenAssembly2`, with that item's own explicit `Key` metadata
       set to Castle's DynamicProxyGenAssembly2 public key (not the repository's
       own public key), because `Chaos.Mongo.Tests` uses Moq to mock
       `IMongoQueuePublisher`, `IMongoQueueSubscriptionFactory`, and
       `IMongoQueuePayloadHandlerFactory`, which are now internal interfaces.
-- [ ] A test demonstrates that a `MongoLockDocument`, a
+- [x] A test demonstrates that a `MongoLockDocument`, a
       `MongoMigrationHistoryItem`, and a `MongoQueueItem<TPayload>` each
       deserialize successfully from a BSON document containing an extra,
       unrecognized element.
-- [ ] `src/Chaos.Mongo/PublicAPI.Unshipped.txt` records a `*REMOVED*` entry for
+- [x] `src/Chaos.Mongo/PublicAPI.Unshipped.txt` records a `*REMOVED*` entry for
       every shipped type, member, and accessor this plan moves to `internal`
       or removes (including the compiler-synthesized members affected by
       sealing `MongoQueueDefinition` and converting `MongoOptions` from a
       record to a class), and the `Microsoft.CodeAnalysis.PublicApiAnalyzers`
       checks (RS0016/RS0017) report no errors.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces
       no warnings, and `bash ./build.sh Test` passes the complete suite with
       at least 95% merged line coverage, per `tests/AGENTS.md`.
 
@@ -237,9 +237,26 @@ global signing configuration unchanged.
 `ICollectionTypeMap`, `CollectionTypeMapExtensions`, `IMongoClientSettingsFactory`,
 `IMongoConnectionFactory`, `MongoLockExtensions`, `MongoIndexManagerExtensions`,
 `MongoQueueMetrics`, and `ServiceCollectionExtensions` keep their current
-public shape; `Chaos.Mongo.EventStore` and `Chaos.Mongo.Outbox` only consume
-`Chaos.Mongo` through `IMongoLock` and `IMongoHelper`/its extensions, so none
-of the internal-visibility changes above affect their compilation.
+public shape; `Chaos.Mongo.EventStore` and `Chaos.Mongo.Outbox` (the production
+projects) only consume `Chaos.Mongo` through `IMongoLock` and
+`IMongoHelper`/its extensions, so none of the internal-visibility changes
+above affect their compilation.
+
+**Implementation finding: `MongoBuilder`'s constructor and cross-project tests.**
+`Chaos.Mongo.EventStore.Tests` and `Chaos.Mongo.Outbox.Tests` construct
+`MongoBuilder` directly (bypassing `AddMongo()`) in ~20 files, to exercise
+`WithEventStore`/`WithOutbox` in isolation without `AddMongo()`'s other
+registrations (several tests, e.g.
+`IntegrityRegistrationTests.WithEventStore_WithoutIntegrityProtection_RegistersNoSealingSweep`,
+assert on the exact resulting `IServiceCollection` contents, so switching
+those call sites to `services.AddMongo()` would change what they observe,
+such as adding an unconditional `MongoHostedService` registration). Making
+`MongoBuilder`'s constructor `internal` breaks that compilation. Rather than
+rewriting those call sites and their assertions, `Chaos.Mongo.csproj` grants
+two additional `InternalsVisibleTo` entries (no explicit `Key`, like the
+existing `Chaos.Mongo.Tests` grant) to `Chaos.Mongo.EventStore.Tests` and
+`Chaos.Mongo.Outbox.Tests`. This is a friend-assembly declaration only; it
+does not change the shipped public API surface.
 
 **Verification.** `tests/AGENTS.md` requires at least 95% merged line
 coverage, measured through the repository's Coverlet/XPlat Code Coverage

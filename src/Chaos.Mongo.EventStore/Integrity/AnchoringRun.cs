@@ -199,18 +199,18 @@ internal sealed class AnchoringRun
     }
 
     private async Task CommitAsync(AnchorRecord anchor, AnchorCandidateBatch lastBatch, CancellationToken cancellationToken)
-        => await _mongoHelper.ExecuteInTransaction(async (_, session, ct) =>
-                                                   {
-                                                       if (!await _store.CommitAsync(session, anchor.Id, anchor.Sequence, ct))
-                                                       {
-                                                           throw new InvalidOperationException(
-                                                               $"Anchor {anchor.Sequence} could not be committed: a later run discarded the attempt " +
-                                                               "or another anchor took its sequence number.");
-                                                       }
+        => await _mongoHelper.ExecuteInTransactionAsync(async (_, session, ct) =>
+                                                        {
+                                                            if (!await _store.CommitAsync(session, anchor.Id, anchor.Sequence, ct))
+                                                            {
+                                                                throw new InvalidOperationException(
+                                                                    $"Anchor {anchor.Sequence} could not be committed: a later run discarded the attempt " +
+                                                                    "or another anchor took its sequence number.");
+                                                            }
 
-                                                       await _source.AcknowledgeAsync(session, lastBatch, ct);
-                                                   },
-                                                   cancellationToken: cancellationToken);
+                                                            await _source.AcknowledgeAsync(session, lastBatch, ct);
+                                                        },
+                                                        cancellationToken: cancellationToken);
 
     /// <summary>
     /// Confirms the revocation status of due tokens unless the lock was lost. A failure is logged and retried by the
@@ -390,8 +390,8 @@ internal sealed class AnchoringRun
         if (read.Heads.Count == 0)
         {
             // Persists the progress of the source, such as a scan over unsealed streams or a fresh resume token.
-            await _mongoHelper.ExecuteInTransaction((_, session, ct) => _source.AcknowledgeAsync(session, read.LastBatch, ct),
-                                                    cancellationToken: cancellationToken);
+            await _mongoHelper.ExecuteInTransactionAsync((_, session, ct) => _source.AcknowledgeAsync(session, read.LastBatch, ct),
+                                                         cancellationToken: cancellationToken);
             return new AnchoringRunResult(AnchoringRunOutcome.NoCandidates);
         }
 

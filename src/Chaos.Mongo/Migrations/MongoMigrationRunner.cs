@@ -29,7 +29,7 @@ using System.Diagnostics;
 ///     </item>
 /// </list>
 /// </remarks>
-public class MongoMigrationRunner : IMongoMigrationRunner
+internal class MongoMigrationRunner : IMongoMigrationRunner
 {
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;

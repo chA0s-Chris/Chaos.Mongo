@@ -67,10 +67,14 @@ public static class MongoHelperExtensions
     /// <param name="cancellationToken">Optional cancellation token.</param>
     /// <typeparam name="TResult">Type of the return value.</typeparam>
     /// <returns>Value returned by <paramref name="callback"/>.</returns>
-    public static async Task<TResult> ExecuteInTransaction<TResult>(this IMongoHelper helper,
-                                                                    Func<IMongoHelper, IClientSessionHandle, CancellationToken, Task<TResult>> callback,
-                                                                    TransactionOptions? transactionOptions = null,
-                                                                    CancellationToken cancellationToken = default)
+    // Both ExecuteInTransactionAsync overloads already shipped with these optional parameters under the name
+    // ExecuteInTransaction; the rename makes PublicApiAnalyzers re-check the pre-existing overload shape as if it
+    // were new.
+#pragma warning disable RS0026
+    public static async Task<TResult> ExecuteInTransactionAsync<TResult>(this IMongoHelper helper,
+                                                                         Func<IMongoHelper, IClientSessionHandle, CancellationToken, Task<TResult>> callback,
+                                                                         TransactionOptions? transactionOptions = null,
+                                                                         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(helper);
         ArgumentNullException.ThrowIfNull(callback);
@@ -81,6 +85,7 @@ public static class MongoHelperExtensions
             transactionOptions,
             cancellationToken);
     }
+#pragma warning restore RS0026
 
     /// <summary>
     /// Execute code within a MongoDB transaction with automatic retry on transient errors.
@@ -96,10 +101,11 @@ public static class MongoHelperExtensions
     /// <param name="transactionOptions">Optional transaction options.</param>
     /// <param name="cancellationToken">Optional cancellation token.</param>
     /// <returns>A task.</returns>
-    public static async Task ExecuteInTransaction(this IMongoHelper helper,
-                                                  Func<IMongoHelper, IClientSessionHandle, CancellationToken, Task> callback,
-                                                  TransactionOptions? transactionOptions = null,
-                                                  CancellationToken cancellationToken = default)
+#pragma warning disable RS0026
+    public static async Task ExecuteInTransactionAsync(this IMongoHelper helper,
+                                                       Func<IMongoHelper, IClientSessionHandle, CancellationToken, Task> callback,
+                                                       TransactionOptions? transactionOptions = null,
+                                                       CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(helper);
         ArgumentNullException.ThrowIfNull(callback);
@@ -114,6 +120,7 @@ public static class MongoHelperExtensions
             transactionOptions,
             cancellationToken);
     }
+#pragma warning restore RS0026
 
     /// <summary>
     /// Attempts to start a MongoDB client session without throwing exceptions.
