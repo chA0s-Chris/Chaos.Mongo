@@ -79,9 +79,6 @@ internal partial class BuildPipeline
         return hash.GetHashAndReset();
     }
 
-    private static String GetPublicKeyToken(Byte[] publicKey)
-        => Convert.ToHexStringLower(SHA1.HashData(publicKey)[^8..].Reverse().ToArray());
-
     /// <summary>
     /// Returns why an assembly is not fully signed with the released key, or <c>null</c> if it is.
     /// </summary>
@@ -98,7 +95,7 @@ internal partial class BuildPipeline
 
         var metadata = peReader.GetMetadataReader();
         var publicKey = metadata.GetBlobBytes(metadata.GetAssemblyDefinition().PublicKey);
-        var token = GetPublicKeyToken(publicKey);
+        var token = PublicKeyTokenCheck.ComputeToken(publicKey);
 
         if (token != ReleasedPublicKeyToken)
             return $"its public key token is '{token}' instead of '{ReleasedPublicKeyToken}'";
@@ -142,6 +139,62 @@ internal partial class BuildPipeline
     }
 
     /// <summary>
+    /// Reads every assembly under <c>lib/</c> of every <c>*.nupkg</c> in <paramref name="directory"/>, appending a
+    /// failure to <paramref name="failures"/> for a directory with no packages or a package with no assemblies.
+    /// </summary>
+    private static List<(AbsolutePath Package, String AssemblyName, Byte[] Image)> ReadPackageAssemblies(AbsolutePath directory, List<String> failures)
+    {
+        var result = new List<(AbsolutePath Package, String AssemblyName, Byte[] Image)>();
+        var packages = directory.GlobFiles("*.nupkg");
+
+        if (packages.Count == 0)
+            failures.Add($"No packages found in '{directory}'.");
+
+        foreach (var package in packages)
+        {
+            using var archive = ZipFile.OpenRead(package);
+            var assemblies = archive.Entries
+                                    .Where(e => e.FullName.StartsWith("lib/", StringComparison.Ordinal) &&
+                                                e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                                    .ToList();
+
+            if (assemblies.Count == 0)
+                failures.Add($"{package}: contains no assemblies under lib/.");
+
+            foreach (var assembly in assemblies)
+                result.Add((package, assembly.FullName, ReadEntry(assembly)));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Fails unless every assembly in every package in <paramref name="directory"/> carries the released public key
+    /// token. Unlike <see cref="VerifyPackageSignatures"/>, this does not need the private key: a public-signed
+    /// assembly has no usable strong-name signature, so only the token is checked.
+    /// </summary>
+    private static void VerifyPublicKeyTokens(AbsolutePath directory)
+    {
+        var failures = new List<String>();
+
+        foreach (var (package, assemblyName, image) in ReadPackageAssemblies(directory, failures))
+        {
+            var failure = PublicKeyTokenCheck.GetMismatch(image, ReleasedPublicKeyToken);
+
+            if (failure is null)
+                Log.Information("Verified public key token of {Package}: {Assembly}", package.Name, assemblyName);
+            else
+                failures.Add($"{package}: {assemblyName}: {failure}.");
+        }
+
+        if (failures.Count > 0)
+        {
+            Assert.Fail($"Public key token verification failed for '{directory}'." +
+                        Environment.NewLine + String.Join(Environment.NewLine, failures));
+        }
+    }
+
+    /// <summary>
     /// Deletes the configuration-specific build outputs of the source projects, which forces Pack to recompile them.
     /// </summary>
     /// <remarks>
@@ -167,32 +220,16 @@ internal partial class BuildPipeline
     private void VerifyPackageSignatures()
     {
         var expectedPublicKey = PublicKeyFile.ReadAllBytes();
-        var packages = PublishDirectory.GlobFiles("*.nupkg");
         var failures = new List<String>();
 
-        if (packages.Count == 0)
-            failures.Add($"No packages found in '{PublishDirectory}'.");
-
-        foreach (var package in packages)
+        foreach (var (package, assemblyName, image) in ReadPackageAssemblies(PublishDirectory, failures))
         {
-            using var archive = ZipFile.OpenRead(package);
-            var assemblies = archive.Entries
-                                    .Where(e => e.FullName.StartsWith("lib/", StringComparison.Ordinal) &&
-                                                e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                                    .ToList();
+            var failure = GetStrongNameFailure(image, expectedPublicKey);
 
-            if (assemblies.Count == 0)
-                failures.Add($"{package}: contains no assemblies under lib/.");
-
-            foreach (var assembly in assemblies)
-            {
-                var failure = GetStrongNameFailure(ReadEntry(assembly), expectedPublicKey);
-
-                if (failure is null)
-                    Log.Information("Verified strong-name signature of {Package}: {Assembly}", package.Name, assembly.FullName);
-                else
-                    failures.Add($"{package}: {assembly.FullName}: {failure}.");
-            }
+            if (failure is null)
+                Log.Information("Verified strong-name signature of {Package}: {Assembly}", package.Name, assemblyName);
+            else
+                failures.Add($"{package}: {assemblyName}: {failure}.");
         }
 
         if (failures.Count > 0)

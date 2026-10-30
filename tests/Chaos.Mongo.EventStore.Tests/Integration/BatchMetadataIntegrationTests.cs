@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -17,7 +18,7 @@ public class BatchMetadataIntegrationTests
     private IAggregateRepository<BatchMetadataAggregate> _aggregateRepository;
     private MongoDbContainer _container;
     private IEventStore<BatchMetadataAggregate> _eventStore;
-    private ServiceProvider _serviceProvider;
+    private ServiceProvider? _serviceProvider;
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
@@ -25,6 +26,12 @@ public class BatchMetadataIntegrationTests
     [SetUp]
     public async Task Setup()
     {
+        if (_bulkWrite && !MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            Assert.Ignore(
+                "Bulk-write optimization requires MongoDB 8.0 or later; the connected test server does not support it.");
+        }
+
         _serviceProvider = new ServiceCollection()
                            .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
                            {
@@ -56,7 +63,15 @@ public class BatchMetadataIntegrationTests
     }
 
     [TearDown]
-    public async Task TearDown() => await _serviceProvider.DisposeAsync();
+    public async Task TearDown()
+    {
+        // Null when [SetUp] called Assert.Ignore before building the service provider (an unsupported
+        // bulk-write fixture instance).
+        if (_serviceProvider is not null)
+        {
+            await _serviceProvider.DisposeAsync();
+        }
+    }
 
     public BatchMetadataIntegrationTests(Boolean bulkWrite)
     {

@@ -14,38 +14,44 @@ full background and the owner's decisions, which this plan follows directly.
 ## Acceptance Criteria
 
 - [ ] A PR opened from a fork completes CI successfully (no step requires
-      `DOCKERHUB_USER`/`DOCKERHUB_PAT` or `CHAOSMONGO_SNK` to succeed).
-- [ ] CI fails when packaging is broken: a new Nuke target packs every `src/`
+      `DOCKERHUB_USER`/`DOCKERHUB_PAT` or `CHAOSMONGO_SNK` to succeed). Pending:
+      the `if: env.DOCKERHUB_USER != ''` guard and secret-free `pack-check` job
+      are implemented and code-reviewed, but a real fork PR run is only
+      observable once the branch is published; not yet executed.
+- [x] CI fails when packaging is broken: a new Nuke target packs every `src/`
       project with public signing (no private key involved), runs .NET package
       validation on the result, and asserts every packed assembly's public key
       token equals the released token. Its output never lands in the directory
       `Publish` globs, so a public-signed package can never reach `Publish`.
-- [ ] `Test` clears `coverlet.xml`-driven coverage data before merging, passes
+- [x] `Test` clears `coverlet.xml`-driven coverage data before merging, passes
       `coverlet.xml` as the Coverlet settings file, and the merged
       `coverage.cobertura.merged.xml` contains line-rate data for
       `Chaos.Mongo`, `Chaos.Mongo.EventStore`, and `Chaos.Mongo.Outbox`, and none
       for any `*.Tests` assembly.
-- [ ] Running `Test` without `CHAOSMONGO_MONGODB_IMAGE` set, or with it set to
+- [x] Running `Test` without `CHAOSMONGO_MONGODB_IMAGE` set, or with it set to
       `Primary`, fails when merged aggregate line coverage drops below 95% or
       any one of the three packages' own line coverage drops below 90%,
       comparing the unrounded values, and reports the measured values either
       way. Running `Test` against `MinimumSupported` or `Latest` never
       enforces either threshold, matching the issue's "gate runs on Primary"
       decision.
-- [ ] Automated regression tests exercise the new enforcement logic directly,
+- [x] Automated regression tests exercise the new enforcement logic directly,
       independent of a full `Test` run against a real MongoDB: the merged-
       coverage threshold comparison at and immediately below both the 95%
       aggregate and the 90% per-package boundary, a per-package failure masked
       by a passing aggregate, and `PackCheck`'s public-key-token check against
       both a correctly and an incorrectly signed sample package.
-- [ ] Every job in `ci.yml` has `timeout-minutes: 15`.
+- [x] Every job in `ci.yml` has `timeout-minutes: 15`.
 - [ ] Pushing a new commit to an open PR cancels that PR's in-progress CI run.
       Pushes to `main` and runs started by the release workflow are never
-      cancelled by another such run.
-- [ ] The full `Test` suite passes with the MongoDB server pinned to each of the
+      cancelled by another such run. Pending: the `concurrency` group
+      expression is implemented and code-reviewed (`actionlint` plus design
+      inspection), but a live cancellation can only be observed once the
+      branch is published and a PR exists; not yet executed.
+- [x] The full `Test` suite passes with the MongoDB server pinned to each of the
       three constants in the new `MongoDbTestImages` class (minimum supported,
       primary, latest), including any integration test adjusted for this plan.
-- [ ] The three pinned `mongo:` image tags exist only as the three constants in
+- [x] The three pinned `mongo:` image tags exist only as the three constants in
       `MongoDbTestImages`; no other file hard-codes a Mongo image tag,
       including the two `benchmarks/` projects that start their own MongoDB
       container today and the `netem/Dockerfile` that
@@ -60,7 +66,17 @@ full background and the owner's decisions, which this plan follows directly.
       separate detected dependencies, not merely as config that matches
       locally.
 - [ ] A GitHub ruleset on `main` requires a single, name-stable CI status check
-      to succeed before merging, readable back via the GitHub API.
+      to succeed before merging, readable back via the GitHub API. Decided
+      (human decision, Implementation Decision Required, 2026-10-30): Publish
+      creates this ruleset for issue #217, since Implementation/Code Fix are
+      not authorized to perform forge mutations, and Publish is the one phase
+      that already mutates the forge (push/PR/labels). The exact
+      `gh api repos/chA0s-Chris/Chaos.Mongo/rulesets` payload, naming the
+      `result` job from `ci.yml` as the required status check, is drafted and
+      ready; `main` currently has no branch protection or rulesets (confirmed
+      via `gh api repos/.../branches/main/protection` → 404 and `gh api
+      repos/.../rulesets` → `[]`), so this creates rather than updates. Not yet
+      executed by this round; remains Publish's responsibility.
 
 ## Technical Details
 

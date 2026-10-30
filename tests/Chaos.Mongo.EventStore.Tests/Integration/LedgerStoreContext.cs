@@ -4,10 +4,12 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using NUnit.Framework;
 using Testcontainers.MongoDb;
 
 /// <summary>
@@ -67,6 +69,12 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                                                              Action<MongoBuilder>? configureMongo = null,
                                                              Boolean personalData = false)
     {
+        if (bulkWrite && !MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            Assert.Ignore(
+                "Bulk-write optimization requires MongoDB 8.0 or later; the connected test server does not support it.");
+        }
+
         var services = new ServiceCollection();
         if (timeProvider is not null)
         {

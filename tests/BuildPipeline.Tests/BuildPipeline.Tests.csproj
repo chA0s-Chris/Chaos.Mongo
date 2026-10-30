@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Links the pure, Nuke-independent logic extracted from the build/ pipeline, so it can be exercised
+       with synthetic values instead of running a pack or a full coverage-gated test run. Named without a
+       "Chaos.Mongo" prefix so coverlet.xml's Include filter never picks this assembly up. -->
+  <ItemGroup>
+    <Compile Include="../../build/PublicKeyTokenCheck.cs" Link="PublicKeyTokenCheck.cs" />
+    <Compile Include="../../build/CoverageThresholds.cs" Link="CoverageThresholds.cs" />
+  </ItemGroup>
+</Project>

@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using Docker.DotNet.Models;
 using DotNet.Testcontainers.Containers;
 using Testcontainers.MongoDb;
@@ -23,7 +24,7 @@ public static class MongoDbTestContainer
                 return Container;
 
             Container = new MongoDbBuilder()
-                        .WithImage("mongo:8")
+                        .WithImage(MongoDbTestImages.Selected)
                         .WithReplicaSet()
                         // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
                         // pinned. See https://jira.mongodb.org/browse/SERVER-121912

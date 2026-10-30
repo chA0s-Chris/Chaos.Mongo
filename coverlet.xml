@@ -3,8 +3,10 @@
     <DataCollectors>
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
-          <Include>[Chaos.Mongo]*</Include>
-          <Exclude>[Chaos.Mongo.Tests]*</Exclude>
+          <Include>[Chaos.Mongo]*,[Chaos.Mongo.*]*</Include>
+          <Exclude>[Chaos.Mongo*.Tests]*</Exclude>
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+          <ExcludeByFile>**/obj/**/*.cs</ExcludeByFile>
         </Configuration>
       </DataCollector>
     </DataCollectors>

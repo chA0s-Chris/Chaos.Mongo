@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.LoadTests;
 
+using Chaos.Mongo.TestSupport;
 using Docker.DotNet.Models;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
@@ -34,7 +35,7 @@ internal sealed class MongoTopology : IAsyncDisposable
 
     public static async Task<MongoTopology> StartSingleNodeAsync()
     {
-        var container = new MongoDbBuilder("mongo:8")
+        var container = new MongoDbBuilder(MongoDbTestImages.Primary)
                         .WithReplicaSet()
                         // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
                         // pinned. See https://jira.mongodb.org/browse/SERVER-121912
@@ -59,6 +60,7 @@ internal sealed class MongoTopology : IAsyncDisposable
                     .WithDockerfileDirectory(Path.Combine(AppContext.BaseDirectory, "netem"))
                     .WithDockerfile("Dockerfile")
                     .WithName("chaos-mongo-loadtest-netem:8")
+                    .WithBuildArgument("MONGO_IMAGE", MongoDbTestImages.Primary)
                     .WithCleanUp(false)
                     .Build();
         await image.CreateAsync();

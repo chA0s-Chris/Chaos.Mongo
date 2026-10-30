@@ -5,4 +5,8 @@
     <TargetFrameworks></TargetFrameworks>
     <TargetFramework>$(LatestTarget)</TargetFramework>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)../tests/MongoDbTestImages.cs'))" Link="MongoDbTestImages.cs" />
+  </ItemGroup>
 </Project>

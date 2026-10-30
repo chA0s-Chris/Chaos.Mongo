@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -105,6 +106,12 @@ public class EventStoreGeneratedIdTests
 
     private IEventStore<OrderAggregate> CreateEventStore(Boolean bulkWriteOptimizationEnabled)
     {
+        if (bulkWriteOptimizationEnabled && !MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            Assert.Ignore(
+                "Bulk-write optimization requires MongoDB 8.0 or later; the connected test server does not support it.");
+        }
+
         var url = MongoUrl.Create(_container.GetConnectionString());
         var sp = new ServiceCollection()
                  .AddMongo(url, configure: options =>

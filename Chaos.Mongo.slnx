@@ -36,9 +36,11 @@
     <File Path="src/Directory.Build.props" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/BuildPipeline.Tests/BuildPipeline.Tests.csproj" />
     <Project Path="tests/Chaos.Mongo.EventStore.Tests/Chaos.Mongo.EventStore.Tests.csproj" />
     <Project Path="tests/Chaos.Mongo.Outbox.Tests/Chaos.Mongo.Outbox.Tests.csproj" />
     <Project Path="tests/Chaos.Mongo.Tests/Chaos.Mongo.Tests.csproj" />
     <File Path="tests/Directory.Build.props" />
+    <File Path="tests/MongoDbTestImages.cs" />
   </Folder>
 </Solution>

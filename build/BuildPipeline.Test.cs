@@ -9,6 +9,7 @@ using Nuke.Common.Tools.DotNet;
 using Nuke.Common.Utilities.Collections;
 using System.Globalization;
 using System.Xml;
+using System.Xml.Linq;
 using static Nuke.Common.Tools.DotNet.DotNetTasks;
 
 internal partial class BuildPipeline
@@ -32,11 +33,16 @@ internal partial class BuildPipeline
         target.DependsOn(BuildTests, RestoreTools)
               .Executes(() =>
               {
+                  // A stale per-project coverage.cobertura.xml from an earlier run would otherwise be merged in
+                  // and skew the gate below.
+                  CoverageDirectory.CreateOrCleanDirectory();
+
                   DotNetTest(s => s
                                   .SetConfiguration(TargetBuildConfiguration)
                                   .EnableNoBuild()
                                   .EnableNoRestore()
                                   .SetDataCollector("XPlat Code Coverage")
+                                  .SetSettingsFile(RootDirectory / "coverlet.xml")
                                   .SetResultsDirectory(CoverageDirectory)
                                   .CombineWith(
                                       TestsDirectory.GlobFiles("**/*.Tests.csproj"),
@@ -80,21 +86,50 @@ internal partial class BuildPipeline
             totalFailureCount += failureCount;
         }
 
-        using var coverageReader = XmlReader.Create(MergedCoverageResultsFile, xmlReaderSettings);
-        coverageReader.Read();
-        coverageReader.Read();
+        var coverageDocument = XDocument.Load(MergedCoverageResultsFile);
+        var coverageRoot = coverageDocument.Root;
 
-        if (coverageReader is not { NodeType: XmlNodeType.Element, Name: "coverage" } ||
-            !Double.TryParse(coverageReader.GetAttribute("line-rate"), NumberStyles.Number, CultureInfo.InvariantCulture, out var lineRate))
+        if (coverageRoot is not { Name.LocalName: "coverage" } ||
+            !Double.TryParse((String?)coverageRoot.Attribute("line-rate"), NumberStyles.Number, CultureInfo.InvariantCulture, out var lineRate))
         {
             throw new InvalidDataException($"Malformed test coverage result file: {MergedCoverageResultsFile}");
         }
 
+        String RequireAttribute(XElement element, String attributeName)
+            => (String?)element.Attribute(attributeName) ??
+               throw new InvalidDataException($"Malformed test coverage result file: {MergedCoverageResultsFile}");
+
+        var packageLineRates = coverageRoot.Descendants("package")
+                                           .ToDictionary(
+                                               p => RequireAttribute(p, "name"),
+                                               p => Double.Parse(RequireAttribute(p, "line-rate"), NumberStyles.Number, CultureInfo.InvariantCulture));
+
         var coverage = (lineRate * 100).ToString("N2");
         Console.WriteLine($"CODE_COVERAGE={coverage}");
 
-        ReportSummary(c => c.AddPair("Total", totalTestCount)
-                            .AddPair("Failed", totalFailureCount)
-                            .AddPair("Coverage", $"{coverage}%"));
+        ReportSummary(c =>
+        {
+            c.AddPair("Total", totalTestCount)
+             .AddPair("Failed", totalFailureCount)
+             .AddPair("Coverage", $"{coverage}%");
+
+            foreach (var (package, rate) in packageLineRates)
+                c.AddPair($"Coverage ({package})", $"{(rate * 100):N2}%");
+
+            return c;
+        });
+
+        // Only the version the issue designates as primary enforces the gate; MinimumSupported and Latest still
+        // compute and print the numbers above so their legs stay informative without failing on MongoDB-version
+        // coverage differences.
+        var mongoImage = Environment.GetEnvironmentVariable("CHAOSMONGO_MONGODB_IMAGE");
+
+        if (CoverageThresholds.ShouldEnforceGate(mongoImage))
+        {
+            var violations = CoverageThresholds.GetViolations(lineRate, packageLineRates);
+
+            if (violations.Count > 0)
+                Assert.Fail(String.Join(Environment.NewLine, violations));
+        }
     }
 }
