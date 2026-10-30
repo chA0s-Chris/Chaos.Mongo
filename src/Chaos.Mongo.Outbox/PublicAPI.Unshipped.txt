@@ -1,4 +1,5 @@
 #nullable enable
+Chaos.Mongo.Outbox.OutboxBuilder.WithLockLeaseTime(System.TimeSpan leaseTime) -> Chaos.Mongo.Outbox.OutboxBuilder!
 *REMOVED*Chaos.Mongo.Outbox.MongoOutbox
 *REMOVED*Chaos.Mongo.Outbox.MongoOutbox.AddMessageAsync<TPayload>(MongoDB.Driver.IClientSessionHandle! session, TPayload! payload, string? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Chaos.Mongo.Outbox.MongoOutbox.MongoOutbox(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Outbox.OutboxOptions! options, System.TimeProvider! timeProvider) -> void
@@ -8,6 +9,7 @@
 *REMOVED*Chaos.Mongo.Outbox.OutboxBuilder.PublisherLifetime.get -> Microsoft.Extensions.DependencyInjection.ServiceLifetime
 *REMOVED*Chaos.Mongo.Outbox.OutboxBuilder.PublisherType.get -> System.Type?
 *REMOVED*Chaos.Mongo.Outbox.OutboxBuilder.Validate() -> void
+*REMOVED*Chaos.Mongo.Outbox.OutboxBuilder.WithLockTimeout(System.TimeSpan lockTimeout) -> Chaos.Mongo.Outbox.OutboxBuilder!
 *REMOVED*Chaos.Mongo.Outbox.OutboxConfigurator
 *REMOVED*Chaos.Mongo.Outbox.OutboxConfigurator.ConfigureAsync(Chaos.Mongo.IMongoHelper! helper, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Chaos.Mongo.Outbox.OutboxConfigurator.OutboxConfigurator(Chaos.Mongo.Outbox.OutboxOptions! options) -> void

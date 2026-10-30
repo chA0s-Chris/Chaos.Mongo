@@ -42,10 +42,10 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithPayloadHandler<EmailMessageHandler>()
         .WithCollectionName("email_queue")
         .WithAutoStartSubscription()
-        .WithQueryLimit(10)
+        .WithBatchSize(10)
         .WithLockLeaseTime(TimeSpan.FromMinutes(2))
         .WithMaxRetries(5)
-        .WithClosedItemRetention(TimeSpan.FromHours(6)));
+        .WithRetentionPeriod(TimeSpan.FromHours(6)));
 ```
 
 When the handler needs more than constructor injection can supply, register a factory instead. The handler is registered as transient, and the factory runs with the root `IServiceProvider` each time an item is handled, so it must not resolve scoped services. A queue accepts either a handler type or a factory, not both:
@@ -63,10 +63,10 @@ If no collection name is specified, `IMongoQueueCollectionNameGenerator` derives
 ### Processing options
 
 - `WithAutoStartSubscription()` starts processing with the hosted application; manual startup is the default.
-- `WithQueryLimit(...)` controls the maximum items fetched in each query.
+- `WithBatchSize(...)` controls the maximum items fetched in each query.
 - `WithLockLeaseTime(...)` determines when work abandoned by another subscriber becomes eligible for recovery.
 - `WithMaxRetries(...)` limits retries after the initial attempt; `WithNoRetry()` makes the first failure terminal.
-- `WithClosedItemRetention(...)` retains successful items for MongoDB TTL cleanup.
+- `WithRetentionPeriod(...)` retains successful items for MongoDB TTL cleanup.
 - `WithImmediateDelete()` removes successful items immediately.
 
 Terminal failed items are excluded from TTL cleanup so they remain available for dead-letter handling.

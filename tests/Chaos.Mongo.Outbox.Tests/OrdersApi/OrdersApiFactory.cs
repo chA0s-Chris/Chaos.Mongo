@@ -46,7 +46,7 @@ public sealed class OrdersApiFactory : WebApplicationFactory<OrdersApiEntryPoint
                                    .WithMessage<OrderCancelledMessage>("OrderCancelled")
                                    .WithMaxRetries(3)
                                    .WithPollingInterval(TimeSpan.FromMilliseconds(200))
-                                   .WithLockTimeout(TimeSpan.FromSeconds(10))
+                                   .WithLockLeaseTime(TimeSpan.FromSeconds(10))
                                    .WithAutoStartProcessor());
 
         var app = appBuilder.Build();

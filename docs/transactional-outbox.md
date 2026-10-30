@@ -243,7 +243,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithRetryBackoff(TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(5))
         .WithBatchSize(100)
         .WithPollingInterval(TimeSpan.FromSeconds(5))
-        .WithLockTimeout(TimeSpan.FromMinutes(5))
+        .WithLockLeaseTime(TimeSpan.FromMinutes(5))
         .WithRetentionPeriod(TimeSpan.FromDays(7))
         .WithAutoStartProcessor());
 ```
@@ -395,7 +395,7 @@ destination's processor.
 | `WithBatchSize(int)` | `100` | Maximum eligible messages fetched per polling batch |
 | `WithPollingInterval(TimeSpan)` | `5s` | Delay between polls when the batch is not full |
 | `WithProcessingFilter(FilterDefinition<OutboxMessage>)` | None | Adds a MongoDB constraint to message selection and atomic claiming |
-| `WithLockTimeout(TimeSpan)` | `5m` | When a locked message becomes reclaimable |
+| `WithLockLeaseTime(TimeSpan)` | `5m` | When a locked message becomes reclaimable |
 | `WithRetentionPeriod(TimeSpan)` | Disabled | Creates TTL indexes for processed and failed messages |
 | `WithAutoStartProcessor()` | Disabled | Starts the processor automatically via hosted service |
 
@@ -563,7 +563,7 @@ Before publishing, the processor claims a message by setting:
 
 Completion and failure updates match on `LockId`. This prevents an older processor from overwriting the state after another processor has reclaimed the same message.
 
-If a processor crashes while holding a lock, another processor can reclaim the message once `LockedUtc` is older than the configured `LockTimeout`.
+If a processor crashes while holding a lock, another processor can reclaim the message once `LockedUtc` is older than the configured `LockLeaseTime`.
 
 ### Ordering
 

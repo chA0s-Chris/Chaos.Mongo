@@ -54,7 +54,7 @@ public class OutboxProcessorQueryContractTests
         ContainsComparison(renderedFilter,
                            nameof(OutboxMessage.LockedUtc),
                            "$lte",
-                           new BsonDateTime(_timeProvider.GetUtcNow().UtcDateTime - _options.LockTimeout)).Should().BeTrue();
+                           new BsonDateTime(_timeProvider.GetUtcNow().UtcDateTime - _options.LockLeaseTime)).Should().BeTrue();
 
         Render(queryCapture.CapturedOptions.Sort!).Should().BeEquivalentTo(new BsonDocument
         {
@@ -122,7 +122,7 @@ public class OutboxProcessorQueryContractTests
         ContainsComparison(renderedFilter,
                            nameof(OutboxMessage.LockedUtc),
                            "$lte",
-                           new BsonDateTime(_timeProvider.GetUtcNow().UtcDateTime - _options.LockTimeout)).Should().BeTrue();
+                           new BsonDateTime(_timeProvider.GetUtcNow().UtcDateTime - _options.LockLeaseTime)).Should().BeTrue();
     }
 
     [SetUp]
@@ -134,7 +134,7 @@ public class OutboxProcessorQueryContractTests
             BatchSize = 10,
             MaxRetries = 3,
             PollingInterval = TimeSpan.FromMilliseconds(50),
-            LockTimeout = TimeSpan.FromMinutes(5),
+            LockLeaseTime = TimeSpan.FromMinutes(5),
             RetryBackoffInitialDelay = TimeSpan.FromSeconds(1),
             RetryBackoffMaxDelay = TimeSpan.FromSeconds(30)
         };

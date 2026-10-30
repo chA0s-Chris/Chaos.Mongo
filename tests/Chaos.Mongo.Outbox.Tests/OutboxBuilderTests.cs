@@ -23,7 +23,7 @@ public class OutboxBuilderTests
         options.ProcessingFilter.Should().BeNull();
         options.BatchSize.Should().Be(OutboxOptions.DefaultBatchSize);
         options.PollingInterval.Should().Be(OutboxOptions.DefaultPollingInterval);
-        options.LockTimeout.Should().Be(OutboxOptions.DefaultLockTimeout);
+        options.LockLeaseTime.Should().Be(OutboxOptions.DefaultLockLeaseTime);
         options.AutoStartProcessor.Should().BeFalse();
         options.MessageTypeLookup.Should().BeEmpty();
     }
@@ -42,7 +42,7 @@ public class OutboxBuilderTests
                      .WithRetentionPeriod(TimeSpan.FromDays(7))
                      .WithBatchSize(50)
                      .WithPollingInterval(TimeSpan.FromSeconds(2))
-                     .WithLockTimeout(TimeSpan.FromMinutes(10))
+                     .WithLockLeaseTime(TimeSpan.FromMinutes(10))
                      .WithAutoStartProcessor();
 
         result.Should().BeSameAs(builder);
@@ -150,22 +150,22 @@ public class OutboxBuilderTests
     }
 
     [Test]
-    public void WithLockTimeout_ValidValue_SetsOption()
+    public void WithLockLeaseTime_ValidValue_SetsOption()
     {
         var builder = new OutboxBuilder();
 
-        builder.WithLockTimeout(TimeSpan.FromMinutes(10));
+        builder.WithLockLeaseTime(TimeSpan.FromMinutes(10));
 
-        builder.Build().LockTimeout.Should().Be(TimeSpan.FromMinutes(10));
+        builder.Build().LockLeaseTime.Should().Be(TimeSpan.FromMinutes(10));
     }
 
     [Test]
-    public void WithLockTimeout_ZeroOrNegative_ThrowsArgumentOutOfRangeException()
+    public void WithLockLeaseTime_ZeroOrNegative_ThrowsArgumentOutOfRangeException()
     {
         var builder = new OutboxBuilder();
 
-        var actZero = () => builder.WithLockTimeout(TimeSpan.Zero);
-        var actNeg = () => builder.WithLockTimeout(TimeSpan.FromMinutes(-1));
+        var actZero = () => builder.WithLockLeaseTime(TimeSpan.Zero);
+        var actNeg = () => builder.WithLockLeaseTime(TimeSpan.FromMinutes(-1));
 
         actZero.Should().Throw<ArgumentOutOfRangeException>();
         actNeg.Should().Throw<ArgumentOutOfRangeException>();

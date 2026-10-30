@@ -14,7 +14,7 @@ public sealed class OutboxBuilder
     private Boolean _autoStartProcessor;
     private Int32 _batchSize = OutboxOptions.DefaultBatchSize;
     private String _collectionName = OutboxOptions.DefaultCollectionName;
-    private TimeSpan _lockTimeout = OutboxOptions.DefaultLockTimeout;
+    private TimeSpan _lockLeaseTime = OutboxOptions.DefaultLockLeaseTime;
     private Int32 _maxRetries = OutboxOptions.DefaultMaxRetries;
     private TimeSpan _pollingInterval = OutboxOptions.DefaultPollingInterval;
     private FilterDefinition<OutboxMessage>? _processingFilter;
@@ -96,17 +96,17 @@ public sealed class OutboxBuilder
     }
 
     /// <summary>
-    /// Sets the lock timeout for stale lock recovery.
+    /// Sets the lock lease time for stale lock recovery.
     /// Defaults to <c>5 minutes</c>.
     /// </summary>
-    /// <param name="lockTimeout">The lock timeout.</param>
+    /// <param name="leaseTime">The lock lease time.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    public OutboxBuilder WithLockTimeout(TimeSpan lockTimeout)
+    public OutboxBuilder WithLockLeaseTime(TimeSpan leaseTime)
     {
-        if (lockTimeout <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(lockTimeout), "Lock timeout must be positive.");
+        if (leaseTime <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseTime), "Lock lease time must be positive.");
 
-        _lockTimeout = lockTimeout;
+        _lockLeaseTime = leaseTime;
         return this;
     }
 
@@ -277,7 +277,7 @@ public sealed class OutboxBuilder
             AutoStartProcessor = _autoStartProcessor,
             BatchSize = _batchSize,
             CollectionName = _collectionName,
-            LockTimeout = _lockTimeout,
+            LockLeaseTime = _lockLeaseTime,
             MaxRetries = _maxRetries,
             MessageTypeLookup = MessageTypes.ToImmutableDictionary(),
             PollingInterval = _pollingInterval,

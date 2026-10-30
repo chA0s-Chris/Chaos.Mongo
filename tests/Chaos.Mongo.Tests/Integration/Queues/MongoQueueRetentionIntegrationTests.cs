@@ -102,7 +102,7 @@ public class MongoQueueRetentionIntegrationTests
             closedItem.IsClosed.Should().BeTrue();
             closedItem.IsLocked.Should().BeFalse();
             closedItem.ClosedUtc.Should().NotBeNull();
-            ttlIndex["expireAfterSeconds"].ToDouble().Should().Be(MongoDefaults.QueueClosedItemRetention!.Value.TotalSeconds);
+            ttlIndex["expireAfterSeconds"].ToDouble().Should().Be(MongoDefaults.QueueRetentionPeriod!.Value.TotalSeconds);
             var partialFilter = ttlIndex["partialFilterExpression"].AsBsonDocument;
             partialFilter["IsClosed"].AsBoolean.Should().BeTrue();
             UsesLegacyCompatibleTerminalFilter(partialFilter)
@@ -125,7 +125,7 @@ public class MongoQueueRetentionIntegrationTests
         await using var firstServiceProvider = CreateServiceProvider(uniqueDbName,
                                                                      collectionName,
                                                                      queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
-                                                                                   .WithClosedItemRetention(TimeSpan.FromHours(2))
+                                                                                   .WithRetentionPeriod(TimeSpan.FromHours(2))
                                                                                    .WithoutAutoStartSubscription());
         var firstHelper = firstServiceProvider.GetRequiredService<IMongoHelper>();
         var firstIndexCollection = firstHelper.Database.GetCollection<BsonDocument>(collectionName);
@@ -134,7 +134,7 @@ public class MongoQueueRetentionIntegrationTests
         await using var secondServiceProvider = CreateServiceProvider(uniqueDbName,
                                                                       collectionName,
                                                                       queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
-                                                                                    .WithClosedItemRetention(TimeSpan.FromMinutes(15))
+                                                                                    .WithRetentionPeriod(TimeSpan.FromMinutes(15))
                                                                                     .WithoutAutoStartSubscription());
         var secondHelper = secondServiceProvider.GetRequiredService<IMongoHelper>();
         var secondIndexCollection = secondHelper.Database.GetCollection<BsonDocument>(collectionName);

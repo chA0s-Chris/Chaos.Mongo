@@ -13,11 +13,10 @@ public sealed record MongoQueueDefinition
     public required Boolean AutoStartSubscription { get; init; }
 
     /// <summary>
-    /// Duration that successfully processed queue items are retained before TTL cleanup removes them.
-    /// <c>null</c> means successful items are deleted immediately after processing.
-    /// Terminal failed items stay queryable for dead-letter handling.
+    /// Number of queue payloads that will be processed sequentially before
+    /// the remaining payloads will be sorted again.
     /// </summary>
-    public TimeSpan? ClosedItemRetention { get; init; } = MongoDefaults.QueueClosedItemRetention;
+    public required Int32 BatchSize { get; init; }
 
     /// <summary>
     /// Name of the collection.
@@ -46,8 +45,9 @@ public sealed record MongoQueueDefinition
     public required Type PayloadType { get; init; }
 
     /// <summary>
-    /// Number of queue payloads that will be processed sequentially before
-    /// the remaining payloads will be sorted again.
+    /// Duration that successfully processed queue items are retained before TTL cleanup removes them.
+    /// <c>null</c> means successful items are deleted immediately after processing.
+    /// Terminal failed items stay queryable for dead-letter handling.
     /// </summary>
-    public required Int32 QueryLimit { get; init; }
+    public TimeSpan? RetentionPeriod { get; init; } = MongoDefaults.QueueRetentionPeriod;
 }

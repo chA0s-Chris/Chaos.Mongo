@@ -221,7 +221,7 @@ public class OutboxIndexContractIntegrationTests
                            .WithMessage<TestPayload>("TestPayload")
                            .WithBatchSize(10)
                            .WithPollingInterval(TimeSpan.FromMilliseconds(100))
-                           .WithLockTimeout(TimeSpan.FromSeconds(10));
+                           .WithLockLeaseTime(TimeSpan.FromSeconds(10));
                     configureOutbox?.Invoke(builder);
                 });
 

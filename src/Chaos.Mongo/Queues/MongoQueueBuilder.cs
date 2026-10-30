@@ -14,14 +14,14 @@ public sealed class MongoQueueBuilder<TPayload>
     private readonly Type _payloadType = typeof(TPayload);
     private readonly IServiceCollection _services;
     private Boolean? _autoStartSubscription;
-    private TimeSpan? _closedItemRetention = MongoDefaults.QueueClosedItemRetention;
+    private Int32? _batchSize;
     private String? _collectionName;
     private Boolean _isRegistered;
     private TimeSpan? _lockLeaseTime;
     private Int32? _maxRetries = MongoDefaults.QueueMaxRetries;
     private Func<IServiceProvider, IMongoQueuePayloadHandler<TPayload>>? _payloadHandlerFactory;
     private Type? _payloadHandlerType;
-    private Int32? _queryLimit;
+    private TimeSpan? _retentionPeriod = MongoDefaults.QueueRetentionPeriod;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MongoQueueBuilder{TPayload}"/> class.
@@ -45,20 +45,22 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
-    /// Configures how long successfully processed queue items are retained before MongoDB TTL cleanup removes them.
-    /// Terminal failed items remain queryable for dead-letter handling.
+    /// Configures the queue to use a specific maximum number of queue items to fetch and process in a single query.
     /// </summary>
-    /// <param name="retention">The retention duration for closed items.</param>
+    /// <remarks>
+    /// The default batch size is <see cref="MongoDefaults.QueueBatchSize"/>
+    /// </remarks>
+    /// <param name="batchSize">The maximum number of queue items to fetch and process in a single query.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="retention"/> is less than or equal to zero.</exception>
-    public MongoQueueBuilder<TPayload> WithClosedItemRetention(TimeSpan retention)
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="batchSize"/> is less than or equal to 0.</exception>
+    public MongoQueueBuilder<TPayload> WithBatchSize(Int32 batchSize)
     {
-        if (retention <= TimeSpan.Zero)
+        if (batchSize <= 0)
         {
-            throw new ArgumentException("Closed item retention must be greater than 0.", nameof(retention));
+            throw new ArgumentOutOfRangeException(nameof(batchSize), "Batch size must be greater than 0.");
         }
 
-        _closedItemRetention = retention;
+        _batchSize = batchSize;
         return this;
     }
 
@@ -86,7 +88,7 @@ public sealed class MongoQueueBuilder<TPayload>
     /// <returns>This builder instance for method chaining.</returns>
     public MongoQueueBuilder<TPayload> WithImmediateDelete()
     {
-        _closedItemRetention = null;
+        _retentionPeriod = null;
         return this;
     }
 
@@ -99,12 +101,12 @@ public sealed class MongoQueueBuilder<TPayload>
     /// </remarks>
     /// <param name="leaseTime">The lock lease time.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="leaseTime"/> is less than or equal to zero.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="leaseTime"/> is less than or equal to zero.</exception>
     public MongoQueueBuilder<TPayload> WithLockLeaseTime(TimeSpan leaseTime)
     {
         if (leaseTime <= TimeSpan.Zero)
         {
-            throw new ArgumentException("Lock lease time must be greater than 0.", nameof(leaseTime));
+            throw new ArgumentOutOfRangeException(nameof(leaseTime), "Lock lease time must be greater than 0.");
         }
 
         _lockLeaseTime = leaseTime;
@@ -116,12 +118,12 @@ public sealed class MongoQueueBuilder<TPayload>
     /// </summary>
     /// <param name="maxRetries">The number of retries allowed after the initial failed attempt.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="maxRetries"/> is less than or equal to zero.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxRetries"/> is less than or equal to zero.</exception>
     public MongoQueueBuilder<TPayload> WithMaxRetries(Int32 maxRetries)
     {
         if (maxRetries <= 0)
         {
-            throw new ArgumentException("Max retries must be greater than 0. Use WithNoRetry() to disable retries.", nameof(maxRetries));
+            throw new ArgumentOutOfRangeException(nameof(maxRetries), "Max retries must be greater than 0. Use WithNoRetry() to disable retries.");
         }
 
         _maxRetries = maxRetries;
@@ -191,22 +193,23 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
-    /// Configures the queue to use a specific maximum number of queue items to fetch and process in a single query.
+    /// Configures how long successfully processed queue items are retained before MongoDB TTL cleanup removes them.
+    /// Terminal failed items remain queryable for dead-letter handling.
     /// </summary>
-    /// <remarks>
-    /// The default query limit is <see cref="MongoDefaults.QueryLimit"/>
-    /// </remarks>
-    /// <param name="queryLimit">The maximum number of queue items to fetch and process in a single query.</param>
+    /// <param name="retentionPeriod">The retention duration for closed items.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="queryLimit"/> is less than or equal to 0.</exception>
-    public MongoQueueBuilder<TPayload> WithQueryLimit(Int32 queryLimit)
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="retentionPeriod"/> is less than or equal to
+    /// zero.
+    /// </exception>
+    public MongoQueueBuilder<TPayload> WithRetentionPeriod(TimeSpan retentionPeriod)
     {
-        if (queryLimit <= 0)
+        if (retentionPeriod <= TimeSpan.Zero)
         {
-            throw new ArgumentException("Query limit must be greater than 0.", nameof(queryLimit));
+            throw new ArgumentOutOfRangeException(nameof(retentionPeriod), "Retention period must be greater than 0.");
         }
 
-        _queryLimit = queryLimit;
+        _retentionPeriod = retentionPeriod;
         return this;
     }
 
@@ -259,11 +262,11 @@ public sealed class MongoQueueBuilder<TPayload>
         var queueDefinition = new MongoQueueDefinition
         {
             CollectionName = _collectionName ?? String.Empty,
-            ClosedItemRetention = _closedItemRetention,
+            RetentionPeriod = _retentionPeriod,
             LockLeaseTime = _lockLeaseTime ?? MongoDefaults.QueueLockLeaseTime,
             MaxRetries = _maxRetries,
             PayloadType = _payloadType,
-            QueryLimit = _queryLimit ?? MongoDefaults.QueryLimit,
+            BatchSize = _batchSize ?? MongoDefaults.QueueBatchSize,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TPayload>),
             AutoStartSubscription = _autoStartSubscription ?? MongoDefaults.AutoStartSubscription
         };

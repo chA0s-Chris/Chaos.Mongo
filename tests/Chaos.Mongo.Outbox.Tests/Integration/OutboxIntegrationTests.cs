@@ -343,7 +343,7 @@ public class OutboxIntegrationTests
                                             .WithMessage<AnotherTestPayload>("AnotherPayload")
                                             .WithMaxRetries(3)
                                             .WithPollingInterval(TimeSpan.FromMilliseconds(100))
-                                            .WithLockTimeout(TimeSpan.FromSeconds(10))
+                                            .WithLockLeaseTime(TimeSpan.FromSeconds(10))
                                             .WithBatchSize(10))
                            .Services
                            .BuildServiceProvider();

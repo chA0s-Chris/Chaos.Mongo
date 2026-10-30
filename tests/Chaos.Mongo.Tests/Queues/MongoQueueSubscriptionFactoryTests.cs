@@ -167,12 +167,12 @@ public class MongoQueueSubscriptionFactoryTests
         var queueDefinition = new MongoQueueDefinition
         {
             AutoStartSubscription = false,
-            ClosedItemRetention = null,
+            RetentionPeriod = null,
             CollectionName = "test-queue",
             LockLeaseTime = TimeSpan.FromMinutes(1),
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             PayloadType = typeof(TestPayload),
-            QueryLimit = 1
+            BatchSize = 1
         };
         CancellationToken cancellationToken;
         using (var cancellationTokenSource = new CancellationTokenSource())
