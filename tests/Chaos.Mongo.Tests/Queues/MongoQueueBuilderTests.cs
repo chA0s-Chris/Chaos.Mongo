@@ -285,6 +285,50 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
+    public void WithBatchSize_WithNegativeValue_ThrowsArgumentOutOfRangeException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithBatchSize(-1);
+
+        // Assert
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
+           .WithMessage("Batch size must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithBatchSize_WithPositiveValue_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithBatchSize(10);
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithBatchSize_WithZeroValue_ThrowsArgumentOutOfRangeException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithBatchSize(0);
+
+        // Assert
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
+           .WithMessage("Batch size must be greater than 0.*");
+    }
+
+    [Test]
     public void WithCollectionName_WhenCollectionNameIsEmpty_ThrowsArgumentException()
     {
         // Arrange
@@ -355,7 +399,7 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithLockLeaseTime_WithNegativeValue_ThrowsArgumentException()
+    public void WithLockLeaseTime_WithNegativeValue_ThrowsArgumentOutOfRangeException()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -365,7 +409,7 @@ public class MongoQueueBuilderTests
         var act = () => builder.WithLockLeaseTime(TimeSpan.FromSeconds(-1));
 
         // Assert
-        act.Should().Throw<ArgumentException>()
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
            .WithMessage("Lock lease time must be greater than 0.*");
     }
 
@@ -384,7 +428,7 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithLockLeaseTime_WithZeroValue_ThrowsArgumentException()
+    public void WithLockLeaseTime_WithZeroValue_ThrowsArgumentOutOfRangeException()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -394,12 +438,12 @@ public class MongoQueueBuilderTests
         var act = () => builder.WithLockLeaseTime(TimeSpan.Zero);
 
         // Assert
-        act.Should().Throw<ArgumentException>()
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
            .WithMessage("Lock lease time must be greater than 0.*");
     }
 
     [Test]
-    public void WithMaxRetries_WithNegativeValue_ThrowsArgumentException()
+    public void WithMaxRetries_WithNegativeValue_ThrowsArgumentOutOfRangeException()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -409,7 +453,7 @@ public class MongoQueueBuilderTests
         var act = () => builder.WithMaxRetries(-1);
 
         // Assert
-        act.Should().Throw<ArgumentException>()
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
            .WithMessage("Max retries must be greater than 0. Use WithNoRetry() to disable retries.*");
     }
 
@@ -428,7 +472,7 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithMaxRetries_WithZeroValue_ThrowsArgumentException()
+    public void WithMaxRetries_WithZeroValue_ThrowsArgumentOutOfRangeException()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -438,7 +482,7 @@ public class MongoQueueBuilderTests
         var act = () => builder.WithMaxRetries(0);
 
         // Assert
-        act.Should().Throw<ArgumentException>()
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
            .WithMessage("Max retries must be greater than 0. Use WithNoRetry() to disable retries.*");
     }
 
@@ -572,51 +616,7 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithQueueLimit_WithNegativeValue_ThrowsArgumentException()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var act = () => builder.WithBatchSize(-1);
-
-        // Assert
-        act.Should().Throw<ArgumentException>()
-           .WithMessage("Batch size must be greater than 0.*");
-    }
-
-    [Test]
-    public void WithQueueLimit_WithPositiveValue_ReturnsBuilderForChaining()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var result = builder.WithBatchSize(10);
-
-        // Assert
-        result.Should().BeSameAs(builder);
-    }
-
-    [Test]
-    public void WithQueueLimit_WithZeroValue_ThrowsArgumentException()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var act = () => builder.WithBatchSize(0);
-
-        // Assert
-        act.Should().Throw<ArgumentException>()
-           .WithMessage("Batch size must be greater than 0.*");
-    }
-
-    [Test]
-    public void WithRetentionPeriod_WithNegativeValue_ThrowsArgumentException()
+    public void WithRetentionPeriod_WithNegativeValue_ThrowsArgumentOutOfRangeException()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -626,7 +626,7 @@ public class MongoQueueBuilderTests
         var act = () => builder.WithRetentionPeriod(TimeSpan.FromSeconds(-1));
 
         // Assert
-        act.Should().Throw<ArgumentException>()
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
            .WithMessage("Retention period must be greater than 0.*");
     }
 
@@ -645,7 +645,7 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void WithRetentionPeriod_WithZeroValue_ThrowsArgumentException()
+    public void WithRetentionPeriod_WithZeroValue_ThrowsArgumentOutOfRangeException()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -655,7 +655,7 @@ public class MongoQueueBuilderTests
         var act = () => builder.WithRetentionPeriod(TimeSpan.Zero);
 
         // Assert
-        act.Should().Throw<ArgumentException>()
+        act.Should().ThrowExactly<ArgumentOutOfRangeException>()
            .WithMessage("Retention period must be greater than 0.*");
     }
 

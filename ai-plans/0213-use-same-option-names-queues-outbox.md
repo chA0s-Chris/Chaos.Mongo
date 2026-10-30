@@ -36,10 +36,10 @@ outcome changes.
       `QueueRetentionPeriod` instead of `QueueClosedItemRetention`, with the
       same values; `MongoDefaults.LockLeaseTime` and
       `MongoDefaults.QueueLockLeaseTime` are unchanged.
-- [x] No renamed member's validation behavior (exception type, thrown
-      condition) or default value changes; only identifiers and the
-      human-readable text that names them (XML docs, exception messages)
-      change.
+- [x] No renamed member's thrown condition or default value changes. The
+      only exception-type change is the deliberate amendment below: the queue
+      builder's range checks now throw `ArgumentOutOfRangeException`, matching
+      the outbox builder.
 - [x] The defaults and switch pairs of both builders are audited per the
       issue's proposal item 2; the audit's findings and disposition (keep
       as-is, with rationale) are recorded in Technical Details, and no new
@@ -82,18 +82,25 @@ use the target names and are unchanged. `MongoDefaults.LockLeaseTime` and
 members (generic distributed-lock default vs. queue-specific default) and are
 unrelated to this rename.
 
-Each builder method keeps its exact current validation. On the queue builder,
-`WithQueryLimit`, `WithClosedItemRetention`, and `WithLockLeaseTime` (already
-correctly named) all throw `ArgumentException` today. On the outbox builder,
-`WithLockTimeout` and the rest of `OutboxBuilder` throw
-`ArgumentOutOfRangeException`. Carry over each existing `if`/`throw` exactly,
-only renaming the parameter and updating the exception message text to name
-the new parameter (e.g., "Retention period must be greater than 0."). Do not
-change an exception's type or the condition it fires on; that would be a
-behavior change outside this issue's scope, including `WithQueryLimit`'s
-existing `ArgumentException` despite its XML doc currently (incorrectly)
-documenting `ArgumentOutOfRangeException` — preserve that pre-existing
-doc/code mismatch as-is under the new name rather than fixing it here.
+Each builder method keeps the condition its validation fires on. On the queue
+builder, `WithQueryLimit`, `WithClosedItemRetention`, `WithLockLeaseTime`
+(already correctly named), and `WithMaxRetries` threw `ArgumentException`
+before this change. On the outbox builder, `WithLockTimeout` and the rest of
+`OutboxBuilder` throw `ArgumentOutOfRangeException`. Carry over each existing
+`if` exactly, renaming the parameter and updating the exception message text
+to name the new parameter (e.g., "Retention period must be greater than 0.").
+
+**Amendment: queue builder exception types.** This plan originally preserved
+the `ArgumentException` throws, including `WithQueryLimit`'s mismatch with its
+XML doc, which documented `ArgumentOutOfRangeException`. Once the names match,
+the same mistake on `WithBatchSize` would throw different types on the two
+builders, so `WithBatchSize`, `WithLockLeaseTime`, `WithMaxRetries`, and
+`WithRetentionPeriod` on the queue builder now throw
+`ArgumentOutOfRangeException`, and their XML docs say so. Existing
+`catch (ArgumentException)` handlers still work because
+`ArgumentOutOfRangeException` derives from it. The conditions are unchanged:
+the queue's `WithMaxRetries` still rejects `0` because `WithNoRetry()` exists,
+while the outbox's accepts it.
 
 **`MongoQueueBuilder<TPayload>.RegisterQueue()`** currently reads
 `MongoDefaults.QueryLimit` and assigns `QueryLimit` on the constructed

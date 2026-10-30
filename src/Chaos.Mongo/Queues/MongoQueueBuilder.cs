@@ -57,7 +57,7 @@ public sealed class MongoQueueBuilder<TPayload>
     {
         if (batchSize <= 0)
         {
-            throw new ArgumentException("Batch size must be greater than 0.", nameof(batchSize));
+            throw new ArgumentOutOfRangeException(nameof(batchSize), "Batch size must be greater than 0.");
         }
 
         _batchSize = batchSize;
@@ -101,12 +101,12 @@ public sealed class MongoQueueBuilder<TPayload>
     /// </remarks>
     /// <param name="leaseTime">The lock lease time.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="leaseTime"/> is less than or equal to zero.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="leaseTime"/> is less than or equal to zero.</exception>
     public MongoQueueBuilder<TPayload> WithLockLeaseTime(TimeSpan leaseTime)
     {
         if (leaseTime <= TimeSpan.Zero)
         {
-            throw new ArgumentException("Lock lease time must be greater than 0.", nameof(leaseTime));
+            throw new ArgumentOutOfRangeException(nameof(leaseTime), "Lock lease time must be greater than 0.");
         }
 
         _lockLeaseTime = leaseTime;
@@ -118,12 +118,12 @@ public sealed class MongoQueueBuilder<TPayload>
     /// </summary>
     /// <param name="maxRetries">The number of retries allowed after the initial failed attempt.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="maxRetries"/> is less than or equal to zero.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxRetries"/> is less than or equal to zero.</exception>
     public MongoQueueBuilder<TPayload> WithMaxRetries(Int32 maxRetries)
     {
         if (maxRetries <= 0)
         {
-            throw new ArgumentException("Max retries must be greater than 0. Use WithNoRetry() to disable retries.", nameof(maxRetries));
+            throw new ArgumentOutOfRangeException(nameof(maxRetries), "Max retries must be greater than 0. Use WithNoRetry() to disable retries.");
         }
 
         _maxRetries = maxRetries;
@@ -198,12 +198,15 @@ public sealed class MongoQueueBuilder<TPayload>
     /// </summary>
     /// <param name="retentionPeriod">The retention duration for closed items.</param>
     /// <returns>This builder instance for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="retentionPeriod"/> is less than or equal to zero.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="retentionPeriod"/> is less than or equal to
+    /// zero.
+    /// </exception>
     public MongoQueueBuilder<TPayload> WithRetentionPeriod(TimeSpan retentionPeriod)
     {
         if (retentionPeriod <= TimeSpan.Zero)
         {
-            throw new ArgumentException("Retention period must be greater than 0.", nameof(retentionPeriod));
+            throw new ArgumentOutOfRangeException(nameof(retentionPeriod), "Retention period must be greater than 0.");
         }
 
         _retentionPeriod = retentionPeriod;
