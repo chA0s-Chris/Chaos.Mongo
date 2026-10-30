@@ -73,4 +73,7 @@ This package references [`Chaos.Mongo`](https://www.nuget.org/packages/Chaos.Mon
 - [Tamper evidence](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/event-store.md#tamper-evidence) and its [specification](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/tamper-evidence-specification.md)
 - [Getting Started with Chaos.Mongo](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/getting-started.md)
 - [Transactions](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/transactions.md)
+- [Migrating from 0.x](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/migrating-from-0.x.md)
+- [Compatibility Policy](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/compatibility-policy.md)
+- [Requirements](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/requirements.md)
 - [Project overview](https://github.com/chA0s-Chris/Chaos.Mongo)
