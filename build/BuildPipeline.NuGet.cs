@@ -66,6 +66,47 @@ internal partial class BuildPipeline
                                       .AddPair("Version", SemanticVersion));
               });
 
+    /// <summary>
+    /// Packs every src/ project with public signing and no private key, so it runs in CI for fork PRs. Writes to
+    /// its own directory, never <see cref="PublishDirectory"/>, so a public-signed package can never reach
+    /// <see cref="Publish"/>.
+    /// </summary>
+    [UsedImplicitly]
+    private Target PackCheck => target =>
+        target.DependsOn(Restore)
+              .Executes(() =>
+              {
+                  ClearSourceBuildOutputs();
+                  PackCheckDirectory.CreateOrCleanDirectory();
+
+                  var packageCount = 0;
+
+                  foreach (var project in SourceDirectory.GlobFiles("**/*.csproj"))
+                  {
+                      DotNetPack(x => x.SetConfiguration(TargetBuildConfiguration)
+                                       .SetProject(project)
+                                       .SetOutputDirectory(PackCheckDirectory)
+                                       .DisablePackageRequireLicenseAcceptance()
+                                       .EnableContinuousIntegrationBuild()
+                                       .SetVersion(SemanticVersion)
+                                       .When(!String.IsNullOrEmpty(ReleaseNotes),
+                                             t => t.SetPackageReleaseNotes(EscapeStringForMsBuild(ReleaseNotes))));
+
+                      packageCount++;
+                  }
+
+                  VerifyPublicKeyTokens(PackCheckDirectory);
+
+                  ReportSummary(c => c.AddPair("Packages", packageCount)
+                                      .AddPair("Version", SemanticVersion));
+              });
+
+    /// <summary>
+    /// Output directory for <see cref="PackCheck"/>'s public-signed packages. Distinct from
+    /// <see cref="PublishDirectory"/> so <see cref="Publish"/> can never see them.
+    /// </summary>
+    private AbsolutePath PackCheckDirectory => ArtifactsDirectory / "packages-check";
+
     [UsedImplicitly]
     private Target Publish => target =>
         target.DependsOn(Pack)

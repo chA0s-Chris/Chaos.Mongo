@@ -11,7 +11,42 @@
   "major": {
     "dependencyDashboardApproval": true
   },
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/examples/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/__fixtures__/**"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Pick up the three pinned MongoDB test image tags in tests/MongoDbTestImages.cs.",
+      "managerFilePatterns": [
+        "/^tests/MongoDbTestImages\\.cs$/"
+      ],
+      "matchStrings": [
+        "renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?) packageName=(?<packageName>.*?) versioning=(?<versioning>.*?)\\s*\\n\\s*public const String \\w+ = \"mongo:(?<currentValue>.*?)\";"
+      ]
+    }
+  ],
   "packageRules": [
+    {
+      "description": "Hold the minimum-supported Mongo test image to the 7.0.x line.",
+      "matchDepNames": [
+        "mongo-minimum-supported"
+      ],
+      "allowedVersions": "/^7\\.0\\./"
+    },
+    {
+      "description": "Hold the primary Mongo test image to the 8.0.x line.",
+      "matchDepNames": [
+        "mongo-primary"
+      ],
+      "allowedVersions": "/^8\\.0\\./"
+    },
     {
       "description": "Restore old NuGet update behavior for bare versions",
       "matchManagers": [

@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Benchmarks;
 using BenchmarkDotNet.Attributes;
 using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using Docker.DotNet.Models;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -292,7 +293,7 @@ public class EventStoreAppendBenchmarks
 
     private void StartContainerAndContexts()
     {
-        _container = new MongoDbBuilder("mongo:8")
+        _container = new MongoDbBuilder(MongoDbTestImages.Primary)
                      .WithReplicaSet()
                      // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
                      // pinned. See https://jira.mongodb.org/browse/SERVER-121912

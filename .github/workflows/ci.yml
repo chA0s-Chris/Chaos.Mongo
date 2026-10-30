@@ -14,9 +14,50 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo-image: [ MinimumSupported, Primary, Latest ]
+    env:
+      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+      DOCKERHUB_PAT: ${{ secrets.DOCKERHUB_PAT }}
+      CHAOSMONGO_MONGODB_IMAGE: ${{ matrix.mongo-image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Forks don't get DOCKERHUB_USER/DOCKERHUB_PAT. Docker then pulls mongo anonymously, which is rate-limited
+      # to 100 pulls per 6 hours per IP; an occasional rerun is acceptable for the rare fork PR.
+      - name: Authenticate to Docker Hub
+        if: env.DOCKERHUB_USER != ''
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ env.DOCKERHUB_USER }}
+          password: ${{ env.DOCKERHUB_PAT }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run NUKE pipeline
+        run: bash build.sh Test
+
+  pack-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -25,19 +66,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Authenticate to Docker Hub
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USER }}
-          password: ${{ secrets.DOCKERHUB_PAT }}
-
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
 
+      # No Docker Hub login and no CHAOSMONGO_SNK: packs with the public key already committed and checks the
+      # result, so this also runs for fork PRs.
+      - name: Run NUKE pipeline
+        run: bash build.sh PackCheck
+
+  release-scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Test the release scripts
         run: bash .github/scripts/release/tests/run.sh
 
-      - name: Run NUKE pipeline
-        run: bash build.sh Test
+  result:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [ ci, pack-check, release-scripts ]
+    if: always()
+    permissions: {}
+    steps:
+      - name: Check required jobs
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

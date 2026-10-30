@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -23,7 +24,7 @@ public class BulkWriteOptimizationIntegrationTests
         var aggregateId = Guid.NewGuid();
         var eventId = Guid.NewGuid();
 
-        await _eventStore.AppendEventsAsync(
+        var firstAppend = () => _eventStore.AppendEventsAsync(
         [
             new OrderCreatedEvent
             {
@@ -34,6 +35,14 @@ public class BulkWriteOptimizationIntegrationTests
                 TotalAmount = 40.00m
             }
         ]);
+
+        if (!MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            await firstAppend.Should().ThrowAsync<NotSupportedException>().WithMessage("*MongoDB 8.0 or later*");
+            return;
+        }
+
+        await firstAppend();
 
         var act = () => _eventStore.AppendEventsAsync(
         [
@@ -55,7 +64,7 @@ public class BulkWriteOptimizationIntegrationTests
         var outboxCollection = _mongoHelper.Database.GetCollection<OutboxMessage>("TestOutbox");
         var outboxMessageId = Guid.NewGuid();
 
-        var aggregate = await _eventStore.AppendEventsAsync(
+        var append = () => _eventStore.AppendEventsAsync(
             [
                 new OrderCreatedEvent
                 {
@@ -91,6 +100,14 @@ public class BulkWriteOptimizationIntegrationTests
                     },
                     cancellationToken: ct);
             });
+
+        if (!MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            await append.Should().ThrowAsync<NotSupportedException>().WithMessage("*MongoDB 8.0 or later*");
+            return;
+        }
+
+        var aggregate = await append();
 
         aggregate.Version.Should().Be(3);
         aggregate.Status.Should().Be("Completed");
@@ -129,7 +146,7 @@ public class BulkWriteOptimizationIntegrationTests
     {
         var aggregateId = Guid.NewGuid();
 
-        await _eventStore.AppendEventsAsync(
+        var firstAppend = () => _eventStore.AppendEventsAsync(
         [
             new OrderCreatedEvent
             {
@@ -140,6 +157,14 @@ public class BulkWriteOptimizationIntegrationTests
                 TotalAmount = 100.00m
             }
         ]);
+
+        if (!MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            await firstAppend.Should().ThrowAsync<NotSupportedException>().WithMessage("*MongoDB 8.0 or later*");
+            return;
+        }
+
+        await firstAppend();
 
         var eventsCollection = _mongoHelper.Database.GetCollection<Event<OrderAggregate>>("Orders_Events");
         await eventsCollection.InsertOneAsync(new OrderCompletedEvent

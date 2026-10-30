@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using Docker.DotNet.Models;
 using DotNet.Testcontainers.Containers;
 using Testcontainers.MongoDb;
@@ -23,7 +24,7 @@ public static class MongoDbTestContainer
                 return Container;
 
             Container = new MongoDbBuilder()
-                        .WithImage("mongo:8")
+                        .WithImage(MongoDbTestImages.Selected)
                         .WithReplicaSet()
                         // Test commands enable fail points, which force server errors such as a lost change-stream history.
                         .WithCommand("--setParameter", "enableTestCommands=1")
