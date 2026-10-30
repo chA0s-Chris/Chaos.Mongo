@@ -45,9 +45,9 @@ public class IntegrityVerificationRegistrationTests
     }
 
     [Test]
-    public void WithIntegrityAnchoring_AfterVerificationWithNamedCollections_RequiresTheSameNames()
+    public void WithIntegrityAnchoring_AfterVerificationWithNamedPrefix_RequiresTheSamePrefix()
     {
-        var builder = CreateBuilder().WithIntegrityVerification(v => v.WithAnchorCollections("A", "L", "E", "C"));
+        var builder = CreateBuilder().WithIntegrityVerification(v => v.WithCollectionPrefix("Other"));
 
         var act = () => builder.WithIntegrityAnchoring(a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri));
 
@@ -116,29 +116,6 @@ public class IntegrityVerificationRegistrationTests
     }
 
     [Test]
-    [TestCase(false)]
-    [TestCase(true)]
-    public void WithIntegrityVerification_AnchorCollectionsOfAnchoring_AreAccepted(Boolean verificationFirst)
-    {
-        var builder = CreateBuilder();
-        Action<IntegrityVerificationBuilder> verification = v => v.WithAnchorCollections("A", "L", "E", "C");
-        Action<IntegrityAnchoringBuilder> anchoring = a =>
-        {
-            a.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
-            a.Options.AnchorsCollectionName = "A";
-            a.Options.AnchorLeavesCollectionName = "L";
-            a.Options.AnchorEvidenceCollectionName = "E";
-            a.Options.AnchorEvidenceChunksCollectionName = "C";
-        };
-
-        var act = () => (verificationFirst
-            ? builder.WithIntegrityVerification(verification).WithIntegrityAnchoring(anchoring)
-            : builder.WithIntegrityAnchoring(anchoring).WithIntegrityVerification(verification)).Services.BuildServiceProvider().Dispose();
-
-        act.Should().NotThrow();
-    }
-
-    [Test]
     public void WithIntegrityVerification_CalledTwice_ThrowsInvalidOperationException()
     {
         var builder = CreateBuilder().WithIntegrityVerification();
@@ -161,24 +138,24 @@ public class IntegrityVerificationRegistrationTests
     public void WithIntegrityVerification_InvalidSettings_Throw()
     {
         var gracePeriod = () => CreateBuilder().WithIntegrityVerification(verification => verification.WithRevocationGracePeriod(TimeSpan.Zero));
-        var collections = () => CreateBuilder().WithIntegrityVerification(verification => verification.WithAnchorCollections("a", " ", "c", "d"));
+        var prefix = () => CreateBuilder().WithIntegrityVerification(verification => verification.WithCollectionPrefix(" "));
 
         gracePeriod.Should().Throw<ArgumentOutOfRangeException>();
-        collections.Should().Throw<ArgumentException>();
+        prefix.Should().Throw<ArgumentException>();
     }
 
     [Test]
     [TestCase(false)]
     [TestCase(true)]
-    public void WithIntegrityVerification_OtherAnchorCollectionsThanAnchoring_ThrowsInvalidOperationException(Boolean verificationFirst)
+    public void WithIntegrityVerification_OtherPrefixThanAnchoring_ThrowsInvalidOperationException(Boolean verificationFirst)
     {
         var builder = CreateBuilder();
-        Action<IntegrityVerificationBuilder> verification = v => v.WithAnchorCollections("A", "L", "E", "C");
+        Action<IntegrityVerificationBuilder> verification = v => v.WithCollectionPrefix("Other");
         Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
         if (verificationFirst)
         {
             builder.WithIntegrityVerification(verification);
-            anchoring += a => a.Options.AnchorsCollectionName = "Other";
+            anchoring += a => a.WithCollectionPrefix("Different");
         }
         else
         {
@@ -191,21 +168,47 @@ public class IntegrityVerificationRegistrationTests
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WithIntegrityVerification_SamePrefixAsAnchoring_IsAccepted(Boolean verificationFirst)
+    {
+        var builder = CreateBuilder();
+        Action<IntegrityVerificationBuilder> verification = v => v.WithCollectionPrefix("Shared");
+        Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+                                                            .WithCollectionPrefix("Shared");
+
+        var act = () => (verificationFirst
+            ? builder.WithIntegrityVerification(verification).WithIntegrityAnchoring(anchoring)
+            : builder.WithIntegrityAnchoring(anchoring).WithIntegrityVerification(verification)).Services.BuildServiceProvider().Dispose();
+
+        act.Should().NotThrow();
+    }
+
+    [Test]
     public void WithIntegrityVerification_Settings_FillOptionsWithoutAnchoring()
     {
-        using var services = CreateBuilder().WithIntegrityVerification(verification => verification.WithAnchorCollections("A", "L", "E", "C")
+        using var services = CreateBuilder().WithIntegrityVerification(verification => verification.WithCollectionPrefix("Custom")
                                                                                                    .WithRevocationGracePeriod(TimeSpan.FromHours(2)))
                                             .Services.BuildServiceProvider();
 
         var anchoring = services.GetRequiredService<IntegrityAnchoringOptions>();
 
-        anchoring.AnchorsCollectionName.Should().Be("A");
-        anchoring.AnchorLeavesCollectionName.Should().Be("L");
-        anchoring.AnchorEvidenceCollectionName.Should().Be("E");
-        anchoring.AnchorEvidenceChunksCollectionName.Should().Be("C");
+        anchoring.AnchorsCollectionName.Should().Be("CustomAnchors");
+        anchoring.AnchorLeavesCollectionName.Should().Be("CustomAnchorLeaves");
+        anchoring.AnchorEvidenceCollectionName.Should().Be("CustomAnchorEvidence");
+        anchoring.AnchorEvidenceChunksCollectionName.Should().Be("CustomAnchorEvidenceChunks");
+        anchoring.ChangeStreamStateCollectionName.Should().Be("CustomChangeStreamState");
         services.GetRequiredService<IntegrityVerificationOptions>().RevocationGracePeriod.Should().Be(TimeSpan.FromHours(2));
         services.GetService<AnchoringRun>().Should().BeNull();
         services.GetRequiredService<EventStreamVerifier<LedgerAggregate>>().Should().NotBeNull();
+    }
+
+    [Test]
+    public void WithIntegrityVerification_WithoutAnchoring_RegistersIAnchorLeafReader()
+    {
+        using var services = CreateBuilder().WithIntegrityVerification().Services.BuildServiceProvider();
+
+        services.GetRequiredService<IAnchorLeafReader>().Should().NotBeNull();
     }
 
     private static MongoBuilder CreateBuilder()

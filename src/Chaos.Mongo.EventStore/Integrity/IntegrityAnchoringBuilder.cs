@@ -51,6 +51,19 @@ public sealed class IntegrityAnchoringBuilder
     }
 
     /// <summary>
+    /// Sets the prefix of the five module-level anchoring collection names. Defaults to <c>"Integrity"</c>.
+    /// </summary>
+    /// <param name="prefix">The collection prefix.</param>
+    /// <returns>The builder for method chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="prefix"/> is null, empty or whitespace-only.</exception>
+    public IntegrityAnchoringBuilder WithCollectionPrefix(String prefix)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        Options.CollectionPrefix = prefix;
+        return this;
+    }
+
+    /// <summary>
     /// Sets the age of the oldest unanchored candidate above which the anchor delay is reported. Defaults to 1 hour.
     /// </summary>
     /// <param name="threshold">The threshold.</param>

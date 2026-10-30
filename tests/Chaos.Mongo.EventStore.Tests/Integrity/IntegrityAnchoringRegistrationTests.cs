@@ -27,6 +27,23 @@ public class IntegrityAnchoringRegistrationTests
     }
 
     [Test]
+    public void WithIntegrityAnchoring_CollectionPrefix_DerivesAllFiveCollectionNames()
+    {
+        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+                                                                                          .WithCollectionPrefix("Custom"))
+                                            .Services.BuildServiceProvider();
+
+        var options = services.GetRequiredService<IntegrityAnchoringOptions>();
+
+        options.CollectionPrefix.Should().Be("Custom");
+        options.AnchorsCollectionName.Should().Be("CustomAnchors");
+        options.AnchorLeavesCollectionName.Should().Be("CustomAnchorLeaves");
+        options.AnchorEvidenceCollectionName.Should().Be("CustomAnchorEvidence");
+        options.AnchorEvidenceChunksCollectionName.Should().Be("CustomAnchorEvidenceChunks");
+        options.ChangeStreamStateCollectionName.Should().Be("CustomChangeStreamState");
+    }
+
+    [Test]
     public void WithIntegrityAnchoring_CustomSettings_FillAnchoringOptions()
     {
         using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("first", AuthorityUri)
@@ -83,6 +100,12 @@ public class IntegrityAnchoringRegistrationTests
         options.MaxLeavesPerAnchor.Should().Be(100_000);
         options.RevocationGracePeriod.Should().Be(TimeSpan.FromHours(24));
         options.RevocationConfirmationDelayThreshold.Should().Be(TimeSpan.FromHours(72));
+        options.CollectionPrefix.Should().Be("Integrity");
+        options.AnchorsCollectionName.Should().Be("IntegrityAnchors");
+        options.AnchorLeavesCollectionName.Should().Be("IntegrityAnchorLeaves");
+        options.AnchorEvidenceCollectionName.Should().Be("IntegrityAnchorEvidence");
+        options.AnchorEvidenceChunksCollectionName.Should().Be("IntegrityAnchorEvidenceChunks");
+        options.ChangeStreamStateCollectionName.Should().Be("IntegrityChangeStreamState");
         services.GetRequiredService<IAnchorCandidateSource>().Should().BeOfType<ChangeStreamAnchorCandidateSource>();
         services.GetServices<IHostedService>().Should().ContainSingle(service => service is IntegrityAnchoringHostedService);
         services.GetServices<IMongoConfigurator>().Should().ContainSingle(configurator => configurator is IntegrityAnchoringConfigurator);
@@ -153,6 +176,15 @@ public class IntegrityAnchoringRegistrationTests
         });
 
         act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public void WithIntegrityAnchoring_WhitespaceCollectionPrefix_ThrowsArgumentException()
+    {
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+                                                                                     .WithCollectionPrefix(" "));
+
+        act.Should().Throw<ArgumentException>();
     }
 
     private static MongoBuilder CreateBuilder()

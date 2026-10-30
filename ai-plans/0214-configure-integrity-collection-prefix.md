@@ -19,25 +19,25 @@ though nothing about the interface requires anchoring to be configured.
 
 ## Acceptance Criteria
 
-- [ ] `IntegrityAnchoringBuilder.WithCollectionPrefix(String prefix)` sets a module-level collection-name prefix; the
+- [x] `IntegrityAnchoringBuilder.WithCollectionPrefix(String prefix)` sets a module-level collection-name prefix; the
       five collection names become `{prefix}Anchors`, `{prefix}AnchorLeaves`, `{prefix}AnchorEvidence`,
       `{prefix}AnchorEvidenceChunks` and `{prefix}ChangeStreamState`. A null, empty or whitespace-only prefix throws
       `ArgumentException`.
-- [ ] `IntegrityVerificationBuilder.WithCollectionPrefix(String prefix)` offers the same configuration for a
+- [x] `IntegrityVerificationBuilder.WithCollectionPrefix(String prefix)` offers the same configuration for a
       verification-only container, with the same validation. `WithAnchorCollections` is removed.
-- [ ] The default prefix is `Integrity`, so the five collection names are unchanged from today without any
+- [x] The default prefix is `Integrity`, so the five collection names are unchanged from today without any
       configuration, and existing deployments need no migration.
-- [ ] In one container that configures both `WithIntegrityAnchoring` and `WithIntegrityVerification`, registration
+- [x] In one container that configures both `WithIntegrityAnchoring` and `WithIntegrityVerification`, registration
       fails with `InvalidOperationException` when their configured prefixes differ, exactly as mismatched names fail
       today. This holds regardless of which of the two is configured first. A test covers both orders.
-- [ ] Two containers configured with different prefixes against the same database maintain independent anchor chains
+- [x] Two containers configured with different prefixes against the same database maintain independent anchor chains
       with no overlapping collections, and an automated test covers this.
-- [ ] A container that configures only `WithIntegrityVerification` can resolve `IAnchorLeafReader` from its service
+- [x] A container that configures only `WithIntegrityVerification` can resolve `IAnchorLeafReader` from its service
       provider, and a test covers this.
-- [ ] `docs/event-store.md` reflects the prefix-based naming: the "Collections Created" list, the "Evidence
+- [x] `docs/event-store.md` reflects the prefix-based naming: the "Collections Created" list, the "Evidence
       collections" bullet, the `WithAnchorCollections` reference in the verification-only example's prose, and the
       "Anchoring" row of the MongoDB roles table.
-- [ ] The Release build has no warnings and the full test suite passes.
+- [x] The Release build has no warnings and the full test suite passes.
 
 ## Technical Details
 
