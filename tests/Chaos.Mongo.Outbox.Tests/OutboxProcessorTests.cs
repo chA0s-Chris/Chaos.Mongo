@@ -369,7 +369,7 @@ public class OutboxProcessorTests
             BatchSize = 10,
             MaxRetries = 40,
             PollingInterval = TimeSpan.FromMilliseconds(50),
-            LockTimeout = TimeSpan.FromMinutes(5),
+            LockLeaseTime = TimeSpan.FromMinutes(5),
             RetryBackoffInitialDelay = TimeSpan.FromHours(8),
             RetryBackoffMaxDelay = TimeSpan.FromDays(2)
         };
@@ -490,7 +490,7 @@ public class OutboxProcessorTests
             BatchSize = 10,
             MaxRetries = 3,
             PollingInterval = TimeSpan.FromMilliseconds(50),
-            LockTimeout = TimeSpan.FromMinutes(5),
+            LockLeaseTime = TimeSpan.FromMinutes(5),
             RetryBackoffInitialDelay = TimeSpan.FromSeconds(1),
             RetryBackoffMaxDelay = TimeSpan.FromSeconds(30)
         };

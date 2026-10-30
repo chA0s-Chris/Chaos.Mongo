@@ -34,24 +34,6 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public void MongoQueueDefinition_WithoutExplicitClosedItemRetention_UsesDefaultRetention()
-    {
-        // Arrange
-        var queueDefinition = new MongoQueueDefinition
-        {
-            CollectionName = "test-queue",
-            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
-            PayloadType = typeof(TestPayload),
-            QueryLimit = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
-            AutoStartSubscription = false
-        };
-
-        // Assert
-        queueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
-    }
-
-    [Test]
     public void MongoQueueDefinition_WithoutExplicitMaxRetries_UsesUnlimitedRetries()
     {
         // Arrange
@@ -60,13 +42,31 @@ public class MongoQueueBuilderTests
             CollectionName = "test-queue",
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
-            QueryLimit = 1,
+            BatchSize = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
 
         // Assert
         queueDefinition.MaxRetries.Should().BeNull();
+    }
+
+    [Test]
+    public void MongoQueueDefinition_WithoutExplicitRetentionPeriod_UsesDefaultRetention()
+    {
+        // Arrange
+        var queueDefinition = new MongoQueueDefinition
+        {
+            CollectionName = "test-queue",
+            LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
+            PayloadType = typeof(TestPayload),
+            BatchSize = 1,
+            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+            AutoStartSubscription = false
+        };
+
+        // Assert
+        queueDefinition.RetentionPeriod.Should().Be(MongoDefaults.QueueRetentionPeriod);
     }
 
     [Test]
@@ -89,26 +89,6 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public async Task RegisterQueue_WithClosedItemRetention_UsesConfiguredRetention()
-    {
-        // Arrange
-        var services = CreateServices();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-        var retention = TimeSpan.FromMinutes(15);
-        builder.WithCollectionName("test-queue");
-        builder.WithPayloadHandler<TestPayloadHandler>();
-        builder.WithClosedItemRetention(retention);
-
-        // Act
-        builder.RegisterQueue();
-        await using var serviceProvider = services.BuildServiceProvider();
-        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
-
-        // Assert
-        queue.QueueDefinition.ClosedItemRetention.Should().Be(retention);
-    }
-
-    [Test]
     public async Task RegisterQueue_WithImmediateDelete_UsesNullRetention()
     {
         // Arrange
@@ -124,7 +104,7 @@ public class MongoQueueBuilderTests
         var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
 
         // Assert
-        queue.QueueDefinition.ClosedItemRetention.Should().BeNull();
+        queue.QueueDefinition.RetentionPeriod.Should().BeNull();
     }
 
     [Test]
@@ -186,13 +166,15 @@ public class MongoQueueBuilderTests
     }
 
     [Test]
-    public async Task RegisterQueue_WithoutClosedItemRetention_UsesDefaultRetention()
+    public async Task RegisterQueue_WithRetentionPeriod_UsesConfiguredRetention()
     {
         // Arrange
         var services = CreateServices();
         var builder = new MongoQueueBuilder<TestPayload>(services);
+        var retention = TimeSpan.FromMinutes(15);
         builder.WithCollectionName("test-queue");
         builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.WithRetentionPeriod(retention);
 
         // Act
         builder.RegisterQueue();
@@ -200,7 +182,7 @@ public class MongoQueueBuilderTests
         var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
 
         // Assert
-        queue.QueueDefinition.ClosedItemRetention.Should().Be(MongoDefaults.QueueClosedItemRetention);
+        queue.QueueDefinition.RetentionPeriod.Should().Be(retention);
     }
 
     [Test]
@@ -234,6 +216,24 @@ public class MongoQueueBuilderTests
         // Assert
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("Payload handler type or factory must be specified.");
+    }
+
+    [Test]
+    public async Task RegisterQueue_WithoutRetentionPeriod_UsesDefaultRetention()
+    {
+        // Arrange
+        var services = CreateServices();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+        builder.WithCollectionName("test-queue");
+        builder.WithPayloadHandler<TestPayloadHandler>();
+
+        // Act
+        builder.RegisterQueue();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<TestPayload>>();
+
+        // Assert
+        queue.QueueDefinition.RetentionPeriod.Should().Be(MongoDefaults.QueueRetentionPeriod);
     }
 
     [Test]
@@ -282,50 +282,6 @@ public class MongoQueueBuilderTests
 
         // Assert
         result.Should().BeSameAs(builder);
-    }
-
-    [Test]
-    public void WithClosedItemRetention_WithNegativeValue_ThrowsArgumentException()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var act = () => builder.WithClosedItemRetention(TimeSpan.FromSeconds(-1));
-
-        // Assert
-        act.Should().Throw<ArgumentException>()
-           .WithMessage("Closed item retention must be greater than 0.*");
-    }
-
-    [Test]
-    public void WithClosedItemRetention_WithPositiveValue_ReturnsBuilderForChaining()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var result = builder.WithClosedItemRetention(TimeSpan.FromMinutes(5));
-
-        // Assert
-        result.Should().BeSameAs(builder);
-    }
-
-    [Test]
-    public void WithClosedItemRetention_WithZeroValue_ThrowsArgumentException()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var builder = new MongoQueueBuilder<TestPayload>(services);
-
-        // Act
-        var act = () => builder.WithClosedItemRetention(TimeSpan.Zero);
-
-        // Assert
-        act.Should().Throw<ArgumentException>()
-           .WithMessage("Closed item retention must be greater than 0.*");
     }
 
     [Test]
@@ -623,11 +579,11 @@ public class MongoQueueBuilderTests
         var builder = new MongoQueueBuilder<TestPayload>(services);
 
         // Act
-        var act = () => builder.WithQueryLimit(-1);
+        var act = () => builder.WithBatchSize(-1);
 
         // Assert
         act.Should().Throw<ArgumentException>()
-           .WithMessage("Query limit must be greater than 0.*");
+           .WithMessage("Batch size must be greater than 0.*");
     }
 
     [Test]
@@ -638,7 +594,7 @@ public class MongoQueueBuilderTests
         var builder = new MongoQueueBuilder<TestPayload>(services);
 
         // Act
-        var result = builder.WithQueryLimit(10);
+        var result = builder.WithBatchSize(10);
 
         // Assert
         result.Should().BeSameAs(builder);
@@ -652,11 +608,55 @@ public class MongoQueueBuilderTests
         var builder = new MongoQueueBuilder<TestPayload>(services);
 
         // Act
-        var act = () => builder.WithQueryLimit(0);
+        var act = () => builder.WithBatchSize(0);
 
         // Assert
         act.Should().Throw<ArgumentException>()
-           .WithMessage("Query limit must be greater than 0.*");
+           .WithMessage("Batch size must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithRetentionPeriod_WithNegativeValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithRetentionPeriod(TimeSpan.FromSeconds(-1));
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Retention period must be greater than 0.*");
+    }
+
+    [Test]
+    public void WithRetentionPeriod_WithPositiveValue_ReturnsBuilderForChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var result = builder.WithRetentionPeriod(TimeSpan.FromMinutes(5));
+
+        // Assert
+        result.Should().BeSameAs(builder);
+    }
+
+    [Test]
+    public void WithRetentionPeriod_WithZeroValue_ThrowsArgumentException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var builder = new MongoQueueBuilder<TestPayload>(services);
+
+        // Act
+        var act = () => builder.WithRetentionPeriod(TimeSpan.Zero);
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+           .WithMessage("Retention period must be greater than 0.*");
     }
 
     [Test]

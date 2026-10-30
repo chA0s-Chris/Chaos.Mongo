@@ -45,12 +45,7 @@ public static class MongoDefaults
     /// <summary>
     /// Gets the default maximum number of queue items to fetch and process in a single query.
     /// </summary>
-    public static Int32 QueryLimit => 1;
-
-    /// <summary>
-    /// Gets the default retention time for successfully processed queue items before TTL cleanup removes them.
-    /// </summary>
-    public static TimeSpan? QueueClosedItemRetention => TimeSpan.FromHours(1);
+    public static Int32 QueueBatchSize => 1;
 
     /// <summary>
     /// Gets the default lease time for queue item locks.
@@ -61,6 +56,11 @@ public static class MongoDefaults
     /// Gets the default maximum number of retries for failed queue items before they become terminal.
     /// </summary>
     public static Int32? QueueMaxRetries => null;
+
+    /// <summary>
+    /// Gets the default retention time for successfully processed queue items before TTL cleanup removes them.
+    /// </summary>
+    public static TimeSpan? QueueRetentionPeriod => TimeSpan.FromHours(1);
 
     /// <summary>
     /// Gets the default delay between lock acquisition retry attempts.

@@ -12,7 +12,7 @@ internal sealed class OutboxOptions
 {
     public const Int32 DefaultBatchSize = 100;
     public const String DefaultCollectionName = "Outbox";
-    public static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan DefaultLockLeaseTime = TimeSpan.FromMinutes(5);
     public const Int32 DefaultMaxRetries = 5;
     public static readonly TimeSpan DefaultPollingInterval = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan DefaultRetryBackoffInitialDelay = TimeSpan.FromSeconds(5);
@@ -37,10 +37,10 @@ internal sealed class OutboxOptions
     public String CollectionName { get; init; } = DefaultCollectionName;
 
     /// <summary>
-    /// Gets or sets the lock timeout after which a locked message is considered stale and can be reclaimed.
+    /// Gets or sets the lock lease time after which a locked message is considered stale and can be reclaimed.
     /// Defaults to <c>5 minutes</c>.
     /// </summary>
-    public TimeSpan LockTimeout { get; init; } = DefaultLockTimeout;
+    public TimeSpan LockLeaseTime { get; init; } = DefaultLockLeaseTime;
 
     /// <summary>
     /// Gets or sets the maximum number of retry attempts before a message is permanently marked as failed.

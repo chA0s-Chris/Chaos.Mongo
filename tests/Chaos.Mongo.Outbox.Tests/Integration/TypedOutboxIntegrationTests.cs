@@ -419,12 +419,12 @@ public class TypedOutboxIntegrationTests
                     Configure(o, "First", autoStart);
                     o.WithMessage<AnotherTestPayload>().WithPublisher<TrackedTypedPublisher>(lifetime)
                      .WithRetentionPeriod(TimeSpan.FromDays(1)).WithBatchSize(1).WithMaxRetries(1)
-                     .WithLockTimeout(TimeSpan.FromSeconds(20));
+                     .WithLockLeaseTime(TimeSpan.FromSeconds(20));
                 })
                 .WithOutbox<SecondDestination>(o =>
                 {
                     Configure(o, "Second", autoStart);
-                    o.WithRetentionPeriod(TimeSpan.FromDays(2)).WithBatchSize(3).WithLockTimeout(TimeSpan.FromSeconds(60));
+                    o.WithRetentionPeriod(TimeSpan.FromDays(2)).WithBatchSize(3).WithLockLeaseTime(TimeSpan.FromSeconds(60));
                     if (filterSecond)
                         o.WithProcessingFilter(Builders<OutboxMessage>.Filter.Eq(m => m.CorrelationId, "eligible"));
                 })

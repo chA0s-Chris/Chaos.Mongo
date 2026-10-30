@@ -140,7 +140,7 @@ public class MongoQueueSubscriptionTests
                                          MaxRetries = 1,
                                          PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                          PayloadType = typeof(TestPayload),
-                                         QueryLimit = 10
+                                         BatchSize = 10
                                      },
                                      logger: loggerMock.Object);
         var method = GetPrivateMethod("HandleFailedQueueItemAsync",
@@ -251,12 +251,12 @@ public class MongoQueueSubscriptionTests
         var sut = CreateSubscription(new MongoQueueDefinition
                                      {
                                          AutoStartSubscription = false,
-                                         ClosedItemRetention = null,
+                                         RetentionPeriod = null,
                                          CollectionName = "test-queue",
                                          LockLeaseTime = TimeSpan.FromMinutes(1),
                                          PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                          PayloadType = typeof(TestPayload),
-                                         QueryLimit = 10
+                                         BatchSize = 10
                                      },
                                      payloadHandlerFactory: payloadHandlerFactoryMock.Object,
                                      logger: loggerMock.Object);
@@ -382,7 +382,7 @@ public class MongoQueueSubscriptionTests
                    LockLeaseTime = TimeSpan.FromMinutes(1),
                    PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                    PayloadType = typeof(TestPayload),
-                   QueryLimit = 10
+                   BatchSize = 10
                },
                mongoHelper ?? Mock.Of<IMongoHelper>(),
                payloadHandlerFactory ?? Mock.Of<IMongoQueuePayloadHandlerFactory>(),

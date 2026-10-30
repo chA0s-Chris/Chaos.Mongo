@@ -209,7 +209,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     {
         var collection = GetCollection();
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var staleLockThreshold = now - _options.LockTimeout;
+        var staleLockThreshold = now - _options.LockLeaseTime;
 
         // Query for eligible messages:
         // State == Pending AND (NextAttemptUtc is null OR NextAttemptUtc <= now)
@@ -323,7 +323,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                                            CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var staleLockThreshold = now - _options.LockTimeout;
+        var staleLockThreshold = now - _options.LockLeaseTime;
         var lockId = Guid.NewGuid().ToString();
 
         // Atomically claim the message

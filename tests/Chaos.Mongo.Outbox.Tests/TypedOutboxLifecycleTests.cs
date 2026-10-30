@@ -203,7 +203,7 @@ public class TypedOutboxLifecycleTests
         builder.WithCollectionName(collection).WithMessage<TestPayload>().WithPublisher<TestOutboxPublisher>()
                .WithPollingInterval(TimeSpan.FromHours(collection == "First" ? 1 : 2))
                .WithBatchSize(collection == "First" ? 1 : 3)
-               .WithLockTimeout(TimeSpan.FromMinutes(collection == "First" ? 1 : 10));
+               .WithLockLeaseTime(TimeSpan.FromMinutes(collection == "First" ? 1 : 10));
         if (autoStart)
             builder.WithAutoStartProcessor();
     }

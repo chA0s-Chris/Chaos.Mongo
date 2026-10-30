@@ -18,42 +18,42 @@ outcome changes.
 
 ## Acceptance Criteria
 
-- [ ] The outbox builder exposes `WithLockLeaseTime(TimeSpan leaseTime)`
+- [x] The outbox builder exposes `WithLockLeaseTime(TimeSpan leaseTime)`
       instead of `WithLockTimeout(TimeSpan lockTimeout)`; the queue builder's
       `WithLockLeaseTime` is unchanged.
-- [ ] The queue builder exposes `WithBatchSize(Int32 batchSize)` instead of
+- [x] The queue builder exposes `WithBatchSize(Int32 batchSize)` instead of
       `WithQueryLimit(Int32 queryLimit)`; the outbox builder's `WithBatchSize`
       is unchanged.
-- [ ] The queue builder exposes `WithRetentionPeriod(TimeSpan retentionPeriod)`
+- [x] The queue builder exposes `WithRetentionPeriod(TimeSpan retentionPeriod)`
       instead of `WithClosedItemRetention(TimeSpan retention)`; the queue
       keeps `WithImmediateDelete()` with its current behavior; the outbox
       builder's `WithRetentionPeriod` is unchanged.
-- [ ] `MongoQueueDefinition.LockLeaseTime` is unchanged; `MongoQueueDefinition`
+- [x] `MongoQueueDefinition.LockLeaseTime` is unchanged; `MongoQueueDefinition`
       exposes `BatchSize` instead of `QueryLimit` and `RetentionPeriod`
       instead of `ClosedItemRetention`, with the same types, nullability, and
       required/optional modifiers as today.
-- [ ] `MongoDefaults` exposes `QueueBatchSize` instead of `QueryLimit`, and
+- [x] `MongoDefaults` exposes `QueueBatchSize` instead of `QueryLimit`, and
       `QueueRetentionPeriod` instead of `QueueClosedItemRetention`, with the
       same values; `MongoDefaults.LockLeaseTime` and
       `MongoDefaults.QueueLockLeaseTime` are unchanged.
-- [ ] No renamed member's validation behavior (exception type, thrown
+- [x] No renamed member's validation behavior (exception type, thrown
       condition) or default value changes; only identifiers and the
       human-readable text that names them (XML docs, exception messages)
       change.
-- [ ] The defaults and switch pairs of both builders are audited per the
+- [x] The defaults and switch pairs of both builders are audited per the
       issue's proposal item 2; the audit's findings and disposition (keep
       as-is, with rationale) are recorded in Technical Details, and no new
       public member is added as a result.
-- [ ] `src/Chaos.Mongo/PublicAPI.Unshipped.txt` and
+- [x] `src/Chaos.Mongo/PublicAPI.Unshipped.txt` and
       `src/Chaos.Mongo.Outbox/PublicAPI.Unshipped.txt` reflect every renamed
       member of a currently public, shipped type, and
       `Microsoft.CodeAnalysis.PublicApiAnalyzers` (RS0016/RS0017) reports no
       errors.
-- [ ] `docs/queues.md`, `docs/transactional-outbox.md`, and
+- [x] `docs/queues.md`, `docs/transactional-outbox.md`, and
       `src/Chaos.Mongo.Outbox/README.md` use only the renamed members; no
       sample in either doc still shows `WithLockTimeout`, `WithQueryLimit`, or
       `WithClosedItemRetention`.
-- [ ] Every production, test, and benchmark reference to a renamed member
+- [x] Every production, test, and benchmark reference to a renamed member
       compiles against the new name; `dotnet build -c Release
       Chaos.Mongo.slnx` produces no warnings and the complete test suite
       (`bash ./build.sh Test`) passes with the merged line coverage required

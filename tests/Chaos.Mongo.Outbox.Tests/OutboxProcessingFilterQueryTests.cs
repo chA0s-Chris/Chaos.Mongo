@@ -80,7 +80,7 @@ public class OutboxProcessingFilterQueryTests
                     new BsonDocument("$or", new BsonArray
                     {
                         new BsonDocument("IsLocked", false),
-                        new BsonDocument("LockedUtc", new BsonDocument("$lte", now - options.LockTimeout))
+                        new BsonDocument("LockedUtc", new BsonDocument("$lte", now - options.LockLeaseTime))
                     })
                 }
             }

@@ -115,14 +115,14 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
 
         _logger.LogDebug("Ensured queue processing index for collection {CollectionName}", _queueDefinition.CollectionName);
 
-        if (_queueDefinition.ClosedItemRetention.HasValue)
+        if (_queueDefinition.RetentionPeriod.HasValue)
         {
             var ttlIndex = new CreateIndexModel<MongoQueueItem<TPayload>>(
                 Builders<MongoQueueItem<TPayload>>.IndexKeys.Ascending(x => x.ClosedUtc),
                 new CreateIndexOptions<MongoQueueItem<TPayload>>
                 {
                     Name = ClosedItemTtlIndexName,
-                    ExpireAfter = _queueDefinition.ClosedItemRetention.Value,
+                    ExpireAfter = _queueDefinition.RetentionPeriod.Value,
                     PartialFilterExpression = new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(
                         new BsonDocument
                         {
@@ -139,10 +139,10 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(ttlIndex, cancellationToken: cancellationToken);
-            _logger.LogInformation("Ensured TTL cleanup index {IndexName} for collection {CollectionName} with retention {ClosedItemRetention}",
+            _logger.LogInformation("Ensured TTL cleanup index {IndexName} for collection {CollectionName} with retention {RetentionPeriod}",
                                    ClosedItemTtlIndexName,
                                    _queueDefinition.CollectionName,
-                                   _queueDefinition.ClosedItemRetention.Value);
+                                   _queueDefinition.RetentionPeriod.Value);
         }
         else
         {
@@ -344,7 +344,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             }
 
             var completionFilter = CreateLockOwnershipFilter(queueItemId, acquiredLockUtc);
-            var completionSucceeded = _queueDefinition.ClosedItemRetention.HasValue
+            var completionSucceeded = _queueDefinition.RetentionPeriod.HasValue
                 ? (await collection.UpdateOneAsync(
                     completionFilter,
                     Builders<MongoQueueItem<TPayload>>.Update
@@ -363,7 +363,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                 return;
             }
 
-            var cleanupMode = _queueDefinition.ClosedItemRetention.HasValue ? "ttl-retention" : "immediate-delete";
+            var cleanupMode = _queueDefinition.RetentionPeriod.HasValue ? "ttl-retention" : "immediate-delete";
             var processingDuration = Stopwatch.GetElapsedTime(processingStartedTimestamp);
             MongoQueueDiagnostics.RecordProcessingSucceeded(_queueDefinition, processingDuration, queueAge, cleanupMode);
             _logger.LogInformation(
@@ -417,7 +417,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                 var queueItemIds = await collection.Find(CreateAvailableQueueItemFilter())
                                                    .Sort(sortDefinition)
                                                    .Project(x => x.Id)
-                                                   .Limit(_queueDefinition.QueryLimit)
+                                                   .Limit(_queueDefinition.BatchSize)
                                                    .ToListAsync(cancellationToken);
 
                 if (queueItemIds.Count == 0)

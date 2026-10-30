@@ -406,7 +406,7 @@ public class MongoQueueTests
             CollectionName = "test-queue",
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
-            QueryLimit = 1,
+            BatchSize = 1,
             PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };

@@ -4,8 +4,15 @@ Chaos.Mongo.Queues.MongoQueueDefinition.<Clone>$() -> Chaos.Mongo.Queues.MongoQu
 Chaos.Mongo.Queues.MongoQueueDefinition.Equals(Chaos.Mongo.Queues.MongoQueueDefinition? other) -> bool
 static Chaos.Mongo.MongoDefaults.ApplyMigrationsOnStartup.get -> bool
 static Chaos.Mongo.MongoDefaults.AutoStartSubscription.get -> bool
-static Chaos.Mongo.MongoDefaults.QueryLimit.get -> int
+static Chaos.Mongo.MongoDefaults.QueueBatchSize.get -> int
+static Chaos.Mongo.MongoDefaults.QueueRetentionPeriod.get -> System.TimeSpan?
 static Chaos.Mongo.MongoDefaults.RunConfiguratorsOnStartup.get -> bool
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithBatchSize(int batchSize) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithRetentionPeriod(System.TimeSpan retentionPeriod) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+Chaos.Mongo.Queues.MongoQueueDefinition.BatchSize.get -> int
+Chaos.Mongo.Queues.MongoQueueDefinition.BatchSize.init -> void
+Chaos.Mongo.Queues.MongoQueueDefinition.RetentionPeriod.get -> System.TimeSpan?
+Chaos.Mongo.Queues.MongoQueueDefinition.RetentionPeriod.init -> void
 static Chaos.Mongo.MongoDefaults.UseDefaultCollectionNames.get -> bool
 static Chaos.Mongo.MongoDefaults.UseTransactionsForMigrationsIfAvailable.get -> bool
 static Chaos.Mongo.MongoHelperExtensions.ExecuteInTransactionAsync(this Chaos.Mongo.IMongoHelper! helper, System.Func<Chaos.Mongo.IMongoHelper!, MongoDB.Driver.IClientSessionHandle!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! callback, MongoDB.Driver.TransactionOptions? transactionOptions = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
@@ -106,6 +113,13 @@ static Chaos.Mongo.MongoHelperExtensions.ExecuteInTransactionAsync<TResult>(this
 *REMOVED*const Chaos.Mongo.MongoDefaults.ApplyMigrationsOnStartup = false -> bool
 *REMOVED*const Chaos.Mongo.MongoDefaults.AutoStartSubscription = false -> bool
 *REMOVED*const Chaos.Mongo.MongoDefaults.QueryLimit = 1 -> int
+*REMOVED*static Chaos.Mongo.MongoDefaults.QueueClosedItemRetention.get -> System.TimeSpan?
+*REMOVED*Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithClosedItemRetention(System.TimeSpan retention) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+*REMOVED*Chaos.Mongo.Queues.MongoQueueBuilder<TPayload>.WithQueryLimit(int queryLimit) -> Chaos.Mongo.Queues.MongoQueueBuilder<TPayload!>!
+*REMOVED*Chaos.Mongo.Queues.MongoQueueDefinition.ClosedItemRetention.get -> System.TimeSpan?
+*REMOVED*Chaos.Mongo.Queues.MongoQueueDefinition.ClosedItemRetention.init -> void
+*REMOVED*Chaos.Mongo.Queues.MongoQueueDefinition.QueryLimit.get -> int
+*REMOVED*Chaos.Mongo.Queues.MongoQueueDefinition.QueryLimit.init -> void
 *REMOVED*const Chaos.Mongo.MongoDefaults.RunConfiguratorsOnStartup = false -> bool
 *REMOVED*const Chaos.Mongo.MongoDefaults.UseDefaultCollectionNames = true -> bool
 *REMOVED*const Chaos.Mongo.MongoDefaults.UseTransactionsForMigrationsIfAvailable = true -> bool
