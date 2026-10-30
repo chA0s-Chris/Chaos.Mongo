@@ -117,6 +117,16 @@ public sealed class UserRepository(IMongoHelper mongo)
 
 When `UseDefaultCollectionNames` is disabled, every requested type must have an explicit mapping.
 
+Resolve `ICollectionTypeMap` directly when you need a type's mapped collection name without a collection handle, for
+example to name a raw command's target or a log message:
+
+```csharp
+public sealed class DiagnosticsService(ICollectionTypeMap collectionTypeMap)
+{
+    public string GetUserCollectionName() => collectionTypeMap.GetCollectionName<User>();
+}
+```
+
 ## MongoDB helper
 
 `IMongoHelper` exposes the configured client and database in addition to mapped collections:
@@ -145,5 +155,6 @@ Use `mongo.Client` when direct access to the underlying `IMongoClient` is requir
 - [Database configurators](configurators.md)
 - [Distributed locking](distributed-locking.md)
 - [Message queues](queues.md)
+- [Testing](testing.md)
 - [Transactions](transactions.md)
 - [Index management](index-management.md)

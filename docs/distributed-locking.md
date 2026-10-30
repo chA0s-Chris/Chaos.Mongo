@@ -50,9 +50,19 @@ public async Task TryProcessJobAsync(CancellationToken cancellationToken = defau
 
 - `await using` releases a held lock automatically.
 - A lease allows another instance to recover work if the current holder stops responding.
+- `IMongoLock.Id` is the lock name supplied to `AcquireLockAsync`/`TryAcquireLockAsync`; it identifies the protected resource and stays the same across acquisitions of that name, so it is not a unique per-acquisition token.
 - `IMongoLock.IsValid` indicates whether the lock is still within its lease.
+- `IMongoLock.ValidUntilUtc` is the UTC time the current lease expires.
 - Lock documents are stored in the collection configured by `MongoOptions.LockCollectionName`.
 - Lease durations shorter than one millisecond are rejected with `ArgumentOutOfRangeException`, because MongoDB stores `DateTime` at millisecond precision. This applies to acquisition, extension, and `MongoOptions.MigrationLockLeaseTime`.
+
+Use `EnsureValid()` to fail fast with a named `InvalidOperationException` instead of continuing with a lock that has already expired or been released:
+
+```csharp
+mongoLock.EnsureValid();
+```
+
+It returns the same lock instance when `IsValid` is `true`, so calls can be chained.
 
 ## Extend a held lock
 

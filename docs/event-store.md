@@ -18,6 +18,9 @@ Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
   - [Registering an Event Store](#registering-an-event-store)
   - [Builder Options](#builder-options)
   - [Checkpoints](#checkpoints)
+  - [Collections Created](#collections-created)
+- [Benchmarking Bulk Writes](#benchmarking-bulk-writes)
+- [Architecture Decision: Bulk-Write Scope](#architecture-decision-bulk-write-scope)
 - [Working with Events](#working-with-events)
   - [Defining Events](#defining-events)
   - [Class Hierarchies](#class-hierarchies)
@@ -29,8 +32,6 @@ Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
   - [Idempotency](#idempotency)
 - [Reconstructing Past States](#reconstructing-past-states)
 - [Transactional Outbox Pattern](#transactional-outbox-pattern)
-- [Benchmarking Bulk Writes](#benchmarking-bulk-writes)
-- [Architecture Decision: Bulk-Write Scope](#architecture-decision-bulk-write-scope)
 - [Tamper Evidence](#tamper-evidence)
   - [Threat Model, Guarantees and Limitations](#threat-model-guarantees-and-limitations)
   - [Enabling Protection](#enabling-protection)
@@ -148,7 +149,6 @@ public class OrderService
     public async Task<OrderAggregate> CreateOrderAsync(string customer, decimal amount)
     {
         var orderId = Guid.CreateVersion7();
-        var version = await _eventStore.GetExpectedNextVersionAsync(orderId);
 
         return await _eventStore.AppendEventsAsync(
         [
@@ -156,7 +156,6 @@ public class OrderService
             {
                 Id = Guid.CreateVersion7(),
                 AggregateId = orderId,
-                Version = version,
                 CustomerName = customer,
                 TotalAmount = amount
             }
@@ -382,6 +381,45 @@ When bulk-write optimization is enabled, EventStore validates the connected serv
 append path. If the server is older than MongoDB 8.0, append operations fail with a clear error instead of silently
 falling back to the legacy behavior.
 
+### Checkpoints
+
+Checkpoints are periodic snapshots of aggregate state that speed up reconstruction for aggregates with many events.
+
+```csharp
+.WithEventStore<OrderAggregate>(es => es
+    .WithEvent<OrderCreatedEvent>("OrderCreated")
+    .WithCheckpoints(interval: 100))  // Checkpoint every 100 events
+```
+
+When enabled:
+- A checkpoint is created whenever an append's revision crosses a multiple of N:
+  `floor(newRevision / N) > floor(oldRevision / N)`. A batch that skips over the exact multiple — for example from
+  revision 2 to 4 with an interval of 3 — still creates one. A batch without state-changing events never does.
+- Each checkpoint snapshots the state after the batch. It is keyed by the aggregate ID and the stream position of the
+  last state-changing event (`_id.Version`) and stores the aggregate revision in `Revision`. Checkpoints therefore no
+  longer sit on exact multiples of N.
+- `GetAtVersionAsync` and `GetAtRevisionAsync` load the nearest checkpoint at or below the target and replay the
+  remaining state-changing events
+- The configurators create indexes on `(_id.AggregateId, _id.Version)` and `(_id.AggregateId, Revision)` that serve
+  both nearest-checkpoint lookups
+- Checkpoints are stored in a separate collection (e.g., `Orders_Checkpoints`)
+
+### Collections Created
+
+For an aggregate configured with prefix `"Orders"`:
+
+| Collection | Purpose |
+|------------|---------|
+| `Orders` | Read model (current aggregate state) |
+| `Orders_Events` | Event stream |
+| `Orders_Checkpoints` | Periodic snapshots (if enabled) |
+| `Orders_IntegrityState` | Progress of the retroactive sealing sweep (with [tamper evidence](#tamper-evidence)) |
+
+With [tamper evidence](#tamper-evidence) anchoring, the module-level collections `{Prefix}Anchors`, `{Prefix}AnchorLeaves`,
+`{Prefix}AnchorEvidence`, `{Prefix}AnchorEvidenceChunks` and `{Prefix}ChangeStreamState` (the change stream's resume
+position) are added once for all aggregate types, with the default prefix `Integrity`. Change it with `WithCollectionPrefix`
+on `WithIntegrityAnchoring` or `WithIntegrityVerification`.
+
 ## Benchmarking Bulk Writes
 
 The repository includes a BenchmarkDotNet harness for the EventStore append path:
@@ -443,45 +481,6 @@ round-trip bottleneck.
 MongoDB 8 support for same-collection bulk writes does not change either decision: the limiting factor is the absence of
 multiple compatible operations at the same point in each workflow, not collection count.
 
-### Checkpoints
-
-Checkpoints are periodic snapshots of aggregate state that speed up reconstruction for aggregates with many events.
-
-```csharp
-.WithEventStore<OrderAggregate>(es => es
-    .WithEvent<OrderCreatedEvent>("OrderCreated")
-    .WithCheckpoints(interval: 100))  // Checkpoint every 100 events
-```
-
-When enabled:
-- A checkpoint is created whenever an append's revision crosses a multiple of N:
-  `floor(newRevision / N) > floor(oldRevision / N)`. A batch that skips over the exact multiple — for example from
-  revision 2 to 4 with an interval of 3 — still creates one. A batch without state-changing events never does.
-- Each checkpoint snapshots the state after the batch. It is keyed by the aggregate ID and the stream position of the
-  last state-changing event (`_id.Version`) and stores the aggregate revision in `Revision`. Checkpoints therefore no
-  longer sit on exact multiples of N.
-- `GetAtVersionAsync` and `GetAtRevisionAsync` load the nearest checkpoint at or below the target and replay the
-  remaining state-changing events
-- The configurators create indexes on `(_id.AggregateId, _id.Version)` and `(_id.AggregateId, Revision)` that serve
-  both nearest-checkpoint lookups
-- Checkpoints are stored in a separate collection (e.g., `Orders_Checkpoints`)
-
-### Collections Created
-
-For an aggregate configured with prefix `"Orders"`:
-
-| Collection | Purpose |
-|------------|---------|
-| `Orders` | Read model (current aggregate state) |
-| `Orders_Events` | Event stream |
-| `Orders_Checkpoints` | Periodic snapshots (if enabled) |
-| `Orders_IntegrityState` | Progress of the retroactive sealing sweep (with [tamper evidence](#tamper-evidence)) |
-
-With [tamper evidence](#tamper-evidence) anchoring, the module-level collections `{Prefix}Anchors`, `{Prefix}AnchorLeaves`,
-`{Prefix}AnchorEvidence`, `{Prefix}AnchorEvidenceChunks` and `{Prefix}ChangeStreamState` (the change stream's resume
-position) are added once for all aggregate types, with the default prefix `Integrity`. Change it with `WithCollectionPrefix`
-on `WithIntegrityAnchoring` or `WithIntegrityVerification`.
-
 ## Working with Events
 
 ### Defining Events
@@ -531,9 +530,9 @@ public abstract class AuditedEvent : Event<OrderAggregate>
 
 public class OrderRenamedEvent : AuditedEvent
 {
-    public string Name { get; set; } = string.Empty;
+    public string NewCustomerName { get; set; } = string.Empty;
 
-    public override void Execute(OrderAggregate aggregate) => aggregate.Name = Name;
+    public override void Execute(OrderAggregate aggregate) => aggregate.CustomerName = NewCustomerName;
 }
 ```
 
@@ -690,7 +689,26 @@ head (see above). For explicit versions, a mismatch fails the append; store-assi
 
 **Handling Concurrency Conflicts with Explicit Versions:**
 
+The explicit `Version` only protects the position; it does not detect a writer that changed the aggregate's state
+*after* this attempt loaded it but *before* the next position was read. Passing the loaded aggregate's `Revision` as
+`expectedRevision` closes that gap, so a concurrent state change still fails the append and triggers a retry with
+fresh state, instead of silently overwriting it:
+
 ```csharp
+public class OrderUpdatedEvent : Event<OrderAggregate>
+{
+    public string CustomerName { get; set; } = string.Empty;
+    public decimal TotalAmount { get; set; }
+    public string Status { get; set; } = string.Empty;
+
+    public override void Execute(OrderAggregate aggregate)
+    {
+        aggregate.CustomerName = CustomerName;
+        aggregate.TotalAmount = TotalAmount;
+        aggregate.Status = Status;
+    }
+}
+
 public async Task UpdateWithRetryAsync(Guid aggregateId, Action<OrderAggregate> update)
 {
     const int maxRetries = 3;
@@ -699,11 +717,27 @@ public async Task UpdateWithRetryAsync(Guid aggregateId, Action<OrderAggregate> 
     {
         try
         {
-            var order = await _repository.GetAsync(aggregateId);
+            var order = await _repository.GetAsync(aggregateId)
+                        ?? throw new InvalidOperationException("Order not found");
+            var expectedRevision = order.Revision;
             var version = await _eventStore.GetExpectedNextVersionAsync(aggregateId);
 
-            // Prepare event based on current state...
-            var updated = await _eventStore.AppendEventsAsync([event]);
+            // Apply the caller's change to the loaded state, then build the event from it.
+            update(order);
+
+            await _eventStore.AppendEventsAsync(
+            [
+                new OrderUpdatedEvent
+                {
+                    Id = Guid.CreateVersion7(),
+                    AggregateId = aggregateId,
+                    Version = version,
+                    CustomerName = order.CustomerName,
+                    TotalAmount = order.TotalAmount,
+                    Status = order.Status
+                }
+            ],
+            expectedRevision: expectedRevision);
             return;
         }
         catch (MongoConcurrencyException) when (attempt < maxRetries - 1)
@@ -726,7 +760,16 @@ var eventId = Guid.CreateVersion7();  // Generate once, use for retries
 
 try
 {
-    await _eventStore.AppendEventsAsync([new OrderCreatedEvent { Id = eventId, ... }]);
+    await _eventStore.AppendEventsAsync(
+    [
+        new OrderCreatedEvent
+        {
+            Id = eventId,
+            AggregateId = orderId,
+            CustomerName = customer,
+            TotalAmount = amount
+        }
+    ]);
 }
 catch (MongoDuplicateEventException)
 {
@@ -794,7 +837,15 @@ Use the `onBeforeCommit` callback to enqueue outbox messages within the same tra
 
 ```csharp
 await _eventStore.AppendEventsAsync(
-    [new OrderCreatedEvent { ... }],
+    [
+        new OrderCreatedEvent
+        {
+            Id = Guid.CreateVersion7(),
+            AggregateId = orderId,
+            CustomerName = customer,
+            TotalAmount = amount
+        }
+    ],
     onBeforeCommit: async (session, aggregate, helper, ct) =>
     {
         await _outbox.AddMessageAsync(
@@ -871,7 +922,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 
 **Register class maps, serializers and conventions before the event store.** Marking personal data resolves the class maps of the marked members' types when the event store is registered, which freezes them. Register custom class maps, serializers and convention packs for those types first.
 
-**Existing events** are sealed retroactively by a background sweep that runs once at startup and then at the configured interval, on one instance at a time. It is resumable and reports its progress through `IEventStoreIntegrity<TAggregate>.GetSealingStatusAsync`. An append to a stream with unsealed events seals up to one chunk of them first; a stream with more fails to append until the sweep caught it up.
+**Existing events** are sealed retroactively by a background sweep that runs once at startup and then at the configured interval, on one instance at a time. It is resumable and reports its progress through `IEventStoreIntegrity<TAggregate>.GetSealingStatusAsync`. An append to a stream with unsealed events seals up to one chunk of them first; a stream with more fails to append until the sweep caught it up. A pass that fails, or that loses the lock it holds while sealing, is retried after `WithSealingSweepRetryDelay` (default 1 minute) instead of waiting for the full `WithSealingSweepInterval`.
 
 ### Anchoring
 
@@ -901,7 +952,30 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 ```
 
 - **Choosing a timestamp authority.** Use an authority whose tokens a court accepts, typically an eIDAS-qualified one, and configure its trusted roots and policy. Configure the roots explicitly rather than relying on the system trust store: verification compares the chain it builds with the chain stored with the token, and a trust store that changed over the years may lead to another path, for example through a cross-signed root, so a genuine token would no longer verify. No authority is configured by default, so anchoring causes no data flow or cost until you add one. Several authorities stamp each anchor for redundancy, for example in case one loses its qualified status; `WithMinimumTimestampTokens` sets how many valid tokens an anchor needs to complete. Authorities with an API other than RFC 3161 over HTTP are added with `WithTimestampAuthority` and must return RFC 3161 tokens. Anchoring checks every token before storing it, as it does for the built-in authority: one DER-encoded token over the anchor digest, signed with the returned chain's first certificate, a chain that names each next certificate's subject as its issuer and ends with a self-issued root, a time equal to the returned time to the millisecond, and a signer and algorithms that verification accepts. Names are compared after decoding, so an issuer name in another string type or ASCII case than the issuer's subject still links. A token that fails counts as a failed request. When verification trust settings exist for the authority's name, anchoring also requires the returned chain to equal the chain built from it to one of their trusted roots, as verification does, and the token to be issued under their policy, so an untrusted authority cannot complete anchors; otherwise trust and policy are checked at verification only, so trust a custom authority's roots with `WithIntegrityVerification`.
+- **Configuring an RFC 3161 authority.** `WithRfc3161TimestampAuthority(name, uri, configure)` creates one `Rfc3161TimestampAuthorityOptions` per authority; `Name` and `Uri` (the `application/timestamp-query` endpoint) are its constructor arguments and read-only afterward, the rest are set in `configure`:
+
+  | Member | Default | Purpose |
+  |---|---|---|
+  | `AttemptTimeout` | 2 minutes | Longest time one attempt may spend on its HTTP work (the timestamp request and any CRL downloads) together, so a chain naming several dead locations cannot stall a run for their sum. |
+  | `HttpClientFactory` | A client shared by all authorities without one, 30-second timeout | Builds the `HttpClient` used for requests and CRL downloads; receives the `IServiceProvider`, so it can resolve a named client from `IHttpClientFactory`. |
+  | `MaximumClockSkew` | 5 minutes | Largest difference between a token's asserted time and the local time; a token outside it is rejected because its chain is validated at the asserted time. |
+  | `MaximumResponseSize` | 16 MB | Largest timestamp response or CRL, in bytes, an attempt reads; a CRL above it counts as unavailable at that location. Raise it for a CA that publishes larger CRLs. |
+  | `PolicyId` | `null` (authority's default policy accepted) | Object identifier of the TSA policy tokens must be issued under; requested with every timestamp, and a token under another policy is rejected. |
+  | `RevocationCheckTimeout` | 30 seconds | Longest time chain validation may spend on one online revocation check or CRL download outside the HTTP client. |
+  | `RevocationMode` | `X509RevocationMode.Online` | How certificate revocation is checked when the token's chain is validated. |
+  | `TrustedRoots` | empty (falls back to the OS trust store) | Roots the token's chain must end in; set explicitly, since qualified authorities often chain to roots outside the OS store and a later change to that store could make a stored token's chain take another path. |
+
 - **Choosing the interval.** The interval (default 5 minutes) bounds both the window in which unanchored events are unprotected and the gap between `CreatedUtc` and the proven time. One timestamp is requested per interval regardless of event volume, about 8,600 per month at the default; intervals without changes request none.
+- **Limiting anchor size.** `WithMaxLeavesPerAnchor` (default 100,000) sets the number of leaves after which a run stops reading candidates, so one run cannot grow without bound when many streams changed since the last anchor; the remaining candidates are picked up by the next run.
+- **Implementing a custom `ITimestampAuthority`.** Register it with `WithTimestampAuthority(sp => new MyAuthority(...))` when an authority's API is not RFC 3161 over HTTP. The interface has three members:
+
+  | Member | Purpose |
+  |---|---|
+  | `Name` | Identifies the authority in stored anchors; stable across restarts, because it is used to find the authority's trust settings for verification and to attribute stored tokens back to it. |
+  | `GetRevocationListsAsync(certificateChain, issuedNotBeforeUtc, cancellationToken)` | Returns one CRL for each HTTP or HTTPS distribution point the chain's non-root certificates name, issued at or after `issuedNotBeforeUtc`, used to confirm a token's revocation status after the revocation grace period. Throws `TimestampAuthorityException` when a CRL could not be obtained. |
+  | `TimestampAsync(digest, algorithm, cancellationToken)` | Obtains and validates an RFC 3161 token over a SHA-256 digest (the only accepted algorithm) and returns it with the evidence captured at stamping time. Throws `TimestampAuthorityException` when no valid token could be obtained. |
+
+  Anchoring validates every token a custom authority returns the same way it validates the built-in RFC 3161 authority's tokens (see above), so a custom implementation only needs to obtain a token and its chain, not re-validate them itself.
 - **Failures** of an authority never block appends: anchoring retries, and an anchor delay beyond the threshold is reported through logging and the `Chaos.Mongo.EventStore.Integrity` meter, whose instruments are:
 
   | Instrument | Type | Measures |
@@ -928,6 +1002,20 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 
 Every protected aggregate type registers `IEventStoreIntegrity<TAggregate>`:
 
+**Trusted anchor heads.** `CheckCompletenessAsync` and `IAnchorVerifier.VerifyAnchorChainAsync` take an optional
+`TrustedAnchorHead`, an anchor known from outside the database that the stored chain of anchors must still contain
+unchanged — the defense against an attacker who deletes or rebuilds the newest anchors (see the threat model above).
+Build it from the digest and sequence number of an anchor already replicated to WORM storage, for example the one the
+`OnAnchorCompleted` hook received and replicated:
+
+```csharp
+var trustedHead = new TrustedAnchorHead
+{
+    AnchorDigest = replicatedAnchor.AnchorDigest,
+    Sequence = replicatedAnchor.Sequence
+};
+```
+
 ```csharp
 var stream = await integrity.VerifyStreamAsync(documentId);
 if (!stream.IsIntact)
@@ -949,6 +1037,89 @@ await foreach (var finding in integrity.CheckCompletenessAsync(trustedHead)) // 
 - `VerifyDerivedDataAsync` reads the stream, the read model and the checkpoints in one snapshot session, which needs MongoDB 5.0 or later, so concurrent appends cause no false reports. It compares the states without `CreatedUtc`, which records the append time and cannot be derived from the events, and reports in `CreationTimeConsistent` whether the read model and the checkpoints agree on it.
 - `CheckCompletenessAsync` is an audit operation over all streams of the type; its cost grows with events and leaves, and its memory with the largest stream and the number of completed anchors, about 8,600 small entries per month at the default interval. It verifies the chain of anchors first, optionally against a trusted head, and reports event documents whose identifier or version cannot be read as `MalformedEvent`; they count as missing, so their stream may also be reported as truncated or deleted. It reads through two server cursors at the pace you consume the findings: a pause longer than the server's cursor timeout (10 minutes by default), or a long run of streams without leaves, can let a cursor expire with `MongoCursorNotFoundException`. Consume the findings promptly and run the check again in that case. The check covers presence and coverage, not contents: a document at an anchored version counts as present whatever it holds, so run stream verification as well to find replaced or relocated events.
 - `IAnchorVerifier.VerifyAnchorChainAsync` verifies the chain of anchors of all types: sequence numbers, digests, every anchor's Merkle root recomputed from its stored leaves, and the completed status of every anchor but the newest and of every anchor up to a trusted head. Its cost grows with the number of leaves. It proves consistency only: timestamp tokens, which `VerifyEventAnchorAsync` verifies, bound when an anchor existed, not who built it, so detecting rebuilt anchors needs a trusted head or anchors replicated outside the database. The same holds for the coverage `CheckCompletenessAsync` reports.
+
+**Result members.** Only `StreamVerificationResult` overrides equality to compare the verdict — the first broken
+version, its failure and the unrecorded erasures — rather than the per-version detail. The other records below
+(`VerifiedEvent`, `EventAnchorVerificationResult`, `TimestampVerificationResult`, `DerivedDataVerificationResult`,
+`AnchorChainVerificationResult`, `CompletenessFinding`) keep the compiler-generated record equality, which compares
+byte arrays and collections by reference; two separately obtained instances holding equivalent hashes or lists are
+not equal unless they share the same array/list instances (see `StreamVerificationResult`'s remarks).
+
+`StreamVerificationResult` (from `VerifyStreamAsync`):
+
+| Member | Description |
+|---|---|
+| `AnchorCoverageChecked` | Whether the stream was also compared with its leaves in completed anchors; `false` when anchors are not configured. |
+| `Events` | The integrity data (`VerifiedEvent`) of every version verified before the chain ended or broke, in version order. |
+| `Failure` | Why the first broken version failed, or `null` when intact. |
+| `FirstBrokenVersion` | The first version whose verification failed, or `null` when intact. |
+| `IsIntact` | `true` when `FirstBrokenVersion` is `null`. |
+| `SealModeTransitions` | Versions where the seal mode changes from `Append` to `Retroactive`; informational, does not affect `IsIntact`. |
+| `UnrecordedErasures` | Erased values no later erasure event records; collected only for an intact stream. |
+
+`VerifiedEvent` (one entry of `StreamVerificationResult.Events`):
+
+| Member | Description |
+|---|---|
+| `Hash` | The event's chain hash. |
+| `PersonalData` | The state of each personal data value the event records. |
+| `PreviousHash` | The predecessor's chain hash, or the stream's genesis value for version 1. |
+| `SealMode` | How the event was sealed (`Append` or `Retroactive`). |
+| `SealingAnchor` | The first completed anchor whose leaf for the stream is at or above the event's version, or `null` while unanchored. |
+| `Version` | The event version. |
+
+`EventAnchorVerificationResult` (from `VerifyEventAnchorAsync`):
+
+| Member | Description |
+|---|---|
+| `Anchor` | The covering anchor whose check ended verification, or `null` when none covers the event or its data could not be read. |
+| `Failure` | Why the anchoring does not verify, set only when `Status` is `Failed`. |
+| `LeafVersion` | The version of the stream's leaf in that anchor, or `null` when no anchor is named. |
+| `Status` | The outcome (`Verified`, `Failed`, `NotAnchored` or `NotChecked`). |
+| `Timestamps` | The result (`TimestampVerificationResult`) for each of the anchor's tokens; empty when not verified. |
+
+`TimestampVerificationResult` (one entry of `EventAnchorVerificationResult.Timestamps`):
+
+| Member | Description |
+|---|---|
+| `Authority` | Name of the authority that issued the token. |
+| `Failure` | Why the token is not valid, or `null` when it is. |
+| `IsValid` | Whether the token is valid evidence for the anchor digest. |
+| `RevocationStatus` | The token's chain revocation status at the token's time, recomputed from the stored confirming CRLs. |
+| `StoredRevocationStatus` | The revocation status stored on the anchor, for comparison only; anyone who can write the anchors can change it. |
+| `TimestampUtc` | The token's time as stored on the anchor. |
+
+`DerivedDataVerificationResult` (from `VerifyDerivedDataAsync`):
+
+| Member | Description |
+|---|---|
+| `Checkpoints` | The result (`CheckpointVerification`) for each stored checkpoint, in version order; empty for a broken chain. |
+| `CreationTimeConsistent` | Whether the read model and every stored checkpoint agree with each other on `CreatedUtc`. The creation time cannot be derived from the events, so it is not checked against the stream; it is `true` for a broken chain, whose derived data is not compared. |
+| `IsConsistent` | `true` when the chain is intact, the read model and every checkpoint match it, and `CreationTimeConsistent` is `true`. |
+| `ReadModel` | How the stored read model compares with the replayed state (`ReadModelStatus`). |
+| `Stream` | The underlying `StreamVerificationResult`; derived data is only compared for an intact chain. |
+
+`AnchorChainVerificationResult` (from `IAnchorVerifier.VerifyAnchorChainAsync`):
+
+| Member | Description |
+|---|---|
+| `AnchorCount` | Number of anchors verified before the chain ended or broke. |
+| `Failure` | Why the first broken sequence number failed, or `null` when intact. |
+| `FirstBrokenSequence` | The first sequence number whose verification failed, or `null` when intact. |
+| `IsIntact` | `true` when `FirstBrokenSequence` is `null`. |
+
+`CompletenessFinding` (one entry yielded by `CheckCompletenessAsync`); which members are populated depends on `Kind`:
+
+| Member | Description |
+|---|---|
+| `Age` | For `Unanchored`, the age of the oldest unanchored event by `CreatedUtc`, or `null` when none records one. |
+| `AggregateId` | The stream the finding concerns, or `null` for `AnchorChainBroken`. |
+| `Anchor` | For `RetroactivelyProtected`, the anchor the events are protected since; for `StreamDeleted`/`StreamTruncated`, the anchor whose leaf shows the highest anchored version. |
+| `AnchorChain` | For `AnchorChainBroken`, the `AnchorChainVerificationResult` that failed. |
+| `FirstVersion` | The first version the finding concerns, or for a deleted/truncated stream the lowest missing one. |
+| `HeadVersion` | The stream's current head version, or `0` when no event is left; `null` for `AnchorChainBroken` and `MalformedEvent`. |
+| `Kind` | The finding kind: `Unanchored`, `StreamDeleted`, `StreamTruncated`, `RetroactivelyProtected`, `Unsealed`, `MalformedEvent` or `AnchorChainBroken`. |
+| `LastVersion` | The last version the finding concerns, or for a deleted/truncated stream the highest anchored version. |
 
 Tokens are only valid when their authority's roots are trusted. The roots of RFC 3161 authorities configured for anchoring are trusted automatically; custom authorities, and containers that only verify, configure them with `WithIntegrityVerification`. Trust configured there for a name replaces what an anchoring RFC 3161 authority of that name contributes to verification, roots and policy alike. In a container that also anchors, a new token must pass both on receipt, the authority's own roots and policy and the trust configured for its name, so when an authority's root changes, update both, listing the current root together with any older one in the configured trust, or new tokens fail on receipt and anchors await their timestamps:
 

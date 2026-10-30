@@ -4,6 +4,10 @@ namespace Chaos.Mongo;
 
 using MongoDB.Driver;
 
+/// <summary>
+/// The primary entry point for application code: an <see cref="IMongoConnection"/> that also provides mapped
+/// collection access and distributed locking.
+/// </summary>
 public interface IMongoHelper : IMongoConnection
 {
     /// <summary>

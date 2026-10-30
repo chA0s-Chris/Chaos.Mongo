@@ -70,8 +70,14 @@ public class MongoQueueItem
 public sealed class MongoQueueItem<TPayload> : MongoQueueItem
     where TPayload : class, new()
 {
+    /// <summary>
+    /// The strongly-typed payload of the queue item.
+    /// </summary>
     public required TPayload Payload { get; init; }
 
+    /// <summary>
+    /// The full type name of <typeparamref name="TPayload"/>, stored alongside the payload for deserialization.
+    /// </summary>
     public String PayloadType { get; init; } = typeof(TPayload).FullName ??
                                                throw new InvalidOperationException(
                                                    $"Type {typeof(TPayload)} does not have a FullName, which is required for payload deserialization.");

@@ -254,6 +254,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 - `IOutboxProcessor` as a singleton
 - Your `IOutboxPublisher` implementation or factory
 - `OutboxConfigurator` for index creation
+- `IOutboxConfiguratorRunner`
 - `OutboxHostedService` when `WithAutoStartProcessor()` is enabled
 
 ### Publisher Factories
@@ -309,6 +310,18 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithRetentionPeriod(TimeSpan.FromDays(30)));
 ```
 
+`WithOutbox<TOutbox>` registers:
+
+- Keyed `OutboxConfigurator`, `MongoOutbox` and `OutboxProcessor` for index creation and
+  processing, keyed by an internal registration token for this destination — not by
+  `typeof(TOutbox)`
+- `IOutbox<TOutbox>` as an unkeyed singleton that wraps the keyed `MongoOutbox` above
+- `IOutboxProcessor<TOutbox>` as an unkeyed singleton that wraps the keyed `OutboxProcessor`
+  above; the closed generic type is what selects the destination when you resolve it
+- Your `IOutboxPublisher` implementation or factory
+- The shared `IOutboxConfiguratorRunner`, which also initializes every other registered outbox
+- `OutboxHostedService` when `WithAutoStartProcessor()` is enabled, shared with every other auto-started outbox
+
 Resolve `IOutbox<NotificationsOutbox>` and `IOutbox<AuditOutbox>` through constructor
 injection or the service provider. Each destination owns its collection, message
 registry, publisher, processor, batch size, polling interval, lock timeout,
@@ -358,10 +371,9 @@ outboxes, including ones without automatic startup. Enabling
 either option, initialize manually before starting a processor. Automatic startup
 alone initializes only enabled destinations. Starting or stopping one processor
 does not affect another; manual processors are the caller's lifecycle responsibility.
-Host shutdown signals every automatic processor before waiting for their completion,
-so a delayed publisher cannot postpone another destination's cancellation. The host's
-shutdown token bounds that wait. Processing and lifecycle diagnostics carry
-`OutboxIdentity` (marker type name or `Default`) and `CollectionName`.
+Host and manual shutdown behave the same way for every destination; see the shutdown behavior described under
+[Processor Startup](#processor-startup). Processing and lifecycle diagnostics carry `OutboxIdentity` (marker type
+name or `Default`) and `CollectionName`.
 
 Use the same compatible MongoDB session to enqueue atomically to multiple destinations:
 
@@ -449,7 +461,20 @@ With auto-start enabled:
 - the outbox hosted service runs the outbox configurator during startup
 - required indexes are ensured before the processor starts polling
 - the processor is stopped automatically during application shutdown
-- an in-flight message may remain pending if shutdown cancels publish or finalization, and will be retried later
+
+**Shutdown behavior**, identical for the default outbox and every typed outbox, and whether triggered by host
+shutdown or a manual `StopAsync` call:
+
+- Every automatic processor is canceled concurrently; a slow or stuck one does not delay another destination's
+  cancellation, and the host's own shutdown token bounds how long it waits for all of them together.
+- A publish already in flight when canceled is not treated as a failure: the processor releases the message's lock
+  instead of recording an error, so the message becomes immediately eligible for redelivery by any processor.
+- A publish that already succeeded is not discarded. Marking it `Processed` is not bound by the caller's
+  cancellation token while the processor is still running; once a stop is requested, that write gets a short grace
+  period (3 seconds) to finish. If it does not finish in time, the lock is released for redelivery instead, the same
+  as for an in-flight publish, rather than leaving the message stuck locked.
+- Failure bookkeeping (`RetryCount`, `Error`, the retry backoff) is written without a cancellation token at all, so a
+  publish that fails during shutdown still records its retry or final failure instead of being silently dropped.
 
 With auto-start disabled, you can manage the processor manually:
 

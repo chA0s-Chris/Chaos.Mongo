@@ -17,38 +17,38 @@ issue's line numbers.
 
 **`docs/event-store.md`**
 
-- [ ] The "Handling Concurrency Conflicts with Explicit Versions" sample (currently `docs/event-store.md:706`,
+- [x] The "Handling Concurrency Conflicts with Explicit Versions" sample (currently `docs/event-store.md:706`,
   which references an undeclared `event` identifier) is valid, compilable C#.
-- [ ] "Benchmarking Bulk Writes" and "Architecture Decision: Bulk-Write Scope" no longer sit between the
+- [x] "Benchmarking Bulk Writes" and "Architecture Decision: Bulk-Write Scope" no longer sit between the
   Configuration chapter's "Builder Options" and "Checkpoints"/"Collections Created" subsections; the table of
   contents reflects the new order.
-- [ ] The Quick Start's "4. Use the Event Store" sample appends with a store-assigned version (`Version` left at
+- [x] The Quick Start's "4. Use the Event Store" sample appends with a store-assigned version (`Version` left at
   its default of `0`) instead of calling `GetExpectedNextVersionAsync` for an explicit version. The same change
   applies to `src/Chaos.Mongo.EventStore/README.md`'s own "Quick start" section, which shows the same
   explicit-version anti-pattern.
-- [ ] The docs show how to construct a `TrustedAnchorHead` for `CheckCompletenessAsync`/`VerifyAnchorChainAsync`.
-- [ ] The docs describe the `ITimestampAuthority` contract (`Name`, `GetRevocationListsAsync`, `TimestampAsync`) for
+- [x] The docs show how to construct a `TrustedAnchorHead` for `CheckCompletenessAsync`/`VerifyAnchorChainAsync`.
+- [x] The docs describe the `ITimestampAuthority` contract (`Name`, `GetRevocationListsAsync`, `TimestampAsync`) for
   implementers adding a custom authority via `WithTimestampAuthority`.
-- [ ] The docs describe every member of `Rfc3161TimestampAuthorityOptions` (`AttemptTimeout`, `HttpClientFactory`,
+- [x] The docs describe every member of `Rfc3161TimestampAuthorityOptions` (`AttemptTimeout`, `HttpClientFactory`,
   `MaximumClockSkew`, `MaximumResponseSize`, `Name`, `PolicyId`, `RevocationCheckTimeout`, `RevocationMode`,
   `TrustedRoots`, `Uri`).
-- [ ] The docs describe `IntegrityAnchoringBuilder.WithMaxLeavesPerAnchor` and
+- [x] The docs describe `IntegrityAnchoringBuilder.WithMaxLeavesPerAnchor` and
   `IntegrityProtectionBuilder<TAggregate>.WithSealingSweepRetryDelay` alongside the other builder options.
-- [ ] The docs describe the members of `StreamVerificationResult`, `EventAnchorVerificationResult`,
+- [x] The docs describe the members of `StreamVerificationResult`, `EventAnchorVerificationResult`,
   `DerivedDataVerificationResult`, `AnchorChainVerificationResult` and `CompletenessFinding`, including the
   supporting `VerifiedEvent` and `TimestampVerificationResult` members they expose.
 
 **`docs/tamper-evidence-specification.md`**
 
-- [ ] The `verify.py check` example (currently `docs/tamper-evidence-specification.md:272`) notes that its
+- [x] The `verify.py check` example (currently `docs/tamper-evidence-specification.md:272`) notes that its
   `--aggregate-type` value is the aggregate's CLR class name — the string the store wrote to the event's
   `AggregateType` element.
 
 **`docs/transactional-outbox.md`**
 
-- [ ] "Multiple Typed Outboxes" lists what `WithOutbox<TOutbox>` registers, the way "Registering the Outbox" already
+- [x] "Multiple Typed Outboxes" lists what `WithOutbox<TOutbox>` registers, the way "Registering the Outbox" already
   lists what `WithOutbox` registers; both lists name `IOutboxConfiguratorRunner`, which neither currently does.
-- [ ] Outbox shutdown behavior is described once, consistently, covering: every automatic processor is canceled
+- [x] Outbox shutdown behavior is described once, consistently, covering: every automatic processor is canceled
   concurrently (a slow one does not delay another's cancellation); a publish in flight when canceled releases the
   message's lock for immediate redelivery rather than failing it; a publish that already succeeded gets a short
   grace period to finish being marked `Processed` before the lock is released for redelivery instead; and that
@@ -56,22 +56,22 @@ issue's line numbers.
 
 **Other files**
 
-- [ ] Every C# sample in `docs/` and in every README (the root `README.md` and each package README under `src/`) is
+- [x] Every C# sample in `docs/` and in every README (the root `README.md` and each package README under `src/`) is
   valid, compilable C# against the 1.0 API — not only the samples touched for another reason in this plan. This
   includes moving the misplaced `using MongoDB.Driver;` in `docs/queues.md`'s custom-prioritizer sample (currently
   line 133, between two type declarations) to the top of that snippet, and adding the missing
   `using Microsoft.Extensions.DependencyInjection;` to `src/Chaos.Mongo.Outbox/README.md`'s `ServiceLifetime`
   samples ("Multiple destinations" and the publisher-factory example).
-- [ ] Every public type and member listed in `src/Chaos.Mongo/PublicAPI.Shipped.txt`,
+- [x] Every public type and member listed in `src/Chaos.Mongo/PublicAPI.Shipped.txt`,
   `src/Chaos.Mongo.EventStore/PublicAPI.Shipped.txt` and `src/Chaos.Mongo.Outbox/PublicAPI.Shipped.txt` has an XML
   documentation comment.
-- [ ] The reference docs document `IMongoClientSettingsFactory` and `IMongoConnectionFactory`: when to replace one
+- [x] The reference docs document `IMongoClientSettingsFactory` and `IMongoConnectionFactory`: when to replace one
   of them instead of using `MongoOptions.ConfigureClientSettings`; that a registration of either one, placed before
   or after `AddMongo`, replaces the library's default (both are registered with `TryAddSingleton`); and an example
   implementation that reuses an already-registered `MongoClient` and returns a `MongoConnection`.
-- [ ] The reference docs cover every other public core API not already documented by an existing `docs/*.md` page
+- [x] The reference docs cover every other public core API not already documented by an existing `docs/*.md` page
   or README (the issue's "remaining minor core APIs").
-- [ ] A Testing section documents: mocking the public interfaces (`IMongoHelper`, `IMongoMigrationRunner`,
+- [x] A Testing section documents: mocking the public interfaces (`IMongoHelper`, `IMongoMigrationRunner`,
   `IMongoConfiguratorRunner`, and similar) for unit tests; building a `ServiceCollection` and calling `AddMongo`
   with the test database URL for integration tests, so collection names and other builder-configured values match
   production, and resolving the real implementations; registering a `TimeProvider` before `AddMongo` to replace the
@@ -80,11 +80,11 @@ issue's line numbers.
 
 **`tools/tamper-evidence-verifier`**
 
-- [ ] `tools/tamper-evidence-verifier/README.md` exists, describing the tool and linking to
+- [x] `tools/tamper-evidence-verifier/README.md` exists, describing the tool and linking to
   `docs/tamper-evidence-specification.md` and `docs/event-store.md`'s tamper-evidence section.
-- [ ] `verify.py`'s module-level `Usage` docstring (what `--help`/usage errors display) lists `--element-name`,
+- [x] `verify.py`'s module-level `Usage` docstring (what `--help`/usage errors display) lists `--element-name`,
   which the `check` command already accepts and the specification document already documents.
-- [ ] The README states the Python and OpenSSL versions the tool supports.
+- [x] The README states the Python and OpenSSL versions the tool supports.
 
 ## Technical Details
 

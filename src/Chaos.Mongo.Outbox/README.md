@@ -75,6 +75,8 @@ Register marker-type outboxes with distinct collections, then inject their typed
 writer and processor interfaces:
 
 ```csharp
+using Microsoft.Extensions.DependencyInjection;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithOutbox<NotificationsOutbox>(o => o
         .WithCollectionName("Notifications")
@@ -111,6 +113,8 @@ When a publisher needs container services or settings, register a factory instea
 of a type. It works for default and typed outboxes:
 
 ```csharp
+using Microsoft.Extensions.DependencyInjection;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithOutbox(o => o
         .WithMessage<OrderPlaced>("OrderPlaced")
@@ -159,6 +163,7 @@ This package references [`Chaos.Mongo`](https://www.nuget.org/packages/Chaos.Mon
 - [Complete Transactional Outbox documentation](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/transactional-outbox.md)
 - [Transactions](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/transactions.md)
 - [Getting Started with Chaos.Mongo](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/getting-started.md)
+- [Testing](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/testing.md)
 - [Migrating from 0.x](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/migrating-from-0.x.md)
 - [Compatibility Policy](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/compatibility-policy.md)
 - [Requirements](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/requirements.md)

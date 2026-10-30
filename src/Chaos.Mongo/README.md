@@ -61,6 +61,7 @@ Both extension packages reference `Chaos.Mongo`; they are installed separately a
 - [Message Queues](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/queues.md)
 - [Transactions](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/transactions.md)
 - [Index Management](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/index-management.md)
+- [Testing](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/testing.md)
 - [Migrating from 0.x](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/migrating-from-0.x.md)
 - [Compatibility Policy](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/compatibility-policy.md)
 - [Requirements](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/requirements.md)
