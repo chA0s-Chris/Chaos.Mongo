@@ -187,9 +187,6 @@ public interface IAggregate
 }
 ```
 
-> **Breaking change:** `IAggregate` gained the `Revision` property. Aggregates deriving from `Aggregate` inherit
-> it; aggregates implementing `IAggregate` directly must add `public long Revision { get; set; }`.
-
 **`Aggregate` Base Class:**
 ```csharp
 public class MyAggregate : Aggregate
@@ -261,13 +258,6 @@ advance faster than revisions:
 | 3 | `OrderShipped` | 2 | `Version` 3, `Revision` 2 |
 | 4 | `OrderViewed` (observational) | 2 | unchanged |
 
-> **Breaking batch behavior:** after each state-changing event executes, the store updates the aggregate's `Version`
-> and `Revision` before executing the next event. Earlier releases exposed the pre-batch `Version` to every event
-> during append. An `Execute` implementation that reads `aggregate.Version` can therefore produce different final
-> state even in a batch containing only state-changing events. Review such implementations when upgrading. Per-event
-> metadata keeps append consistent with replay and lets observational validation see the preceding events' state.
-> The store owns both values: anything an `Execute` or `Validate` implementation assigns to them is overwritten.
-
 `AppendEventsAsync` validates positions against the stream head — the highest position in the events collection,
 including observational events — rather than against the read model. Leave `Version` at `0` to let the event store
 assign positions, or use `GetExpectedNextVersionAsync` to obtain the next position yourself.
@@ -334,9 +324,6 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 - **`GetExpectedNextVersionAsync`**: Returns the next expected position for an aggregate (highest existing position + 1, or 1 if new)
 - **`AppendEventsAsync`**: Validates and persists events within a transaction, returns the updated aggregate as a commit-time snapshot.
   Leave `Version` at `0` to let the store assign positions; see [Concurrency and Idempotency](#concurrency-and-idempotency)
-
-> **Breaking change:** `expectedRevision` was inserted as the second parameter of `AppendEventsAsync`. Callers that
-> passed `onBeforeCommit` positionally must pass it by name (`onBeforeCommit: ...`) or supply `expectedRevision` first.
 - **`GetEventStreamAsync`**: Returns events for an aggregate, optionally bounded by version range
 
 ### Aggregate Repository
@@ -361,9 +348,6 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
 - **`GetAtRevisionAsync`**: Reconstructs aggregate state at a specific revision; see [Reconstructing Past States](#reconstructing-past-states)
 - **`Collection`**: Direct access to the MongoDB collection for advanced queries. Queries through it bypass the
   [legacy revision normalization](#documents-written-before-revisions).
-
-> **Breaking change:** `IAggregateRepository<TAggregate>` gained `GetAtRevisionAsync`. Custom implementations,
-> including hand-written test doubles, must implement it.
 
 ## Configuration
 
@@ -575,23 +559,6 @@ therefore rejects two types in an aggregate's event hierarchy that share a discr
 `InvalidOperationException`; the driver would otherwise fail every read of that discriminator as ambiguous. This happens, for example, when `OrderPlacedV2 : OrderPlaced` is
 registered as `"OrderPlaced"` while `OrderPlaced` is no longer registered and thus defaults to the same name. Resolve it
 by registering the intermediate type with a distinct discriminator, such as `WithEvent<OrderPlaced>("OrderPlacedV1")`.
-
-> **Earlier versions** built every event class map directly on `Event<TAggregate>` and every aggregate class map
-> directly on `Aggregate`, so members declared on intermediate classes were silently neither stored nor read back.
-> Stored documents are not rewritten: events stored with the shorter discriminator array still deserialize, and sealed
-> events still verify. The data dropped by earlier versions cannot be recovered. Inherited event members were never
-> stored, so replay cannot restore them, and existing read models and checkpoints regain inherited members only when
-> later events set them. Until then, reconstruction from such a checkpoint can differ from a replay that starts at the
-> beginning of the stream. Consumers who registered their own class maps before the event store were not affected.
-
-> **Breaking change:** Registration now throws `InvalidOperationException` when two types in an aggregate's event
-> hierarchy share a discriminator. This includes an unregistered intermediate type whose default name matches another
-> event's discriminator, such as `OrderPlacedV2 : OrderPlaced` registered as `"OrderPlaced"`. Such configurations
-> previously started; register the intermediate type with a distinct discriminator. Events and read models stored with
-> inherited members contain elements that earlier versions do not map, so earlier versions fail to read them unless
-> extra elements are ignored. Do not run earlier versions against the same collections after upgrading. An inherited
-> member marked `[BsonRequired]` makes events, read models and checkpoints stored before the upgrade unreadable, because
-> they lack its element. Remove the attribute, or rewrite or migrate the affected documents, before upgrading.
 
 ### Appending Events
 

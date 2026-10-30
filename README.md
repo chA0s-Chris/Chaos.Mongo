@@ -67,6 +67,9 @@ Resolve `IMongoHelper` to access the configured database and mapped collections.
 | [Event Store](docs/event-store.md) | Event sourcing, aggregates, checkpoints, concurrency, and tamper evidence |
 | [Tamper Evidence Specification](docs/tamper-evidence-specification.md) | Byte-level format of the tamper evidence, for independent verification |
 | [Transactional Outbox](docs/transactional-outbox.md) | Atomic message persistence and background delivery |
+| [Migrating from 0.x](docs/migrating-from-0.x.md) | Breaking changes since v0.9.0 and the upgrade path to 1.0 |
+| [Compatibility Policy](docs/compatibility-policy.md) | SemVer, stored-data and platform support guarantees |
+| [Requirements](docs/requirements.md) | Supported .NET and MongoDB server versions |
 
 ## License
 

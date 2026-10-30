@@ -12,24 +12,24 @@ guarantees 1.x makes going forward.
 
 ## Acceptance Criteria
 
-- [ ] `docs/migrating-from-0.x.md` exists and covers the upgrade path from v0.9.0 to 1.0, including: every
+- [x] `docs/migrating-from-0.x.md` exists and covers the upgrade path from v0.9.0 to 1.0, including: every
       inline breaking-change note currently in `docs/event-store.md` (see Technical Details for the exact list),
       and every `breaking`-labeled pull request merged since the v0.9.0 release that is not already covered by
       those notes (at least #208 and #210 through #214).
-- [ ] `docs/event-store.md` contains no inline "Breaking change" or "Breaking batch behavior" notes. The reference
+- [x] `docs/event-store.md` contains no inline "Breaking change" or "Breaking batch behavior" notes. The reference
       text they interrupted reads as continuous prose/lists afterward (in particular, the `AppendEventsAsync`/
       `GetEventStreamAsync` bullet list under [Event Store](docs/event-store.md) is contiguous).
-- [ ] `docs/compatibility-policy.md` exists and states the policy from the issue: SemVer for public API source/binary
+- [x] `docs/compatibility-policy.md` exists and states the policy from the issue: SemVer for public API source/binary
       compatibility; the stored-data guarantees (cross-1.x readability, same-feature-set rolling upgrades, and which
       names/values are contract); tamper-evidence format versioning; the platform support policy for dropping .NET
       and MongoDB server versions and raising dependency minimums; and what the policy does not cover.
-- [ ] `docs/requirements.md` exists and states: the supported .NET version(s); the minimum MongoDB server version and
+- [x] `docs/requirements.md` exists and states: the supported .NET version(s); the minimum MongoDB server version and
       the replica-set/sharded-cluster requirement, plus the higher versions specific features need; the minimum
       `MongoDB.Driver` version; and the MongoDB server lines the project tests against.
-- [ ] `README.md` and all three package READMEs (`src/Chaos.Mongo/README.md`, `src/Chaos.Mongo.EventStore/README.md`,
+- [x] `README.md` and all three package READMEs (`src/Chaos.Mongo/README.md`, `src/Chaos.Mongo.EventStore/README.md`,
       `src/Chaos.Mongo.Outbox/README.md`) link to all three new pages, following each file's existing documentation
       link convention.
-- [ ] Every link and heading anchor added or changed by this work resolves (relative paths in `README.md`'s
+- [x] Every link and heading anchor added or changed by this work resolves (relative paths in `README.md`'s
       documentation table, absolute `blob/main` GitHub URLs in the package READMEs, and in-page anchors).
 
 This is a documentation-only change: no production code, build configuration or test changes are expected, so no
