@@ -48,7 +48,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithRetentionPeriod(TimeSpan.FromHours(6)));
 ```
 
-When the handler needs more than constructor injection can supply, register a factory instead. The handler is registered as transient, and the factory runs with the root `IServiceProvider` each time an item is handled, so it must not resolve scoped services. A queue accepts either a handler type or a factory, not both:
+When the handler needs more than constructor injection can supply, register a factory instead. Each queue item is handled in its own DI scope: the handler is resolved from that scope and the scope is disposed once handling completes, whether it succeeds, fails, or is canceled. The handler type registration and the factory both receive the item's scoped `IServiceProvider`, so either way a handler may depend on scoped services such as a `DbContext`. A queue accepts either a handler type or a factory, not both:
 
 ```csharp
 services.AddMongo("mongodb://localhost:27017", "myDatabase")

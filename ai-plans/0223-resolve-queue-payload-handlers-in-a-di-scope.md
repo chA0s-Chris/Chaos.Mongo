@@ -8,12 +8,12 @@ Giving each queue item its own DI scope lets handler factories resolve scoped se
 
 ## Acceptance Criteria
 
-- [ ] Each queue item's payload handler is resolved from a DI scope created for that item, and the scope is disposed after handling completes, on success, on failure, and on cancellation.
-- [ ] A handler resolved through `WithPayloadHandler<TPayloadHandler>()` (the handler-type registration) can depend on a scoped service and is disposed when its item's scope ends; a test proves both.
-- [ ] A handler resolved through `WithPayloadHandler(Func<IServiceProvider, ...>)` (the factory overload) receives the item's scoped `IServiceProvider`, can depend on a scoped service, and is disposed when its item's scope ends; a test proves both.
-- [ ] The tests above build their `IServiceProvider` with scope validation enabled (`ServiceProviderOptions.ValidateScopes = true`) so a regression that resolves a scoped service from the root provider fails the test instead of silently succeeding.
-- [ ] `docs/queues.md` describes the per-item scope and no longer states that a factory "runs with the root `IServiceProvider`" or "must not resolve scoped services".
-- [ ] The Release build produces no warnings and the full test suite passes.
+- [x] Each queue item's payload handler is resolved from a DI scope created for that item, and the scope is disposed after handling completes, on success, on failure, and on cancellation.
+- [x] A handler resolved through `WithPayloadHandler<TPayloadHandler>()` (the handler-type registration) can depend on a scoped service and is disposed when its item's scope ends; a test proves both.
+- [x] A handler resolved through `WithPayloadHandler(Func<IServiceProvider, ...>)` (the factory overload) receives the item's scoped `IServiceProvider`, can depend on a scoped service, and is disposed when its item's scope ends; a test proves both.
+- [x] The tests above build their `IServiceProvider` with scope validation enabled (`ServiceProviderOptions.ValidateScopes = true`) so a regression that resolves a scoped service from the root provider fails the test instead of silently succeeding.
+- [x] `docs/queues.md` describes the per-item scope and no longer states that a factory "runs with the root `IServiceProvider`" or "must not resolve scoped services".
+- [x] The Release build produces no warnings and the full test suite passes.
 
 ## Technical Details
 

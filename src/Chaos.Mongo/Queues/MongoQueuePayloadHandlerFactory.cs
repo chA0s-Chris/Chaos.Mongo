@@ -9,24 +9,13 @@ using Microsoft.Extensions.DependencyInjection;
 /// </summary>
 internal class MongoQueuePayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
 {
-    private readonly IServiceProvider _serviceProvider;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="MongoQueuePayloadHandlerFactory"/> class.
-    /// </summary>
-    /// <param name="serviceProvider">The service provider for resolving handlers.</param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="serviceProvider"/> is null.</exception>
-    public MongoQueuePayloadHandlerFactory(IServiceProvider serviceProvider)
-    {
-        ArgumentNullException.ThrowIfNull(serviceProvider);
-        _serviceProvider = serviceProvider;
-    }
-
     /// <inheritdoc/>
-    public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>()
+    public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider)
         where TPayload : class, new()
     {
-        var payloadHandler = _serviceProvider.GetService<IMongoQueuePayloadHandler<TPayload>>() ??
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+
+        var payloadHandler = serviceProvider.GetService<IMongoQueuePayloadHandler<TPayload>>() ??
                              throw new InvalidOperationException($"No handler for queue payload {typeof(TPayload)} registered.");
 
         return payloadHandler;

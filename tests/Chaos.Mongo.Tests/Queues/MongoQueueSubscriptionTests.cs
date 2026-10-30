@@ -4,10 +4,12 @@ namespace Chaos.Mongo.Tests.Queues;
 
 using Chaos.Mongo.Queues;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
 using System.Reflection;
@@ -175,7 +177,7 @@ public class MongoQueueSubscriptionTests
         updateResultMock.SetupGet(x => x.ModifiedCount).Returns(0);
         payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
                           .Returns(Task.CompletedTask);
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>()).Returns(payloadHandlerMock.Object);
+        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
         collectionMock
             .Setup(c => c.FindOneAndUpdateAsync(
                        It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
@@ -215,6 +217,72 @@ public class MongoQueueSubscriptionTests
     }
 
     [Test]
+    public async Task ProcessQueueItemAsync_WhenHandlerIsCanceled_StillDisposesItemScope()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddScoped<ScopedDependency>();
+        var tracker = new DisposalTracker
+        {
+            ShouldCancel = true
+        };
+        services.AddSingleton(tracker);
+        services.AddTransient<IMongoQueuePayloadHandler<TestPayload>, ScopedTestPayloadHandler>();
+        var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+
+        var queueItemId = ObjectId.GenerateNewId();
+        var collection = CreateSuccessfulCompletionCollection(queueItemId);
+        var sut = CreateSubscription(payloadHandlerFactory: new MongoQueuePayloadHandlerFactory(),
+                                     serviceScopeFactory: serviceProvider.GetRequiredService<IServiceScopeFactory>());
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        tracker.WasDisposed.Should().BeTrue("the per-item scope must dispose the handler even when handling observes cancellation");
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_WhenHandlerThrows_StillDisposesItemScope()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddScoped<ScopedDependency>();
+        var tracker = new DisposalTracker
+        {
+            ShouldThrow = true
+        };
+        services.AddSingleton(tracker);
+        services.AddTransient<IMongoQueuePayloadHandler<TestPayload>, ScopedTestPayloadHandler>();
+        var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+
+        var queueItemId = ObjectId.GenerateNewId();
+        var collection = CreateSuccessfulCompletionCollection(queueItemId);
+        var sut = CreateSubscription(payloadHandlerFactory: new MongoQueuePayloadHandlerFactory(),
+                                     serviceScopeFactory: serviceProvider.GetRequiredService<IServiceScopeFactory>());
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        tracker.WasDisposed.Should().BeTrue("the per-item scope must dispose the handler even when it throws");
+    }
+
+    [Test]
     public async Task ProcessQueueItemAsync_WhenImmediateDeleteCompletionOwnershipChanges_DoesNotEmitSuccessMetrics()
     {
         // Arrange
@@ -228,7 +296,7 @@ public class MongoQueueSubscriptionTests
         deleteResultMock.SetupGet(x => x.DeletedCount).Returns(0);
         payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
                           .Returns(Task.CompletedTask);
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>()).Returns(payloadHandlerMock.Object);
+        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
         collectionMock
             .Setup(c => c.FindOneAndUpdateAsync(
                        It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
@@ -277,6 +345,69 @@ public class MongoQueueSubscriptionTests
     }
 
     [Test]
+    public async Task ProcessQueueItemAsync_WithPayloadHandlerFactoryRegistration_ResolvesScopedDependencyAndDisposesHandler()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddScoped<ScopedDependency>();
+        var tracker = new DisposalTracker();
+        services.AddSingleton(tracker);
+        services.AddTransient<IMongoQueuePayloadHandler<TestPayload>>(sp => new ScopedTestPayloadHandler(sp.GetRequiredService<ScopedDependency>(),
+                                                                                                         sp.GetRequiredService<DisposalTracker>()));
+        var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+
+        var queueItemId = ObjectId.GenerateNewId();
+        var collection = CreateSuccessfulCompletionCollection(queueItemId);
+        var sut = CreateSubscription(payloadHandlerFactory: new MongoQueuePayloadHandlerFactory(),
+                                     serviceScopeFactory: serviceProvider.GetRequiredService<IServiceScopeFactory>());
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        tracker.ResolvedScopedDependency.Should().NotBeNull("a factory-registered handler must receive the item's scoped IServiceProvider");
+        tracker.WasDisposed.Should().BeTrue("the per-item scope must dispose the handler once handling completes");
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_WithPayloadHandlerTypeRegistration_ResolvesScopedDependencyAndDisposesHandler()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddScoped<ScopedDependency>();
+        var tracker = new DisposalTracker();
+        services.AddSingleton(tracker);
+        services.AddTransient<IMongoQueuePayloadHandler<TestPayload>, ScopedTestPayloadHandler>();
+        var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+
+        var queueItemId = ObjectId.GenerateNewId();
+        var collection = CreateSuccessfulCompletionCollection(queueItemId);
+        var sut = CreateSubscription(payloadHandlerFactory: new MongoQueuePayloadHandlerFactory(),
+                                     serviceScopeFactory: serviceProvider.GetRequiredService<IServiceScopeFactory>());
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        tracker.ResolvedScopedDependency.Should().NotBeNull("a handler-type registration must resolve scoped services from the item's scope");
+        tracker.WasDisposed.Should().BeTrue("the per-item scope must dispose the handler once handling completes");
+    }
+
+    [Test]
     public async Task ProcessQueueItemAsync_WithRecoveredLock_EmitsRecoveryAndSuccessDiagnostics()
     {
         // Arrange
@@ -295,7 +426,7 @@ public class MongoQueueSubscriptionTests
         timeProviderMock.Setup(x => x.GetUtcNow()).Returns(now);
         payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
                           .Returns(Task.CompletedTask);
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>()).Returns(payloadHandlerMock.Object);
+        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
         collectionMock
             .Setup(c => c.FindOneAndUpdateAsync(
                        It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
@@ -368,11 +499,15 @@ public class MongoQueueSubscriptionTests
             _ => false
         };
 
+    private static IServiceScopeFactory CreateDefaultServiceScopeFactory()
+        => new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
     private static MongoQueueSubscription<TestPayload> CreateSubscription(
         MongoQueueDefinition? queueDefinition = null,
         IMongoHelper? mongoHelper = null,
         IMongoQueuePayloadHandlerFactory? payloadHandlerFactory = null,
         IMongoQueuePayloadPrioritizer? payloadPrioritizer = null,
+        IServiceScopeFactory? serviceScopeFactory = null,
         TimeProvider? timeProvider = null,
         ILogger<MongoQueueSubscription<TestPayload>>? logger = null)
         => new(queueDefinition ?? new MongoQueueDefinition
@@ -387,8 +522,12 @@ public class MongoQueueSubscriptionTests
                mongoHelper ?? Mock.Of<IMongoHelper>(),
                payloadHandlerFactory ?? Mock.Of<IMongoQueuePayloadHandlerFactory>(),
                payloadPrioritizer ?? Mock.Of<IMongoQueuePayloadPrioritizer>(),
+               serviceScopeFactory ?? CreateDefaultServiceScopeFactory(),
                timeProvider ?? TimeProvider.System,
                logger ?? Mock.Of<ILogger<MongoQueueSubscription<TestPayload>>>());
+
+    private static IMongoCollection<MongoQueueItem<TestPayload>> CreateSuccessfulCompletionCollection(ObjectId queueItemId)
+        => new CompletingQueueItemCollection(queueItemId);
 
     private static MethodInfo GetPrivateMethod(String name, Type[] parameterTypes)
         => typeof(MongoQueueSubscription<TestPayload>).GetMethod(name,
@@ -499,4 +638,387 @@ public class MongoQueueSubscriptionTests
             times);
 
     public class TestPayload;
+
+    /// <summary>
+    /// Hand-crafted collection double simulating a successful acquire-then-complete sequence for a single queue
+    /// item:
+    /// <see
+    ///     cref="FindOneAndUpdateAsync{TProjection}(FilterDefinition{MongoQueueItem{TestPayload}}, UpdateDefinition{MongoQueueItem{TestPayload}}, FindOneAndUpdateOptions{MongoQueueItem{TestPayload}, TProjection}, CancellationToken)"/>
+    /// returns the queue item with the given ID, and
+    /// <see
+    ///     cref="UpdateOneAsync(FilterDefinition{MongoQueueItem{TestPayload}}, UpdateDefinition{MongoQueueItem{TestPayload}}, UpdateOptions, CancellationToken)"/>
+    /// reports it as modified. Every other member is unreachable for the per-item-scope tests that use this
+    /// double and throws deliberately.
+    /// </summary>
+    private sealed class CompletingQueueItemCollection : IMongoCollection<MongoQueueItem<TestPayload>>
+    {
+        private readonly ObjectId _queueItemId;
+
+        public CompletingQueueItemCollection(ObjectId queueItemId) => _queueItemId = queueItemId;
+
+        public CollectionNamespace CollectionNamespace => throw new NotSupportedException();
+        public IMongoDatabase Database => throw new NotSupportedException();
+        public IBsonSerializer<MongoQueueItem<TestPayload>> DocumentSerializer => throw new NotSupportedException();
+        public IMongoIndexManager<MongoQueueItem<TestPayload>> Indexes => throw new NotSupportedException();
+        public IMongoSearchIndexManager SearchIndexes => throw new NotSupportedException();
+        public MongoCollectionSettings Settings => throw new NotSupportedException();
+
+        public IAsyncCursor<TResult> Aggregate<TResult>(PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline, AggregateOptions options,
+                                                        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TResult> Aggregate<TResult>(IClientSessionHandle session, PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline, AggregateOptions options,
+                                                        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TResult>> AggregateAsync<TResult>(PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline, AggregateOptions options,
+                                                                   CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TResult>> AggregateAsync<TResult>(IClientSessionHandle session, PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline,
+                                                                   AggregateOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public void AggregateToCollection<TResult>(PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline, AggregateOptions options,
+                                                   CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public void AggregateToCollection<TResult>(IClientSessionHandle session, PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline, AggregateOptions options,
+                                                   CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task AggregateToCollectionAsync<TResult>(PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline, AggregateOptions options,
+                                                        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task AggregateToCollectionAsync<TResult>(IClientSessionHandle session, PipelineDefinition<MongoQueueItem<TestPayload>, TResult> pipeline,
+                                                        AggregateOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public BulkWriteResult<MongoQueueItem<TestPayload>> BulkWrite(IEnumerable<WriteModel<MongoQueueItem<TestPayload>>> requests, BulkWriteOptions options,
+                                                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public BulkWriteResult<MongoQueueItem<TestPayload>> BulkWrite(IClientSessionHandle session, IEnumerable<WriteModel<MongoQueueItem<TestPayload>>> requests,
+                                                                      BulkWriteOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<BulkWriteResult<MongoQueueItem<TestPayload>>> BulkWriteAsync(IEnumerable<WriteModel<MongoQueueItem<TestPayload>>> requests, BulkWriteOptions options,
+                                                                                 CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<BulkWriteResult<MongoQueueItem<TestPayload>>> BulkWriteAsync(IClientSessionHandle session, IEnumerable<WriteModel<MongoQueueItem<TestPayload>>> requests,
+                                                                                 BulkWriteOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Int64 Count(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Int64 Count(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Int64> CountAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Int64> CountAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options,
+                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Int64 CountDocuments(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Int64 CountDocuments(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options,
+                                    CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<Int64> CountDocumentsAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Int64> CountDocumentsAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options,
+                                               CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public DeleteResult DeleteMany(FilterDefinition<MongoQueueItem<TestPayload>> filter, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public DeleteResult DeleteMany(FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public DeleteResult DeleteMany(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options,
+                                       CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<DeleteResult> DeleteManyAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<DeleteResult> DeleteManyAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<DeleteResult> DeleteManyAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options,
+                                                  CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public DeleteResult DeleteOne(FilterDefinition<MongoQueueItem<TestPayload>> filter, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public DeleteResult DeleteOne(FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public DeleteResult DeleteOne(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options,
+                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<DeleteResult> DeleteOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<DeleteResult> DeleteOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<DeleteResult> DeleteOneAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, DeleteOptions options,
+                                                 CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TField> Distinct<TField>(FieldDefinition<MongoQueueItem<TestPayload>, TField> field, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                     DistinctOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TField> Distinct<TField>(IClientSessionHandle session, FieldDefinition<MongoQueueItem<TestPayload>, TField> field,
+                                                     FilterDefinition<MongoQueueItem<TestPayload>> filter, DistinctOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TField>> DistinctAsync<TField>(FieldDefinition<MongoQueueItem<TestPayload>, TField> field, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                DistinctOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TField>> DistinctAsync<TField>(IClientSessionHandle session, FieldDefinition<MongoQueueItem<TestPayload>, TField> field,
+                                                                FilterDefinition<MongoQueueItem<TestPayload>> filter, DistinctOptions options,
+                                                                CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TItem> DistinctMany<TItem>(FieldDefinition<MongoQueueItem<TestPayload>, IEnumerable<TItem>> field,
+                                                       FilterDefinition<MongoQueueItem<TestPayload>> filter, DistinctOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public IAsyncCursor<TItem> DistinctMany<TItem>(IClientSessionHandle session, FieldDefinition<MongoQueueItem<TestPayload>, IEnumerable<TItem>> field,
+                                                       FilterDefinition<MongoQueueItem<TestPayload>> filter, DistinctOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TItem>> DistinctManyAsync<TItem>(FieldDefinition<MongoQueueItem<TestPayload>, IEnumerable<TItem>> field,
+                                                                  FilterDefinition<MongoQueueItem<TestPayload>> filter, DistinctOptions options,
+                                                                  CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TItem>> DistinctManyAsync<TItem>(IClientSessionHandle session, FieldDefinition<MongoQueueItem<TestPayload>, IEnumerable<TItem>> field,
+                                                                  FilterDefinition<MongoQueueItem<TestPayload>> filter, DistinctOptions options,
+                                                                  CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Int64 EstimatedDocumentCount(EstimatedDocumentCountOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<Int64> EstimatedDocumentCountAsync(EstimatedDocumentCountOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                      FindOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                      FindOptions<MongoQueueItem<TestPayload>, TProjection> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public TProjection FindOneAndDelete<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                         FindOneAndDeleteOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                         CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public TProjection FindOneAndDelete<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                         FindOneAndDeleteOptions<MongoQueueItem<TestPayload>, TProjection> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<TProjection> FindOneAndDeleteAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                    FindOneAndDeleteOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                    CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TProjection> FindOneAndDeleteAsync<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                    FindOneAndDeleteOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                    CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public TProjection FindOneAndReplace<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement,
+                                                          FindOneAndReplaceOptions<MongoQueueItem<TestPayload>, TProjection> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public TProjection FindOneAndReplace<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                          MongoQueueItem<TestPayload> replacement, FindOneAndReplaceOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                          CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TProjection> FindOneAndReplaceAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement,
+                                                                     FindOneAndReplaceOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                     CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TProjection> FindOneAndReplaceAsync<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                     MongoQueueItem<TestPayload> replacement,
+                                                                     FindOneAndReplaceOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                     CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public TProjection FindOneAndUpdate<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                                         FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, TProjection> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public TProjection FindOneAndUpdate<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                         UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                                         FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                         CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TProjection> FindOneAndUpdateAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                                                    FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                    CancellationToken cancellationToken)
+        {
+            var queueItem = new MongoQueueItem<TestPayload>
+            {
+                Id = _queueItemId,
+                CreatedUtc = DateTime.UtcNow,
+                Payload = new TestPayload()
+            };
+            return Task.FromResult((TProjection)(Object)queueItem);
+        }
+
+        public Task<TProjection> FindOneAndUpdateAsync<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                    UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                                                    FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                    CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TProjection> FindSync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter, FindOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                               CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TProjection> FindSync<TProjection>(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                               FindOptions<MongoQueueItem<TestPayload>, TProjection> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public void InsertMany(IEnumerable<MongoQueueItem<TestPayload>> documents, InsertManyOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public void InsertMany(IClientSessionHandle session, IEnumerable<MongoQueueItem<TestPayload>> documents, InsertManyOptions options,
+                               CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task InsertManyAsync(IEnumerable<MongoQueueItem<TestPayload>> documents, InsertManyOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task InsertManyAsync(IClientSessionHandle session, IEnumerable<MongoQueueItem<TestPayload>> documents, InsertManyOptions options,
+                                    CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public void InsertOne(MongoQueueItem<TestPayload> document, InsertOneOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public void InsertOne(IClientSessionHandle session, MongoQueueItem<TestPayload> document, InsertOneOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task InsertOneAsync(MongoQueueItem<TestPayload> document, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task InsertOneAsync(MongoQueueItem<TestPayload> document, InsertOneOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task InsertOneAsync(IClientSessionHandle session, MongoQueueItem<TestPayload> document, InsertOneOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public IAsyncCursor<TResult> MapReduce<TResult>(BsonJavaScript map, BsonJavaScript reduce, MapReduceOptions<MongoQueueItem<TestPayload>, TResult> options,
+                                                        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IAsyncCursor<TResult> MapReduce<TResult>(IClientSessionHandle session, BsonJavaScript map, BsonJavaScript reduce,
+                                                        MapReduceOptions<MongoQueueItem<TestPayload>, TResult> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TResult>> MapReduceAsync<TResult>(BsonJavaScript map, BsonJavaScript reduce, MapReduceOptions<MongoQueueItem<TestPayload>, TResult> options,
+                                                                   CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<TResult>> MapReduceAsync<TResult>(IClientSessionHandle session, BsonJavaScript map, BsonJavaScript reduce,
+                                                                   MapReduceOptions<MongoQueueItem<TestPayload>, TResult> options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public ReplaceOneResult ReplaceOne(FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement, ReplaceOptions options,
+                                           CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ReplaceOneResult ReplaceOne(FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement, UpdateOptions options,
+                                           CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ReplaceOneResult ReplaceOne(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement,
+                                           ReplaceOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ReplaceOneResult ReplaceOne(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement,
+                                           UpdateOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<ReplaceOneResult> ReplaceOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement, ReplaceOptions options,
+                                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<ReplaceOneResult> ReplaceOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement, UpdateOptions options,
+                                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<ReplaceOneResult> ReplaceOneAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement,
+                                                      ReplaceOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<ReplaceOneResult> ReplaceOneAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, MongoQueueItem<TestPayload> replacement,
+                                                      UpdateOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public UpdateResult UpdateMany(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options,
+                                       CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public UpdateResult UpdateMany(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                       UpdateOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<UpdateResult> UpdateManyAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options,
+                                                  CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<UpdateResult> UpdateManyAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                  UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public UpdateResult UpdateOne(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options,
+                                      CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public UpdateResult UpdateOne(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                      UpdateOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<UpdateResult> UpdateOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options,
+                                                 CancellationToken cancellationToken)
+            => Task.FromResult<UpdateResult>(new UpdateResult.Acknowledged(1, 1, null));
+
+        public Task<UpdateResult> UpdateOneAsync(IClientSessionHandle session, FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                 UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public IChangeStreamCursor<TResult> Watch<TResult>(PipelineDefinition<ChangeStreamDocument<MongoQueueItem<TestPayload>>, TResult> pipeline, ChangeStreamOptions options,
+                                                           CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IChangeStreamCursor<TResult> Watch<TResult>(IClientSessionHandle session, PipelineDefinition<ChangeStreamDocument<MongoQueueItem<TestPayload>>, TResult> pipeline,
+                                                           ChangeStreamOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(PipelineDefinition<ChangeStreamDocument<MongoQueueItem<TestPayload>>, TResult> pipeline,
+                                                                      ChangeStreamOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(IClientSessionHandle session,
+                                                                      PipelineDefinition<ChangeStreamDocument<MongoQueueItem<TestPayload>>, TResult> pipeline,
+                                                                      ChangeStreamOptions options, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IMongoCollection<MongoQueueItem<TestPayload>> WithReadConcern(ReadConcern readConcern) => throw new NotSupportedException();
+        public IMongoCollection<MongoQueueItem<TestPayload>> WithReadPreference(ReadPreference readPreference) => throw new NotSupportedException();
+        public IMongoCollection<MongoQueueItem<TestPayload>> WithWriteConcern(WriteConcern writeConcern) => throw new NotSupportedException();
+
+        IFilteredMongoCollection<TDerivedDocument> IMongoCollection<MongoQueueItem<TestPayload>>.OfType<TDerivedDocument>() => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Records whether a <see cref="ScopedTestPayloadHandler"/> resolved its scoped dependency and whether it was
+    /// disposed, and configures whether <see cref="ScopedTestPayloadHandler.HandlePayloadAsync"/> throws or cancels.
+    /// </summary>
+    private sealed class DisposalTracker
+    {
+        public ScopedDependency? ResolvedScopedDependency { get; set; }
+        public Boolean ShouldCancel { get; set; }
+        public Boolean ShouldThrow { get; set; }
+        public Boolean WasDisposed { get; set; }
+    }
+
+    private sealed class ScopedDependency;
+
+    private sealed class ScopedTestPayloadHandler : IMongoQueuePayloadHandler<TestPayload>, IAsyncDisposable
+    {
+        private readonly DisposalTracker _tracker;
+
+        public ScopedTestPayloadHandler(ScopedDependency scopedDependency, DisposalTracker tracker)
+        {
+            _tracker = tracker;
+            _tracker.ResolvedScopedDependency = scopedDependency;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            _tracker.WasDisposed = true;
+            return ValueTask.CompletedTask;
+        }
+
+        public Task HandlePayloadAsync(TestPayload payload, CancellationToken cancellationToken = default)
+        {
+            if (_tracker.ShouldCancel)
+            {
+                throw new OperationCanceledException();
+            }
+
+            if (_tracker.ShouldThrow)
+            {
+                throw new InvalidOperationException("boom");
+            }
+
+            return Task.CompletedTask;
+        }
+    }
 }
