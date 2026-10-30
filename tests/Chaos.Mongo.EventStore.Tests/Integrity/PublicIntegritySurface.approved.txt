@@ -195,6 +195,7 @@ interface ITimestampAuthority
   Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
 sealed class IntegrityAnchoringBuilder
   IntegrityAnchoringBuilder OnAnchorCompleted(Func<IServiceProvider, CompletedAnchor, CancellationToken, Task> hook)
+  IntegrityAnchoringBuilder WithCollectionPrefix(String prefix)
   IntegrityAnchoringBuilder WithDelayThreshold(TimeSpan threshold)
   IntegrityAnchoringBuilder WithInterval(TimeSpan interval)
   IntegrityAnchoringBuilder WithMaxLeavesPerAnchor(Int32 maximum)
@@ -237,7 +238,7 @@ sealed class IntegritySealingStatus
   required Int64 StreamsFailed { get; init; }
   required Int64 StreamsSealed { get; init; }
 sealed class IntegrityVerificationBuilder
-  IntegrityVerificationBuilder WithAnchorCollections(String anchors, String leaves, String evidence, String evidenceChunks)
+  IntegrityVerificationBuilder WithCollectionPrefix(String prefix)
   IntegrityVerificationBuilder WithRevocationGracePeriod(TimeSpan gracePeriod)
   IntegrityVerificationBuilder WithTimestampAuthorityTrust(String name, Action<TimestampAuthorityTrust>? configure = null)
 sealed class PersonalDataErased<TAggregate> : ObservationalEvent<TAggregate>

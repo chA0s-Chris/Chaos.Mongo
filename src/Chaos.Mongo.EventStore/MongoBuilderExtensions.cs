@@ -163,9 +163,9 @@ public static class MongoBuilderExtensions
         }
 
         AddAnchorVerifier(builder.Services);
+        AddAnchorLeafReader(builder.Services, options);
         builder.WithAnchorCandidates();
         builder.Services.AddTransient<IMongoConfigurator>(_ => new IntegrityAnchoringConfigurator(options));
-        builder.Services.AddSingleton<IAnchorLeafReader>(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp => new SealingAnchorLookup(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp => new AnchorEvidenceResolver(sp.GetRequiredService<IMongoHelper>(), options));
         builder.Services.AddSingleton(sp =>
@@ -239,6 +239,7 @@ public static class MongoBuilderExtensions
         // making the public builder resolvable.
         builder.Services.AddSingleton(new IntegrityVerificationRegistration(verificationBuilder));
         AddAnchorVerifier(builder.Services);
+        AddAnchorLeafReader(builder.Services, GetOrAddSingleton<IntegrityAnchoringOptions>(builder.Services));
         return builder;
     }
 
@@ -265,6 +266,16 @@ public static class MongoBuilderExtensions
                                                                   sp.GetService<ILogger<ChangeStreamAnchorCandidateSource>>() ??
                                                                   NullLogger<ChangeStreamAnchorCandidateSource>.Instance));
         return builder;
+    }
+
+    private static void AddAnchorLeafReader(IServiceCollection services, IntegrityAnchoringOptions options)
+    {
+        if (services.Any(s => s.ServiceType == typeof(IAnchorLeafReader)))
+        {
+            return;
+        }
+
+        services.AddSingleton<IAnchorLeafReader>(sp => new AnchorLeafReader(sp.GetRequiredService<IMongoHelper>(), options));
     }
 
     private static void AddAnchorVerifier(IServiceCollection services)

@@ -9,28 +9,27 @@ namespace Chaos.Mongo.EventStore.Integrity;
 internal sealed class IntegrityAnchoringOptions
 {
     /// <summary>
-    /// Gets or sets the name of the collection that holds the chunks of evidence items too large to store inline.
-    /// Defaults to <c>"IntegrityAnchorEvidenceChunks"</c>.
+    /// Gets the name of the collection that holds the chunks of evidence items too large to store inline.
+    /// Derived from <see cref="CollectionPrefix"/>.
     /// </summary>
-    public String AnchorEvidenceChunksCollectionName { get; set; } = "IntegrityAnchorEvidenceChunks";
+    public String AnchorEvidenceChunksCollectionName => $"{CollectionPrefix}AnchorEvidenceChunks";
 
     /// <summary>
-    /// Gets or sets the name of the collection that holds the tokens, certificates and CRLs of anchor timestamps,
-    /// addressed by their SHA-256. Defaults to <c>"IntegrityAnchorEvidence"</c>.
+    /// Gets the name of the collection that holds the tokens, certificates and CRLs of anchor timestamps, addressed
+    /// by their SHA-256. Derived from <see cref="CollectionPrefix"/>.
     /// </summary>
-    public String AnchorEvidenceCollectionName { get; set; } = "IntegrityAnchorEvidence";
+    public String AnchorEvidenceCollectionName => $"{CollectionPrefix}AnchorEvidence";
 
     /// <summary>
-    /// Gets or sets the name of the collection that holds the leaves and inclusion proofs of anchors.
-    /// Defaults to <c>"IntegrityAnchorLeaves"</c>.
+    /// Gets the name of the collection that holds the leaves and inclusion proofs of anchors. Derived from
+    /// <see cref="CollectionPrefix"/>.
     /// </summary>
-    public String AnchorLeavesCollectionName { get; set; } = "IntegrityAnchorLeaves";
+    public String AnchorLeavesCollectionName => $"{CollectionPrefix}AnchorLeaves";
 
     /// <summary>
-    /// Gets or sets the name of the collection that holds the anchors.
-    /// Defaults to <c>"IntegrityAnchors"</c>.
+    /// Gets the name of the collection that holds the anchors. Derived from <see cref="CollectionPrefix"/>.
     /// </summary>
-    public String AnchorsCollectionName { get; set; } = "IntegrityAnchors";
+    public String AnchorsCollectionName => $"{CollectionPrefix}Anchors";
 
     /// <summary>
     /// Gets or sets the number of candidates an anchoring run reads per batch. Defaults to 1,000.
@@ -38,10 +37,15 @@ internal sealed class IntegrityAnchoringOptions
     public Int32 CandidateReadBatchSize { get; set; } = 1_000;
 
     /// <summary>
-    /// Gets or sets the name of the collection that holds the change-stream position.
-    /// Defaults to <c>"IntegrityChangeStreamState"</c>.
+    /// Gets the name of the collection that holds the change-stream position. Derived from
+    /// <see cref="CollectionPrefix"/>.
     /// </summary>
-    public String ChangeStreamStateCollectionName { get; set; } = "IntegrityChangeStreamState";
+    public String ChangeStreamStateCollectionName => $"{CollectionPrefix}ChangeStreamState";
+
+    /// <summary>
+    /// Gets or sets the prefix of the five module-level anchoring collection names. Defaults to <c>"Integrity"</c>.
+    /// </summary>
+    public String CollectionPrefix { get; set; } = "Integrity";
 
     /// <summary>
     /// Gets or sets the age of the oldest unanchored candidate above which a run reports the anchor delay through a

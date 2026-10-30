@@ -493,9 +493,10 @@ For an aggregate configured with prefix `"Orders"`:
 | `Orders_Checkpoints` | Periodic snapshots (if enabled) |
 | `Orders_IntegrityState` | Progress of the retroactive sealing sweep (with [tamper evidence](#tamper-evidence)) |
 
-With [tamper evidence](#tamper-evidence) anchoring, the module-level collections `IntegrityAnchors`, `IntegrityAnchorLeaves`,
-`IntegrityAnchorEvidence`, `IntegrityAnchorEvidenceChunks` and `IntegrityChangeStreamState` (the change stream's resume
-position) are added once for all aggregate types.
+With [tamper evidence](#tamper-evidence) anchoring, the module-level collections `{Prefix}Anchors`, `{Prefix}AnchorLeaves`,
+`{Prefix}AnchorEvidence`, `{Prefix}AnchorEvidenceChunks` and `{Prefix}ChangeStreamState` (the change stream's resume
+position) are added once for all aggregate types, with the default prefix `Integrity`. Change it with `WithCollectionPrefix`
+on `WithIntegrityAnchoring` or `WithIntegrityVerification`.
 
 ## Working with Events
 
@@ -944,7 +945,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
   | `chaos.mongo.eventstore.anchoring.revocation_confirmation_delay_exceeded` | Counter | Runs after which the revocation confirmation delay exceeded its threshold. |
   | `chaos.mongo.eventstore.anchoring.revoked_timestamps` | Counter | Tokens whose chain a confirming CRL lists as revoked at or before the token's time. |
 - **Revocation confirmation.** The CRLs captured when a token is issued usually predate it. After a grace period (default 24 hours, `WithRevocationGracePeriod`), later anchoring runs fetch CRLs issued after the token's time and store them with the token. Tokens still unconfirmed beyond a threshold (default 72 hours, `WithRevocationConfirmationDelayThreshold`) are reported like the anchor delay. A token whose chain turns out to be revoked at or before its time is no evidence; its anchor's events stay protected by the next anchor, from that anchor's time.
-- **Evidence collections.** Tokens, certificate chains and CRLs are stored once per distinct content in `IntegrityAnchorEvidence` and `IntegrityAnchorEvidenceChunks`, referenced by hash from the anchors in `IntegrityAnchors`; leaves and their inclusion proofs are stored in `IntegrityAnchorLeaves`. Evidence is only ever inserted, so the anchoring role needs no `update` or `remove` on it.
+- **Evidence collections.** Tokens, certificate chains and CRLs are stored once per distinct content in `{Prefix}AnchorEvidence` and `{Prefix}AnchorEvidenceChunks`, referenced by hash from the anchors in `{Prefix}Anchors`; leaves and their inclusion proofs are stored in `{Prefix}AnchorLeaves`. Evidence is only ever inserted, so the anchoring role needs no `update` or `remove` on it.
 
 **Operating requirements.** Anchoring collects the changed stream heads from a database-wide change stream:
 
@@ -993,7 +994,7 @@ services.AddMongo(auditConnectionString, "myDatabase")
         .WithRevocationGracePeriod(TimeSpan.FromHours(24)));
 ```
 
-A container with read-only credentials must not seal, so it registers no sealing sweep with `WithoutSealingSweep()`; `GetSealingStatusAsync` still reports the progress of the sweep elsewhere. When it uses anchor collections with other names, `WithAnchorCollections` names them; in a container that also anchors, the names must match the anchoring configuration.
+A container with read-only credentials must not seal, so it registers no sealing sweep with `WithoutSealingSweep()`; `GetSealingStatusAsync` still reports the progress of the sweep elsewhere. When it uses anchor collections with a prefix other than the default, `WithCollectionPrefix` names them; in a container that also anchors, the prefix must match the anchoring configuration.
 
 Only CRLs of issuers whose certificates are part of the stored chain can be verified. A token whose chain points to an indirect CRL issuer stays unconfirmed; it is still valid evidence.
 
@@ -1019,7 +1020,7 @@ Grant least privilege:
 |---|---|
 | Application | `insert` and `find` on the events collection; the usual permissions on the read-model and checkpoint collections; while the sealing sweep runs in it, `insert`, `update` and `find` on `{Prefix}_IntegrityState`, and `insert`, `update`, `remove` and `find` on the distributed lock collection, whose lock the sweep releases by removing it. A container with `WithoutSealingSweep()` needs none of these. |
 | Retroactive sealing | The sweep's permissions above, and temporarily `update` on the events collection. |
-| Anchoring | `changeStream` and `find` on the database; `insert`, `update`, `remove` and `find` on `IntegrityAnchors`, `IntegrityAnchorLeaves`, `IntegrityChangeStreamState` and the distributed lock collection; `insert` and `find` on the evidence collections. |
+| Anchoring | `changeStream` and `find` on the database; `insert`, `update`, `remove` and `find` on `{Prefix}Anchors`, `{Prefix}AnchorLeaves`, `{Prefix}ChangeStreamState` and the distributed lock collection; `insert` and `find` on the evidence collections. |
 | Erasure | The application's permissions on the events, read-model and checkpoint collections, `update` on the events collection and, when checkpoints are enabled, on the checkpoint collection, whose states erasure rewrites, with separate credentials. Register its event stores with `WithoutSealingSweep()`, so it needs no sweep permissions. |
 | Verification | `find` on the events, read-model and checkpoint collections, on `{Prefix}_IntegrityState`, which `GetSealingStatusAsync` reads, and on the anchor and evidence collections. |
 

@@ -8,7 +8,7 @@ namespace Chaos.Mongo.EventStore.Integrity;
 public sealed class IntegrityVerificationBuilder
 {
     private readonly IntegrityAnchoringOptions _anchoring;
-    private String[]? _anchorCollections;
+    private String? _prefix;
 
     internal IntegrityVerificationBuilder(IntegrityVerificationOptions options, IntegrityAnchoringOptions anchoring)
     {
@@ -24,23 +24,17 @@ public sealed class IntegrityVerificationBuilder
     internal IntegrityVerificationOptions Options { get; }
 
     /// <summary>
-    /// Sets the names of the collections that hold the anchors, their leaves and their evidence, when they differ from
-    /// the defaults. In a container that also anchors, the anchoring configuration must use the same names; the
-    /// registration fails otherwise, so verification cannot redirect where anchors are written.
+    /// Sets the prefix of the five module-level anchoring collection names, when it differs from the default. In a
+    /// container that also anchors, the anchoring configuration must use the same prefix; the registration fails
+    /// otherwise, so verification cannot redirect where anchors are written.
     /// </summary>
-    /// <param name="anchors">The anchors collection.</param>
-    /// <param name="leaves">The anchor leaves collection.</param>
-    /// <param name="evidence">The evidence collection.</param>
-    /// <param name="evidenceChunks">The evidence chunks collection.</param>
+    /// <param name="prefix">The collection prefix.</param>
     /// <returns>The builder for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when a name is empty.</exception>
-    public IntegrityVerificationBuilder WithAnchorCollections(String anchors, String leaves, String evidence, String evidenceChunks)
+    /// <exception cref="ArgumentException">Thrown when <paramref name="prefix"/> is null, empty or whitespace-only.</exception>
+    public IntegrityVerificationBuilder WithCollectionPrefix(String prefix)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(anchors);
-        ArgumentException.ThrowIfNullOrWhiteSpace(leaves);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidence);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidenceChunks);
-        _anchorCollections = [anchors, leaves, evidence, evidenceChunks];
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        _prefix = prefix;
         return this;
     }
 
@@ -83,57 +77,43 @@ public sealed class IntegrityVerificationBuilder
     }
 
     /// <summary>
-    /// Applies the configured anchor collection names, when any, to the anchoring options shared with a later anchoring
+    /// Applies the configured collection prefix, when any, to the anchoring options shared with a later anchoring
     /// configuration.
     /// </summary>
     internal void ApplyAnchorCollections()
     {
-        if (_anchorCollections is not [var anchors, var leaves, var evidence, var evidenceChunks])
+        if (_prefix is null)
         {
             return;
         }
 
-        _anchoring.AnchorsCollectionName = anchors;
-        _anchoring.AnchorLeavesCollectionName = leaves;
-        _anchoring.AnchorEvidenceCollectionName = evidence;
-        _anchoring.AnchorEvidenceChunksCollectionName = evidenceChunks;
+        _anchoring.CollectionPrefix = _prefix;
     }
 
     /// <summary>
-    /// Ensures that the configured anchor collection names, when any, are those of the anchoring configuration.
+    /// Ensures that the configured collection prefix, when any, is that of the anchoring configuration.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when the names differ.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the prefixes differ.</exception>
     internal void EnsureAnchorCollectionsMatch()
     {
-        String[] configured =
-        [
-            _anchoring.AnchorsCollectionName,
-            _anchoring.AnchorLeavesCollectionName,
-            _anchoring.AnchorEvidenceCollectionName,
-            _anchoring.AnchorEvidenceChunksCollectionName
-        ];
-        if (_anchorCollections is { } names && !names.SequenceEqual(configured, StringComparer.Ordinal))
+        if (_prefix is { } prefix && !String.Equals(prefix, _anchoring.CollectionPrefix, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("The anchor collections configured for integrity verification differ from those of integrity anchoring; " +
-                                                "configure the same names for both.");
+                                                "configure the same prefix for both.");
         }
     }
 
     /// <summary>
-    /// Restores the default anchor collection names in the shared options before an anchoring configuration fills them,
-    /// when names were configured here, so the anchoring configuration must name the same collections itself.
+    /// Restores the default collection prefix in the shared options before an anchoring configuration fills it, when a
+    /// prefix was configured here, so the anchoring configuration must name the same collections itself.
     /// </summary>
     internal void RestoreDefaultAnchorCollections()
     {
-        if (_anchorCollections is null)
+        if (_prefix is null)
         {
             return;
         }
 
-        var defaults = new IntegrityAnchoringOptions();
-        _anchoring.AnchorsCollectionName = defaults.AnchorsCollectionName;
-        _anchoring.AnchorLeavesCollectionName = defaults.AnchorLeavesCollectionName;
-        _anchoring.AnchorEvidenceCollectionName = defaults.AnchorEvidenceCollectionName;
-        _anchoring.AnchorEvidenceChunksCollectionName = defaults.AnchorEvidenceChunksCollectionName;
+        _anchoring.CollectionPrefix = new IntegrityAnchoringOptions().CollectionPrefix;
     }
 }
