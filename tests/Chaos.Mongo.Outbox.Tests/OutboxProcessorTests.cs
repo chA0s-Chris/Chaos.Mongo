@@ -697,7 +697,7 @@ public class OutboxProcessorTests
             l => l.Log(
                 LogLevel.Error,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((o, _) => o.ToString()!.Contains(messageSubstring)),
+                It.Is<It.IsAnyType>((o, _) => o!.ToString()!.Contains(messageSubstring)),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             Times.AtLeastOnce);
@@ -709,7 +709,7 @@ public class OutboxProcessorTests
             l => l.Log(
                 LogLevel.Warning,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((o, _) => o.ToString()!.Contains(messageSubstring)),
+                It.Is<It.IsAnyType>((o, _) => o!.ToString()!.Contains(messageSubstring)),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             Times.AtLeastOnce);
