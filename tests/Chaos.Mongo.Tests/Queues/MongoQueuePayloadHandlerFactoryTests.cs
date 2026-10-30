@@ -11,27 +11,17 @@ using NUnit.Framework;
 public class MongoQueuePayloadHandlerFactoryTests
 {
     [Test]
-    public void Constructor_WhenServiceProviderIsNull_ThrowsArgumentNullException()
-    {
-        // Arrange & Act
-        var act = () => new MongoQueuePayloadHandlerFactory(null!);
-
-        // Assert
-        act.Should().Throw<ArgumentNullException>();
-    }
-
-    [Test]
     public void CreateHandler_CalledMultipleTimes_ReturnsNewInstanceEachTime()
     {
         // Arrange
         var services = new ServiceCollection();
         services.AddTransient<IMongoQueuePayloadHandler<TestPayload>, TestPayloadHandler>();
         var serviceProvider = services.BuildServiceProvider();
-        var factory = new MongoQueuePayloadHandlerFactory(serviceProvider);
+        var factory = new MongoQueuePayloadHandlerFactory();
 
         // Act
-        var handler1 = factory.CreateHandler<TestPayload>();
-        var handler2 = factory.CreateHandler<TestPayload>();
+        var handler1 = factory.CreateHandler<TestPayload>(serviceProvider);
+        var handler2 = factory.CreateHandler<TestPayload>(serviceProvider);
 
         // Assert
         handler1.Should().NotBeNull();
@@ -45,10 +35,10 @@ public class MongoQueuePayloadHandlerFactoryTests
         // Arrange
         var services = new ServiceCollection();
         var serviceProvider = services.BuildServiceProvider();
-        var factory = new MongoQueuePayloadHandlerFactory(serviceProvider);
+        var factory = new MongoQueuePayloadHandlerFactory();
 
         // Act
-        var act = () => factory.CreateHandler<TestPayload>();
+        var act = () => factory.CreateHandler<TestPayload>(serviceProvider);
 
         // Assert
         act.Should().Throw<InvalidOperationException>()
@@ -63,14 +53,27 @@ public class MongoQueuePayloadHandlerFactoryTests
         var services = new ServiceCollection();
         services.AddSingleton(mockHandler.Object);
         var serviceProvider = services.BuildServiceProvider();
-        var factory = new MongoQueuePayloadHandlerFactory(serviceProvider);
+        var factory = new MongoQueuePayloadHandlerFactory();
 
         // Act
-        var result = factory.CreateHandler<TestPayload>();
+        var result = factory.CreateHandler<TestPayload>(serviceProvider);
 
         // Assert
         result.Should().NotBeNull();
         result.Should().BeSameAs(mockHandler.Object);
+    }
+
+    [Test]
+    public void CreateHandler_WhenServiceProviderIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var factory = new MongoQueuePayloadHandlerFactory();
+
+        // Act
+        var act = () => factory.CreateHandler<TestPayload>(null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>();
     }
 
     public class TestPayload;

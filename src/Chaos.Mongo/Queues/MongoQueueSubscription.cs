@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Queues;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -29,6 +30,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     private readonly IMongoQueuePayloadHandlerFactory _payloadHandlerFactory;
     private readonly IMongoQueuePayloadPrioritizer _payloadPrioritizer;
     private readonly MongoQueueDefinition _queueDefinition;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly SemaphoreSlim _signalSemaphore = new(1, Int32.MaxValue);
     private readonly TimeProvider _timeProvider;
     private Boolean _isActive;
@@ -43,6 +45,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     /// <param name="mongoHelper">The MongoDB helper for database operations.</param>
     /// <param name="payloadHandlerFactory">The factory for creating payload handlers.</param>
     /// <param name="payloadPrioritizer">The prioritizer for sorting queue items.</param>
+    /// <param name="serviceScopeFactory">The service scope factory for resolving a payload handler per queue item.</param>
     /// <param name="timeProvider">The time provider for timestamp operations.</param>
     /// <param name="logger">The logger for diagnostic messages.</param>
     /// <exception cref="ArgumentNullException">Thrown when any parameter is null.</exception>
@@ -50,6 +53,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                                   IMongoHelper mongoHelper,
                                   IMongoQueuePayloadHandlerFactory payloadHandlerFactory,
                                   IMongoQueuePayloadPrioritizer payloadPrioritizer,
+                                  IServiceScopeFactory serviceScopeFactory,
                                   TimeProvider timeProvider,
                                   ILogger<MongoQueueSubscription<TPayload>> logger)
     {
@@ -57,11 +61,13 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         ArgumentNullException.ThrowIfNull(mongoHelper);
         ArgumentNullException.ThrowIfNull(payloadHandlerFactory);
         ArgumentNullException.ThrowIfNull(payloadPrioritizer);
+        ArgumentNullException.ThrowIfNull(serviceScopeFactory);
         ArgumentNullException.ThrowIfNull(timeProvider);
         _queueDefinition = queueDefinition;
         _mongoHelper = mongoHelper;
         _payloadHandlerFactory = payloadHandlerFactory;
         _payloadPrioritizer = payloadPrioritizer;
+        _serviceScopeFactory = serviceScopeFactory;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -317,30 +323,20 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                     typeof(TPayload).FullName);
             }
 
-            var payloadHandler = _payloadHandlerFactory.CreateHandler<TPayload>();
-            try
+            await using (var scope = _serviceScopeFactory.CreateAsyncScope())
             {
-                _logger.LogDebug("Handling payload {PayloadType} with handler {PayloadHandlerType}", typeof(TPayload).FullName,
-                                 payloadHandler.GetType().FullName);
-                await payloadHandler.HandlePayloadAsync(queueItem.Payload, cancellationToken);
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
-            {
-                await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, e, cancellationToken);
-                return;
-            }
-            finally
-            {
-                // ReSharper disable SuspiciousTypeConversion.Global
-                if (payloadHandler is IAsyncDisposable asyncDisposable)
+                var payloadHandler = _payloadHandlerFactory.CreateHandler<TPayload>(scope.ServiceProvider);
+                try
                 {
-                    await asyncDisposable.DisposeAsync();
+                    _logger.LogDebug("Handling payload {PayloadType} with handler {PayloadHandlerType}", typeof(TPayload).FullName,
+                                     payloadHandler.GetType().FullName);
+                    await payloadHandler.HandlePayloadAsync(queueItem.Payload, cancellationToken);
                 }
-                else if (payloadHandler is IDisposable disposable)
+                catch (Exception e) when (e is not OperationCanceledException)
                 {
-                    disposable.Dispose();
+                    await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, e, cancellationToken);
+                    return;
                 }
-                // ReSharper restore SuspiciousTypeConversion.Global
             }
 
             var completionFilter = CreateLockOwnershipFilter(queueItemId, acquiredLockUtc);

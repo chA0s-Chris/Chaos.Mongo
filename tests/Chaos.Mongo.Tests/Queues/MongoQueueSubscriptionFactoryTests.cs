@@ -23,6 +23,7 @@ public class MongoQueueSubscriptionFactoryTests
         var mockMongoHelper = new Mock<IMongoHelper>();
         var mockPayloadHandlerFactory = new Mock<IMongoQueuePayloadHandlerFactory>();
         var mockPayloadPrioritizer = new Mock<IMongoQueuePayloadPrioritizer>();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var timeProvider = TimeProvider.System;
 
         // Act
@@ -30,6 +31,7 @@ public class MongoQueueSubscriptionFactoryTests
             mockMongoHelper.Object,
             mockPayloadHandlerFactory.Object,
             mockPayloadPrioritizer.Object,
+            serviceScopeFactory,
             timeProvider,
             null!);
 
@@ -43,6 +45,7 @@ public class MongoQueueSubscriptionFactoryTests
         // Arrange
         var mockPayloadHandlerFactory = new Mock<IMongoQueuePayloadHandlerFactory>();
         var mockPayloadPrioritizer = new Mock<IMongoQueuePayloadPrioritizer>();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var timeProvider = TimeProvider.System;
         var loggerFactory = CreateLoggerFactory();
 
@@ -51,6 +54,7 @@ public class MongoQueueSubscriptionFactoryTests
             null!,
             mockPayloadHandlerFactory.Object,
             mockPayloadPrioritizer.Object,
+            serviceScopeFactory,
             timeProvider,
             loggerFactory);
 
@@ -64,6 +68,7 @@ public class MongoQueueSubscriptionFactoryTests
         // Arrange
         var mockMongoHelper = new Mock<IMongoHelper>();
         var mockPayloadPrioritizer = new Mock<IMongoQueuePayloadPrioritizer>();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var timeProvider = TimeProvider.System;
         var loggerFactory = CreateLoggerFactory();
 
@@ -72,6 +77,7 @@ public class MongoQueueSubscriptionFactoryTests
             mockMongoHelper.Object,
             null!,
             mockPayloadPrioritizer.Object,
+            serviceScopeFactory,
             timeProvider,
             loggerFactory);
 
@@ -85,6 +91,7 @@ public class MongoQueueSubscriptionFactoryTests
         // Arrange
         var mockMongoHelper = new Mock<IMongoHelper>();
         var mockPayloadHandlerFactory = new Mock<IMongoQueuePayloadHandlerFactory>();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var timeProvider = TimeProvider.System;
         var loggerFactory = CreateLoggerFactory();
 
@@ -92,6 +99,30 @@ public class MongoQueueSubscriptionFactoryTests
         var act = () => new MongoQueueSubscriptionFactory(
             mockMongoHelper.Object,
             mockPayloadHandlerFactory.Object,
+            null!,
+            serviceScopeFactory,
+            timeProvider,
+            loggerFactory);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Test]
+    public void Constructor_WhenServiceScopeFactoryIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var mongoHelper = new ThrowingMongoHelper();
+        var payloadHandlerFactory = new ThrowingPayloadHandlerFactory();
+        var payloadPrioritizer = new ThrowingPayloadPrioritizer();
+        var timeProvider = TimeProvider.System;
+        var loggerFactory = CreateLoggerFactory();
+
+        // Act
+        var act = () => new MongoQueueSubscriptionFactory(
+            mongoHelper,
+            payloadHandlerFactory,
+            payloadPrioritizer,
             null!,
             timeProvider,
             loggerFactory);
@@ -107,6 +138,7 @@ public class MongoQueueSubscriptionFactoryTests
         var mockMongoHelper = new Mock<IMongoHelper>();
         var mockPayloadHandlerFactory = new Mock<IMongoQueuePayloadHandlerFactory>();
         var mockPayloadPrioritizer = new Mock<IMongoQueuePayloadPrioritizer>();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var timeProvider = TimeProvider.System;
         var loggerFactory = CreateLoggerFactory();
 
@@ -115,6 +147,7 @@ public class MongoQueueSubscriptionFactoryTests
             mockMongoHelper.Object,
             mockPayloadHandlerFactory.Object,
             mockPayloadPrioritizer.Object,
+            serviceScopeFactory,
             timeProvider,
             loggerFactory);
 
@@ -129,12 +162,14 @@ public class MongoQueueSubscriptionFactoryTests
         var mockMongoHelper = new Mock<IMongoHelper>();
         var mockPayloadHandlerFactory = new Mock<IMongoQueuePayloadHandlerFactory>();
         var mockPayloadPrioritizer = new Mock<IMongoQueuePayloadPrioritizer>();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var timeProvider = TimeProvider.System;
         var loggerFactory = CreateLoggerFactory();
         var factory = new MongoQueueSubscriptionFactory(
             mockMongoHelper.Object,
             mockPayloadHandlerFactory.Object,
             mockPayloadPrioritizer.Object,
+            serviceScopeFactory,
             timeProvider,
             loggerFactory);
 
@@ -156,11 +191,13 @@ public class MongoQueueSubscriptionFactoryTests
 
         var payloadHandlerFactory = new ThrowingPayloadHandlerFactory();
         var payloadPrioritizer = new ThrowingPayloadPrioritizer();
+        var serviceScopeFactory = CreateServiceScopeFactory();
         var loggerFactory = CreateLoggerFactory();
         var factory = new MongoQueueSubscriptionFactory(
             mongoHelper,
             payloadHandlerFactory,
             payloadPrioritizer,
+            serviceScopeFactory,
             TimeProvider.System,
             loggerFactory);
 
@@ -196,6 +233,9 @@ public class MongoQueueSubscriptionFactoryTests
         services.AddNUnitTestLogging();
         return services.BuildServiceProvider().GetRequiredService<ILoggerFactory>();
     }
+
+    private static IServiceScopeFactory CreateServiceScopeFactory()
+        => new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
 
     public class TestPayload;
 
@@ -687,12 +727,26 @@ public class MongoQueueSubscriptionFactoryTests
     }
 
     /// <summary>
+    /// Hand-crafted stub for <see cref="IMongoHelper"/>. Not exercised by the constructor-guard test that uses
+    /// it; the constructor's earlier null checks never invoke it before the test's targeted argument is validated.
+    /// </summary>
+    private sealed class ThrowingMongoHelper : IMongoHelper
+    {
+        public IMongoClient Client => throw new NotSupportedException();
+        public IMongoDatabase Database => throw new NotSupportedException();
+        public IMongoCollection<TDocument> GetCollection<TDocument>(MongoCollectionSettings? settings = null) => throw new NotSupportedException();
+
+        public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    /// <summary>
     /// Hand-crafted stub for <see cref="IMongoQueuePayloadHandlerFactory"/>. Not exercised by the real startup
     /// path under test; cancellation is observed before any payload handler would be created.
     /// </summary>
     private sealed class ThrowingPayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
     {
-        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>() where TPayload : class, new()
+        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
             => throw new NotSupportedException();
     }
 
