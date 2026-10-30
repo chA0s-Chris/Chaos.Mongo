@@ -608,7 +608,7 @@ public class MongoQueueSubscriptionTests
             l => l.Log(
                 LogLevel.Error,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(messageSubstring)),
+                It.Is<It.IsAnyType>((state, _) => state!.ToString()!.Contains(messageSubstring)),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             times);
@@ -620,7 +620,7 @@ public class MongoQueueSubscriptionTests
             l => l.Log(
                 LogLevel.Information,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(messageSubstring)),
+                It.Is<It.IsAnyType>((state, _) => state!.ToString()!.Contains(messageSubstring)),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             times);
@@ -632,7 +632,7 @@ public class MongoQueueSubscriptionTests
             l => l.Log(
                 LogLevel.Warning,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(messageSubstring)),
+                It.Is<It.IsAnyType>((state, _) => state!.ToString()!.Contains(messageSubstring)),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             times);
