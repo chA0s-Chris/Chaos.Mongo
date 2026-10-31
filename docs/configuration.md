@@ -63,6 +63,50 @@ services.AddMongo(options =>
 
 The callback is applied to the `MongoClientSettings` created from `Url` before the client is constructed.
 
+## Replacing Connection Construction
+
+`AddMongo` builds the connection in two replaceable steps, each behind an interface registered with
+`TryAddSingleton`: `IMongoClientSettingsFactory.CreateMongoClientSettings(MongoUrl)` turns the configured URL into
+`MongoClientSettings`, and `IMongoConnectionFactory.CreateConnection(MongoUrl, string?)` uses those settings to build
+the `IMongoConnection` — the `MongoClient` and `IMongoDatabase` pair — that the rest of the library resolves.
+
+An ordinary settings change, even one that depends on registered services, does not need a custom
+`IMongoClientSettingsFactory`: the provider-aware `AddMongo` overloads already let the configure delegate resolve
+services from the `IServiceProvider` and set `MongoOptions.ConfigureClientSettings` from them, exactly as
+[Configuring options with registered services](#configuring-options-with-registered-services) shows. Replace
+`IMongoClientSettingsFactory` only to change how settings are *constructed* from the URL itself — its
+`CreateMongoClientSettings(MongoUrl)` responsibility — not merely because the settings depend on a service.
+
+Replace `IMongoConnectionFactory` to change how `IMongoConnection` itself is constructed, for example to reuse an
+already-registered `MongoClient` or to validate connectivity eagerly before returning it.
+
+Because both are registered with `TryAddSingleton`, a registration of either interface replaces the library's
+default, whether it is registered before `AddMongo` (so the library's own registration never takes effect, since
+`TryAddSingleton` only adds a service when none is registered yet) or after it with `AddSingleton` (so the later
+registration simply wins). Register before `AddMongo` when the replacement does not depend on anything `AddMongo`
+itself registers; register after when it does.
+
+```csharp
+public sealed class SharedClientConnectionFactory(MongoClient client) : IMongoConnectionFactory
+{
+    public IMongoConnection CreateConnection(MongoUrl url, string? databaseName = null)
+    {
+        var name = databaseName ?? url.DatabaseName
+                   ?? throw new ArgumentException("URL doesn't contain a database name and databaseName is not set");
+
+        return new MongoConnection(client, client.GetDatabase(name));
+    }
+}
+
+services.AddSingleton(new MongoClient("mongodb://localhost:27017"));
+services.AddSingleton<IMongoConnectionFactory, SharedClientConnectionFactory>();
+services.AddMongo("mongodb://localhost:27017", "myDatabase");
+```
+
+Registering before `AddMongo` means the library's own `MongoConnectionFactory` never runs: the custom factory ignores
+the settings `IMongoClientSettingsFactory` would have built and instead wraps the already-registered `MongoClient` in
+a `MongoConnection`.
+
 ## Configuring options with registered services
 
 When an option depends on a service registered in the dependency-injection container, use an `AddMongo` overload whose delegate also receives the `IServiceProvider`. For example, route the MongoDB driver's logging through the application's `ILoggerFactory`:

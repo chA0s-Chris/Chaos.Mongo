@@ -13,6 +13,7 @@ Usage:
                     [--anchors FILE --leaves FILE --evidence FILE [--evidence-chunks FILE]
                      --trusted-root [NAME=]PEM [--trusted-root [NAME=]PEM ...] [--policy NAME=OID ...]
                      [--grace-hours HOURS] [--trusted-head SEQUENCE:DIGESTHEX]]
+                    [--element-name NAME=STORED ...]
 
 A trusted root without a name applies to every timestamp authority, one with a name only to that authority's tokens.
 Input files hold concatenated raw BSON documents, the format mongodump writes. Both commands print a JSON report and

@@ -60,6 +60,11 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 
 If no collection name is specified, `IMongoQueueCollectionNameGenerator` derives one from the payload type. A queue is registered as `IMongoQueue<TPayload>` and as the non-generic `IMongoQueue`.
 
+`IMongoQueue<TPayload>.QueueDefinition` exposes the resolved configuration as a `MongoQueueDefinition`:
+`AutoStartSubscription`, `BatchSize`, `CollectionName`, `LockLeaseTime`, `MaxRetries`, `PayloadHandlerType`,
+`PayloadType` and `RetentionPeriod`. Use it to introspect a queue's effective settings at runtime, for example in
+diagnostics or health checks.
+
 ### Processing options
 
 - `WithAutoStartSubscription()` starts processing with the hosted application; manual startup is the default.
@@ -124,13 +129,13 @@ public sealed class QueueManager(IMongoQueue<EmailMessage> queue)
 Implement and register `IMongoQueuePayloadPrioritizer` to change the order in which payloads are processed:
 
 ```csharp
+using MongoDB.Driver;
+
 public sealed class PriorityEmailMessage
 {
     public string To { get; set; } = string.Empty;
     public int Priority { get; set; }
 }
-
-using MongoDB.Driver;
 
 public sealed class EmailPriorityQueuePrioritizer : IMongoQueuePayloadPrioritizer
 {
@@ -156,6 +161,11 @@ The prioritizer is shared by registered queues, so provide a deterministic fallb
 - A process crash leaves a lock that becomes recoverable after the configured lease expires.
 - Successful items are retained for one hour by default and removed by a TTL index on `ClosedUtc`.
 - Terminal items remain queryable for inspection and dead-letter workflows.
+
+`IMongoQueue<TPayload>.IsRunning`, `StartSubscriptionAsync` and `StopSubscriptionAsync` are backed internally by
+`IMongoQueueSubscription<TPayload>`, which manages the change-stream monitor and processing loop. It is public for
+the library's own composition but is not created or replaced by application code; use the `IMongoQueue<TPayload>`
+members above instead.
 
 ## Diagnostics
 

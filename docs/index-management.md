@@ -18,3 +18,15 @@ await collection.Indexes.CreateOneOrUpdateAsync(
 ```
 
 Explicit names make it possible to compare and replace an existing definition predictably. Index creation is commonly placed in an idempotent [database configurator](configurators.md) or [migration](migrations.md), depending on whether the change is startup configuration or a versioned database transition.
+
+## Dropping an Index
+
+`DropOneIfExistsAsync` drops a named index and ignores the error when the index or its collection does not already exist, so retiring an index stays idempotent:
+
+```csharp
+await collection.Indexes.DropOneIfExistsAsync(
+    "email_unique",
+    cancellationToken: cancellationToken);
+```
+
+Overloads accept a `DropIndexOptions` and a `IClientSessionHandle`, matching the driver's own `DropOneAsync` overloads. Any other error, such as an invalid index name, still throws `MongoCommandException`.
