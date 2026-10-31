@@ -109,6 +109,8 @@ const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Tags.Authority = "anchor
 *REMOVED*static Chaos.Mongo.EventStore.MongoEventStoreSerializationSetup.RegisterClassMaps<TAggregate>(Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate!>! options) -> void
 *REMOVED*~override Chaos.Mongo.EventStore.CheckpointId.Equals(object obj) -> bool
 *REMOVED*~override Chaos.Mongo.EventStore.CheckpointId.ToString() -> string
+Chaos.Mongo.EventStore.Errors.MongoConcurrencyIndexMissingException
+Chaos.Mongo.EventStore.Errors.MongoConcurrencyIndexMissingException.MongoConcurrencyIndexMissingException(string! message, System.Exception? innerException = null) -> void
 Chaos.Mongo.EventStore.Errors.TimestampAuthorityException
 Chaos.Mongo.EventStore.Errors.TimestampAuthorityException.AuthorityName.get -> string!
 Chaos.Mongo.EventStore.Errors.TimestampAuthorityException.TimestampAuthorityException(string! authorityName, string! message, System.Exception? innerException = null) -> void
@@ -143,5 +145,7 @@ Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.TrustedAnchorHead() -> void
 Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.UnrecordedErasure() -> void
 Chaos.Mongo.EventStore.Integrity.VerifiedEvent.VerifiedEvent() -> void
 Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithIntegrityProtection(System.Action<Chaos.Mongo.EventStore.Integrity.IntegrityProtectionBuilder<TAggregate!>!>? configure = null) -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
+Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithoutConcurrencyIndexVerification() -> Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate!>!
 Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.EventTypes.get -> System.Collections.Generic.IReadOnlyDictionary<System.Type!, string!>!
+Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.VerifyConcurrencyIndexOnAppend.get -> bool
 static Chaos.Mongo.EventStore.Integrity.RevocationLists.IssuedTooEarly(System.DateTime nextUpdateUtc) -> Chaos.Mongo.EventStore.Integrity.RevocationLists!

@@ -25,40 +25,40 @@ around line 1172) a clear, explicit way to either see the problem or acknowledge
 
 ## Acceptance Criteria
 
-- [ ] A store registered exactly as the quick start in `docs/event-store.md` and
+- [x] A store registered exactly as the quick start in `docs/event-store.md` and
       `src/Chaos.Mongo.EventStore/README.md` shows it (`RunConfiguratorsOnStartup` left at
       its default `false`, no manual configurator run) cannot commit two events at the same
       `(AggregateId, Version)`; the loser gets `MongoConcurrencyException`, not a silent
       duplicate.
-- [ ] When the connection used for appending lacks permission to create indexes and the
+- [x] When the connection used for appending lacks permission to create indexes and the
       unique index does not already exist, appending throws a clear, dedicated exception
       that explains the missing protection and how to resolve it, instead of silently
       appending without concurrency protection. An integration test using a connection
       restricted to `insert`/`find` (no `createIndex`) on the events collection verifies
       this.
-- [ ] An explicit opt-out is available for deployments that provision the index out-of-band
+- [x] An explicit opt-out is available for deployments that provision the index out-of-band
       (e.g. via an elevated-privilege configurator run) and want appends on a
       restricted-privilege connection to skip the automatic index check. An integration test
       verifies that, with this opt-out set and the index already present, appending
       succeeds without attempting index creation.
-- [ ] A concurrency test reproducing the issue's scenario (many concurrent appends racing
+- [x] A concurrency test reproducing the issue's scenario (many concurrent appends racing
       for the same explicit version) runs in the integration suite for both
       `RunConfiguratorsOnStartup = true` and `= false`, and in both cases exactly one
       append per contested version succeeds while the rest fail with
       `MongoConcurrencyException` — no duplicated positions.
-- [ ] `docs/event-store.md`'s quick start, its "MongoDB Roles" table, and its "Exception
+- [x] `docs/event-store.md`'s quick start, its "MongoDB Roles" table, and its "Exception
       Handling" table, plus `src/Chaos.Mongo.EventStore/README.md`'s quick start, correctly
       describe when and how the concurrency index is created, and the restricted-role
       behavior and its opt-out.
-- [ ] Ensuring the concurrency index in one database does not suppress the check (or its
+- [x] Ensuring the concurrency index in one database does not suppress the check (or its
       failure/opt-out behavior) for a same-named events collection in a different database
       reachable through the same `IMongoClient`. A test verifies this with two databases on
       one client.
-- [ ] If an index already exists under the concurrency index's name with different keys or
+- [x] If an index already exists under the concurrency index's name with different keys or
       options, appending fails with the dedicated exception instead of dropping and
       recreating that index; no event is persisted and the existing index is left intact. A
       test verifies this.
-- [ ] The Release build produces no warnings and the full test suite passes.
+- [x] The Release build produces no warnings and the full test suite passes.
 
 ## Technical Details
 

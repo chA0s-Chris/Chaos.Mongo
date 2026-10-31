@@ -507,7 +507,12 @@ internal abstract class NotSupportedMongoIndexManager<TDocument> : IMongoIndexMa
 }
 
 /// <summary>
-/// A placeholder <see cref="IMongoIndexManager{TDocument}"/> that is never invoked, only returned from
-/// <see cref="IMongoCollection{TDocument}.Indexes"/>.
+/// A placeholder <see cref="IMongoIndexManager{TDocument}"/> returned from
+/// <see cref="IMongoCollection{TDocument}.Indexes"/>. <see cref="CreateOneAsync"/> simulates an index that already
+/// exists, which is all the append path's concurrency index check needs; every other member is unsupported.
 /// </summary>
-internal sealed class PlaceholderMongoIndexManager<TDocument> : NotSupportedMongoIndexManager<TDocument>;
+internal sealed class PlaceholderMongoIndexManager<TDocument> : NotSupportedMongoIndexManager<TDocument>
+{
+    public override Task<String> CreateOneAsync(CreateIndexModel<TDocument> model, CreateOneIndexOptions options, CancellationToken cancellationToken)
+        => Task.FromResult(model.Options.Name ?? String.Empty);
+}

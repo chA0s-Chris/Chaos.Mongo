@@ -393,11 +393,13 @@ sealed class MongoEventStoreBuilder<TAggregate>
   MongoEventStoreBuilder<TAggregate> WithEventsCollectionSuffix(String suffix)
   MongoEventStoreBuilder<TAggregate> WithIntegrityProtection(Action<IntegrityProtectionBuilder<TAggregate>>? configure = null)
   MongoEventStoreBuilder<TAggregate> WithMaxAppendRetries(Int32 retries)
+  MongoEventStoreBuilder<TAggregate> WithoutConcurrencyIndexVerification()
 sealed class MongoEventStoreOptions<TAggregate>
   Boolean BulkWriteOptimizationEnabled { get; }
   Boolean CheckpointsEnabled { get; }
   Boolean IntegrityProtectionEnabled { get; }
   Boolean SealingSweepEnabled { get; }
+  Boolean VerifyConcurrencyIndexOnAppend { get; }
   IReadOnlyDictionary<Type, String> EventTypes { get; }
   Int32 CheckpointInterval { get; }
   Int32 MaxAppendRetries { get; }

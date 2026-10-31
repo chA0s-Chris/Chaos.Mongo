@@ -25,15 +25,7 @@ internal sealed class MongoEventStoreConfigurator<TAggregate> : IMongoConfigurat
     {
         var eventsCollection = helper.Database.GetCollection<Event<TAggregate>>(_options.EventsCollectionName);
 
-        var indexModel = new CreateIndexModel<Event<TAggregate>>(
-            Builders<Event<TAggregate>>.IndexKeys
-                                       .Ascending(e => e.AggregateId)
-                                       .Ascending(e => e.Version),
-            new CreateIndexOptions
-            {
-                Unique = true,
-                Name = IndexNames.AggregateIdWithVersionUnique
-            });
+        var indexModel = EventStoreIndexes.CreateConcurrencyIndexModel<TAggregate>();
 
         await eventsCollection.Indexes.CreateOneOrUpdateAsync(indexModel, cancellationToken: cancellationToken);
 

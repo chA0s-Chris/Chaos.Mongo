@@ -130,6 +130,12 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithCollectionPrefix("Orders"));
 ```
 
+This registration alone is enough for optimistic concurrency, even without `RunConfiguratorsOnStartup` (see
+[Registering an Event Store](#registering-an-event-store)): the first append on a connection that is allowed to
+create indexes creates the unique `(AggregateId, Version)` index automatically, before relying on it. A connection
+without that permission needs the index provisioned out-of-band instead — see
+[MongoDB Roles](#mongodb-roles) and [Exception Handling](#exception-handling).
+
 ### 4. Use the Event Store
 
 ```csharp
@@ -376,10 +382,21 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 | `WithEventsCollectionSuffix(string suffix)`     | Sets events collection suffix                          | `_Events`           |
 | `WithCheckpointCollectionSuffix(string suffix)` | Sets checkpoint collection suffix                      | `_Checkpoints`      |
 | `WithIntegrityProtection(Action<IntegrityProtectionBuilder<TAggregate>>? configure)` | Enables [tamper evidence](#tamper-evidence) for the aggregate type | Disabled |
+| `WithoutConcurrencyIndexVerification()`                                            | Skips the automatic check and creation of the unique concurrency index on append; use only once the index is confirmed to exist | Verification enabled |
 
 When bulk-write optimization is enabled, EventStore validates the connected server version before using the optimized
 append path. If the server is older than MongoDB 8.0, append operations fail with a clear error instead of silently
 falling back to the legacy behavior.
+
+Every append verifies — and, when permitted, creates — the unique `(AggregateId, Version)` index before relying on
+it for optimistic concurrency, independent of `RunConfiguratorsOnStartup`. The check runs once per `IMongoClient`
+and events collection and is then cached for the process lifetime. On a connection whose role cannot create indexes
+(see [MongoDB Roles](#mongodb-roles)), appends fail with `MongoConcurrencyIndexMissingException` unless the role is
+granted `createIndex`, or the index is provisioned out-of-band and the connection calls
+`WithoutConcurrencyIndexVerification()` — the index's mere existence does not resolve the failure on its own, since
+the restricted role still cannot run the check's `createIndexes` command. Running configurators manually, for
+example via `IMongoConfiguratorRunner` or `RunConfiguratorsOnStartup`, provisions the index ahead of time; once it
+exists, the automatic check's `createIndexes` call is idempotent for a connection permitted to run it.
 
 ### Checkpoints
 
@@ -1156,7 +1173,7 @@ Grant least privilege:
 
 | Role | Permissions |
 |---|---|
-| Application | `insert` and `find` on the events collection; the usual permissions on the read-model and checkpoint collections; while the sealing sweep runs in it, `insert`, `update` and `find` on `{Prefix}_IntegrityState`, and `insert`, `update`, `remove` and `find` on the distributed lock collection, whose lock the sweep releases by removing it. A container with `WithoutSealingSweep()` needs none of these. |
+| Application | `insert` and `find` on the events collection; the usual permissions on the read-model and checkpoint collections; while the sealing sweep runs in it, `insert`, `update` and `find` on `{Prefix}_IntegrityState`, and `insert`, `update`, `remove` and `find` on the distributed lock collection, whose lock the sweep releases by removing it. A container with `WithoutSealingSweep()` needs none of these. Without `createIndex` on the events collection, appends on this role fail with `MongoConcurrencyIndexMissingException` until the concurrency index is provisioned out-of-band (for example by running configurators with an elevated-privilege connection) and `WithoutConcurrencyIndexVerification()` is set. |
 | Retroactive sealing | The sweep's permissions above, and temporarily `update` on the events collection. |
 | Anchoring | `changeStream` and `find` on the database; `insert`, `update`, `remove` and `find` on `{Prefix}Anchors`, `{Prefix}AnchorLeaves`, `{Prefix}ChangeStreamState` and the distributed lock collection; `insert` and `find` on the evidence collections. |
 | Erasure | The application's permissions on the events, read-model and checkpoint collections, `update` on the events collection and, when checkpoints are enabled, on the checkpoint collection, whose states erasure rewrites, with separate credentials. Register its event stores with `WithoutSealingSweep()`, so it needs no sweep permissions. |
@@ -1176,6 +1193,7 @@ Erasure permanently needs `update` on the events collection and, with checkpoint
 | Exception                       | Cause                                                                                                  | Recommended Action                    |
 |---------------------------------|--------------------------------------------------------------------------------------------------------|---------------------------------------|
 | `MongoConcurrencyException`     | `expectedRevision` does not match; with explicit versions, a concurrent commit; with store-assigned versions, conflicts beyond the retry bound | Reload aggregate and retry            |
+| `MongoConcurrencyIndexMissingException` | The unique concurrency index could not be verified or created: the connection lacks `createIndex` on the events collection, or an index with that name already exists with different keys or options | Grant `createIndex`, provision the index out-of-band and set `WithoutConcurrencyIndexVerification()`, or reconcile the conflicting index |
 | `MongoDuplicateEventException`  | Event with same ID already exists                                                                      | Safe to ignore (idempotent)           |
 | `MongoEventValidationException` | Event preconditions not met, or an observational event has no preceding state-changing event          | Fix the event data or aggregate state |
 | `MongoEventStoreException`      | The stream contains events but the aggregate's read model is missing                                   | Restore or rebuild the read model     |
