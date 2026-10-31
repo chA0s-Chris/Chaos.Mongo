@@ -1,0 +1,23 @@
+# Make MongoQueue disposal idempotent
+
+## Rationale
+
+[Issue #235](https://github.com/chA0s-Chris/Chaos.Mongo/issues/235): `MongoQueue<TPayload>.DisposeAsync` (`src/Chaos.Mongo/Queues/MongoQueue.cs:42-46`) cannot be called twice. `MongoQueueBuilder.RegisterQueue` (`src/Chaos.Mongo/Queues/MongoQueueBuilder.cs:274-293`) registers `IMongoQueue<TPayload>` as a singleton factory that creates the `MongoQueue<TPayload>` instance, and registers `IMongoQueue` as a singleton factory that resolves and returns that same `IMongoQueue<TPayload>` instance. A `ServiceProvider` tracks each singleton descriptor independently for disposal, so it calls `DisposeAsync` twice on the same object when both interfaces have been resolved.
+
+The first call runs normally: `StopSubscriptionAsync` acquires `_semaphore`, then `DisposeAsync` disposes `_semaphore`. The second call re-enters `StopSubscriptionAsync`, which awaits `_semaphore.WaitAsync()` on the already-disposed semaphore and throws `ObjectDisposedException`. This reproduces both when disposing the provider directly after resolving both interfaces, and when a real `Microsoft.Extensions.Hosting.Host` is started, stopped and disposed with such a queue registered.
+
+## Acceptance Criteria
+
+- [ ] Calling `MongoQueue<TPayload>.DisposeAsync` a second time, after it already completed, returns without throwing and without re-running the stop/dispose logic.
+- [ ] Calling `MongoQueue<TPayload>.DisposeAsync` concurrently from two callers does not throw, and the stop/dispose logic runs at most once.
+- [ ] A new test builds a real `Host` with a queue registered through `AddMongo(...).WithQueue<TPayload>(...)`, resolves both `IMongoQueue<TPayload>` and `IMongoQueue` from its `IServiceProvider`, then starts, stops and disposes the host without throwing.
+- [ ] Existing `MongoQueueTests` disposal tests (`DisposeAsync_WithNoSubscription_CompletesSuccessfully`, `DisposeAsync_WithRunningSubscription_StopsSubscription`) keep passing unmodified.
+- [ ] The Release build produces no warnings and the full test suite passes.
+
+## Technical Details
+
+- Add a disposed guard to `MongoQueue<TPayload>` following the idiom already used by `MongoQueueSubscription.DisposeAsync` (`src/Chaos.Mongo/Queues/MongoQueueSubscription.cs:461-466`, a `Boolean` flag checked before doing any teardown work) and `MongoLock.DisposeAsync` (`src/Chaos.Mongo/MongoLock.cs:89-106`, which guards the flag with a dedicated plain-`Object` lock rather than the semaphore it later disposes). Add a `private readonly Object _disposeLock = new();` and a `private Boolean _disposed;` field. At the start of `DisposeAsync`, check-and-set `_disposed` under `_disposeLock`; if already set, return immediately without touching `_semaphore` or calling `StopSubscriptionAsync`. Only the caller that wins the check proceeds to call `StopSubscriptionAsync` and dispose `_semaphore`.
+- Guarding with a plain lock (not the `SemaphoreSlim`) keeps the check synchronous and avoids depending on the resource that `DisposeAsync` itself tears down, and makes the check-and-set atomic under concurrent `DisposeAsync` calls.
+- No change is needed to `MongoQueueBuilder`'s registration shape or to `MongoHostedService`; the fix is confined to making repeated disposal of the same `MongoQueue<TPayload>` instance safe, which is what the duplicate singleton registrations trigger in practice.
+- Regression unit test coverage in `tests/Chaos.Mongo.Tests/Queues/MongoQueueTests.cs`: a test that calls `DisposeAsync` twice sequentially and asserts no exception is thrown (e.g. `DisposeAsync_CalledTwice_DoesNotThrow`), and a test that awaits two concurrent `DisposeAsync` calls (e.g. via `Task.WhenAll`) and asserts no exception is thrown (e.g. `DisposeAsync_CalledConcurrently_DoesNotThrow`). Follow the existing hand-crafted-friendly style of this file; new tests should use hand-crafted test doubles rather than adding further Moq usage, per `tests/AGENTS.md`.
+- New Host-based coverage: follow the `CreateHost` pattern in `tests/Chaos.Mongo.Outbox.Tests/TypedOutboxLifecycleTests.cs:211-231` (a `HostBuilder` with `AddMongo(...)` plus the relevant `With...` registration). Register the queue with `AutoStartSubscription` set to `false` so `MongoHostedService.StartedAsync`/`StoppingAsync` (`src/Chaos.Mongo/MongoHostedService.cs:47-54,82-89`) skip `StartSubscriptionAsync`/`StopSubscriptionAsync`, keeping the test independent of any real MongoDB I/O; the scenario under test is DI-container disposal, not subscription behavior. Resolve both `IMongoQueue<TPayload>` and `IMongoQueue` from `host.Services` before starting, so the container tracks both singleton descriptors, matching the issue's reproduction.
