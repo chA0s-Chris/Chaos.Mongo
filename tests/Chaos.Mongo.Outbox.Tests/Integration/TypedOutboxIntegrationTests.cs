@@ -137,6 +137,49 @@ public class TypedOutboxIntegrationTests
     }
 
     [Test]
+    public async Task Processor_PublisherOnlyAsyncDisposable_DisposesWithoutThrowing()
+    {
+        var hub = new TypedPublicationHub();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(hub);
+        services.AddMongo(_container.GetConnectionString(), $"TypedOutboxAsyncOnly_{Guid.NewGuid():N}", o =>
+                {
+                    o.RunConfiguratorsOnStartup = false;
+                    o.ApplyMigrationsOnStartup = false;
+                })
+                .WithOutbox<FirstDestination>(o => o.WithCollectionName("First")
+                                                    .WithMessage<TestPayload>("First")
+                                                    .WithPublisher<TrackedAsyncOnlyPublisher>(ServiceLifetime.Scoped)
+                                                    .WithPollingInterval(TimeSpan.FromMilliseconds(50)));
+        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        using (var session = await provider.GetRequiredService<IMongoHelper>().Client.StartSessionAsync())
+        {
+            session.StartTransaction();
+            await provider.GetRequiredService<IOutbox<FirstDestination>>().AddMessageAsync(session, new TestPayload());
+            await session.CommitTransactionAsync();
+        }
+
+        var processor = provider.GetRequiredService<IOutboxProcessor<FirstDestination>>();
+        try
+        {
+            await processor.StartAsync();
+            await WaitUntilAsync(() => Task.FromResult(hub.Publications.Count == 1));
+        }
+        finally
+        {
+            await processor.StopAsync();
+        }
+
+        await WaitUntilAsync(() => Task.FromResult(!hub.Disposed.IsEmpty));
+        hub.Disposed.Should().ContainSingle();
+    }
+
+    [Test]
     public async Task RunAsync_DifferentRetentionPolicies_CreatesIndependentIndexes()
     {
         await using var provider = CreateServices().BuildServiceProvider();
@@ -442,6 +485,27 @@ internal sealed class TypedPublicationHub
     public ConcurrentBag<Guid> Disposed { get; } = [];
     public ConcurrentDictionary<String, Func<CancellationToken, Task>> Handlers { get; } = new();
     public ConcurrentBag<(String Destination, Guid PublisherId)> Publications { get; } = [];
+}
+
+internal sealed class TrackedAsyncOnlyPublisher : IOutboxPublisher, IAsyncDisposable
+{
+    private readonly TypedPublicationHub _hub;
+    private readonly Guid _id = Guid.NewGuid();
+
+    public TrackedAsyncOnlyPublisher(TypedPublicationHub hub) => _hub = hub;
+
+    public ValueTask DisposeAsync()
+    {
+        _hub.Disposed.Add(_id);
+        return ValueTask.CompletedTask;
+    }
+
+    public async Task PublishAsync(OutboxMessage message, CancellationToken cancellationToken = default)
+    {
+        _hub.Publications.Add((message.Type, _id));
+        if (_hub.Handlers.TryGetValue(message.Type, out var handler))
+            await handler(cancellationToken);
+    }
 }
 
 internal sealed class TrackedTypedPublisher : IOutboxPublisher, IDisposable

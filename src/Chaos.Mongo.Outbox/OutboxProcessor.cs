@@ -244,7 +244,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         _logger.LogDebug("Found {MessageCount} eligible outbox messages", messages.Count);
 
-        using var scope = _serviceScopeFactory.CreateScope();
+        await using var scope = _serviceScopeFactory.CreateAsyncScope();
         var publisher = _publisherKey is null
             ? scope.ServiceProvider.GetRequiredService<IOutboxPublisher>()
             : scope.ServiceProvider.GetRequiredKeyedService<IOutboxPublisher>(_publisherKey);

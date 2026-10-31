@@ -17,14 +17,14 @@ instead of introducing a new one.
 
 ## Acceptance Criteria
 
-- [ ] `OutboxProcessor` resolves the batch publisher from an async scope
+- [x] `OutboxProcessor` resolves the batch publisher from an async scope
       (`IServiceScopeFactory.CreateAsyncScope()`, disposed with `await using`)
       instead of the synchronous `CreateScope()`/`using` pair.
-- [ ] An automated test delivers at least one outbox message through a publisher
+- [x] An automated test delivers at least one outbox message through a publisher
       that implements only `IAsyncDisposable` (not `IDisposable`) and verifies
       that publisher was disposed once its batch completes, without the
       processor throwing.
-- [ ] The Release build produces no new warnings and the full test suite passes.
+- [x] The Release build produces no new warnings and the full test suite passes.
 
 ## Technical Details
 
