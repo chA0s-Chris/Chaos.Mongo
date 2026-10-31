@@ -4,6 +4,8 @@ namespace Chaos.Mongo.Tests.Queues;
 
 using Chaos.Mongo.Queues;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Moq;
 using NUnit.Framework;
 
@@ -49,6 +51,76 @@ public class MongoQueueTests
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task DisposeAsync_CalledConcurrently_DoesNotThrow()
+    {
+        // Arrange
+        var queueDefinition = CreateQueueDefinition();
+        var subscription = new CountingQueueSubscription();
+        var subscriptionFactory = new SingleUseQueueSubscriptionFactory(subscription);
+        var publisher = new ThrowingQueuePublisher();
+        var queue = new MongoQueue<TestPayload>(queueDefinition, subscriptionFactory, publisher);
+        await queue.StartSubscriptionAsync();
+
+        var firstDispose = queue.DisposeAsync().AsTask();
+        await subscription.StopEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        firstDispose.IsCompleted.Should().BeFalse("the first disposal must still be tearing down the subscription when the second call starts");
+
+        // Act
+        var secondDispose = queue.DisposeAsync().AsTask();
+        subscription.ReleaseStop();
+        var act = () => Task.WhenAll(firstDispose, secondDispose).WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Assert
+        await act.Should().NotThrowAsync();
+        subscription.StopCalls.Should().Be(1);
+        subscription.DisposeCalls.Should().Be(1);
+    }
+
+    [Test]
+    public async Task DisposeAsync_CalledTwice_DoesNotThrow()
+    {
+        // Arrange
+        var queueDefinition = CreateQueueDefinition();
+        var subscriptionFactory = new ThrowingQueueSubscriptionFactory();
+        var publisher = new ThrowingQueuePublisher();
+        var queue = new MongoQueue<TestPayload>(queueDefinition, subscriptionFactory, publisher);
+        await queue.DisposeAsync();
+
+        // Act
+        var act = async () => await queue.DisposeAsync();
+
+        // Assert
+        await act.Should().NotThrowAsync();
+    }
+
+    [Test]
+    public async Task DisposeAsync_WhenBothQueueInterfacesAreResolvedFromHost_DoesNotThrow()
+    {
+        // Arrange
+        var host = new HostBuilder().ConfigureServices(services => services
+                                                                   .AddMongo("mongodb://localhost/Unused")
+                                                                   .WithQueue<TestPayload>(queue => queue
+                                                                                                    .WithPayloadHandler<NoOpPayloadHandler>()
+                                                                                                    .WithCollectionName("test-queue")
+                                                                                                    .WithoutAutoStartSubscription()))
+                                    .Build();
+
+        host.Services.GetRequiredService<IMongoQueue<TestPayload>>();
+        host.Services.GetRequiredService<IMongoQueue>();
+
+        // Act
+        var act = async () =>
+        {
+            await host.StartAsync();
+            await host.StopAsync();
+            host.Dispose();
+        };
+
+        // Assert
+        await act.Should().NotThrowAsync();
     }
 
     [Test]
@@ -416,6 +488,58 @@ public class MongoQueueTests
     public class WrongPayload;
 
     /// <summary>
+    /// Hand-crafted double for <see cref="IMongoQueueSubscription{TPayload}"/> that counts stop and dispose
+    /// calls and gates <see cref="StopAsync"/> on <see cref="ReleaseStop"/>, so a test can force two
+    /// <see cref="MongoQueue{TPayload}.DisposeAsync"/> calls to genuinely overlap and still verify the
+    /// subscription is torn down at most once.
+    /// </summary>
+    private sealed class CountingQueueSubscription : IMongoQueueSubscription<TestPayload>
+    {
+        private readonly TaskCompletionSource _releaseGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _stopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Int32 _disposeCalls;
+        private Int32 _stopCalls;
+
+        public Int32 DisposeCalls => _disposeCalls;
+
+        public Int32 StopCalls => _stopCalls;
+
+        /// <summary>
+        /// Completes once <see cref="StopAsync"/> has been entered, letting a test assert the first disposal
+        /// is genuinely still in progress before starting the second one.
+        /// </summary>
+        public Task StopEntered => _stopEntered.Task;
+
+        public Boolean IsActive => true;
+
+        public void ReleaseStop() => _releaseGate.TrySetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref _disposeCalls);
+            return ValueTask.CompletedTask;
+        }
+
+        public Task StartAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _stopCalls);
+            _stopEntered.TrySetResult();
+            await _releaseGate.Task;
+        }
+    }
+
+    /// <summary>
+    /// Hand-crafted no-op stub for <see cref="IMongoQueuePayloadHandler{TPayload}"/>. Never exercised: the
+    /// test that registers it through DI keeps the queue's subscription from auto-starting.
+    /// </summary>
+    private sealed class NoOpPayloadHandler : IMongoQueuePayloadHandler<TestPayload>
+    {
+        public Task HandlePayloadAsync(TestPayload payload, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>
     /// Minimal hand-crafted stub for <see cref="IMongoQueueSubscription{TPayload}"/>. None of its members are
     /// exercised by the test that uses it; the subscription is only ever created and stored.
     /// </summary>
@@ -457,11 +581,37 @@ public class MongoQueueTests
     }
 
     /// <summary>
+    /// Hand-crafted single-use double for <see cref="IMongoQueueSubscriptionFactory"/> that always returns the
+    /// given subscription, used to verify disposal tears down the subscription at most once.
+    /// </summary>
+    private sealed class SingleUseQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
+    {
+        private readonly IMongoQueueSubscription<TestPayload> _subscription;
+
+        public SingleUseQueueSubscriptionFactory(IMongoQueueSubscription<TestPayload> subscription) => _subscription = subscription;
+
+        public Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
+            where TPayload : class, new()
+            => Task.FromResult((IMongoQueueSubscription<TPayload>)_subscription);
+    }
+
+    /// <summary>
     /// Hand-crafted stub for <see cref="IMongoQueuePublisher"/>. Not exercised by the test that uses it.
     /// </summary>
     private sealed class ThrowingQueuePublisher : IMongoQueuePublisher
     {
         public Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition, TPayload payload, CancellationToken cancellationToken)
+            where TPayload : class, new()
+            => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Hand-crafted stub for <see cref="IMongoQueueSubscriptionFactory"/>. Not exercised by the test that uses
+    /// it, which never starts a subscription before disposing the queue.
+    /// </summary>
+    private sealed class ThrowingQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
+    {
+        public Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
             where TPayload : class, new()
             => throw new NotSupportedException();
     }

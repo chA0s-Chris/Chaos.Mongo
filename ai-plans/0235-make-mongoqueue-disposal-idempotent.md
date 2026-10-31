@@ -8,11 +8,11 @@ The first call runs normally: `StopSubscriptionAsync` acquires `_semaphore`, the
 
 ## Acceptance Criteria
 
-- [ ] Calling `MongoQueue<TPayload>.DisposeAsync` a second time, after it already completed, returns without throwing and without re-running the stop/dispose logic.
-- [ ] Calling `MongoQueue<TPayload>.DisposeAsync` concurrently from two callers does not throw, and the stop/dispose logic runs at most once.
-- [ ] A new test builds a real `Host` with a queue registered through `AddMongo(...).WithQueue<TPayload>(...)`, resolves both `IMongoQueue<TPayload>` and `IMongoQueue` from its `IServiceProvider`, then starts, stops and disposes the host without throwing.
-- [ ] Existing `MongoQueueTests` disposal tests (`DisposeAsync_WithNoSubscription_CompletesSuccessfully`, `DisposeAsync_WithRunningSubscription_StopsSubscription`) keep passing unmodified.
-- [ ] The Release build produces no warnings and the full test suite passes.
+- [x] Calling `MongoQueue<TPayload>.DisposeAsync` a second time, after it already completed, returns without throwing and without re-running the stop/dispose logic.
+- [x] Calling `MongoQueue<TPayload>.DisposeAsync` concurrently from two callers does not throw, and the stop/dispose logic runs at most once.
+- [x] A new test builds a real `Host` with a queue registered through `AddMongo(...).WithQueue<TPayload>(...)`, resolves both `IMongoQueue<TPayload>` and `IMongoQueue` from its `IServiceProvider`, then starts, stops and disposes the host without throwing.
+- [x] Existing `MongoQueueTests` disposal tests (`DisposeAsync_WithNoSubscription_CompletesSuccessfully`, `DisposeAsync_WithRunningSubscription_StopsSubscription`) keep passing unmodified.
+- [x] The Release build produces no warnings and the full test suite passes.
 
 ## Technical Details
 

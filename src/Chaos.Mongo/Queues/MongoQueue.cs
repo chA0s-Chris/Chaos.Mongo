@@ -8,9 +8,11 @@ namespace Chaos.Mongo.Queues;
 /// <typeparam name="TPayload">The type of payload stored in the queue.</typeparam>
 internal class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : class, new()
 {
+    private readonly Object _disposeLock = new();
     private readonly IMongoQueuePublisher _publisher;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private readonly IMongoQueueSubscriptionFactory _subscriptionFactory;
+    private Boolean _disposed;
     private IMongoQueueSubscription<TPayload>? _subscription;
 
     /// <summary>
@@ -41,6 +43,14 @@ internal class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : cla
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
+        lock (_disposeLock)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+        }
+
         await StopSubscriptionAsync();
         _semaphore.Dispose();
     }
