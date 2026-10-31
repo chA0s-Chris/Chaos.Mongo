@@ -19,7 +19,8 @@ public class MongoEventStoreBuilderTests
                      .WithCheckpointCollectionSuffix("_Snap")
                      .WithEventsCollectionSuffix("_Evt")
                      .WithMaxAppendRetries(5)
-                     .WithEvent<TestCreatedEvent>("Created");
+                     .WithEvent<TestCreatedEvent>("Created")
+                     .WithoutConcurrencyIndexVerification();
 
         result.Should().BeSameAs(builder);
     }
@@ -37,6 +38,7 @@ public class MongoEventStoreBuilderTests
         builder.Options.CheckpointsEnabled.Should().BeFalse();
         builder.Options.EventTypes.Should().BeEmpty();
         builder.Options.MaxAppendRetries.Should().Be(3);
+        builder.Options.VerifyConcurrencyIndexOnAppend.Should().BeTrue();
     }
 
     [Test]
@@ -199,6 +201,16 @@ public class MongoEventStoreBuilderTests
         builder.WithMaxAppendRetries(retries);
 
         builder.Options.MaxAppendRetries.Should().Be(retries);
+    }
+
+    [Test]
+    public void WithoutConcurrencyIndexVerification_WhenCalled_DisablesOption()
+    {
+        var builder = new MongoEventStoreBuilder<TestAggregate>();
+
+        builder.WithoutConcurrencyIndexVerification();
+
+        builder.Options.VerifyConcurrencyIndexOnAppend.Should().BeFalse();
     }
 
     private sealed class TestAggregate : IAggregate

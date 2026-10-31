@@ -180,4 +180,17 @@ public sealed class MongoEventStoreBuilder<TAggregate> where TAggregate : class,
         Options.MaxAppendRetries = retries;
         return this;
     }
+
+    /// <summary>
+    /// Disables the automatic check that verifies — and, when permitted, creates — the unique concurrency index
+    /// before an append relies on it. Use this only for a connection whose role cannot create indexes, after the
+    /// index has been provisioned out-of-band, for example by running configurators once with an
+    /// elevated-privilege connection. Without this index, concurrent appends can commit duplicate positions.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    public MongoEventStoreBuilder<TAggregate> WithoutConcurrencyIndexVerification()
+    {
+        Options.VerifyConcurrencyIndexOnAppend = false;
+        return this;
+    }
 }

@@ -104,6 +104,15 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     public TimeSpan SealingSweepRetryDelay { get; internal set; } = TimeSpan.FromMinutes(1);
 
     /// <summary>
+    /// Gets a value indicating whether an append verifies that the unique concurrency index on
+    /// <c>(AggregateId, Version)</c> exists before relying on it, creating it when the connection is permitted to.
+    /// Defaults to <c>true</c>. Disable with
+    /// <see cref="MongoEventStoreBuilder{TAggregate}.WithoutConcurrencyIndexVerification"/> only once the index is
+    /// confirmed to exist, for a connection whose role cannot create indexes.
+    /// </summary>
+    public Boolean VerifyConcurrencyIndexOnAppend { get; internal set; } = true;
+
+    /// <summary>
     /// Gets the name of the collection that stores the integrity sealing state.
     /// </summary>
     internal String IntegrityStateCollectionName => $"{CollectionPrefix}{IntegrityStateCollectionSuffix}";

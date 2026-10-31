@@ -281,6 +281,7 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             }
             : null;
 
+        await EnsureConcurrencyIndexAsync(cancellationToken);
         await EnsureBulkWriteOptimizationSupportedAsync(cancellationToken);
 
         // Serialized documents are only needed to seal events or to feed the client bulk write. Without
@@ -450,6 +451,16 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
             _mongoHelper.Client,
             _mongoHelper.Database,
             cancellationToken);
+    }
+
+    private Task EnsureConcurrencyIndexAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.VerifyConcurrencyIndexOnAppend)
+        {
+            return Task.CompletedTask;
+        }
+
+        return MongoEventStoreConcurrencyIndexSupport.EnsureIndexAsync(_mongoHelper.Client, GetEventsCollection(), cancellationToken);
     }
 
     private IMongoCollection<CheckpointDocument<TAggregate>> GetCheckpointCollection()

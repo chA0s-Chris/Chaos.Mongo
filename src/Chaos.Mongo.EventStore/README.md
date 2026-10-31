@@ -47,6 +47,12 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithCollectionPrefix("Orders"));
 ```
 
+This is enough for optimistic concurrency on its own: the first append on a connection that can create indexes
+creates the unique concurrency index automatically, independent of `RunConfiguratorsOnStartup`. A connection
+without that permission needs the index provisioned out-of-band instead — see the
+[MongoDB Roles](https://github.com/chA0s-Chris/Chaos.Mongo/blob/main/docs/event-store.md#mongodb-roles) section of
+the complete documentation.
+
 Append an event through `IEventStore<TAggregate>`:
 
 ```csharp
