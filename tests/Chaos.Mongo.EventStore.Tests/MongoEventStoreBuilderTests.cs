@@ -204,7 +204,7 @@ public class MongoEventStoreBuilderTests
     }
 
     [Test]
-    public void WithoutConcurrencyIndexVerification_DisablesOption()
+    public void WithoutConcurrencyIndexVerification_WhenCalled_DisablesOption()
     {
         var builder = new MongoEventStoreBuilder<TestAggregate>();
 
