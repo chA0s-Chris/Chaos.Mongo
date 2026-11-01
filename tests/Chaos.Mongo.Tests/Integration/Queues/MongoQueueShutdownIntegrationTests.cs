@@ -19,7 +19,7 @@ public class MongoQueueShutdownIntegrationTests
         => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
-    public async Task HandlerCanceledByShutdown_ReleasesLockSoItemIsReprocessedWithoutWaitingForLease()
+    public async Task StopSubscriptionAsync_WhenHandlerIsInFlight_ReleasesLockSoItemIsReprocessedWithoutWaitingForLease()
     {
         // Arrange: a deliberately long lease. If the released item waited out the lease instead of being
         // released immediately, the second subscription below would never observe it within its short timeout.
