@@ -537,6 +537,119 @@ public class MongoMigrationRunnerTests
         historyCollection.InsertedItems.Should().HaveCount(9);
     }
 
+    [Test]
+    public async Task RunMigrationsAsync_WithSlowLeaseAcquisition_RenewsBeforeRemainingLeaseExpires()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extendCallCount = 0;
+
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, duration, _) =>
+        {
+            Interlocked.Increment(ref extendCallCount);
+            return Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime);
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+
+        // The acquisition round trip consumes 6 of the lease's 10 minutes, leaving 4, which is less than half the lease.
+        var helper = new FakeMongoHelper((_, _, _) =>
+        {
+            timeProvider.Advance(TimeSpan.FromMinutes(6));
+            return Task.FromResult<IMongoLock?>(mongoLock);
+        }, historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var migration = new FakeMigration("001_LongRunning", async (_, _, ct) =>
+        {
+            migrationStarted.SetResult();
+            await releaseMigration.Task.WaitAsync(ct);
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act: half of the remaining 4 minutes elapses, well before a fixed half-lease delay of 5 minutes would.
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task;
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+        await WaitForAsync(() => extendCallCount > 0);
+
+        releaseMigration.SetResult();
+        var result = await runTask;
+
+        // Assert
+        extendCallCount.Should().BeGreaterThanOrEqualTo(1);
+        result.AppliedMigrationIds.Should().Equal("001_LongRunning");
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithSlowLeaseExtension_RenewsBeforeRemainingLeaseExpires()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extendCallCount = 0;
+
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, duration, _) =>
+        {
+            var validUntilUtc = timeProvider.GetUtcNow().Add(duration).UtcDateTime;
+
+            // The first extension's round trip consumes 6 of the new lease's 10 minutes, leaving 4.
+            if (Interlocked.Increment(ref extendCallCount) == 1)
+            {
+                timeProvider.Advance(TimeSpan.FromMinutes(6));
+            }
+
+            return Task.FromResult<DateTime?>(validUntilUtc);
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var migration = new FakeMigration("001_LongRunning", async (_, _, ct) =>
+        {
+            migrationStarted.SetResult();
+            await releaseMigration.Task.WaitAsync(ct);
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task;
+        timeProvider.Advance(leaseTime / 2);
+        await WaitForAsync(() => extendCallCount > 0);
+
+        // Half of the remaining 4 minutes elapses, well before a fixed half-lease delay of 5 minutes would.
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+        await WaitForAsync(() => extendCallCount > 1);
+
+        releaseMigration.SetResult();
+        var result = await runTask;
+
+        // Assert
+        extendCallCount.Should().BeGreaterThanOrEqualTo(2);
+        result.AppliedMigrationIds.Should().Equal("001_LongRunning");
+    }
+
     private static MongoLock CreateMongoLock(TimeProvider timeProvider,
                                              TimeSpan leaseTime,
                                              Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction) =>

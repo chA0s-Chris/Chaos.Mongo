@@ -105,9 +105,9 @@ public sealed class MigrationService(IMongoMigrationRunner migrationRunner)
   decide how to react. `MongoHostedService`, however, fails hosted startup when migrations are enabled and the run
   is skipped, unless `MigrationLockWaitTimeout` is `TimeSpan.Zero` — because letting startup continue would run
   configurators and the rest of the host against a schema another instance may still be migrating.
-- While a migration runs, the lock's lease is renewed in the background approximately every half lease duration, so
-  a migration (or a batch of migrations) that takes longer than `MigrationLockLeaseTime` keeps the lock instead of
-  losing it. If the lease cannot be renewed — because another holder has taken over, or renewal otherwise fails —
+- While a migration runs, the lock's lease is renewed in the background once half of its remaining lifetime has
+  elapsed, so a migration (or a batch of migrations) that takes longer than `MigrationLockLeaseTime` keeps the lock
+  instead of losing it. If the lease cannot be renewed — because another holder has taken over, or renewal otherwise fails —
   the in-progress migration is signaled for cancellation, is not recorded as applied, and its transaction (if any)
   is aborted. A migration that observes its cancellation token stops promptly; one that does not cannot be forcibly
   interrupted, and any non-transactional effects it already performed cannot be rolled back.

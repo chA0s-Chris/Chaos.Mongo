@@ -226,28 +226,39 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
     /// Renews <paramref name="mongoLock"/>'s lease for the lifetime of the whole migration run.
     /// </summary>
     /// <remarks>
-    /// A refused extension, or any exception other than the loop's own shutdown cancellation via
-    /// <paramref name="stopToken"/>, cancels <paramref name="lockLostCts"/> so in-progress protected work observes
-    /// the loss, and then propagates, so <see cref="RunMigrationsAsync"/> can surface it when no migration
-    /// exception already takes precedence.
+    ///     <para>
+    ///     Each renewal waits half of the lease's remaining lifetime rather than half of the configured lease, because
+    ///     a lease's expiry is calculated before its database round trip: a slow acquisition or extension has already
+    ///     consumed part of the lease by the time this loop sees it.
+    ///     </para>
+    ///     <para>
+    ///     A refused extension, an already-expired lease (which the database would only refuse), or any exception other
+    ///     than the loop's own shutdown cancellation via <paramref name="stopToken"/>, cancels
+    ///     <paramref name="lockLostCts"/> so in-progress protected work observes the loss. Exceptions then propagate, so
+    ///     <see cref="RunMigrationsAsync"/> can surface them when no migration exception already takes precedence.
+    ///     </para>
     /// </remarks>
     private async Task RunLeaseRenewalLoopAsync(IMongoLock mongoLock, CancellationTokenSource lockLostCts, CancellationToken stopToken)
     {
-        var interval = _options.MigrationLockLeaseTime / 2;
-
         try
         {
             while (true)
             {
-                await Task.Delay(interval, _timeProvider, stopToken);
-
-                if (!await mongoLock.TryExtendAsync(cancellationToken: stopToken))
+                var remainingLease = mongoLock.ValidUntilUtc - _timeProvider.GetUtcNow().UtcDateTime;
+                if (remainingLease > TimeSpan.Zero)
                 {
-                    _logger.LogWarning("Migration lock {LockName} could not be renewed; stopping in-progress migration work",
-                                       _options.MigrationsLockName);
-                    await lockLostCts.CancelAsync();
-                    return;
+                    await Task.Delay(remainingLease / 2, _timeProvider, stopToken);
+
+                    if (await mongoLock.TryExtendAsync(cancellationToken: stopToken))
+                    {
+                        continue;
+                    }
                 }
+
+                _logger.LogWarning("Migration lock {LockName} could not be renewed; stopping in-progress migration work",
+                                   _options.MigrationsLockName);
+                await lockLostCts.CancelAsync();
+                return;
             }
         }
         catch (OperationCanceledException) when (stopToken.IsCancellationRequested)

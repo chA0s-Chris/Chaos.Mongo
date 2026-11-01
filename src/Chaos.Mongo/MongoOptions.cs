@@ -88,8 +88,7 @@ public sealed class MongoOptions
     ///     <para>
     ///     The lease is renewed automatically while migrations run, so a migration that runs longer than this
     ///     duration does not lose the lock. A shorter value still bounds how long a crashed holder's lock stays
-    ///     unclaimable, so prefer tuning the renewal margin over setting this to the longest possible migration
-    ///     duration.
+    ///     unclaimable, so do not set this to the longest possible migration duration.
     ///     </para>
     /// </remarks>
     public TimeSpan MigrationLockLeaseTime { get; set; } = MongoDefaults.MigrationLockLeaseTime;
