@@ -11,8 +11,8 @@ internal static class MongoQueueDiagnostics
 
     private static readonly Histogram<Double> ProcessingDurationHistogram = Meter.CreateHistogram<Double>(
         MongoQueueMetrics.Instruments.ProcessingDuration,
-        "ms",
-        "Queue item processing duration in milliseconds.");
+        "s",
+        "Queue item processing duration in seconds.");
 
     private static readonly Counter<Int64> ProcessingFailedCounter = Meter.CreateCounter<Int64>(
         MongoQueueMetrics.Instruments.ProcessingFailed,
@@ -28,13 +28,13 @@ internal static class MongoQueueDiagnostics
 
     private static readonly Histogram<Double> QueueAgeHistogram = Meter.CreateHistogram<Double>(
         MongoQueueMetrics.Instruments.ProcessingQueueAge,
-        "ms",
-        "Time from queue item creation to lock acquisition in milliseconds.");
+        "s",
+        "Time from queue item creation to lock acquisition in seconds.");
 
     private static readonly Histogram<Double> RecoveredLockAgeHistogram = Meter.CreateHistogram<Double>(
         MongoQueueMetrics.Instruments.LockRecoveryAge,
-        "ms",
-        "Age of recovered queue item locks in milliseconds.");
+        "s",
+        "Age of recovered queue item locks in seconds.");
 
     private static readonly Counter<Int64> RecoveredLockCounter = Meter.CreateCounter<Int64>(
         MongoQueueMetrics.Instruments.LockRecovered,
@@ -44,7 +44,7 @@ internal static class MongoQueueDiagnostics
     {
         var tags = CreateCommonTags(queueDefinition);
         RecoveredLockCounter.Add(1, tags);
-        RecoveredLockAgeHistogram.Record(lockAge.TotalMilliseconds, tags);
+        RecoveredLockAgeHistogram.Record(lockAge.TotalSeconds, tags);
     }
 
     internal static void RecordProcessingFailed(MongoQueueDefinition queueDefinition, String result)
@@ -63,8 +63,8 @@ internal static class MongoQueueDiagnostics
         tags.Add(MongoQueueMetrics.Tags.CleanupMode, cleanupMode);
 
         ProcessingSucceededCounter.Add(1, tags);
-        ProcessingDurationHistogram.Record(processingDuration.TotalMilliseconds, tags);
-        QueueAgeHistogram.Record(queueAge.TotalMilliseconds, tags);
+        ProcessingDurationHistogram.Record(processingDuration.TotalSeconds, tags);
+        QueueAgeHistogram.Record(queueAge.TotalSeconds, tags);
     }
 
     internal static void RecordPublished(MongoQueueDefinition queueDefinition)

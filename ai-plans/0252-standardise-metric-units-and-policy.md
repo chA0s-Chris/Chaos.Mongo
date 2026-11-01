@@ -14,27 +14,27 @@ three policy gaps so both are settled once rather than reopened per PR.
 
 ## Acceptance Criteria
 
-- [ ] `MongoQueueDiagnostics`'s three duration histograms (`ProcessingDuration`, `ProcessingQueueAge`,
+- [x] `MongoQueueDiagnostics`'s three duration histograms (`ProcessingDuration`, `ProcessingQueueAge`,
       `LockRecoveryAge`) register unit `"s"` and record seconds, matching `IntegrityAnchoringDiagnostics`.
-- [ ] Unit tests assert, for all five duration histograms across both meters (`ProcessingDuration`,
+- [x] Unit tests assert, for all five duration histograms across both meters (`ProcessingDuration`,
       `ProcessingQueueAge`, `LockRecoveryAge`, `IntegrityAnchoringDiagnostics`'s `AnchorDelay` and
       `RevocationConfirmationDelay`), that the published `Instrument.Unit` is `"s"` and that a known, deterministic
       input `TimeSpan` is recorded as the equal number of seconds (not the old millisecond value for the three queue
       histograms; a regression guard for the two anchoring histograms, which already record seconds).
-- [ ] `docs/queues.md`'s Diagnostics section contains a metrics table (instrument, type, what it measures) listing
+- [x] `docs/queues.md`'s Diagnostics section contains a metrics table (instrument, type, what it measures) listing
       all seven `MongoQueueMetrics.Instruments`, with histogram units stated, in the same shape as the anchoring
       metrics table in `docs/event-store.md`.
-- [ ] `docs/compatibility-policy.md`'s stored-data contract bullet names units alongside metric names and tags as
+- [x] `docs/compatibility-policy.md`'s stored-data contract bullet names units alongside metric names and tags as
       frozen.
-- [ ] `docs/compatibility-policy.md` states that a public interface only grows through members with a default
+- [x] `docs/compatibility-policy.md` states that a public interface only grows through members with a default
       implementation; a member without one is breaking.
-- [ ] `docs/compatibility-policy.md` states that a public enum used as a result type may gain new values in a minor
+- [x] `docs/compatibility-policy.md` states that a public enum used as a result type may gain new values in a minor
       release, and that consumers must not assume its value set is closed.
-- [ ] `docs/compatibility-policy.md` states that adding a `required` member to an existing public type is a breaking
+- [x] `docs/compatibility-policy.md` states that adding a `required` member to an existing public type is a breaking
       change.
-- [ ] `docs/migrating-from-0.x.md` gains an entry for the queue metric unit change, naming the affected instruments
+- [x] `docs/migrating-from-0.x.md` gains an entry for the queue metric unit change, naming the affected instruments
       and the concrete consequence for dashboards/alerts built against the old millisecond values.
-- [ ] `dotnet build -c Release Chaos.Mongo.slnx` produces no warnings and the full test suite passes.
+- [x] `dotnet build -c Release Chaos.Mongo.slnx` produces no warnings and the full test suite passes.
 
 ## Technical Details
 

@@ -144,6 +144,15 @@ The queue keeps `WithImmediateDelete`, which the outbox does not have. `MongoDef
 `MongoDefaults.QueueRetentionPeriod`. Stored document shapes are unchanged; rename call sites to the new builder
 methods, properties and defaults.
 
+## Queue metrics: duration histograms now record seconds
+
+`MongoQueueMetrics.Instruments.ProcessingDuration`, `ProcessingQueueAge` and `LockRecoveryAge` now register unit
+`"s"` and record seconds, matching the `IntegrityMetrics` anchoring histograms and OpenTelemetry's convention for
+duration instruments. They previously registered unit `"ms"` and recorded milliseconds.
+
+Dashboards, alert thresholds and queries built against the old millisecond values now read 1000x too low against
+the same stored/exported data. Rescale them to seconds, or rebuild them against the new unit, before upgrading.
+
 ## Configuration: ambiguous `null` for `AddMongo` configure delegates
 
 `AddMongo` can now configure `MongoOptions` with the `IServiceProvider` (see
