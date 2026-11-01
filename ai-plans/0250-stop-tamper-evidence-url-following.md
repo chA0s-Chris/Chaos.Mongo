@@ -30,12 +30,12 @@ to a trusted root before any URL it names is used.
 
 ## Acceptance Criteria
 
-- [ ] Building a token's certificate chain — at receipt and when `StoredTimestampVerifier`
+- [x] Building a token's certificate chain — at receipt and when `StoredTimestampVerifier`
       rebuilds a stored chain — never fetches a certificate from an AIA location named by a
       certificate of the chain, even when the configured or default trust would otherwise
       accept the chain. A test verifies a token whose signing or intermediate certificate
       names an AIA URL and asserts no request reaches it.
-- [ ] `TimestampRevocationConfirmer` does not request any authority's CRLs for a stored
+- [x] `TimestampRevocationConfirmer` does not request any authority's CRLs for a stored
       certificate chain unless building that chain to a trusted root yields exactly the
       stored certificates (because no trust is configured for the authority, the stored
       root does not match the configured trusted roots, the stored chain is otherwise
@@ -45,14 +45,14 @@ to a trusted root before any URL it names is used.
       authority failures are; this includes a chain that still builds to a trusted root for
       the token's real signer but carries an additional, unrelated certificate naming its
       own CRL distribution point.
-- [ ] `TimestampRevocationConfirmer` still requests and records CRLs, unchanged from
+- [x] `TimestampRevocationConfirmer` still requests and records CRLs, unchanged from
       current behavior, for a stored chain that does build to a trusted root (regression
       coverage distinguishing this from the previous criterion).
-- [ ] `docs/event-store.md` states, in the Anchoring section, when the library makes
+- [x] `docs/event-store.md` states, in the Anchoring section, when the library makes
       network requests (the TSA timestamp request; CRL downloads at receipt and during
       revocation confirmation, restricted to HTTP/HTTPS distribution points) and that
       building a certificate chain never fetches a certificate to complete it.
-- [ ] The Release build has no warnings and the full test suite passes.
+- [x] The Release build has no warnings and the full test suite passes.
 
 ## Technical Details
 
