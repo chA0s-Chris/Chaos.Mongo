@@ -4,5 +4,6 @@ namespace Chaos.Mongo.Queues;
 
 internal static class MongoQueueSubscriptionDefaults
 {
+    internal static readonly TimeSpan CompletionGraceTimeout = TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan MaxLeaseRecoveryWakeInterval = TimeSpan.FromSeconds(1);
 }
