@@ -127,6 +127,55 @@ public class MongoIndexManagerExtensionsIntegrationTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenCollectionHasNonSimpleDefaultCollationAndSameNameIndexIsExplicitlySimple_ShouldReplaceWithInheritedCollation()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var mongoHelper = new ServiceCollection()
+                          .AddMongo(url, configure: options =>
+                          {
+                              options.DefaultDatabase = uniqueDbName;
+                          })
+                          .Services
+                          .BuildServiceProvider()
+                          .GetRequiredService<IMongoHelper>();
+
+        var collectionName = "test_" + Guid.NewGuid().ToString("N");
+        await mongoHelper.Database.CreateCollectionAsync(collectionName, new CreateCollectionOptions
+        {
+            Collation = new Collation("en")
+        });
+        var collection = mongoHelper.Database.GetCollection<TestDocument>(collectionName);
+        var indexManager = collection.Indexes;
+
+        var indexName = "idx_simple_to_inherited_" + Guid.NewGuid();
+
+        await indexManager.CreateOneAsync(new CreateIndexModel<TestDocument>(
+                                              Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
+                                              new CreateIndexOptions
+                                              {
+                                                  Name = indexName,
+                                                  Collation = Collation.Simple
+                                              }));
+        // Act - Omitting the collation inherits the collection's "en" default, which differs from the existing
+        // simple index even though listIndexes reports no collation for it at all.
+        var result = await indexManager.CreateOneOrUpdateAsync(new CreateIndexModel<TestDocument>(
+                                                                   Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
+                                                                   new CreateIndexOptions
+                                                                   {
+                                                                       Name = indexName
+                                                                   }));
+
+        // Assert
+        result.Should().Be(indexName);
+        var indexes = await (await indexManager.ListAsync()).ToListAsync();
+        indexes.Should().ContainSingle(idx => idx["name"].AsString == indexName)
+               .Which["collation"]["locale"].AsString.Should().Be("en");
+        indexes.Should().NotContain(idx => idx["name"].AsString.StartsWith("__chaosMongoCollationProbe_"));
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenCollectionHasNonSimpleDefaultCollationAndSiblingHasExplicitSimpleCollation_ShouldPreserveSiblingAndRenameOldIndex()
     {
         // Arrange
@@ -1612,6 +1661,57 @@ public class MongoIndexManagerExtensionsIntegrationTests
         indexesAfter.Should().HaveCount(64);
         indexesAfter.Should().Contain(idx => idx["name"].AsString == oldName);
         indexesAfter.Should().NotContain(idx => idx["name"].AsString == newName);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WithSession_WhenCollectionHasNonSimpleDefaultCollationAndSameNameIndexIsExplicitlySimple_ShouldReplaceWithInheritedCollation()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var mongoHelper = new ServiceCollection()
+                          .AddMongo(url, configure: options =>
+                          {
+                              options.DefaultDatabase = uniqueDbName;
+                          })
+                          .Services
+                          .BuildServiceProvider()
+                          .GetRequiredService<IMongoHelper>();
+
+        var collectionName = "test_" + Guid.NewGuid().ToString("N");
+        await mongoHelper.Database.CreateCollectionAsync(collectionName, new CreateCollectionOptions
+        {
+            Collation = new Collation("en")
+        });
+        var collection = mongoHelper.Database.GetCollection<TestDocument>(collectionName);
+        var indexManager = collection.Indexes;
+
+        var indexName = "idx_simple_to_inherited_" + Guid.NewGuid();
+
+        await indexManager.CreateOneAsync(new CreateIndexModel<TestDocument>(
+                                              Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
+                                              new CreateIndexOptions
+                                              {
+                                                  Name = indexName,
+                                                  Collation = Collation.Simple
+                                              }));
+        using var session = await mongoHelper.Client.StartSessionAsync();
+
+        // Act - Omitting the collation inherits the collection's "en" default, which differs from the existing
+        // simple index even though listIndexes reports no collation for it at all.
+        var result = await indexManager.CreateOneOrUpdateAsync(session, new CreateIndexModel<TestDocument>(
+                                                                   Builders<TestDocument>.IndexKeys.Ascending(x => x.Name),
+                                                                   new CreateIndexOptions
+                                                                   {
+                                                                       Name = indexName
+                                                                   }));
+
+        // Assert
+        result.Should().Be(indexName);
+        var indexes = await (await indexManager.ListAsync()).ToListAsync();
+        indexes.Should().ContainSingle(idx => idx["name"].AsString == indexName)
+               .Which["collation"]["locale"].AsString.Should().Be("en");
+        indexes.Should().NotContain(idx => idx["name"].AsString.StartsWith("__chaosMongoCollationProbe_"));
     }
 
     [Test]

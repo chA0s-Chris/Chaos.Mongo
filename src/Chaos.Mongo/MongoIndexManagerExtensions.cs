@@ -11,6 +11,12 @@ using MongoDB.Driver;
 public static class MongoIndexManagerExtensions
 {
     /// <summary>
+    /// How many times <see cref="RetryOrRecoverAsync"/> attempts the creation before giving up, so callers that
+    /// keep racing each other, or a listed match the server keeps rejecting, can never loop indefinitely.
+    /// </summary>
+    private const Int32 MaxCreateAttempts = 3;
+
+    /// <summary>
     /// How long the probe's best-effort cleanup (<see cref="DropProbeBestEffortAsync"/>) may run on its
     /// own independent context before giving up, so a stuck cleanup can never hang indefinitely.
     /// </summary>
@@ -54,7 +60,7 @@ public static class MongoIndexManagerExtensions
                 ct => indexManager.ListAsync(ct),
                 (name, ct) => indexManager.DropOneIfExistsAsync(name, ct),
                 () => indexManager.CreateOneAsync(model, options, cancellationToken),
-                (probe, ct) => indexManager.CreateOneAsync(probe, null, ct),
+                (probe, ct) => indexManager.CreateOneAsync(probe, options, ct),
                 cancellationToken);
         }
         catch (MongoCommandException e) when (IsIndexConflict(e))
@@ -73,7 +79,7 @@ public static class MongoIndexManagerExtensions
                 ct => indexManager.ListAsync(ct),
                 (name, ct) => indexManager.DropOneIfExistsAsync(name, ct),
                 () => indexManager.CreateOneAsync(model, options, cancellationToken),
-                (probe, ct) => indexManager.CreateOneAsync(probe, null, ct),
+                (probe, ct) => indexManager.CreateOneAsync(probe, options, ct),
                 cancellationToken);
         }
     }
@@ -118,7 +124,7 @@ public static class MongoIndexManagerExtensions
                 ct => indexManager.ListAsync(session, ct),
                 (name, ct) => indexManager.DropOneIfExistsAsync(session, name, ct),
                 () => indexManager.CreateOneAsync(session, model, options, cancellationToken),
-                (probe, ct) => indexManager.CreateOneAsync(session, probe, null, ct),
+                (probe, ct) => indexManager.CreateOneAsync(session, probe, options, ct),
                 cancellationToken);
         }
         catch (MongoCommandException e) when (IsIndexConflict(e))
@@ -137,7 +143,7 @@ public static class MongoIndexManagerExtensions
                 ct => indexManager.ListAsync(session, ct),
                 (name, ct) => indexManager.DropOneIfExistsAsync(session, name, ct),
                 () => indexManager.CreateOneAsync(session, model, options, cancellationToken),
-                (probe, ct) => indexManager.CreateOneAsync(session, probe, null, ct),
+                (probe, ct) => indexManager.CreateOneAsync(session, probe, options, ct),
                 cancellationToken);
         }
     }
@@ -222,14 +228,14 @@ public static class MongoIndexManagerExtensions
     /// Builds the desired <see cref="IndexDefinition"/> for <paramref name="model"/>: its rendered keys, its
     /// normalized identity/effective options, and its effective <c>Collation</c>, resolved via
     /// <see cref="ProbeEffectiveCollationAsync{TDocument}"/> when (and only when) it cannot be trusted literally
-    /// (see <see cref="RequiresCollationProbe"/>). If the probe itself cannot be created because the target
-    /// collection is already at MongoDB's 64-index limit, <paramref name="originalConflict"/> is thrown instead
-    /// of the probe's own <c>CannotCreateIndex</c> failure: resolving the collation needs one spare index slot in
-    /// the target collection, and a caller at capacity should see the original index conflict, not a confusing
-    /// error about an internal throwaway index it never asked for.
+    /// (see <see cref="RequiresCollationProbe"/>). An omitted <c>Collation</c> is also resolved when the unresolved
+    /// definition would fully satisfy the request: the server has just reported a conflict, so an apparent exact
+    /// match can mean the omitted <c>Collation</c> inherits a non-simple collection default that differs from a
+    /// same-name index with a simple collation, which <c>listIndexes</c> reports without any collation at all.
     /// </summary>
     private static async Task<IndexDefinition> BuildDesiredDefinitionAsync<TDocument>(IMongoIndexManager<TDocument> indexManager,
                                                                                       CreateIndexModel<TDocument> model,
+                                                                                      String requestedName,
                                                                                       IReadOnlyList<ExistingIndex> indexes,
                                                                                       Func<CreateIndexModel<TDocument>, CancellationToken, Task<String>> createProbe,
                                                                                       Func<CancellationToken, Task<IAsyncCursor<BsonDocument>>> listIndexes,
@@ -243,22 +249,14 @@ public static class MongoIndexManagerExtensions
         var textFields = ExtractTextFieldNames(renderedKeys, options?.Weights);
         var keys = NormalizeRequestedKeys(renderedKeys, textFields);
 
-        BsonDocument? collation = null;
-        if (RequiresCollationProbe(options?.Collation, keys, indexes))
-        {
-            try
-            {
-                collation = await ProbeEffectiveCollationAsync<TDocument>(options?.Collation, createProbe, listIndexes, dropOneIfExists, cancellationToken);
-            }
-            catch (MongoCommandException e) when (e.CodeName == "CannotCreateIndex")
-            {
-                throw originalConflict;
-            }
-        }
+        var isCollationResolved = RequiresCollationProbe(options?.Collation, keys, indexes);
+        var collation = isCollationResolved
+            ? await ResolveCollationOrThrowConflictAsync<TDocument>(options?.Collation, createProbe, listIndexes, dropOneIfExists, cancellationToken, originalConflict)
+            : null;
 
         var isGeo2D = Is2DIndex(keys);
 
-        return new IndexDefinition(
+        var desired = new IndexDefinition(
             keys,
             options?.Unique ?? false,
             options?.Sparse ?? false,
@@ -275,6 +273,16 @@ public static class MongoIndexManagerExtensions
             isGeo2D ? options?.Max ?? 180.0 : null,
             options?.Hidden ?? false,
             options?.StorageEngine);
+
+        if (!isCollationResolved && options?.Collation is null && FindFullySatisfyingIndexName(indexes, requestedName, desired) is not null)
+        {
+            desired = desired with
+            {
+                Collation = await ResolveCollationOrThrowConflictAsync<TDocument>(null, createProbe, listIndexes, dropOneIfExists, cancellationToken, originalConflict)
+            };
+        }
+
+        return desired;
     }
 
     /// <summary>
@@ -370,6 +378,28 @@ public static class MongoIndexManagerExtensions
 
     private static String? FindFullySatisfyingIndexName(IReadOnlyList<ExistingIndex> indexes, String requestedName, IndexDefinition desired)
         => indexes.FirstOrDefault(index => index.Name == requestedName && EffectiveEquals(index.Definition, desired)).Name;
+
+    /// <summary>
+    /// Locates the existing index that has to be dropped before the desired index can be created: none when an
+    /// index already fully satisfies the request (nothing needs replacing), otherwise the same-name index, or the
+    /// only index whose identity matches the desired definition. An ambiguous or missing match also yields none.
+    /// </summary>
+    private static String? FindIndexNameToDrop(IReadOnlyList<ExistingIndex> indexes, String requestedName, IndexDefinition desired)
+    {
+        if (FindFullySatisfyingIndexName(indexes, requestedName, desired) is not null)
+        {
+            return null;
+        }
+
+        var sameName = indexes.FirstOrDefault(index => index.Name == requestedName);
+        if (sameName.Name is not null)
+        {
+            return sameName.Name;
+        }
+
+        var identityMatches = indexes.Where(index => IdentityEquals(index.Definition, desired)).ToList();
+        return identityMatches.Count == 1 ? identityMatches[0].Name : null;
+    }
 
     private static String? GetRequestedIndexName(MongoCommandException exception)
         => exception.Command["indexes"][0]["name"].AsString;
@@ -665,30 +695,36 @@ public static class MongoIndexManagerExtensions
             ? collation.Locale != "simple"
             : indexes.Any(index => index.Definition.Keys.Equals(desiredKeys) && index.Definition.Collation is not null);
 
-    private static ConflictResolution ResolveCandidate(IReadOnlyList<ExistingIndex> indexes, String requestedName, IndexDefinition desired)
+    /// <summary>
+    /// Resolves the model's effective <c>Collation</c> through <see cref="ProbeEffectiveCollationAsync{TDocument}"/>.
+    /// If the probe itself cannot be created because the target collection is already at MongoDB's 64-index limit,
+    /// <paramref name="originalConflict"/> is thrown instead of the probe's own <c>CannotCreateIndex</c> failure:
+    /// resolving the collation needs one spare index slot in the target collection, and a caller at capacity should
+    /// see the original index conflict, not a confusing error about an internal throwaway index it never asked for.
+    /// </summary>
+    private static async Task<BsonDocument?> ResolveCollationOrThrowConflictAsync<TDocument>(Collation? collation,
+                                                                                             Func<CreateIndexModel<TDocument>, CancellationToken, Task<String>> createProbe,
+                                                                                             Func<CancellationToken, Task<IAsyncCursor<BsonDocument>>> listIndexes,
+                                                                                             Func<String, CancellationToken, Task> dropOneIfExists,
+                                                                                             CancellationToken cancellationToken,
+                                                                                             MongoCommandException originalConflict)
     {
-        var satisfiedName = FindFullySatisfyingIndexName(indexes, requestedName, desired);
-        if (satisfiedName is not null)
+        try
         {
-            return ConflictResolution.Satisfied(satisfiedName);
+            return await ProbeEffectiveCollationAsync<TDocument>(collation, createProbe, listIndexes, dropOneIfExists, cancellationToken);
         }
-
-        var sameName = indexes.FirstOrDefault(index => index.Name == requestedName);
-        if (sameName.Name is not null)
+        catch (MongoCommandException e) when (e.CodeName == "CannotCreateIndex")
         {
-            return ConflictResolution.Candidate(sameName.Name);
+            throw originalConflict;
         }
-
-        var identityMatches = indexes.Where(index => IdentityEquals(index.Definition, desired)).ToList();
-        return identityMatches.Count == 1
-            ? ConflictResolution.Candidate(identityMatches[0].Name)
-            : ConflictResolution.Unresolved;
     }
 
     /// <summary>
     /// Resolves an <c>IndexOptionsConflict</c>/<c>IndexKeySpecsConflict</c> by locating the index that actually
     /// causes it, instead of trusting the requested name as the drop target, and tolerates a concurrent caller
-    /// having already resolved the same conflict.
+    /// having already resolved the same conflict. A listed index that already satisfies the request is not dropped,
+    /// but is not reported as success either: <c>listIndexes</c> includes indexes that are still being built, so
+    /// only a successful creation in <see cref="RetryOrRecoverAsync"/> proves that the index is actually complete.
     /// </summary>
     private static async Task<String?> ResolveConflictAsync<TDocument>(IMongoIndexManager<TDocument> indexManager,
                                                                        CreateIndexModel<TDocument> model,
@@ -701,17 +737,11 @@ public static class MongoIndexManagerExtensions
                                                                        CancellationToken cancellationToken)
     {
         var indexes = await ListExistingIndexesAsync(listIndexes, cancellationToken);
-        var desired = await BuildDesiredDefinitionAsync(indexManager, model, indexes, createProbe, listIndexes, dropOneIfExists, cancellationToken, exception);
-        var resolution = ResolveCandidate(indexes, requestedName, desired);
+        var desired = await BuildDesiredDefinitionAsync(indexManager, model, requestedName, indexes, createProbe, listIndexes, dropOneIfExists, cancellationToken, exception);
 
-        if (resolution is { Kind: ConflictResolutionKind.Satisfied, Name: { } satisfiedName })
+        if (FindIndexNameToDrop(indexes, requestedName, desired) is { } nameToDrop)
         {
-            return satisfiedName;
-        }
-
-        if (resolution is { Kind: ConflictResolutionKind.Candidate, Name: { } candidateName })
-        {
-            await dropOneIfExists(candidateName, cancellationToken);
+            await dropOneIfExists(nameToDrop, cancellationToken);
         }
 
         return await RetryOrRecoverAsync(createOne, listIndexes, requestedName, desired, exception, cancellationToken);
@@ -771,10 +801,12 @@ public static class MongoIndexManagerExtensions
     }
 
     /// <summary>
-    /// Retries the creation once, tolerating a concurrent caller that resolved the same conflict between this
-    /// call's own listing/drop and this retry: if the retry still conflicts, the desired index may already exist
-    /// under the requested name because a concurrent caller finished first, in which case that index is returned
-    /// instead of throwing. Only when the desired state is still not observed is the original exception rethrown.
+    /// Retries the creation, tolerating a concurrent caller that resolved the same conflict between this call's
+    /// own listing/drop and this retry. If the retry still conflicts and a listed index now satisfies the request,
+    /// the creation is attempted again instead of reporting that index as success: MongoDB makes an identical
+    /// request wait for a matching build that is still in progress and reports its failure, whereas a listing cannot
+    /// tell a finished index from an unfinished one. The original exception is rethrown when no listed index
+    /// satisfies the request, or after <see cref="MaxCreateAttempts"/> attempts.
     /// </summary>
     private static async Task<String?> RetryOrRecoverAsync(Func<Task<String>> createOne,
                                                            Func<CancellationToken, Task<IAsyncCursor<BsonDocument>>> listIndexes,
@@ -783,37 +815,26 @@ public static class MongoIndexManagerExtensions
                                                            MongoCommandException exception,
                                                            CancellationToken cancellationToken)
     {
-        try
+        for (var attempt = 1;; attempt++)
         {
-            return await createOne();
-        }
-        catch (MongoCommandException e) when (IsIndexConflict(e))
-        {
-            var indexes = await ListExistingIndexesAsync(listIndexes, cancellationToken);
-            var satisfiedName = FindFullySatisfyingIndexName(indexes, requestedName, desired);
-            if (satisfiedName is not null)
+            try
             {
-                return satisfiedName;
+                return await createOne();
             }
+            catch (MongoCommandException e) when (IsIndexConflict(e))
+            {
+                if (attempt == MaxCreateAttempts)
+                {
+                    throw exception;
+                }
 
-            throw exception;
+                var indexes = await ListExistingIndexesAsync(listIndexes, cancellationToken);
+                if (FindFullySatisfyingIndexName(indexes, requestedName, desired) is null)
+                {
+                    throw exception;
+                }
+            }
         }
-    }
-
-    private readonly record struct ConflictResolution(ConflictResolutionKind Kind, String? Name)
-    {
-        public static ConflictResolution Unresolved { get; } = new(ConflictResolutionKind.Unresolved, null);
-
-        public static ConflictResolution Candidate(String name) => new(ConflictResolutionKind.Candidate, name);
-
-        public static ConflictResolution Satisfied(String name) => new(ConflictResolutionKind.Satisfied, name);
-    }
-
-    private enum ConflictResolutionKind
-    {
-        Satisfied,
-        Candidate,
-        Unresolved
     }
 
     private readonly record struct ExistingIndex(String Name, IndexDefinition Definition);

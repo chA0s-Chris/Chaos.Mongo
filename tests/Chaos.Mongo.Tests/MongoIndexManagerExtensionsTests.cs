@@ -63,6 +63,32 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenCollationProbeIsRequired_ShouldForwardCallerOptionsToProbe()
+    {
+        // Arrange
+        var options = new CreateOneIndexOptions
+        {
+            MaxTime = TimeSpan.FromSeconds(5)
+        };
+        var conflict = CreateConflictException("new_name");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([EmptyListing, EmptyListing]));
+
+        // Act
+        await indexManager.CreateOneOrUpdateAsync(CreateModelRequiringCollationProbe(), options);
+
+        // Assert
+        indexManager.CreateOneAsyncCalls.Should().ContainSingle(call => IsCollationProbe(call.Model))
+                    .Which.Options.Should().BeSameAs(options);
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenConcurrentCallerAlreadyDroppedOldIndexButNotYetRecreated_ShouldReturnWithoutThrowing()
     {
         // Arrange
@@ -95,7 +121,7 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
-    public async Task CreateOneOrUpdateAsync_WhenConcurrentCallerDroppedOldIndexAndConflictsAgainOnRetry_ShouldReturnObservedIndexWithoutThrowing()
+    public async Task CreateOneOrUpdateAsync_WhenConcurrentCallerDroppedOldIndexAndConflictsAgainOnRetry_ShouldConfirmObservedIndexByRetryingCreation()
     {
         // Arrange
         var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
@@ -116,7 +142,8 @@ public class MongoIndexManagerExtensionsTests
         var createOneResults = new Queue<Func<Task<String>>>(
         [
             () => throw firstConflict,
-            () => throw retryConflict
+            () => throw retryConflict,
+            () => Task.FromResult("new_name")
         ]);
         var listResults = new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>(
         [
@@ -135,7 +162,7 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
-    public async Task CreateOneOrUpdateAsync_WhenConcurrentCallerRecreatesIndexAfterOwnDrop_ShouldReturnObservedIndexWithoutThrowing()
+    public async Task CreateOneOrUpdateAsync_WhenConcurrentCallerRecreatesIndexAfterOwnDrop_ShouldConfirmObservedIndexByRetryingCreation()
     {
         // Arrange
         var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
@@ -161,7 +188,8 @@ public class MongoIndexManagerExtensionsTests
         var createOneResults = new Queue<Func<Task<String>>>(
         [
             () => throw conflict,
-            () => throw secondConflict
+            () => throw secondConflict,
+            () => Task.FromResult("new_name")
         ]);
         var listResults = new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>(
         [
@@ -177,6 +205,33 @@ public class MongoIndexManagerExtensionsTests
         // Assert
         result.Should().Be("new_name");
         indexManager.DropOneAsyncCallCount.Should().Be(1);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenHiddenMismatchFallsBackToConflictResolution_ShouldForwardCallerOptionsToProbe()
+    {
+        // Arrange
+        var options = new CreateOneIndexOptions
+        {
+            MaxTime = TimeSpan.FromSeconds(5)
+        };
+        var conflict = CreateConflictException("new_name");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => Task.FromResult("new_name"),
+                () => throw conflict,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(CreateIndexDocument("new_name")), EmptyListing, EmptyListing]));
+
+        // Act
+        await indexManager.CreateOneOrUpdateAsync(CreateModelRequiringCollationProbe(), options);
+
+        // Assert
+        indexManager.CreateOneAsyncCalls.Should().ContainSingle(call => IsCollationProbe(call.Model))
+                    .Which.Options.Should().BeSameAs(options);
     }
 
     [Test]
@@ -237,6 +292,75 @@ public class MongoIndexManagerExtensionsTests
 
         // Assert
         result.Should().Be("same_name");
+        indexManager.DropOneAsyncCallCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenListedIndexBuildFails_ShouldPropagateBuildFailure()
+    {
+        // Arrange - listIndexes also reports an index a concurrent caller is still building, so the listed match
+        // is not proof of a finished index; the retried creation waits for that build and reports its failure.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "new_name",
+            Unique = true
+        });
+
+        var conflict = CreateConflictException("new_name");
+        var buildFailure = CreateCommandException("new_name", 11000, "DuplicateKey");
+        var buildingIndexDocument = CreateIndexDocument("new_name");
+        buildingIndexDocument["unique"] = true;
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => throw buildFailure
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(buildingIndexDocument), () => Listing(buildingIndexDocument)]));
+
+        // Act
+        var act = async () => await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        var thrown = await act.Should().ThrowAsync<MongoCommandException>();
+        thrown.Which.Should().BeSameAs(buildFailure);
+        indexManager.DropOneAsyncCalls.Should().ContainSingle()
+                    .Which.Name.Should().StartWith("__chaosMongoCollationProbe_");
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenListedMatchKeepsConflicting_ShouldRethrowOriginalExceptionAfterBoundedAttempts()
+    {
+        // Arrange - an explicit simple collation needs no probe, so every create below is the real model.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "new_name",
+            Collation = Collation.Simple
+        });
+
+        var originalConflict = CreateConflictException("new_name");
+        var matchingListing = () => Listing(CreateIndexDocument("new_name"));
+        var retryConflict = CreateConflictException("new_name");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw originalConflict,
+                () => throw retryConflict,
+                () => throw retryConflict,
+                () => throw retryConflict
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([matchingListing, matchingListing, matchingListing]));
+
+        // Act
+        var act = async () => await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        var thrown = await act.Should().ThrowAsync<MongoCommandException>();
+        thrown.Which.Should().BeSameAs(originalConflict);
+        indexManager.CreateOneAsyncCalls.Should().HaveCount(4);
         indexManager.DropOneAsyncCallCount.Should().Be(0);
     }
 
@@ -315,6 +439,37 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenOmittedCollationLooksSatisfiedAndCollectionHasNoDefault_ShouldKeepIndexAndConfirmByRetryingCreation()
+    {
+        // Arrange - a concurrent caller already created the desired index on a collection with no custom default
+        // collation: the probe resolves to no collation, so the listed index really matches and is left in place.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "new_name"
+        });
+
+        var conflict = CreateConflictException("new_name");
+        var matchingListing = () => Listing(CreateIndexDocument("new_name"));
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([matchingListing, matchingListing]));
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("new_name");
+        indexManager.DropOneAsyncCalls.Should().ContainSingle()
+                    .Which.Name.Should().StartWith("__chaosMongoCollationProbe_");
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenServerSilentlyAcceptsHiddenMismatch_ShouldDropAndRecreate()
     {
         // Arrange - simulates a MongoDB server version (observed: 7.0, fixed by 8.0) that accepts a
@@ -358,7 +513,60 @@ public class MongoIndexManagerExtensionsTests
         indexManager.DropOneAsyncCalls[0].Name.Should().Be("same_name");
     }
 
-    private static MongoCommandException CreateConflictException(String requestedName)
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WithSession_WhenCollationProbeIsRequired_ShouldForwardCallerOptionsToProbe()
+    {
+        // Arrange
+        var options = new CreateOneIndexOptions
+        {
+            MaxTime = TimeSpan.FromSeconds(5)
+        };
+        var conflict = CreateConflictException("new_name");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([EmptyListing, EmptyListing]));
+
+        // Act
+        await indexManager.CreateOneOrUpdateAsync(null!, CreateModelRequiringCollationProbe(), options);
+
+        // Assert
+        indexManager.CreateOneAsyncCalls.Should().ContainSingle(call => IsCollationProbe(call.Model))
+                    .Which.Options.Should().BeSameAs(options);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WithSession_WhenHiddenMismatchFallsBackToConflictResolution_ShouldForwardCallerOptionsToProbe()
+    {
+        // Arrange
+        var options = new CreateOneIndexOptions
+        {
+            MaxTime = TimeSpan.FromSeconds(5)
+        };
+        var conflict = CreateConflictException("new_name");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => Task.FromResult("new_name"),
+                () => throw conflict,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(CreateIndexDocument("new_name")), EmptyListing, EmptyListing]));
+
+        // Act
+        await indexManager.CreateOneOrUpdateAsync(null!, CreateModelRequiringCollationProbe(), options);
+
+        // Assert
+        indexManager.CreateOneAsyncCalls.Should().ContainSingle(call => IsCollationProbe(call.Model))
+                    .Which.Options.Should().BeSameAs(options);
+    }
+
+    private static MongoCommandException CreateCommandException(String requestedName, Int32 code, String codeName)
     {
         var connectionId = new ConnectionId(new ServerId(new ClusterId(), new DnsEndPoint("localhost", 27017)));
         var command = new BsonDocument
@@ -377,18 +585,46 @@ public class MongoIndexManagerExtensionsTests
         {
             ["ok"] = 0.0,
             ["errmsg"] = "Index already exists with a different name",
-            ["code"] = 85,
-            ["codeName"] = "IndexOptionsConflict"
+            ["code"] = code,
+            ["codeName"] = codeName
         };
 
         return new MongoCommandException(connectionId, "Index options conflict", command, result);
     }
 
+    private static MongoCommandException CreateConflictException(String requestedName)
+        => CreateCommandException(requestedName, 85, "IndexOptionsConflict");
+
+    private static BsonDocument CreateIndexDocument(String name)
+        => new()
+        {
+            ["name"] = name,
+            ["key"] = new BsonDocument("Field", 1)
+        };
+
+    private static CreateIndexModel<BsonDocument> CreateModelRequiringCollationProbe()
+        => new((IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1), new CreateIndexOptions
+        {
+            Name = "new_name",
+            Collation = new Collation("en"),
+            Hidden = true
+        });
+
+    private static Task<IAsyncCursor<BsonDocument>> EmptyListing()
+        => Listing();
+
+    private static Boolean IsCollationProbe(CreateIndexModel<BsonDocument> model)
+        => model.Options.Name.StartsWith("__chaosMongoCollationProbe_", StringComparison.Ordinal);
+
+    private static Task<IAsyncCursor<BsonDocument>> Listing(params BsonDocument[] documents)
+        => Task.FromResult<IAsyncCursor<BsonDocument>>(new SingleBatchAsyncCursor<BsonDocument>(documents));
+
     /// <summary>
     /// A hand-crafted <see cref="IMongoIndexManager{TDocument}"/> that scripts the exact sequence of
     /// <c>CreateOneAsync</c> and <c>ListAsync</c> responses a test needs, instead of a dynamically generated mock
     /// proxy. Only the members <see cref="MongoIndexManagerExtensions"/>'s <c>CreateOneOrUpdateAsync</c> actually
-    /// calls are implemented; every other member throws <see cref="NotSupportedException"/>.
+    /// calls are implemented, with the session overloads sharing the same script as the sessionless ones; every
+    /// other member throws <see cref="NotSupportedException"/>.
     /// </summary>
     private sealed class FakeIndexManager : IMongoIndexManager<BsonDocument>
     {
@@ -400,6 +636,8 @@ public class MongoIndexManagerExtensionsTests
             _createOneResults = createOneResults;
             _listResults = listResults;
         }
+
+        public List<(CreateIndexModel<BsonDocument> Model, CreateOneIndexOptions? Options)> CreateOneAsyncCalls { get; } = [];
 
         public Int32 DropOneAsyncCallCount { get; private set; }
 
@@ -455,7 +693,10 @@ public class MongoIndexManagerExtensionsTests
             => throw Unsupported(nameof(CreateOne));
 
         public Task<String> CreateOneAsync(CreateIndexModel<BsonDocument> model, CreateOneIndexOptions? options, CancellationToken cancellationToken = default)
-            => _createOneResults.Dequeue().Invoke();
+        {
+            CreateOneAsyncCalls.Add((model, options));
+            return _createOneResults.Dequeue().Invoke();
+        }
 
         public Task<String> CreateOneAsync(IndexKeysDefinition<BsonDocument> keys, CreateIndexOptions options, CancellationToken cancellationToken = default)
             => throw Unsupported(nameof(CreateOneAsync));
@@ -466,7 +707,7 @@ public class MongoIndexManagerExtensionsTests
 
         public Task<String> CreateOneAsync(IClientSessionHandle session, CreateIndexModel<BsonDocument> model, CreateOneIndexOptions? options,
                                            CancellationToken cancellationToken = default)
-            => throw Unsupported(nameof(CreateOneAsync));
+            => CreateOneAsync(model, options, cancellationToken);
 
         public void DropAll(DropIndexOptions options, CancellationToken cancellationToken = default)
             => throw Unsupported(nameof(DropAll));
@@ -515,7 +756,7 @@ public class MongoIndexManagerExtensionsTests
             => throw Unsupported(nameof(DropOneAsync));
 
         public Task DropOneAsync(IClientSessionHandle session, String name, CancellationToken cancellationToken = default)
-            => throw Unsupported(nameof(DropOneAsync));
+            => DropOneAsync(name, cancellationToken);
 
         public Task DropOneAsync(IClientSessionHandle session, String name, DropIndexOptions options, CancellationToken cancellationToken = default)
             => throw Unsupported(nameof(DropOneAsync));
@@ -539,7 +780,7 @@ public class MongoIndexManagerExtensionsTests
             => throw Unsupported(nameof(ListAsync));
 
         public Task<IAsyncCursor<BsonDocument>> ListAsync(IClientSessionHandle session, CancellationToken cancellationToken = default)
-            => throw Unsupported(nameof(ListAsync));
+            => ListAsync(cancellationToken);
 
         public Task<IAsyncCursor<BsonDocument>> ListAsync(IClientSessionHandle session, ListIndexesOptions options, CancellationToken cancellationToken = default)
             => throw Unsupported(nameof(ListAsync));
