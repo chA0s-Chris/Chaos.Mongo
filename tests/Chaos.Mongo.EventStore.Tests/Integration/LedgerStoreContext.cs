@@ -205,6 +205,12 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                       .Find(EventDocumentFields<ShipmentAggregate>.ForVersion<BsonDocument>(aggregateId, version))
                       .SingleAsync();
 
+    public Task<Boolean> ReadModelExistsAsync(Guid aggregateId)
+        => MongoHelper.Database
+                      .GetCollection<BsonDocument>(Options.ReadModelCollectionName)
+                      .Find(Builders<BsonDocument>.Filter.Eq("_id", new BsonBinaryData(aggregateId, GuidRepresentation.Standard)))
+                      .AnyAsync();
+
     public Task<List<BsonDocument>> ReadRawCheckpointsAsync(Guid aggregateId)
         => MongoHelper.Database
                       .GetCollection<BsonDocument>(Options.CheckpointCollectionName)

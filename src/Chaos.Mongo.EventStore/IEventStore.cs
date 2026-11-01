@@ -86,7 +86,9 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
     /// Thrown when <paramref name="events"/> is empty, contains events for different aggregates,
     /// mixes unset and explicit versions, starts at a version below one, leaves a gap above the stream's
     /// highest version, or continues with non-sequential versions. Also thrown for a
-    /// <see cref="Integrity.PersonalDataErased{TAggregate}"/> event, which only the personal data eraser appends.
+    /// <see cref="Integrity.PersonalDataErased{TAggregate}"/> event, which only the personal data eraser appends,
+    /// and for any other event whose runtime type was not registered with
+    /// <see cref="MongoEventStoreBuilder{TAggregate}.WithEvent{TEvent}(String?)"/>.
     /// </exception>
     /// <exception cref="MongoEventValidationException">
     /// Thrown when an event cannot be applied because the aggregate's state does not permit it, and when

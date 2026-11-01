@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -150,10 +151,28 @@ public class BatchMetadataIntegrationTests
 
 public class BatchMetadataAggregate : Aggregate
 {
+    public Boolean AppliedOnceEventApplied { get; set; }
     public List<Int64> EventRevisionsSeen { get; set; } = [];
     public Int32 OverwritesApplied { get; set; }
     public List<Int64> RevisionsSeen { get; set; } = [];
     public List<Int64> VersionsSeen { get; set; } = [];
+}
+
+/// <summary>
+/// Rejects being executed against an aggregate it was already applied to, so a replay of this event
+/// against an already-updated read model fails instead of silently succeeding again.
+/// </summary>
+public class BatchMetadataAppliedOnceEvent : Event<BatchMetadataAggregate>
+{
+    public override void Execute(BatchMetadataAggregate aggregate)
+    {
+        if (aggregate.AppliedOnceEventApplied)
+        {
+            throw new MongoEventValidationException("This event cannot be applied to an aggregate it was already applied to.");
+        }
+
+        aggregate.AppliedOnceEventApplied = true;
+    }
 }
 
 public class BatchMetadataRecordedEvent : Event<BatchMetadataAggregate>

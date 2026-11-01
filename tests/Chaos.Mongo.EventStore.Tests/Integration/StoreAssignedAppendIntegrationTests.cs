@@ -4,8 +4,10 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
@@ -179,6 +181,199 @@ public class StoreAssignedAppendIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_OnBeforeCommitDuplicateKeyInLookAlikeNamedCollection_PropagatesOriginalExceptionAndStoresNothing()
+    {
+        var context = await CreateContextAsync();
+
+        // A collection whose name contains the full events-collection name as a substring, so a namespace
+        // check could also be fooled by it.
+        var outboxCollection = context.MongoHelper.Database.GetCollection<BsonDocument>($"{context.Options.EventsCollectionName}Outbox");
+        var duplicateId = Guid.NewGuid();
+        await outboxCollection.InsertOneAsync(new BsonDocument("_id", new BsonBinaryData(duplicateId, GuidRepresentation.Standard)));
+
+        var aggregateId = Guid.NewGuid();
+        var act = () => context.Store.AppendEventsAsync(
+            [Entry(aggregateId)],
+            onBeforeCommit: async (session, _, _, ct) =>
+                await outboxCollection.InsertOneAsync(
+                    session,
+                    new BsonDocument("_id", new BsonBinaryData(duplicateId, GuidRepresentation.Standard)),
+                    cancellationToken: ct));
+
+        // MongoDuplicateEventException and MongoConcurrencyException are never MongoExceptions (the driver's
+        // base type), so this alone confirms the original exception propagated unclassified.
+        await act.Should().ThrowAsync<MongoException>();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(0);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_OnBeforeCommitDuplicateKeyInLookAlikeNamedCollection_PropagatesOriginalExceptionAndStoresNothing_UserDefinedIndex()
+    {
+        // A custom unique index whose name merely contains IndexNames.AggregateIdWithVersionUnique as a
+        // substring, rather than matching it exactly, must not be misclassified as the concurrency index.
+        var context = await CreateContextAsync();
+        await context.Events.Indexes.CreateOneAsync(
+            new CreateIndexModel<BsonDocument>(
+                Builders<BsonDocument>.IndexKeys.Ascending("Reference"),
+                new CreateIndexOptions
+                {
+                    Unique = true,
+                    Name = $"Ledger_{IndexNames.AggregateIdWithVersionUnique}_External"
+                }));
+
+        // CreateEntry always sets a fixed Reference value, so appending a second entry under this index
+        // collides on it, regardless of aggregate or version.
+        await context.AppendStreamAsync(1);
+
+        var aggregateId = Guid.NewGuid();
+        var act = () => context.Store.AppendEventsAsync([Entry(aggregateId)]);
+
+        // MongoDuplicateEventException and MongoConcurrencyException are never MongoExceptions (the driver's
+        // base type), so this alone confirms the original exception propagated unclassified.
+        await act.Should().ThrowAsync<MongoException>();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(0);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_OnBeforeCommitClientBulkWriteDuplicateKeyAtEventWriteIndexInLookAlikeNamedCollection_PropagatesOriginalExceptionAndStoresNothing()
+    {
+        if (!MongoDbTestImages.SupportsBulkWriteOptimization)
+        {
+            Assert.Ignore("The client bulk write API requires MongoDB 8.0 or later; the connected test server does not support it.");
+        }
+
+        var context = await CreateContextAsync(options => options.CheckpointInterval = 1);
+
+        // A collection whose name contains the full events-collection name as a substring, so a namespace
+        // check could also be fooled by it.
+        var outboxCollection = context.MongoHelper.Database.GetCollection<BsonDocument>($"{context.Options.EventsCollectionName}Outbox");
+        var duplicateId = Guid.NewGuid();
+        await outboxCollection.InsertOneAsync(new BsonDocument("_id", new BsonBinaryData(duplicateId, GuidRepresentation.Standard)));
+
+        var aggregateId = Guid.NewGuid();
+        var act = () => context.Store.AppendEventsAsync(
+            [Entry(aggregateId)],
+            onBeforeCommit: async (session, _, helper, ct) =>
+                // A client bulk write at index 0 — the same index an events-collection conflict would use
+                // — into the look-alike collection, raising the same exception type a bulk-write-optimized
+                // events-collection conflict would (ClientBulkWriteException).
+                await helper.Client.BulkWriteAsync(
+                    session,
+                    [
+                        new BulkWriteInsertOneModel<BsonDocument>(
+                            outboxCollection.CollectionNamespace,
+                            new BsonDocument("_id", new BsonBinaryData(duplicateId, GuidRepresentation.Standard)))
+                    ],
+                    cancellationToken: ct));
+
+        // Asserting the concrete ClientBulkWriteException and its duplicate-key write error at the
+        // callback's own request index 0 confirms the original exception propagated unclassified,
+        // rather than only that it is not one of this store's two internal exception types.
+        var exception = await act.Should().ThrowAsync<ClientBulkWriteException>();
+        exception.Which.WriteErrors.Should().ContainKey(0);
+        exception.Which.WriteErrors[0].Category.Should().Be(ServerErrorCategory.DuplicateKey);
+        (await context.CountEventsAsync(aggregateId)).Should().Be(0);
+        (await context.ReadModelExistsAsync(aggregateId)).Should().BeFalse();
+        (await context.ReadRawCheckpointsAsync(aggregateId)).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_CheckpointDuplicateKey_PropagatesOriginalExceptionAndStoresNothing()
+    {
+        var context = await CreateContextAsync(options => options.CheckpointInterval = 1);
+        var aggregateId = Guid.NewGuid();
+
+        // A checkpoint already stored at the exact (AggregateId, Version) this append's checkpoint will
+        // use, so the checkpoint insert collides on the checkpoint collection's own "_id_" index — named
+        // identically to the events collection's — even though this append never touches an event
+        // document's _id.
+        var checkpointCollection = context.MongoHelper.Database.GetCollection<CheckpointDocument<LedgerAggregate>>(context.Options.CheckpointCollectionName);
+        await checkpointCollection.InsertOneAsync(new CheckpointDocument<LedgerAggregate>
+        {
+            Id = new CheckpointId(aggregateId, 1),
+            Revision = 1,
+            State = new LedgerAggregate
+            {
+                Id = aggregateId
+            }
+        });
+        var seededCheckpoint = (await context.ReadRawCheckpointsAsync(aggregateId)).Single();
+
+        var act = () => context.Store.AppendEventsAsync([Entry(aggregateId)]);
+
+        // Asserting the concrete MongoWriteException and its duplicate-key category confirms the
+        // original exception propagated unclassified, rather than only that it is not one of this
+        // store's two internal exception types. The checkpoint collection must still contain exactly
+        // the document seeded above, unchanged by the aborted insert.
+        var exception = await act.Should().ThrowAsync<MongoWriteException>();
+        exception.Which.WriteError.Category.Should().Be(ServerErrorCategory.DuplicateKey);
+        (await context.CountEventsAsync(aggregateId)).Should().Be(0);
+        (await context.ReadModelExistsAsync(aggregateId)).Should().BeFalse();
+        (await context.ReadRawCheckpointsAsync(aggregateId)).Should().ContainSingle(c => c.Equals(seededCheckpoint));
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_CheckpointDuplicateKeyWithBulkWriteOptimization_PropagatesOriginalExceptionAndStoresNothing()
+    {
+        var context = await LedgerStoreContext.CreateAsync(
+            _container,
+            _integrityProtection,
+            true,
+            configureOptions: options => options.CheckpointInterval = 1);
+        _contexts.Add(context);
+        var aggregateId = Guid.NewGuid();
+
+        // Same collision as the non-bulk checkpoint case above, but under bulk-write optimization the
+        // checkpoint model occupies an index in `models` after every event-document entry, so its
+        // duplicate key must be filtered out by the events-only index range rather than misclassified
+        // as an events-collection conflict.
+        var checkpointCollection = context.MongoHelper.Database.GetCollection<CheckpointDocument<LedgerAggregate>>(context.Options.CheckpointCollectionName);
+        await checkpointCollection.InsertOneAsync(new CheckpointDocument<LedgerAggregate>
+        {
+            Id = new CheckpointId(aggregateId, 1),
+            Revision = 1,
+            State = new LedgerAggregate
+            {
+                Id = aggregateId
+            }
+        });
+        var seededCheckpoint = (await context.ReadRawCheckpointsAsync(aggregateId)).Single();
+
+        var act = () => context.Store.AppendEventsAsync([Entry(aggregateId)]);
+
+        // This single-event batch's models are [event, read-model replace, checkpoint insert] (in that
+        // order, since the entry is state-changing), so the checkpoint's duplicate key is reported at
+        // write-error index 2 — past the events-only index range the production catch filters on — and
+        // must propagate as the original, unclassified ClientBulkWriteException.
+        var exception = await act.Should().ThrowAsync<ClientBulkWriteException>();
+        exception.Which.WriteErrors.Should().ContainKey(2);
+        exception.Which.WriteErrors[2].Category.Should().Be(ServerErrorCategory.DuplicateKey);
+        (await context.CountEventsAsync(aggregateId)).Should().Be(0);
+        (await context.ReadModelExistsAsync(aggregateId)).Should().BeFalse();
+        (await context.ReadRawCheckpointsAsync(aggregateId)).Should().ContainSingle(c => c.Equals(seededCheckpoint));
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_DuplicateEventIdAtFreshExplicitPosition_ThrowsMongoDuplicateEventException()
+    {
+        var context = await CreateContextAsync();
+        var firstAggregateId = await context.AppendStreamAsync(1);
+        var stored = await context.FindEventAsync(firstAggregateId, 1);
+        var duplicateId = stored["_id"].AsGuid;
+
+        // A fresh explicit position for a different aggregate is never stale (ValidatePositionsAsync
+        // only looks up stored IDs when firstVersion <= head.Version), so this exercises the genuine
+        // events-collection duplicate-key catch at the insert itself — covering both the typed insert
+        // path (integrity disabled) and the serialized-document insert path (integrity enabled), the two
+        // cases this fixture is parameterized over.
+        var otherAggregateId = Guid.NewGuid();
+        var act = () => context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(otherAggregateId, 1, duplicateId)]);
+
+        await act.Should().ThrowAsync<MongoDuplicateEventException>();
+        (await context.CountEventsAsync(otherAggregateId)).Should().Be(0);
+    }
+
+    [Test]
     public async Task AppendEventsAsync_RetryAfterConcurrentCommits_ExecutesWithCurrentAttemptRevision()
     {
         await using var serviceProvider = await CreateBatchMetadataProviderAsync();
@@ -296,6 +491,73 @@ public class StoreAssignedAppendIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_StoreAssignedRetryWithSameEventIdAndStaleExpectedRevision_ThrowsMongoDuplicateEventException()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(1);
+        var eventId = Guid.NewGuid();
+
+        // The caller read revision 1 before the first attempt, which committed and advanced it to 2.
+        await context.Store.AppendEventsAsync([Entry(aggregateId, eventId)], 1);
+
+        // A retry resubmits the same event ID in a fresh instance with Version left unset, carrying the
+        // same (now stale) expectedRevision the caller read before the first attempt.
+        var retry = Entry(aggregateId, eventId);
+        var act = () => context.Store.AppendEventsAsync([retry], 1);
+
+        await act.Should().ThrowAsync<MongoDuplicateEventException>();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(2);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_StoreAssignedRetryWithSameEventIdWithoutExpectedRevision_ThrowsMongoDuplicateEventException()
+    {
+        var context = await CreateContextAsync();
+        var aggregateId = await context.AppendStreamAsync(1);
+        var eventId = Guid.NewGuid();
+
+        await context.Store.AppendEventsAsync([Entry(aggregateId, eventId)]);
+
+        // A retry resubmits the same event ID in a fresh instance with Version left unset, without an
+        // expectedRevision to recheck.
+        var retry = Entry(aggregateId, eventId);
+        var act = () => context.Store.AppendEventsAsync([retry]);
+
+        await act.Should().ThrowAsync<MongoDuplicateEventException>();
+        (await context.CountEventsAsync(aggregateId)).Should().Be(2);
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_StoreAssignedRetryWithSameEventIdWithoutExpectedRevision_DoesNotReapplyEventsAgainstUpdatedState()
+    {
+        await using var serviceProvider = await CreateBatchMetadataProviderAsync();
+        var store = serviceProvider.GetRequiredService<IEventStore<BatchMetadataAggregate>>();
+        var aggregateId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+
+        // BatchMetadataAppliedOnceEvent's Execute rejects an aggregate it was already applied to. If the
+        // store-assigned idempotency preflight were absent or moved after ApplyEvents, this retry would
+        // re-run Execute against the read model the first attempt already updated and surface
+        // MongoEventValidationException instead of the duplicate the retry actually is.
+        await store.AppendEventsAsync([
+            new BatchMetadataAppliedOnceEvent
+            {
+                Id = eventId,
+                AggregateId = aggregateId
+            }
+        ]);
+
+        var retry = new BatchMetadataAppliedOnceEvent
+        {
+            Id = eventId,
+            AggregateId = aggregateId
+        };
+        var act = () => store.AppendEventsAsync([retry]);
+
+        await act.Should().ThrowAsync<MongoDuplicateEventException>();
+    }
+
+    [Test]
     public async Task AppendEventsAsync_UnsetVersions_AssignsSequentialPositions()
     {
         var context = await CreateContextAsync();
@@ -357,6 +619,7 @@ public class StoreAssignedAppendIntegrationTests
                               {
                                   builder.WithEvent<BatchMetadataRecordedEvent>("BatchMetadataRecorded")
                                          .WithEvent<BatchMetadataOverwritingObservation>("BatchMetadataOverwritingObservation")
+                                         .WithEvent<BatchMetadataAppliedOnceEvent>("BatchMetadataAppliedOnce")
                                          .WithCollectionPrefix("BatchMetadata");
 
                                   if (_integrityProtection)

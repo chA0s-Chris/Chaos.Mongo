@@ -454,6 +454,44 @@ public class EventStoreIntegrationTests
     }
 
     [Test]
+    public async Task AppendEventsAsync_UnregisteredEventType_ThrowsArgumentExceptionAndStoresNothing()
+    {
+        var aggregateId = Guid.NewGuid();
+        await _eventStore.AppendEventsAsync(
+        [
+            new OrderCreatedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1,
+                CustomerName = "Mia",
+                TotalAmount = 25.00m
+            }
+        ]);
+
+        // OrderViewedEvent is never registered with WithEvent<TEvent>() in Setup below.
+        var act = () => _eventStore.AppendEventsAsync(
+        [
+            new OrderViewedEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 2,
+                ViewedBy = "auditor"
+            }
+        ]);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+                 .WithMessage("*OrderViewedEvent*not registered*");
+
+        var events = new List<Event<OrderAggregate>>();
+        await foreach (var evt in _eventStore.GetEventStreamAsync(aggregateId))
+            events.Add(evt);
+
+        events.Should().HaveCount(1);
+    }
+
+    [Test]
     public async Task AppendEventsAsync_ValidationFailure_ThrowsAndDoesNotPersist()
     {
         var aggregateId = Guid.NewGuid();
