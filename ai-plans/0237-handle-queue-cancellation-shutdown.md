@@ -8,12 +8,12 @@ The fix distinguishes shutdown-caused cancellation from handler-caused cancellat
 
 ## Acceptance Criteria
 
-- [ ] When the payload handler throws an `OperationCanceledException` (e.g. `TaskCanceledException` from an internal timeout) while the `cancellationToken` passed to it has **not** been cancelled, the item is treated as a failure: it is logged through the existing failure path and its retry count is incremented, so `MaxRetries` is respected.
-- [ ] When the payload handler throws (or is observed to throw) an `OperationCanceledException` while the `cancellationToken` **has** been cancelled (subscription shutdown), the item's lock is released immediately instead of being left locked for the remainder of the lease, and this does not count as a retry attempt.
-- [ ] When the payload handler completes successfully but the `cancellationToken` is already cancelled by the time the completion write (close/delete) runs, the completion write still succeeds and the item is not reprocessed on the next poll.
-- [ ] An item released after a shutdown-caused cancellation is selected by `CreateAvailableQueueItemFilter` again as soon as the lock-release write is visible, without waiting for `LockLeaseTime` to elapse.
-- [ ] Automated tests cover: a handler-caused cancellation while `cancellationToken` is not cancelled (failure path, retry increment, log entry); a shutdown-caused cancellation (lock released, no retry increment); and a successful handler completion where `cancellationToken` is already cancelled before the completion write (completion still recorded).
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) has no warnings and the full test suite passes.
+- [x] When the payload handler throws an `OperationCanceledException` (e.g. `TaskCanceledException` from an internal timeout) while the `cancellationToken` passed to it has **not** been cancelled, the item is treated as a failure: it is logged through the existing failure path and its retry count is incremented, so `MaxRetries` is respected.
+- [x] When the payload handler throws (or is observed to throw) an `OperationCanceledException` while the `cancellationToken` **has** been cancelled (subscription shutdown), the item's lock is released immediately instead of being left locked for the remainder of the lease, and this does not count as a retry attempt.
+- [x] When the payload handler completes successfully but the `cancellationToken` is already cancelled by the time the completion write (close/delete) runs, the completion write still succeeds and the item is not reprocessed on the next poll.
+- [x] An item released after a shutdown-caused cancellation is selected by `CreateAvailableQueueItemFilter` again as soon as the lock-release write is visible, without waiting for `LockLeaseTime` to elapse.
+- [x] Automated tests cover: a handler-caused cancellation while `cancellationToken` is not cancelled (failure path, retry increment, log entry); a shutdown-caused cancellation (lock released, no retry increment); and a successful handler completion where `cancellationToken` is already cancelled before the completion write (completion still recorded).
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) has no warnings and the full test suite passes.
 
 ## Technical Details
 

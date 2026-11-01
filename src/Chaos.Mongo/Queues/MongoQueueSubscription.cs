@@ -332,7 +332,12 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                                      payloadHandler.GetType().FullName);
                     await payloadHandler.HandlePayloadAsync(queueItem.Payload, cancellationToken);
                 }
-                catch (Exception e) when (e is not OperationCanceledException)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await ReleaseLockForShutdownAsync(collection, queueItemId, acquiredLockUtc);
+                    return;
+                }
+                catch (Exception e)
                 {
                     await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, e, cancellationToken);
                     return;
@@ -340,16 +345,29 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             }
 
             var completionFilter = CreateLockOwnershipFilter(queueItemId, acquiredLockUtc);
-            var completionSucceeded = _queueDefinition.RetentionPeriod.HasValue
-                ? (await collection.UpdateOneAsync(
-                    completionFilter,
-                    Builders<MongoQueueItem<TPayload>>.Update
-                                                      .Set(x => x.IsClosed, true)
-                                                      .Set(x => x.ClosedUtc, _timeProvider.GetUtcNow().UtcDateTime)
-                                                      .Set(x => x.IsLocked, false)
-                                                      .Unset(x => x.LockedUtc),
-                    cancellationToken: cancellationToken)).ModifiedCount > 0
-                : (await collection.DeleteOneAsync(completionFilter, cancellationToken)).DeletedCount > 0;
+            Boolean completionSucceeded;
+            try
+            {
+                using var completionGracePeriodCts = new CancellationTokenSource(MongoQueueSubscriptionDefaults.CompletionGraceTimeout);
+                completionSucceeded = _queueDefinition.RetentionPeriod.HasValue
+                    ? (await collection.UpdateOneAsync(
+                        completionFilter,
+                        Builders<MongoQueueItem<TPayload>>.Update
+                                                          .Set(x => x.IsClosed, true)
+                                                          .Set(x => x.ClosedUtc, _timeProvider.GetUtcNow().UtcDateTime)
+                                                          .Set(x => x.IsLocked, false)
+                                                          .Unset(x => x.LockedUtc),
+                        cancellationToken: completionGracePeriodCts.Token)).ModifiedCount > 0
+                    : (await collection.DeleteOneAsync(completionFilter, completionGracePeriodCts.Token)).DeletedCount > 0;
+            }
+            catch (Exception e)
+            {
+                _logger.LogWarning(e,
+                                   "Completing queue item {QueueItemId} with payload {PayloadType} failed; it will be reprocessed after the lock lease expires",
+                                   queueItemId,
+                                   typeof(TPayload).FullName);
+                return;
+            }
 
             if (!completionSucceeded)
             {
@@ -455,6 +473,44 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         _logger.LogInformation("Stopped processing items with payload {PayloadType} for queue {CollectionName}",
                                _queueDefinition.PayloadType.FullName,
                                _queueDefinition.CollectionName);
+    }
+
+    /// <summary>
+    /// Releases the lock on a queue item whose handler was cancelled by subscription shutdown, so the item
+    /// becomes available again immediately instead of waiting for the lock lease to expire.
+    /// </summary>
+    /// <param name="collection">The MongoDB collection containing the queue item.</param>
+    /// <param name="queueItemId">The identifier of the queue item to release.</param>
+    /// <param name="acquiredLockUtc">The timestamp at which the lock being released was acquired.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    private async Task ReleaseLockForShutdownAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, ObjectId queueItemId, DateTime acquiredLockUtc)
+    {
+        try
+        {
+            using var gracePeriodCts = new CancellationTokenSource(MongoQueueSubscriptionDefaults.CompletionGraceTimeout);
+            var releaseResult = await collection.UpdateOneAsync(
+                CreateLockOwnershipFilter(queueItemId, acquiredLockUtc),
+                Builders<MongoQueueItem<TPayload>>.Update
+                                                  .Set(x => x.IsLocked, false)
+                                                  .Unset(x => x.LockedUtc),
+                cancellationToken: gracePeriodCts.Token);
+
+            if (releaseResult.ModifiedCount == 0)
+            {
+                _logger.LogWarning(
+                    "Skipping lock release for queue item {QueueItemId} with payload {PayloadType} after shutdown-caused cancellation because lock ownership changed",
+                    queueItemId,
+                    typeof(TPayload).FullName);
+            }
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e,
+                               "Releasing the lock for queue item {QueueItemId} with payload {PayloadType} after shutdown-caused cancellation failed; "
+                               + "it will be recovered after the lock lease expires",
+                               queueItemId,
+                               typeof(TPayload).FullName);
+        }
     }
 
     /// <inheritdoc/>
