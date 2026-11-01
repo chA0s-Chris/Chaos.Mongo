@@ -54,8 +54,33 @@ internal class MongoHostedService : IHostedLifecycleService
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Migrations run before configurators, so a configurator cannot create an index before a migration that
+    /// cleans up the data it depends on. When migrations are enabled and the migration lock wait times out (see
+    /// <see cref="MongoOptions.MigrationLockWaitTimeout"/>), startup fails instead of continuing to configurators
+    /// against a potentially stale schema, unless <see cref="MongoOptions.MigrationLockWaitTimeout"/> is
+    /// <see cref="TimeSpan.Zero"/> — an explicit, intentionally-unsafe compatibility opt-out.
+    /// </remarks>
     public async Task StartingAsync(CancellationToken cancellationToken)
     {
+        if (_options.ApplyMigrationsOnStartup)
+        {
+            using var scope = _serviceScopeFactory.CreateScope();
+            var migrationRunner = scope.ServiceProvider.GetRequiredService<IMongoMigrationRunner>();
+
+            _logger.LogInformation("Running MongoDB migrations on application startup");
+            var result = await migrationRunner.RunMigrationsAsync(cancellationToken);
+
+            if (result.Skipped && _options.MigrationLockWaitTimeout != TimeSpan.Zero)
+            {
+                throw new InvalidOperationException(
+                    $"MongoDB migrations were skipped because the migration lock '{_options.MigrationsLockName}' could " +
+                    $"not be acquired within the configured {nameof(MongoOptions.MigrationLockWaitTimeout)} " +
+                    $"({_options.MigrationLockWaitTimeout}). Hosted startup cannot continue against a potentially " +
+                    "stale schema. Set MigrationLockWaitTimeout to TimeSpan.Zero to opt out of this check.");
+            }
+        }
+
         if (_options.RunConfiguratorsOnStartup)
         {
             using var scope = _serviceScopeFactory.CreateScope();
@@ -63,15 +88,6 @@ internal class MongoHostedService : IHostedLifecycleService
 
             _logger.LogInformation("Running MongoDB configurators on application startup");
             await configuratorRunner.RunConfiguratorsAsync(cancellationToken);
-        }
-
-        if (_options.ApplyMigrationsOnStartup)
-        {
-            using var scope = _serviceScopeFactory.CreateScope();
-            var migrationRunner = scope.ServiceProvider.GetRequiredService<IMongoMigrationRunner>();
-
-            _logger.LogInformation("Running MongoDB migrations on application startup");
-            await migrationRunner.RunMigrationsAsync(cancellationToken);
         }
     }
 

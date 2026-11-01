@@ -19,6 +19,53 @@ public class MongoMigrationHostedServiceTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    public async Task StartingAsync_WhenAnotherInstanceHoldsTheMigrationLock_ThrowsAndPreventsStartup()
+    {
+        // Arrange
+        var databaseName = $"BlockedStartupTest_{Guid.NewGuid():N}";
+        var connectionString = _container.GetConnectionString();
+        MigrationTestTracker.Reset();
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var services = new ServiceCollection()
+                       .AddNUnitTestLogging()
+                       .AddSingleton(gate)
+                       .AddMongo(connectionString, databaseName, options =>
+                       {
+                           options.ApplyMigrationsOnStartup = true;
+                           options.MigrationLockWaitTimeout = TimeSpan.FromMilliseconds(500);
+                       })
+                       .WithMigration<BlockingTestMigration>()
+                       .Services;
+
+        var serviceProvider = services.BuildServiceProvider();
+
+        // Simulates a first instance that is already running the blocking migration and holding the lock.
+        var firstInstanceRunner = serviceProvider.GetRequiredService<IMongoMigrationRunner>();
+        var firstInstanceTask = Task.Run(async () => await firstInstanceRunner.RunMigrationsAsync());
+        await WaitUntilAsync(() => MigrationTestTracker.ExecutedMigrations.Contains(nameof(BlockingTestMigration)));
+
+        var hostedServices = serviceProvider.GetServices<IHostedService>().OfType<IHostedLifecycleService>().ToList();
+
+        // Act: a second instance's hosted startup tries to run migrations while the first instance holds the lock.
+        var act = async () =>
+        {
+            foreach (var hostedService in hostedServices)
+            {
+                await hostedService.StartingAsync(CancellationToken.None);
+            }
+        };
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        // Cleanup
+        gate.SetResult();
+        await firstInstanceTask;
+    }
+
+    [Test]
     public async Task StartingAsync_WithApplyMigrationsOnStartupDisabled_MigrationsDoNotRun()
     {
         // Arrange
@@ -127,6 +174,15 @@ public class MongoMigrationHostedServiceTests
             {
                 await hostedService.StopAsync(CancellationToken.None);
             }
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<Boolean> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(20));
         }
     }
 }

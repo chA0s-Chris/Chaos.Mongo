@@ -135,3 +135,14 @@ static Chaos.Mongo.MongoHelperExtensions.ExecuteInTransactionAsync<TResult>(this
 *REMOVED*virtual Chaos.Mongo.Queues.MongoQueueDefinition.EqualityContract.get -> System.Type!
 *REMOVED*virtual Chaos.Mongo.Queues.MongoQueueDefinition.Equals(Chaos.Mongo.Queues.MongoQueueDefinition? other) -> bool
 *REMOVED*virtual Chaos.Mongo.Queues.MongoQueueDefinition.PrintMembers(System.Text.StringBuilder! builder) -> bool
+*REMOVED*Chaos.Mongo.Migrations.IMongoMigrationRunner.RunMigrationsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Chaos.Mongo.Migrations.IMongoMigrationRunner.RunMigrationsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Chaos.Mongo.Migrations.MongoMigrationResult!>!
+Chaos.Mongo.Migrations.MongoMigrationResult
+Chaos.Mongo.Migrations.MongoMigrationResult.AppliedMigrationIds.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Chaos.Mongo.Migrations.MongoMigrationResult.AppliedMigrationIds.init -> void
+Chaos.Mongo.Migrations.MongoMigrationResult.MongoMigrationResult() -> void
+Chaos.Mongo.Migrations.MongoMigrationResult.Skipped.get -> bool
+Chaos.Mongo.Migrations.MongoMigrationResult.Skipped.init -> void
+Chaos.Mongo.MongoOptions.MigrationLockWaitTimeout.get -> System.TimeSpan?
+Chaos.Mongo.MongoOptions.MigrationLockWaitTimeout.set -> void
+static Chaos.Mongo.MongoDefaults.MigrationLockWaitTimeout.get -> System.TimeSpan

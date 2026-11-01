@@ -147,6 +147,65 @@ internal class FastTestMigration : IMongoMigration
     }
 }
 
+internal class BlockingTestMigration : IMongoMigration
+{
+    private readonly TaskCompletionSource _gate;
+
+    public BlockingTestMigration(TaskCompletionSource gate)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        _gate = gate;
+    }
+
+    public String Description => "Blocks until released by the test, to hold the migration lock open";
+
+    public String Id => "444_BlockingTest";
+
+    public async Task ApplyAsync(IMongoHelper mongoHelper, IClientSessionHandle? session = null, CancellationToken cancellationToken = default)
+    {
+        MigrationTestTracker.Track(nameof(BlockingTestMigration));
+        await _gate.Task.WaitAsync(cancellationToken);
+    }
+}
+
+internal class TransactionalBlockingTestMigration : IMongoMigration
+{
+    private readonly TaskCompletionSource _gate;
+
+    public TransactionalBlockingTestMigration(TaskCompletionSource gate)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        _gate = gate;
+    }
+
+    public String Description => "Inserts a document inside the migration transaction, then blocks until released or cancelled";
+
+    public String Id => "333_TransactionalBlockingTest";
+
+    public async Task ApplyAsync(IMongoHelper mongoHelper, IClientSessionHandle? session = null, CancellationToken cancellationToken = default)
+    {
+        MigrationTestTracker.Track(nameof(TransactionalBlockingTestMigration));
+
+        var collection = mongoHelper.GetCollection<TestDocument>();
+        var document = new TestDocument
+        {
+            Id = ObjectId.GenerateNewId(),
+            Name = "ShouldBeRolledBackIfLockIsLost"
+        };
+
+        if (session is null)
+        {
+            await collection.InsertOneAsync(document, cancellationToken: cancellationToken);
+        }
+        else
+        {
+            await collection.InsertOneAsync(session, document, cancellationToken: cancellationToken);
+        }
+
+        await _gate.Task.WaitAsync(cancellationToken);
+    }
+}
+
 internal class CancellingTestMigration : IMongoMigration
 {
     private readonly CancellationTokenSource _cancellationTokenSource;

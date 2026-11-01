@@ -43,6 +43,11 @@ public static class MongoDefaults
     public static TimeSpan MigrationLockLeaseTime => TimeSpan.FromMinutes(10);
 
     /// <summary>
+    /// Gets the default duration to wait for the migration lock before reporting a skipped run.
+    /// </summary>
+    public static TimeSpan MigrationLockWaitTimeout => TimeSpan.FromMinutes(30);
+
+    /// <summary>
     /// Gets the default maximum number of queue items to fetch and process in a single query.
     /// </summary>
     public static Int32 QueueBatchSize => 1;

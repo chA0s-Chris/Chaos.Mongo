@@ -71,6 +71,11 @@ services.AddMongo(options =>
 
 Keep configurators idempotent so repeated startup execution is safe.
 
+During hosted startup, configurators run after migrations (when `ApplyMigrationsOnStartup` is also enabled), so a
+configurator cannot create an index before a migration that cleans up the data it depends on. See
+[Database Migrations](migrations.md#behavior) for the migration lock-wait and lease-renewal behavior, and for how a
+timed-out migration lock wait fails hosted startup before configurators run.
+
 ## Related documentation
 
 - [Configuration](configuration.md)
