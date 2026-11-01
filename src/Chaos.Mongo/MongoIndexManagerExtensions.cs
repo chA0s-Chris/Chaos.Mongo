@@ -262,7 +262,7 @@ public static class MongoIndexManagerExtensions
             options?.Sparse ?? false,
             options?.PartialFilterExpression?.Render(renderArgs),
             collation,
-            options?.ExpireAfter,
+            options?.ExpireAfter?.TotalSeconds,
             NormalizeDesiredWeights(textFields, options?.Weights),
             NormalizeDesiredDefaultLanguage(textFields, options?.DefaultLanguage),
             NormalizeDesiredLanguageOverride(textFields, options?.LanguageOverride),
@@ -307,26 +307,27 @@ public static class MongoIndexManagerExtensions
 
     /// <summary>
     /// Identity equality plus every other option the server persists and could cause <c>CreateOneOrUpdateAsync</c>
-    /// to wrongly report a same-name request as already satisfied: <c>ExpireAfter</c>, <c>Hidden</c>,
+    /// to wrongly report a same-name request as already satisfied: <c>ExpireAfterSeconds</c>, <c>Hidden</c>,
     /// <c>StorageEngine</c>, and (for a text index) <c>Weights</c>, <c>DefaultLanguage</c>, <c>LanguageOverride</c>,
-    /// <c>TextIndexVersion</c>, (for a wildcard index) <c>WildcardProjection</c>, and (for a 2d index) <c>Bits</c>,
-    /// <c>Min</c>, <c>Max</c>. An index that is effectively equal to the desired model is already the exact end
-    /// state the caller is requesting. None of these participate in identity: the server does not treat any of
-    /// them as distinguishing two same-key indexes filed under different names (only one text or overlapping
-    /// wildcard/2d index can coexist on the same keys in practice), so an existing index's current value for any
+    /// <c>TextIndexVersion</c>, and (for a 2d index) <c>Bits</c>, <c>Min</c>, <c>Max</c>. An index that is
+    /// effectively equal to the desired model is already the exact end state the caller is requesting. None of
+    /// these participate in identity: the server does not treat any of them as distinguishing two same-key indexes
+    /// filed under different names (only one text or 2d index can coexist on the same keys in practice), so an
+    /// existing index's current value for any
     /// of them need not equal the desired one for it to be the conflicting index — but a same-name index whose
     /// value differs must still be dropped and recreated, not falsely treated as already matching.
     /// </summary>
     private static Boolean EffectiveEquals(IndexDefinition a, IndexDefinition b)
         => IdentityEquals(a, b) &&
-           a.ExpireAfter == b.ExpireAfter &&
+           // Exact on purpose: a legacy NaN must never match a requested value.
+           // ReSharper disable once CompareOfFloatsByEqualityOperator
+           a.ExpireAfterSeconds == b.ExpireAfterSeconds &&
            a.Hidden == b.Hidden &&
            NullableDocumentEquals(a.StorageEngine, b.StorageEngine) &&
            NullableDocumentEquals(a.Weights, b.Weights) &&
            a.DefaultLanguage == b.DefaultLanguage &&
            a.LanguageOverride == b.LanguageOverride &&
            a.TextIndexVersion == b.TextIndexVersion &&
-           NullableDocumentEquals(a.WildcardProjection, b.WildcardProjection) &&
            a.Bits == b.Bits &&
            a.Min.Equals(b.Min) &&
            a.Max.Equals(b.Max);
@@ -407,7 +408,8 @@ public static class MongoIndexManagerExtensions
     /// <summary>
     /// Compares the rendered key specification together with the options that MongoDB treats as distinguishing
     /// two indexes that otherwise share the same keys (<c>Unique</c>, <c>Sparse</c>, <c>PartialFilterExpression</c>,
-    /// <c>Collation</c>). Two indexes with equal identity definitions cannot coexist under different names.
+    /// <c>Collation</c>, <c>WildcardProjection</c>). Two indexes with equal identity definitions cannot coexist under
+    /// different names.
     /// <c>Collation</c> is compared as a fully resolved document on both sides (see
     /// <see cref="BuildDesiredDefinitionAsync{TDocument}"/>
     /// and <see cref="ParseExisting"/>), not by only the fields the caller happened to set, so two indexes that
@@ -419,7 +421,8 @@ public static class MongoIndexManagerExtensions
            a.Unique == b.Unique &&
            a.Sparse == b.Sparse &&
            NullableDocumentEquals(a.PartialFilter, b.PartialFilter) &&
-           NullableDocumentEquals(a.Collation, b.Collation);
+           NullableDocumentEquals(a.Collation, b.Collation) &&
+           NullableDocumentEquals(a.WildcardProjection, b.WildcardProjection);
 
     /// <summary>
     /// Determines whether a (normalized) key specification describes a legacy 2d geospatial index, i.e. it
@@ -614,7 +617,7 @@ public static class MongoIndexManagerExtensions
             document.Contains("sparse") && document["sparse"].ToBoolean(),
             document.Contains("partialFilterExpression") ? document["partialFilterExpression"].AsBsonDocument : null,
             document.Contains("collation") ? NormalizeExistingCollation(document["collation"].AsBsonDocument) : null,
-            document.Contains("expireAfterSeconds") ? TimeSpan.FromSeconds(document["expireAfterSeconds"].ToDouble()) : null,
+            document.Contains("expireAfterSeconds") ? document["expireAfterSeconds"].ToDouble() : null,
             NormalizeExistingWeights(document),
             document.Contains("default_language") ? document["default_language"].AsString : null,
             document.Contains("language_override") ? document["language_override"].AsString : null,
@@ -639,13 +642,33 @@ public static class MongoIndexManagerExtensions
     /// the throwaway index again. This only runs when <see cref="RequiresCollationProbe"/> says the literal value
     /// cannot be trusted, which only happens once an actual index conflict has already been caught, never on the
     /// ordinary no-conflict path, so the extra round trip is incidental next to the conflict's own
-    /// drop-and-recreate cost.
+    /// drop-and-recreate cost. The probe is sparse, so it indexes no existing documents. A time-series collection
+    /// rejects a sparse index on a measurement field with <c>InvalidOptions</c> and also rejects a partial filter
+    /// combined with a collation, so that rejection is retried once without <c>Sparse</c>, which builds across the
+    /// whole collection.
     /// </summary>
     private static async Task<BsonDocument?> ProbeEffectiveCollationAsync<TDocument>(Collation? collation,
                                                                                      Func<CreateIndexModel<TDocument>, CancellationToken, Task<String>> createProbe,
                                                                                      Func<CancellationToken, Task<IAsyncCursor<BsonDocument>>> listIndexes,
                                                                                      Func<String, CancellationToken, Task> dropOneIfExists,
                                                                                      CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ProbeEffectiveCollationOnceAsync<TDocument>(collation, true, createProbe, listIndexes, dropOneIfExists, cancellationToken);
+        }
+        catch (MongoCommandException e) when (e.CodeName == "InvalidOptions")
+        {
+            return await ProbeEffectiveCollationOnceAsync<TDocument>(collation, null, createProbe, listIndexes, dropOneIfExists, cancellationToken);
+        }
+    }
+
+    private static async Task<BsonDocument?> ProbeEffectiveCollationOnceAsync<TDocument>(Collation? collation,
+                                                                                         Boolean? sparse,
+                                                                                         Func<CreateIndexModel<TDocument>, CancellationToken, Task<String>> createProbe,
+                                                                                         Func<CancellationToken, Task<IAsyncCursor<BsonDocument>>> listIndexes,
+                                                                                         Func<String, CancellationToken, Task> dropOneIfExists,
+                                                                                         CancellationToken cancellationToken)
     {
         var probeName = $"__chaosMongoCollationProbe_{Guid.NewGuid():N}";
         var probeField = $"__chaosMongoCollationProbeField_{Guid.NewGuid():N}";
@@ -654,7 +677,7 @@ public static class MongoIndexManagerExtensions
         {
             Name = probeName,
             Collation = collation,
-            Sparse = true
+            Sparse = sparse
         });
 
         try
@@ -841,13 +864,15 @@ public static class MongoIndexManagerExtensions
 
     /// <summary>
     /// The rendered key specification plus the normalized options that participate in identity (<see cref="Unique"/>,
-    /// <see cref="Sparse"/>, <see cref="PartialFilter"/>, <see cref="Collation"/>) and effective (identity plus
-    /// <see cref="ExpireAfter"/>, <see cref="Hidden"/>, <see cref="StorageEngine"/>, <see cref="Weights"/>,
-    /// <see cref="DefaultLanguage"/>, <see cref="LanguageOverride"/>, <see cref="TextIndexVersion"/>,
-    /// <see cref="WildcardProjection"/>, <see cref="Bits"/>, <see cref="Min"/> and <see cref="Max"/>) comparisons,
+    /// <see cref="Sparse"/>, <see cref="PartialFilter"/>, <see cref="Collation"/>, <see cref="WildcardProjection"/>)
+    /// and effective (identity plus <see cref="ExpireAfterSeconds"/>, <see cref="Hidden"/>, <see cref="StorageEngine"/>,
+    /// <see cref="Weights"/>, <see cref="DefaultLanguage"/>, <see cref="LanguageOverride"/>,
+    /// <see cref="TextIndexVersion"/>, <see cref="Bits"/>, <see cref="Min"/> and <see cref="Max"/>) comparisons,
     /// for either a desired model or an existing index. <see cref="Collation"/> is always the fully resolved,
     /// effective document on both sides (see <see cref="BuildDesiredDefinitionAsync{TDocument}"/> and
-    /// <see cref="ParseExisting"/>), never a literal, partially specified one.
+    /// <see cref="ParseExisting"/>), never a literal, partially specified one. <see cref="ExpireAfterSeconds"/> stays
+    /// in raw seconds because a legacy TTL index can store <c>NaN</c>, which cannot be converted to a
+    /// <see cref="TimeSpan"/> and, by never equaling itself, never matches a requested value.
     /// </summary>
     private readonly record struct IndexDefinition(
         BsonDocument Keys,
@@ -855,7 +880,7 @@ public static class MongoIndexManagerExtensions
         Boolean Sparse,
         BsonDocument? PartialFilter,
         BsonDocument? Collation,
-        TimeSpan? ExpireAfter,
+        Double? ExpireAfterSeconds,
         BsonDocument? Weights,
         String? DefaultLanguage,
         String? LanguageOverride,

@@ -1416,6 +1416,61 @@ public class MongoIndexManagerExtensionsIntegrationTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenTimeSeriesMetadataIndexCollationChanges_ShouldDropAndRecreateWithoutLeavingProbe()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var mongoHelper = new ServiceCollection()
+                          .AddMongo(url, configure: options =>
+                          {
+                              options.DefaultDatabase = uniqueDbName;
+                          })
+                          .Services
+                          .BuildServiceProvider()
+                          .GetRequiredService<IMongoHelper>();
+
+        var collectionName = "test_" + Guid.NewGuid().ToString("N");
+        await mongoHelper.Database.CreateCollectionAsync(collectionName, new CreateCollectionOptions
+        {
+            TimeSeriesOptions = new TimeSeriesOptions("timestamp", "metadata")
+        });
+        var collection = mongoHelper.Database.GetCollection<BsonDocument>(collectionName);
+        await collection.InsertOneAsync(new BsonDocument
+        {
+            ["timestamp"] = DateTime.UtcNow,
+            ["metadata"] = new BsonDocument("key", "value")
+        });
+        var indexManager = collection.Indexes;
+
+        var indexName = "idx_time_series_metadata_" + Guid.NewGuid();
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("metadata.key", 1);
+
+        await indexManager.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                                              keys,
+                                              new CreateIndexOptions
+                                              {
+                                                  Name = indexName,
+                                                  Collation = new Collation("en")
+                                              }));
+        // Act - The explicit collation requires the probe, which a time-series collection rejects when sparse.
+        var result = await indexManager.CreateOneOrUpdateAsync(new CreateIndexModel<BsonDocument>(
+                                                                   keys,
+                                                                   new CreateIndexOptions
+                                                                   {
+                                                                       Name = indexName,
+                                                                       Collation = new Collation("fr")
+                                                                   }));
+
+        // Assert
+        result.Should().Be(indexName);
+        var indexes = await (await indexManager.ListAsync()).ToListAsync();
+        indexes.Should().ContainSingle(idx => idx["name"].AsString == indexName)
+               .Which["collation"]["locale"].AsString.Should().Be("fr");
+        indexes.Should().NotContain(idx => idx["name"].AsString.StartsWith("__chaosMongoCollationProbe_"));
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenUnrelatedIndexSharesKeySpecs_ShouldLeaveUnrelatedIndexUntouched()
     {
         // Arrange
@@ -1466,6 +1521,61 @@ public class MongoIndexManagerExtensionsIntegrationTests
         indexes.Should().Contain(idx => idx["name"].AsString == uniqueIndexName);
         indexes.Should().NotContain(idx => idx["name"].AsString == oldName);
         indexes.Should().Contain(idx => idx["name"].AsString == newName);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenWildcardIndexIsRenamedAndSiblingHasOtherProjection_ShouldPreserveSiblingAndRenameOldIndex()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var mongoHelper = new ServiceCollection()
+                          .AddMongo(url, configure: options =>
+                          {
+                              options.DefaultDatabase = uniqueDbName;
+                          })
+                          .Services
+                          .BuildServiceProvider()
+                          .GetRequiredService<IMongoHelper>();
+
+        var collectionName = "test_" + Guid.NewGuid().ToString("N");
+        var collection = mongoHelper.Database.GetCollection<TestDocument>(collectionName);
+        var indexManager = collection.Indexes;
+
+        var oldName = "idx_wildcard_old_" + Guid.NewGuid();
+        var newName = "idx_wildcard_new_" + Guid.NewGuid();
+        var siblingName = "idx_wildcard_sibling_" + Guid.NewGuid();
+        var wildcardKeys = (IndexKeysDefinition<TestDocument>)new BsonDocument("$**", 1);
+
+        await indexManager.CreateOneAsync(new CreateIndexModel<TestDocument>(
+                                              wildcardKeys,
+                                              new CreateIndexOptions<TestDocument>
+                                              {
+                                                  Name = oldName,
+                                                  WildcardProjection = new BsonDocument("Name", 1)
+                                              }));
+        await indexManager.CreateOneAsync(new CreateIndexModel<TestDocument>(
+                                              wildcardKeys,
+                                              new CreateIndexOptions<TestDocument>
+                                              {
+                                                  Name = siblingName,
+                                                  WildcardProjection = new BsonDocument("Value", 1)
+                                              }));
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(new CreateIndexModel<TestDocument>(
+                                                                   wildcardKeys,
+                                                                   new CreateIndexOptions<TestDocument>
+                                                                   {
+                                                                       Name = newName,
+                                                                       WildcardProjection = new BsonDocument("Name", 1)
+                                                                   }));
+
+        // Assert
+        result.Should().Be(newName);
+        var indexes = await (await indexManager.ListAsync()).ToListAsync();
+        indexes.Should().NotContain(idx => idx["name"].AsString == oldName);
+        indexes.Should().Contain(idx => idx["name"].AsString == newName);
+        indexes.Should().Contain(idx => idx["name"].AsString == siblingName);
     }
 
     [Test]
@@ -2934,6 +3044,63 @@ public class MongoIndexManagerExtensionsIntegrationTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WithSession_WhenTimeSeriesMetadataIndexCollationChanges_ShouldDropAndRecreateWithoutLeavingProbe()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var mongoHelper = new ServiceCollection()
+                          .AddMongo(url, configure: options =>
+                          {
+                              options.DefaultDatabase = uniqueDbName;
+                          })
+                          .Services
+                          .BuildServiceProvider()
+                          .GetRequiredService<IMongoHelper>();
+
+        var collectionName = "test_" + Guid.NewGuid().ToString("N");
+        await mongoHelper.Database.CreateCollectionAsync(collectionName, new CreateCollectionOptions
+        {
+            TimeSeriesOptions = new TimeSeriesOptions("timestamp", "metadata")
+        });
+        var collection = mongoHelper.Database.GetCollection<BsonDocument>(collectionName);
+        await collection.InsertOneAsync(new BsonDocument
+        {
+            ["timestamp"] = DateTime.UtcNow,
+            ["metadata"] = new BsonDocument("key", "value")
+        });
+        var indexManager = collection.Indexes;
+
+        var indexName = "idx_time_series_metadata_" + Guid.NewGuid();
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("metadata.key", 1);
+
+        await indexManager.CreateOneAsync(new CreateIndexModel<BsonDocument>(
+                                              keys,
+                                              new CreateIndexOptions
+                                              {
+                                                  Name = indexName,
+                                                  Collation = new Collation("en")
+                                              }));
+        using var session = await mongoHelper.Client.StartSessionAsync();
+
+        // Act - The explicit collation requires the probe, which a time-series collection rejects when sparse.
+        var result = await indexManager.CreateOneOrUpdateAsync(session, new CreateIndexModel<BsonDocument>(
+                                                                   keys,
+                                                                   new CreateIndexOptions
+                                                                   {
+                                                                       Name = indexName,
+                                                                       Collation = new Collation("fr")
+                                                                   }));
+
+        // Assert
+        result.Should().Be(indexName);
+        var indexes = await (await indexManager.ListAsync()).ToListAsync();
+        indexes.Should().ContainSingle(idx => idx["name"].AsString == indexName)
+               .Which["collation"]["locale"].AsString.Should().Be("fr");
+        indexes.Should().NotContain(idx => idx["name"].AsString.StartsWith("__chaosMongoCollationProbe_"));
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WithSession_WhenUnrelatedIndexSharesKeySpecs_ShouldLeaveUnrelatedIndexUntouched()
     {
         // Arrange
@@ -2986,6 +3153,63 @@ public class MongoIndexManagerExtensionsIntegrationTests
         indexes.Should().Contain(idx => idx["name"].AsString == uniqueIndexName);
         indexes.Should().NotContain(idx => idx["name"].AsString == oldName);
         indexes.Should().Contain(idx => idx["name"].AsString == newName);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WithSession_WhenWildcardIndexIsRenamedAndSiblingHasOtherProjection_ShouldPreserveSiblingAndRenameOldIndex()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var mongoHelper = new ServiceCollection()
+                          .AddMongo(url, configure: options =>
+                          {
+                              options.DefaultDatabase = uniqueDbName;
+                          })
+                          .Services
+                          .BuildServiceProvider()
+                          .GetRequiredService<IMongoHelper>();
+
+        var collectionName = "test_" + Guid.NewGuid().ToString("N");
+        var collection = mongoHelper.Database.GetCollection<TestDocument>(collectionName);
+        var indexManager = collection.Indexes;
+
+        var oldName = "idx_wildcard_old_" + Guid.NewGuid();
+        var newName = "idx_wildcard_new_" + Guid.NewGuid();
+        var siblingName = "idx_wildcard_sibling_" + Guid.NewGuid();
+        var wildcardKeys = (IndexKeysDefinition<TestDocument>)new BsonDocument("$**", 1);
+
+        await indexManager.CreateOneAsync(new CreateIndexModel<TestDocument>(
+                                              wildcardKeys,
+                                              new CreateIndexOptions<TestDocument>
+                                              {
+                                                  Name = oldName,
+                                                  WildcardProjection = new BsonDocument("Name", 1)
+                                              }));
+        await indexManager.CreateOneAsync(new CreateIndexModel<TestDocument>(
+                                              wildcardKeys,
+                                              new CreateIndexOptions<TestDocument>
+                                              {
+                                                  Name = siblingName,
+                                                  WildcardProjection = new BsonDocument("Value", 1)
+                                              }));
+        using var session = await mongoHelper.Client.StartSessionAsync();
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(session, new CreateIndexModel<TestDocument>(
+                                                                   wildcardKeys,
+                                                                   new CreateIndexOptions<TestDocument>
+                                                                   {
+                                                                       Name = newName,
+                                                                       WildcardProjection = new BsonDocument("Name", 1)
+                                                                   }));
+
+        // Assert
+        result.Should().Be(newName);
+        var indexes = await (await indexManager.ListAsync()).ToListAsync();
+        indexes.Should().NotContain(idx => idx["name"].AsString == oldName);
+        indexes.Should().Contain(idx => idx["name"].AsString == newName);
+        indexes.Should().Contain(idx => idx["name"].AsString == siblingName);
     }
 
     [OneTimeSetUp]

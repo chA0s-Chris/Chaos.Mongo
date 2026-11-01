@@ -260,6 +260,32 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenHiddenReadBackListsLegacyNaNTtlIndex_ShouldNotThrow()
+    {
+        // Arrange
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "new_name",
+            Hidden = true
+        });
+
+        var matchingIndexDocument = CreateIndexDocument("new_name");
+        matchingIndexDocument["hidden"] = true;
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([() => Task.FromResult("new_name")]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(matchingIndexDocument, CreateLegacyNaNTtlIndexDocument("legacy_ttl"))]));
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("new_name");
+        indexManager.DropOneAsyncCallCount.Should().Be(0);
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenHiddenRequestedAndServerAlreadyMatches_ShouldNotDropOrRecreate()
     {
         // Arrange - the common case for a caller that sets Hidden: the server already honored it (either a
@@ -470,6 +496,96 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenProbeWithoutSparseIsAlsoRejected_ShouldPropagateRejection()
+    {
+        // Arrange
+        var conflict = CreateConflictException("new_name");
+        var sparseRejection = CreateCommandException("probe", 72, "InvalidOptions");
+        var retryRejection = CreateCommandException("probe", 72, "InvalidOptions");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => throw sparseRejection,
+                () => throw retryRejection
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([EmptyListing]));
+
+        // Act
+        var act = async () => await indexManager.CreateOneOrUpdateAsync(CreateModelRequiringCollationProbe());
+
+        // Assert
+        var thrown = await act.Should().ThrowAsync<MongoCommandException>();
+        thrown.Which.Should().BeSameAs(retryRejection);
+        indexManager.DropOneAsyncCallCount.Should().Be(2);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenRenamedWildcardIndexIsGoneAndOnlySiblingWithOtherProjectionIsListed_ShouldNotDropSibling()
+    {
+        // Arrange - a concurrent caller already dropped the index being renamed but has not recreated it yet.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("$**", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions<BsonDocument>
+        {
+            Name = "new_name",
+            WildcardProjection = new BsonDocument("a", 1)
+        });
+
+        var conflict = CreateConflictException("new_name");
+        var siblingIndexDocument = new BsonDocument
+        {
+            ["name"] = "sibling",
+            ["key"] = new BsonDocument("$**", 1),
+            ["wildcardProjection"] = new BsonDocument("b", 1)
+        };
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(siblingIndexDocument)]));
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("new_name");
+        indexManager.DropOneAsyncCallCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenSameNameIndexHasLegacyNaNTtl_ShouldDropAndRecreate()
+    {
+        // Arrange - NaN never equals a requested value, so the same-name index is never reported as satisfied.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "new_name",
+            ExpireAfter = TimeSpan.FromHours(1)
+        });
+
+        var conflict = CreateConflictException("new_name");
+        var legacyIndexDocument = CreateLegacyNaNTtlIndexDocument("new_name");
+        legacyIndexDocument["key"] = new BsonDocument("Field", 1);
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(legacyIndexDocument)]));
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("new_name");
+        indexManager.DropOneAsyncCalls.Should().ContainSingle()
+                    .Which.Name.Should().Be("new_name");
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenServerSilentlyAcceptsHiddenMismatch_ShouldDropAndRecreate()
     {
         // Arrange - simulates a MongoDB server version (observed: 7.0, fixed by 8.0) that accepts a
@@ -511,6 +627,64 @@ public class MongoIndexManagerExtensionsTests
         result.Should().Be("same_name");
         indexManager.DropOneAsyncCallCount.Should().Be(1);
         indexManager.DropOneAsyncCalls[0].Name.Should().Be("same_name");
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenSiblingIndexHasLegacyNaNTtl_ShouldReplaceSameNameIndexOnly()
+    {
+        // Arrange - the supported server versions refuse to create this legacy state, so it needs a scripted listing.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "new_name",
+            Unique = true
+        });
+
+        var conflict = CreateConflictException("new_name");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([() => Listing(CreateIndexDocument("new_name"), CreateLegacyNaNTtlIndexDocument("legacy_ttl"))]));
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("new_name");
+        indexManager.DropOneAsyncCalls.Should().ContainSingle()
+                    .Which.Name.Should().Be("new_name");
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenSparseProbeIsRejectedWithInvalidOptions_ShouldRetryProbeWithoutSparse()
+    {
+        // Arrange
+        var conflict = CreateConflictException("new_name");
+        var rejection = CreateCommandException("probe", 72, "InvalidOptions");
+
+        var indexManager = new FakeIndexManager(
+            new Queue<Func<Task<String>>>([
+                () => throw conflict,
+                () => throw rejection,
+                () => Task.FromResult("__chaosMongoCollationProbe_ignored"),
+                () => Task.FromResult("new_name")
+            ]),
+            new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>([EmptyListing, EmptyListing]));
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(CreateModelRequiringCollationProbe());
+
+        // Assert
+        result.Should().Be("new_name");
+        var probes = indexManager.CreateOneAsyncCalls.Where(call => IsCollationProbe(call.Model)).ToList();
+        probes.Should().HaveCount(2);
+        probes[0].Model.Options.Sparse.Should().BeTrue();
+        probes[1].Model.Options.Sparse.Should().BeNull();
+        indexManager.DropOneAsyncCalls.Select(call => call.Name).Should()
+                    .BeEquivalentTo(probes.Select(call => call.Model.Options.Name));
     }
 
     [Test]
@@ -600,6 +774,14 @@ public class MongoIndexManagerExtensionsTests
         {
             ["name"] = name,
             ["key"] = new BsonDocument("Field", 1)
+        };
+
+    private static BsonDocument CreateLegacyNaNTtlIndexDocument(String name)
+        => new()
+        {
+            ["name"] = name,
+            ["key"] = new BsonDocument("Timestamp", 1),
+            ["expireAfterSeconds"] = Double.NaN
         };
 
     private static CreateIndexModel<BsonDocument> CreateModelRequiringCollationProbe()
