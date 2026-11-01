@@ -6,6 +6,7 @@ using Chaos.Mongo.Queues;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
@@ -168,16 +169,12 @@ public class MongoQueueSubscriptionTests
     {
         // Arrange
         var queueItemId = ObjectId.GenerateNewId();
-        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var logger = new CapturingLogger();
         var collection = new RecordingQueueItemCollection(queueItemId, DateTime.UtcNow);
-        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
-        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
         var cancellationTokenSource = new CancellationTokenSource();
-        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
-                          .Returns(() => cancellationTokenSource.CancelAsync());
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(() => cancellationTokenSource.CancelAsync());
 
-        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactoryMock.Object, logger: loggerMock.Object);
+        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactory, logger: logger);
         var method = GetPrivateMethod("ProcessQueueItemAsync",
         [
             typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
@@ -187,9 +184,9 @@ public class MongoQueueSubscriptionTests
         await (Task)method.Invoke(sut, [collection, queueItemId, cancellationTokenSource.Token])!;
 
         // Assert
-        VerifyLoggedInformation(loggerMock, "Processed queue item", Times.Once());
-        VerifyLoggedWarning(loggerMock, "Skipping completion", Times.Never());
-        VerifyLoggedWarning(loggerMock, "Completing queue item", Times.Never());
+        logger.Count(LogLevel.Information, "Processed queue item").Should().Be(1);
+        logger.Count(LogLevel.Warning, "Skipping completion").Should().Be(0);
+        logger.Count(LogLevel.Warning, "Completing queue item").Should().Be(0);
         collection.UpdateOneCallCount.Should().Be(1, "the retention completion write must run exactly once");
         collection.LastUpdateCancellationToken.IsCancellationRequested.Should().BeFalse(
             "the completion write must use the unlinked grace-period token, not the already-cancelled ambient token");
@@ -207,14 +204,10 @@ public class MongoQueueSubscriptionTests
     {
         // Arrange
         var queueItemId = ObjectId.GenerateNewId();
-        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var logger = new CapturingLogger();
         var collection = new RecordingQueueItemCollection(queueItemId, DateTime.UtcNow);
-        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
-        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
         var cancellationTokenSource = new CancellationTokenSource();
-        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
-                          .Returns(() => cancellationTokenSource.CancelAsync());
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(() => cancellationTokenSource.CancelAsync());
 
         var sut = CreateSubscription(new MongoQueueDefinition
                                      {
@@ -226,8 +219,8 @@ public class MongoQueueSubscriptionTests
                                          PayloadType = typeof(TestPayload),
                                          BatchSize = 10
                                      },
-                                     payloadHandlerFactory: payloadHandlerFactoryMock.Object,
-                                     logger: loggerMock.Object);
+                                     payloadHandlerFactory: payloadHandlerFactory,
+                                     logger: logger);
         var method = GetPrivateMethod("ProcessQueueItemAsync",
         [
             typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
@@ -237,8 +230,8 @@ public class MongoQueueSubscriptionTests
         await (Task)method.Invoke(sut, [collection, queueItemId, cancellationTokenSource.Token])!;
 
         // Assert
-        VerifyLoggedInformation(loggerMock, "Processed queue item", Times.Once());
-        VerifyLoggedWarning(loggerMock, "Skipping completion", Times.Never());
+        logger.Count(LogLevel.Information, "Processed queue item").Should().Be(1);
+        logger.Count(LogLevel.Warning, "Skipping completion").Should().Be(0);
         collection.UpdateOneCallCount.Should().Be(0, "immediate-delete completion must use DeleteOneAsync, not UpdateOneAsync");
         collection.DeleteOneCallCount.Should().Be(1, "the immediate-delete completion write must run exactly once");
         collection.LastDeleteCancellationToken.IsCancellationRequested.Should().BeFalse(
@@ -305,26 +298,22 @@ public class MongoQueueSubscriptionTests
     {
         // Arrange
         var queueItemId = ObjectId.GenerateNewId();
-        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var logger = new CapturingLogger();
         var collection = new RecordingQueueItemCollection(queueItemId, DateTime.UtcNow)
         {
             ModifiedCount = 0
         };
-        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
-        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
         using var cancellationTokenSource = new CancellationTokenSource();
-        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
-                          .Returns(async () =>
-                          {
-                              // The ambient token is cancelled only after the handler was actually invoked with
-                              // an acquired lock, matching how the real driver cancels in-flight operations
-                              // rather than refusing to acquire the lock in the first place.
-                              await cancellationTokenSource.CancelAsync();
-                              throw new OperationCanceledException();
-                          });
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(async () =>
+        {
+            // The ambient token is cancelled only after the handler was actually invoked with
+            // an acquired lock, matching how the real driver cancels in-flight operations
+            // rather than refusing to acquire the lock in the first place.
+            await cancellationTokenSource.CancelAsync();
+            throw new OperationCanceledException();
+        });
 
-        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactoryMock.Object, logger: loggerMock.Object);
+        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactory, logger: logger);
         var method = GetPrivateMethod("ProcessQueueItemAsync",
         [
             typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
@@ -335,8 +324,8 @@ public class MongoQueueSubscriptionTests
 
         // Assert
         collection.UpdateOneCallCount.Should().Be(1);
-        VerifyLoggedWarning(loggerMock, "Skipping lock release", Times.Once());
-        VerifyLoggedError(loggerMock, "failed on attempt", Times.Never());
+        logger.Count(LogLevel.Warning, "Skipping lock release").Should().Be(1);
+        logger.Count(LogLevel.Error, "failed on attempt").Should().Be(0);
     }
 
     [Test]
@@ -345,27 +334,22 @@ public class MongoQueueSubscriptionTests
         // Arrange
         var queueItemId = ObjectId.GenerateNewId();
         var acquiredLockUtc = new DateTimeOffset(2025, 6, 1, 8, 0, 0, TimeSpan.Zero);
-        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var logger = new CapturingLogger();
         var collection = new RecordingQueueItemCollection(queueItemId, acquiredLockUtc.UtcDateTime.AddMinutes(-1));
-        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
-        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
-        var timeProviderMock = new Mock<TimeProvider>();
-        timeProviderMock.Setup(x => x.GetUtcNow()).Returns(acquiredLockUtc);
+        var timeProvider = new FakeTimeProvider(acquiredLockUtc);
         using var cancellationTokenSource = new CancellationTokenSource();
-        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
-                          .Returns(async () =>
-                          {
-                              // The ambient token is cancelled only after the handler was actually invoked with
-                              // an acquired lock, matching how the real driver cancels in-flight operations
-                              // rather than refusing to acquire the lock in the first place.
-                              await cancellationTokenSource.CancelAsync();
-                              throw new OperationCanceledException();
-                          });
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(async () =>
+        {
+            // The ambient token is cancelled only after the handler was actually invoked with
+            // an acquired lock, matching how the real driver cancels in-flight operations
+            // rather than refusing to acquire the lock in the first place.
+            await cancellationTokenSource.CancelAsync();
+            throw new OperationCanceledException();
+        });
 
-        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactoryMock.Object,
-                                     timeProvider: timeProviderMock.Object,
-                                     logger: loggerMock.Object);
+        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactory,
+                                     timeProvider: timeProvider,
+                                     logger: logger);
         var method = GetPrivateMethod("ProcessQueueItemAsync",
         [
             typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
@@ -391,7 +375,7 @@ public class MongoQueueSubscriptionTests
             "a shutdown-caused cancellation must not close the item, or it would never become available again");
         ContainsEquality(collection.LastUpdateDefinition!, nameof(MongoQueueItem.IsTerminal), BsonBoolean.True).Should().BeFalse(
             "a shutdown-caused cancellation must not terminalize the item");
-        VerifyLoggedError(loggerMock, "failed on attempt", Times.Never());
+        logger.Count(LogLevel.Error, "failed on attempt").Should().Be(0);
     }
 
     [Test]
@@ -412,11 +396,11 @@ public class MongoQueueSubscriptionTests
         });
 
         var queueItemId = ObjectId.GenerateNewId();
-        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var logger = new CapturingLogger();
         var collection = CreateSuccessfulCompletionCollection(queueItemId);
         var sut = CreateSubscription(payloadHandlerFactory: new MongoQueuePayloadHandlerFactory(),
                                      serviceScopeFactory: serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-                                     logger: loggerMock.Object);
+                                     logger: logger);
         var method = GetPrivateMethod("ProcessQueueItemAsync",
         [
             typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
@@ -427,7 +411,7 @@ public class MongoQueueSubscriptionTests
 
         // Assert
         tracker.WasDisposed.Should().BeTrue("the per-item scope must dispose the handler even when its own cancellation is treated as a failure");
-        VerifyLoggedError(loggerMock, "failed on attempt", Times.Once());
+        logger.Count(LogLevel.Error, "failed on attempt").Should().Be(1);
     }
 
     [Test]
@@ -435,14 +419,10 @@ public class MongoQueueSubscriptionTests
     {
         // Arrange
         var queueItemId = ObjectId.GenerateNewId();
-        var loggerMock = new Mock<ILogger<MongoQueueSubscription<TestPayload>>>();
+        var logger = new CapturingLogger();
         var collection = new FailureTrackingQueueItemCollection(queueItemId, DateTime.UtcNow);
         var handlerException = new TaskCanceledException();
-        var payloadHandlerMock = new Mock<IMongoQueuePayloadHandler<TestPayload>>();
-        var payloadHandlerFactoryMock = new Mock<IMongoQueuePayloadHandlerFactory>();
-        payloadHandlerMock.Setup(x => x.HandlePayloadAsync(It.IsAny<TestPayload>(), It.IsAny<CancellationToken>()))
-                          .ThrowsAsync(handlerException);
-        payloadHandlerFactoryMock.Setup(x => x.CreateHandler<TestPayload>(It.IsAny<IServiceProvider>())).Returns(payloadHandlerMock.Object);
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(() => Task.FromException(handlerException));
 
         var sut = CreateSubscription(new MongoQueueDefinition
                                      {
@@ -454,8 +434,8 @@ public class MongoQueueSubscriptionTests
                                          PayloadType = typeof(TestPayload),
                                          BatchSize = 10
                                      },
-                                     payloadHandlerFactory: payloadHandlerFactoryMock.Object,
-                                     logger: loggerMock.Object);
+                                     payloadHandlerFactory: payloadHandlerFactory,
+                                     logger: logger);
         var method = GetPrivateMethod("ProcessQueueItemAsync",
         [
             typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
@@ -467,7 +447,7 @@ public class MongoQueueSubscriptionTests
         // Assert - retried, not yet terminal.
         collection.RetryCount.Should().Be(1, "the handler-caused cancellation must increment RetryCount like any other failure");
         collection.TerminalTransitionCount.Should().Be(0);
-        VerifyLoggedErrorWithException(loggerMock, "failed on attempt 1", handlerException, Times.Once());
+        logger.Count(LogLevel.Error, "failed on attempt 1", handlerException).Should().Be(1);
 
         // Act - second attempt exceeds MaxRetries (1).
         await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
@@ -475,7 +455,7 @@ public class MongoQueueSubscriptionTests
         // Assert - MaxRetries respected: the item becomes terminal instead of retrying again.
         collection.RetryCount.Should().Be(2);
         collection.TerminalTransitionCount.Should().Be(1);
-        VerifyLoggedErrorWithException(loggerMock, "Marking queue item", handlerException, Times.Once());
+        logger.Count(LogLevel.Error, "Marking queue item", handlerException).Should().Be(1);
     }
 
     [Test]
@@ -842,19 +822,6 @@ public class MongoQueueSubscriptionTests
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             times);
 
-    private static void VerifyLoggedErrorWithException(Mock<ILogger<MongoQueueSubscription<TestPayload>>> loggerMock,
-                                                       String messageSubstring,
-                                                       Exception expectedException,
-                                                       Times times)
-        => loggerMock.Verify(
-            l => l.Log(
-                LogLevel.Error,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((state, _) => state!.ToString()!.Contains(messageSubstring)),
-                expectedException,
-                It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
-            times);
-
     private static void VerifyLoggedInformation(Mock<ILogger<MongoQueueSubscription<TestPayload>>> loggerMock,
                                                 String messageSubstring,
                                                 Times times)
@@ -880,6 +847,30 @@ public class MongoQueueSubscriptionTests
             times);
 
     public class TestPayload;
+
+    /// <summary>
+    /// Logger test double that records the level, message and exception of every log entry.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger<MongoQueueSubscription<TestPayload>>
+    {
+        private readonly List<(LogLevel Level, String Message, Exception? Exception)> _entries = [];
+
+        public Int32 Count(LogLevel level, String messageSubstring, Exception? exception = null)
+            => _entries.Count(entry => entry.Level == level &&
+                                       entry.Message.Contains(messageSubstring) &&
+                                       (exception is null || ReferenceEquals(entry.Exception, exception)));
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public Boolean IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel,
+                                EventId eventId,
+                                TState state,
+                                Exception? exception,
+                                Func<TState, Exception?, String> formatter)
+            => _entries.Add((logLevel, formatter(state, exception), exception));
+    }
 
     /// <summary>
     /// Hand-crafted collection double simulating a successful acquire-then-complete sequence for a single queue
@@ -1421,5 +1412,30 @@ public class MongoQueueSubscriptionTests
 
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>
+    /// Payload handler double that delegates to the given callback.
+    /// </summary>
+    private sealed class StubPayloadHandler : IMongoQueuePayloadHandler<TestPayload>
+    {
+        private readonly Func<Task> _handle;
+
+        public StubPayloadHandler(Func<Task> handle) => _handle = handle;
+
+        public Task HandlePayloadAsync(TestPayload payload, CancellationToken cancellationToken = default) => _handle();
+    }
+
+    /// <summary>
+    /// Payload handler factory double that creates a <see cref="StubPayloadHandler"/> running the given callback.
+    /// </summary>
+    private sealed class StubPayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
+    {
+        private readonly IMongoQueuePayloadHandler<TestPayload> _handler;
+
+        public StubPayloadHandlerFactory(Func<Task> handle) => _handler = new StubPayloadHandler(handle);
+
+        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
+            => (IMongoQueuePayloadHandler<TPayload>)_handler;
     }
 }
