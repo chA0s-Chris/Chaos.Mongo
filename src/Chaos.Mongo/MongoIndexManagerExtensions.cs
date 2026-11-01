@@ -21,7 +21,10 @@ public static class MongoIndexManagerExtensions
     /// If the index exists with conflicting options or key specifications, it will be dropped and recreated.
     /// The existing index is located by its key specification and options, not by the name the server reports
     /// in the conflict, so renaming an index that keeps the same key specification is handled correctly. A
-    /// concurrent caller resolving the same conflict is tolerated.
+    /// concurrent caller resolving the same conflict is tolerated. When <c>model.Options.Hidden</c> is set
+    /// explicitly, the created index's actual <c>Hidden</c> value is also verified (see
+    /// <see cref="ResolveHiddenMismatchAsync{TDocument}"/>): some MongoDB server versions accept a same-name
+    /// request that only changes <c>Hidden</c> without raising a conflict, leaving the index unchanged.
     /// </summary>
     /// <typeparam name="TDocument">The type of the document.</typeparam>
     /// <param name="indexManager">The index manager.</param>
@@ -43,7 +46,16 @@ public static class MongoIndexManagerExtensions
     {
         try
         {
-            return await indexManager.CreateOneAsync(model, options, cancellationToken);
+            var createdName = await indexManager.CreateOneAsync(model, options, cancellationToken);
+            return await ResolveHiddenMismatchAsync(
+                indexManager,
+                model,
+                createdName,
+                ct => indexManager.ListAsync(ct),
+                (name, ct) => indexManager.DropOneIfExistsAsync(name, ct),
+                () => indexManager.CreateOneAsync(model, options, cancellationToken),
+                (probe, ct) => indexManager.CreateOneAsync(probe, null, ct),
+                cancellationToken);
         }
         catch (MongoCommandException e) when (IsIndexConflict(e))
         {
@@ -71,7 +83,10 @@ public static class MongoIndexManagerExtensions
     /// If the index exists with conflicting options or key specifications, it will be dropped and recreated.
     /// The existing index is located by its key specification and options, not by the name the server reports
     /// in the conflict, so renaming an index that keeps the same key specification is handled correctly. A
-    /// concurrent caller resolving the same conflict is tolerated.
+    /// concurrent caller resolving the same conflict is tolerated. When <c>model.Options.Hidden</c> is set
+    /// explicitly, the created index's actual <c>Hidden</c> value is also verified (see
+    /// <see cref="ResolveHiddenMismatchAsync{TDocument}"/>): some MongoDB server versions accept a same-name
+    /// request that only changes <c>Hidden</c> without raising a conflict, leaving the index unchanged.
     /// </summary>
     /// <typeparam name="TDocument">The type of the document.</typeparam>
     /// <param name="indexManager">The index manager.</param>
@@ -95,7 +110,16 @@ public static class MongoIndexManagerExtensions
     {
         try
         {
-            return await indexManager.CreateOneAsync(session, model, options, cancellationToken);
+            var createdName = await indexManager.CreateOneAsync(session, model, options, cancellationToken);
+            return await ResolveHiddenMismatchAsync(
+                indexManager,
+                model,
+                createdName,
+                ct => indexManager.ListAsync(session, ct),
+                (name, ct) => indexManager.DropOneIfExistsAsync(session, name, ct),
+                () => indexManager.CreateOneAsync(session, model, options, cancellationToken),
+                (probe, ct) => indexManager.CreateOneAsync(session, probe, null, ct),
+                cancellationToken);
         }
         catch (MongoCommandException e) when (IsIndexConflict(e))
         {
@@ -325,8 +349,8 @@ public static class MongoIndexManagerExtensions
     private static List<String> ExtractTextFieldNames(BsonDocument renderedKeys, BsonDocument? weights)
     {
         var textFields = renderedKeys.Elements.Where(element => element.Value.IsString && element.Value.AsString == "text")
-                                      .Select(element => element.Name)
-                                      .ToList();
+                                     .Select(element => element.Name)
+                                     .ToList();
 
         if (textFields.Count == 0 || weights is null)
         {
@@ -691,6 +715,59 @@ public static class MongoIndexManagerExtensions
         }
 
         return await RetryOrRecoverAsync(createOne, listIndexes, requestedName, desired, exception, cancellationToken);
+    }
+
+    /// <summary>
+    /// Closes a gap the exception-driven resolution in <see cref="ResolveConflictAsync{TDocument}"/> cannot see:
+    /// on MongoDB server versions before the server fixed this (observed fixed by 8.0), a <c>createIndexes</c>
+    /// request that differs from an existing same-name index only in <c>Hidden</c> succeeds silently, without
+    /// raising <c>IndexOptionsConflict</c>, and leaves the existing index's visibility unchanged. Every other
+    /// option difference, and every server version 8.0 and later, raises the conflict normally and is already
+    /// handled by the catch clause in <c>CreateOneOrUpdateAsync</c>. This only pays the extra <c>listIndexes</c>
+    /// round-trip when the caller actually set <c>Hidden</c> explicitly; a request that leaves it unset never
+    /// reaches this far (<paramref name="createdName"/>'s index is read back only to compare that one option, not
+    /// to repeat <see cref="ResolveConflictAsync{TDocument}"/>'s full identity/effective comparison). A mismatch is
+    /// treated exactly like a caught conflict: the stale index is dropped and creation retried; if that retry
+    /// itself conflicts (a concurrent caller raced the same resolution), it falls back into the same conflict
+    /// resolution <see cref="ResolveConflictAsync{TDocument}"/> already provides for a genuine server-reported
+    /// conflict.
+    /// </summary>
+    private static async Task<String?> ResolveHiddenMismatchAsync<TDocument>(IMongoIndexManager<TDocument> indexManager,
+                                                                             CreateIndexModel<TDocument> model,
+                                                                             String createdName,
+                                                                             Func<CancellationToken, Task<IAsyncCursor<BsonDocument>>> listIndexes,
+                                                                             Func<String, CancellationToken, Task> dropOneIfExists,
+                                                                             Func<Task<String>> createOne,
+                                                                             Func<CreateIndexModel<TDocument>, CancellationToken, Task<String>> createProbe,
+                                                                             CancellationToken cancellationToken)
+    {
+        if (model.Options?.Hidden is not { } requestedHidden)
+        {
+            return createdName;
+        }
+
+        var indexes = await ListExistingIndexesAsync(listIndexes, cancellationToken);
+        var actual = indexes.FirstOrDefault(index => index.Name == createdName);
+        if (actual.Name is null || actual.Definition.Hidden == requestedHidden)
+        {
+            return createdName;
+        }
+
+        try
+        {
+            await dropOneIfExists(createdName, cancellationToken);
+            return await createOne();
+        }
+        catch (MongoCommandException e) when (IsIndexConflict(e))
+        {
+            var requestedName = GetRequestedIndexName(e);
+            if (String.IsNullOrEmpty(requestedName))
+            {
+                throw;
+            }
+
+            return await ResolveConflictAsync(indexManager, model, requestedName, e, listIndexes, dropOneIfExists, createOne, createProbe, cancellationToken);
+        }
     }
 
     /// <summary>

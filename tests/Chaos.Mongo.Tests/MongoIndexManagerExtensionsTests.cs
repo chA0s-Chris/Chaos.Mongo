@@ -13,10 +13,12 @@ using NUnit.Framework;
 using System.Net;
 
 /// <summary>
-/// Covers two branches of <see cref="MongoIndexManagerExtensions"/>'s <c>CreateOneOrUpdateAsync</c> that tolerate
-/// a concurrent caller resolving the same index conflict. Both branches depend on exact server timing (a
-/// concurrent caller finishing between this call's own list/drop/create steps) that cannot be reliably forced
-/// through a real server via Testcontainers, so they are covered with a hand-crafted fake
+/// Covers branches of <see cref="MongoIndexManagerExtensions"/>'s <c>CreateOneOrUpdateAsync</c> that cannot be
+/// reliably forced through a real server via Testcontainers: tolerating a concurrent caller resolving the same
+/// index conflict (depends on exact server timing between this call's own list/drop/create steps), the
+/// collation probe's post-cancellation cleanup (depends on exact timing of a caller-initiated cancellation),
+/// and the server-version-dependent silent acceptance of a same-name request that only changes <c>Hidden</c>
+/// (depends on which MongoDB version is actually running). All are covered with a hand-crafted fake
 /// <see cref="IMongoIndexManager{TDocument}"/> that scripts the exact sequence of responses instead.
 /// </summary>
 public class MongoIndexManagerExtensionsTests
@@ -178,6 +180,67 @@ public class MongoIndexManagerExtensionsTests
     }
 
     [Test]
+    public async Task CreateOneOrUpdateAsync_WhenHiddenNotRequested_ShouldNotPerformExtraListCheck()
+    {
+        // Arrange - a caller that never sets Hidden must not pay the extra listIndexes round-trip at all; an
+        // empty listResults queue means the test fails with a Dequeue error if ResolveHiddenMismatchAsync calls
+        // ListAsync when it should have returned immediately.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "same_name"
+        });
+
+        var createOneResults = new Queue<Func<Task<String>>>([() => Task.FromResult("same_name")]);
+        var listResults = new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>();
+
+        var indexManager = new FakeIndexManager(createOneResults, listResults);
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("same_name");
+        indexManager.DropOneAsyncCallCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenHiddenRequestedAndServerAlreadyMatches_ShouldNotDropOrRecreate()
+    {
+        // Arrange - the common case for a caller that sets Hidden: the server already honored it (either a
+        // brand-new index, or a server version that does raise the conflict and already resolved it above), so
+        // the read-back must not falsely trigger a drop/recreate.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "same_name",
+            Hidden = true
+        });
+
+        var matchingIndexDocument = new BsonDocument
+        {
+            ["name"] = "same_name",
+            ["key"] = new BsonDocument("Field", 1),
+            ["hidden"] = true
+        };
+
+        var createOneResults = new Queue<Func<Task<String>>>([() => Task.FromResult("same_name")]);
+        var listResults = new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>(
+        [
+            () => Task.FromResult<IAsyncCursor<BsonDocument>>(new SingleBatchAsyncCursor<BsonDocument>([matchingIndexDocument]))
+        ]);
+
+        var indexManager = new FakeIndexManager(createOneResults, listResults);
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("same_name");
+        indexManager.DropOneAsyncCallCount.Should().Be(0);
+    }
+
+    [Test]
     public async Task CreateOneOrUpdateAsync_WhenListingBackCollationProbeFailsWithCancellation_ShouldStillCleanUpProbeOnIndependentContextAndRethrowCancellation()
     {
         // Arrange
@@ -249,6 +312,50 @@ public class MongoIndexManagerExtensionsTests
         var thrown = await act.Should().ThrowAsync<MongoCommandException>();
         thrown.Which.Should().BeSameAs(originalConflict);
         indexManager.DropOneAsyncCallCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task CreateOneOrUpdateAsync_WhenServerSilentlyAcceptsHiddenMismatch_ShouldDropAndRecreate()
+    {
+        // Arrange - simulates a MongoDB server version (observed: 7.0, fixed by 8.0) that accepts a
+        // createIndexes request differing from an existing same-name index only in Hidden without raising
+        // IndexOptionsConflict, leaving the existing index's hidden value unchanged. CreateOneAsync therefore
+        // succeeds on its first call, so the exception-driven path in ResolveConflictAsync never runs; only the
+        // post-success read-back below can observe and correct this.
+        var keys = (IndexKeysDefinition<BsonDocument>)new BsonDocument("Field", 1);
+        var model = new CreateIndexModel<BsonDocument>(keys, new CreateIndexOptions
+        {
+            Name = "same_name",
+            Hidden = true
+        });
+
+        var staleIndexDocument = new BsonDocument
+        {
+            ["name"] = "same_name",
+            ["key"] = new BsonDocument("Field", 1)
+            // No "hidden" field: the existing index's stored value is still the server default (false),
+            // because the server silently left it untouched instead of raising a conflict.
+        };
+
+        var createOneResults = new Queue<Func<Task<String>>>(
+        [
+            () => Task.FromResult("same_name"),
+            () => Task.FromResult("same_name")
+        ]);
+        var listResults = new Queue<Func<Task<IAsyncCursor<BsonDocument>>>>(
+        [
+            () => Task.FromResult<IAsyncCursor<BsonDocument>>(new SingleBatchAsyncCursor<BsonDocument>([staleIndexDocument]))
+        ]);
+
+        var indexManager = new FakeIndexManager(createOneResults, listResults);
+
+        // Act
+        var result = await indexManager.CreateOneOrUpdateAsync(model);
+
+        // Assert
+        result.Should().Be("same_name");
+        indexManager.DropOneAsyncCallCount.Should().Be(1);
+        indexManager.DropOneAsyncCalls[0].Name.Should().Be("same_name");
     }
 
     private static MongoCommandException CreateConflictException(String requestedName)
