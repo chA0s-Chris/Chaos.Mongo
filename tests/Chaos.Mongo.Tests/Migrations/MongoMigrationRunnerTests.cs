@@ -223,6 +223,230 @@ public class MongoMigrationRunnerTests
     }
 
     [Test]
+    public async Task RunMigrationsAsync_WithExtensionFailingAfterMigrationsFinished_ReturnsSuccessfulResult()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extensionResult = new TaskCompletionSource<DateTime?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _, _) =>
+        {
+            extensionStarted.SetResult();
+            return extensionResult.Task;
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        var releaseMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migration = new FakeMigration("001_Finishing", async (_, _, ct) =>
+        {
+            migrationStarted.SetResult();
+            await releaseMigration.Task.WaitAsync(ct);
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task;
+        timeProvider.Advance(leaseTime / 2);
+        await extensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        releaseMigration.SetResult();
+        await WaitForAsync(() => historyCollection.InsertedItems.Count > 0);
+        await Task.WhenAny(runTask, Task.Delay(TimeSpan.FromMilliseconds(100)));
+        extensionResult.SetException(new InvalidOperationException("Lease extension failed unexpectedly"));
+        var result = await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        result.AppliedMigrationIds.Should().Equal("001_Finishing");
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithExtensionInFlightWhenCallerCancelsAfterMigrationsFinished_AbortsExtensionAndCompletes()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extensionCancelled = false;
+
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, _, ct) =>
+        {
+            extensionStarted.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                extensionCancelled = true;
+                throw;
+            }
+
+            return null;
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        var releaseMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migration = new FakeMigration("001_Finishing", async (_, _, _) =>
+        {
+            migrationStarted.SetResult();
+            await releaseMigration.Task;
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+        using var callerCts = new CancellationTokenSource();
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(callerCts.Token);
+        await migrationStarted.Task;
+        timeProvider.Advance(leaseTime / 2);
+        await extensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        releaseMigration.SetResult();
+        await WaitForAsync(() => historyCollection.InsertedItems.Count > 0);
+        await Task.WhenAny(runTask, Task.Delay(TimeSpan.FromMilliseconds(100)));
+        await callerCts.CancelAsync();
+        var result = await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        extensionCancelled.Should().BeTrue();
+        result.AppliedMigrationIds.Should().Equal("001_Finishing");
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithExtensionInFlightWhenMigrationsFinish_WaitsForItAndReleasesWithItsExpiry()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extensionResult = new TaskCompletionSource<DateTime?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        DateTime? releasedWithExpiry = null;
+
+        var mongoLock = CreateMongoLock(timeProvider,
+                                        leaseTime,
+                                        async (_, _, ct) =>
+                                        {
+                                            extensionStarted.SetResult();
+                                            return await extensionResult.Task.WaitAsync(ct);
+                                        },
+                                        validUntilUtc =>
+                                        {
+                                            releasedWithExpiry = validUntilUtc;
+                                            return Task.CompletedTask;
+                                        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        var releaseMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migration = new FakeMigration("001_Finishing", async (_, _, ct) =>
+        {
+            migrationStarted.SetResult();
+            await releaseMigration.Task.WaitAsync(ct);
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task;
+        timeProvider.Advance(leaseTime / 2);
+        await extensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        releaseMigration.SetResult();
+        await WaitForAsync(() => historyCollection.InsertedItems.Count > 0);
+
+        // The run must not finish while the extension is in flight. Cancelling the extension on shutdown would let it.
+        await Task.WhenAny(runTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        var finishedDuringExtension = runTask.IsCompleted;
+
+        var extendedUntilUtc = timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime;
+        extensionResult.SetResult(extendedUntilUtc);
+        var result = await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        finishedDuringExtension.Should().BeFalse();
+        releasedWithExpiry.Should().Be(extendedUntilUtc);
+        result.AppliedMigrationIds.Should().Equal("001_Finishing");
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithExtensionStalledPastLeaseExpiry_StopsInProgressMigrationAndDoesNotRecordIt()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, _, ct) =>
+        {
+            extensionStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return null;
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migration = new FakeMigration("001_Blocked", async (_, _, ct) =>
+        {
+            migrationStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task;
+        timeProvider.Advance(leaseTime / 2);
+        await extensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        timeProvider.Advance(leaseTime / 2);
+
+        var act = async () => await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        historyCollection.InsertedItems.Should().BeEmpty();
+    }
+
+    [Test]
     public async Task RunMigrationsAsync_WithHistoryReadBlockedPastLeaseExpiry_StopsBeforeApplyingAnyMigration()
     {
         // Arrange
@@ -652,12 +876,13 @@ public class MongoMigrationRunnerTests
 
     private static MongoLock CreateMongoLock(TimeProvider timeProvider,
                                              TimeSpan leaseTime,
-                                             Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction) =>
+                                             Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction,
+                                             Func<DateTime, Task>? releaseAction = null) =>
         new("migration-lock",
             timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime,
             leaseTime,
             timeProvider,
-            _ => Task.CompletedTask,
+            releaseAction ?? (_ => Task.CompletedTask),
             extendAction);
 
     private static async Task WaitForAsync(Func<Boolean> condition)

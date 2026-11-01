@@ -110,7 +110,9 @@ public sealed class MigrationService(IMongoMigrationRunner migrationRunner)
   instead of losing it. If the lease cannot be renewed — because another holder has taken over, or renewal otherwise fails —
   the in-progress migration is signaled for cancellation, is not recorded as applied, and its transaction (if any)
   is aborted. A migration that observes its cancellation token stops promptly; one that does not cannot be forcibly
-  interrupted, and any non-transactional effects it already performed cannot be rolled back.
+  interrupted, and any non-transactional effects it already performed cannot be rolled back. A renewal already in
+  flight when the run ends is allowed to finish first, so the lock is released using the renewed expiry; cancelling
+  the token passed to `RunMigrationsAsync` skips that wait, in which case the lock may stay held until its lease expires.
 - Migrations use transactions when available unless `UseTransactionsForMigrationsIfAvailable` is disabled.
 
 ## Recommendations

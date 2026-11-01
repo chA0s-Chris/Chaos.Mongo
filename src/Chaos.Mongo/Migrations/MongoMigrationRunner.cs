@@ -232,13 +232,23 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
     ///     consumed part of the lease by the time this loop sees it.
     ///     </para>
     ///     <para>
-    ///     A refused extension, an already-expired lease (which the database would only refuse), or any exception other
-    ///     than the loop's own shutdown cancellation via <paramref name="stopToken"/>, cancels
-    ///     <paramref name="lockLostCts"/> so in-progress protected work observes the loss. Exceptions then propagate, so
-    ///     <see cref="RunMigrationsAsync"/> can surface them when no migration exception already takes precedence.
+    ///     A refused extension, an already-expired lease (which the database would only refuse), or any exception raised
+    ///     before <paramref name="stopToken"/> is cancelled, cancels <paramref name="lockLostCts"/> so in-progress
+    ///     protected work observes the loss. Exceptions then propagate, so <see cref="RunMigrationsAsync"/> can surface
+    ///     them when no migration exception already takes precedence.
+    ///     </para>
+    ///     <para>
+    ///     <paramref name="stopToken"/> only cancels the wait between renewals. An extension already in flight keeps
+    ///     running, because cancelling it could leave the database holding an expiry this lock never learned about, so
+    ///     the release would match nothing and the lock would stay held until that lease expired. See
+    ///     <see cref="TryExtendLeaseAsync"/> for what still bounds that extension. Once the protected work is done an
+    ///     extension failure can no longer affect it, so it is logged rather than failing the run.
     ///     </para>
     /// </remarks>
-    private async Task RunLeaseRenewalLoopAsync(IMongoLock mongoLock, CancellationTokenSource lockLostCts, CancellationToken stopToken)
+    private async Task RunLeaseRenewalLoopAsync(IMongoLock mongoLock,
+                                                CancellationTokenSource lockLostCts,
+                                                CancellationToken stopToken,
+                                                CancellationToken extensionAbortToken)
     {
         try
         {
@@ -249,7 +259,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
                 {
                     await Task.Delay(remainingLease / 2, _timeProvider, stopToken);
 
-                    if (await mongoLock.TryExtendAsync(cancellationToken: stopToken))
+                    if (await TryExtendLeaseAsync(mongoLock, extensionAbortToken))
                     {
                         continue;
                     }
@@ -265,6 +275,11 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         {
             // Normal shutdown requested by RunMigrationsAsync once the migration loop finished.
         }
+        catch (Exception ex) when (stopToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Migration lock {LockName} lease renewal failed after migration work finished; the lock may stay held until its lease expires",
+                               _options.MigrationsLockName);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Migration lock {LockName} lease renewal failed unexpectedly; stopping in-progress migration work",
@@ -272,6 +287,27 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
             await lockLostCts.CancelAsync();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Extends <paramref name="mongoLock"/>'s lease, giving up once the lease being extended has expired.
+    /// </summary>
+    /// <remarks>
+    /// Past that expiry the database would refuse the extension anyway, so this bound stops a stalled extension from
+    /// hiding a lost lock from in-progress work or holding up the end of the run indefinitely.
+    /// </remarks>
+    /// <returns><see langword="true"/> when the lease was extended; otherwise, <see langword="false"/>.</returns>
+    private async Task<Boolean> TryExtendLeaseAsync(IMongoLock mongoLock, CancellationToken extensionAbortToken)
+    {
+        var remainingLease = mongoLock.ValidUntilUtc - _timeProvider.GetUtcNow().UtcDateTime;
+        if (remainingLease <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        using var leaseExpiryCts = new CancellationTokenSource(remainingLease, _timeProvider);
+        using var extensionCts = CancellationTokenSource.CreateLinkedTokenSource(extensionAbortToken, leaseExpiryCts.Token);
+        return await mongoLock.TryExtendAsync(cancellationToken: extensionCts.Token);
     }
 
     /// <inheritdoc/>
@@ -298,10 +334,11 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
             // unexpectedly, and that cancellation flows into all of that protected work via protectedCts below.
             using var lockLostCts = new CancellationTokenSource();
             using var renewalStopCts = new CancellationTokenSource();
+            using var extensionAbortCts = new CancellationTokenSource();
             using var protectedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lockLostCts.Token);
             var protectedCancellationToken = protectedCts.Token;
 
-            var renewalTask = RunLeaseRenewalLoopAsync(mongoLock, lockLostCts, renewalStopCts.Token);
+            var renewalTask = RunLeaseRenewalLoopAsync(mongoLock, lockLostCts, renewalStopCts.Token, extensionAbortCts.Token);
 
             var appliedIds = new List<String>();
             Exception? migrationException = null;
@@ -336,6 +373,10 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
             }
 
             await renewalStopCts.CancelAsync();
+
+            // The caller's token only reaches an in-flight extension from here on. Linking it any earlier would end
+            // renewal under a migration that ignores its cancellation token and keeps running.
+            using var extensionAbortRegistration = cancellationToken.Register(extensionAbortCts.Cancel);
 
             Exception? renewalException = null;
             try
