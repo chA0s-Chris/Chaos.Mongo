@@ -82,15 +82,36 @@ public sealed class MongoOptions
     /// </summary>
     /// <remarks>
     ///     <para>
-    ///     This determines how long a migration lock is valid before it automatically expires.
-    ///     The lock prevents concurrent migration execution across multiple application instances.
+    ///     This determines how long a migration lock is valid before it automatically expires if its holder stops
+    ///     renewing it. The lock prevents concurrent migration execution across multiple application instances.
     ///     </para>
     ///     <para>
-    ///     If a migration takes longer than this duration, an <see cref="InvalidOperationException"/> will be thrown.
-    ///     Ensure this value is large enough for your longest migration to complete.
+    ///     The lease is renewed automatically while migrations run, so a migration that runs longer than this
+    ///     duration does not lose the lock. A shorter value still bounds how long a crashed holder's lock stays
+    ///     unclaimable, so prefer tuning the renewal margin over setting this to the longest possible migration
+    ///     duration.
     ///     </para>
     /// </remarks>
     public TimeSpan MigrationLockLeaseTime { get; set; } = MongoDefaults.MigrationLockLeaseTime;
+
+    /// <summary>
+    /// Gets or sets how long <see cref="Migrations.IMongoMigrationRunner.RunMigrationsAsync"/> waits to acquire the
+    /// migration lock before reporting a skipped run.
+    /// Defaults to <see cref="MongoDefaults.MigrationLockWaitTimeout"/>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     <see langword="null"/> waits indefinitely for the lock, bounded only by the caller's cancellation token.
+    ///     <see cref="TimeSpan.Zero"/> makes a single acquisition attempt and reports a skipped run immediately if
+    ///     the lock is held, restoring the pre-1.0 behavior. Any other positive value bounds the wait.
+    ///     </para>
+    ///     <para>
+    ///     When <see cref="MongoHostedService"/> runs migrations on startup and this wait times out, hosted startup
+    ///     fails instead of continuing to configurators against a potentially stale schema. Set this to
+    ///     <see cref="TimeSpan.Zero"/> to opt out of that protection.
+    ///     </para>
+    /// </remarks>
+    public TimeSpan? MigrationLockWaitTimeout { get; set; } = MongoDefaults.MigrationLockWaitTimeout;
 
     /// <summary>
     /// Gets or sets the name of the distributed lock used to coordinate migration execution.

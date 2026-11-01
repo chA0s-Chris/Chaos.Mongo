@@ -152,3 +152,30 @@ Passing a literal `null` as `configure` is now ambiguous (`CS0121`) for `AddMong
 and the three-argument connection-string and `MongoUrl` overloads, because the compiler can no longer pick between
 the `Action<MongoOptions>` and `Action<IServiceProvider, MongoOptions>` overloads. Omit the argument, or cast it to
 `Action<MongoOptions>`.
+
+## Migrations: `RunMigrationsAsync` waits for the lock and returns a result
+
+`IMongoMigrationRunner.RunMigrationsAsync` now returns `Task<MongoMigrationResult>` instead of `Task`. Update call
+sites that awaited it as a plain `Task` to use the result, or at least discard it explicitly.
+
+By default, a second instance now waits for the first to finish migrations instead of skipping immediately when the
+lock is held, bounded by the new `MongoOptions.MigrationLockWaitTimeout` (30 minutes by default). Set
+`MigrationLockWaitTimeout` to `TimeSpan.Zero` to restore the previous "skip immediately if the lock is held"
+behavior, or to `null` to wait indefinitely.
+
+`MongoMigrationResult.Skipped` is `true` only when the lock could not be acquired within that wait; it replaces the
+previous silent skip. Callers that invoke `RunMigrationsAsync` directly must check `Skipped` themselves and decide
+how to react. `MongoHostedService` fails hosted startup instead when migrations are enabled and the run is skipped,
+unless `MigrationLockWaitTimeout` is `TimeSpan.Zero`.
+
+The lock's lease is now renewed automatically while migrations run, so a migration (or a batch of migrations) that
+runs longer than `MigrationLockLeaseTime` no longer loses the lock on its own; a renewal that is refused or fails
+instead signals the in-progress migration for cancellation, leaves it unrecorded, and aborts its transaction, if
+any. A migration that observes its cancellation token stops promptly; one that does not cannot be forcibly
+interrupted, and any non-transactional effects it already performed cannot be rolled back.
+
+The `MongoMigrationRunner` constructor now throws `ArgumentException` when two or more registered migrations share
+the same `Id`, naming the duplicate ID(s), instead of silently applying only one of them.
+
+During hosted startup, migrations now run before configurators instead of after, so a configurator cannot create an
+index before a migration that cleans up the data it depends on.

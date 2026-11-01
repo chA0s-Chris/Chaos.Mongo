@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.Migrations;
 using Chaos.Mongo.Queues;
 using Chaos.Testing.Logging;
 using FluentAssertions;
@@ -190,6 +191,64 @@ public class MongoHostedServiceTests
     }
 
     [Test]
+    public async Task StartingAsync_WhenApplyMigrationsOnStartupIsDisabled_DoesNotRunMigrations()
+    {
+        // Arrange
+        var migrationRunner = new RecordingMigrationRunner(_ => throw new InvalidOperationException("Should not run"));
+        var configuratorRunner = new RecordingConfiguratorRunner();
+        var mockServiceScopeFactory = CreateFakeServiceScopeFactory(configuratorRunner, migrationRunner);
+        var options = Options.Create(new MongoOptions
+        {
+            ApplyMigrationsOnStartup = false
+        });
+        var logger = new NUnitTestLogger<MongoHostedService>();
+        var service = new MongoHostedService([], mockServiceScopeFactory, options, logger);
+
+        // Act
+        var act = async () => await service.StartingAsync(CancellationToken.None);
+
+        // Assert
+        await act.Should().NotThrowAsync();
+    }
+
+    [Test]
+    public async Task StartingAsync_WhenApplyMigrationsOnStartupIsEnabled_RunsMigrationsBeforeConfigurators()
+    {
+        // Arrange
+        var executionOrder = new List<String>();
+        var migrationRunner = new RecordingMigrationRunner(_ =>
+        {
+            executionOrder.Add("Migrations");
+            return Task.FromResult(new MongoMigrationResult
+            {
+                Skipped = false,
+                AppliedMigrationIds = []
+            });
+        });
+
+        var configuratorRunner = new RecordingConfiguratorRunner(_ =>
+        {
+            executionOrder.Add("Configurators");
+            return Task.CompletedTask;
+        });
+
+        var mockServiceScopeFactory = CreateFakeServiceScopeFactory(configuratorRunner, migrationRunner);
+        var options = Options.Create(new MongoOptions
+        {
+            ApplyMigrationsOnStartup = true,
+            RunConfiguratorsOnStartup = true
+        });
+        var logger = new NUnitTestLogger<MongoHostedService>();
+        var service = new MongoHostedService([], mockServiceScopeFactory, options, logger);
+
+        // Act
+        await service.StartingAsync(CancellationToken.None);
+
+        // Assert
+        executionOrder.Should().Equal("Migrations", "Configurators");
+    }
+
+    [Test]
     public async Task StartingAsync_WhenConfiguratorRunnerIsCanceled_PropagatesCancellation()
     {
         // Arrange
@@ -232,6 +291,93 @@ public class MongoHostedServiceTests
 
         // Assert
         act.Should().ThrowAsync<InvalidOperationException>().WithMessage("Configurator failed");
+    }
+
+    [Test]
+    public async Task StartingAsync_WhenMigrationsAreSkippedAndWaitTimeoutIsZero_DoesNotThrowAndRunsConfigurators()
+    {
+        // Arrange
+        var migrationRunner = new RecordingMigrationRunner(_ => Task.FromResult(new MongoMigrationResult
+        {
+            Skipped = true,
+            AppliedMigrationIds = []
+        }));
+
+        var configuratorRunner = new RecordingConfiguratorRunner();
+        var mockServiceScopeFactory = CreateFakeServiceScopeFactory(configuratorRunner, migrationRunner);
+        var options = Options.Create(new MongoOptions
+        {
+            ApplyMigrationsOnStartup = true,
+            RunConfiguratorsOnStartup = true,
+            MigrationLockWaitTimeout = TimeSpan.Zero
+        });
+        var logger = new NUnitTestLogger<MongoHostedService>();
+        var service = new MongoHostedService([], mockServiceScopeFactory, options, logger);
+
+        // Act
+        var act = async () => await service.StartingAsync(CancellationToken.None);
+
+        // Assert
+        await act.Should().NotThrowAsync();
+        configuratorRunner.RunCallCount.Should().Be(1);
+    }
+
+    [Test]
+    public async Task StartingAsync_WhenMigrationsAreSkippedWithNullWaitTimeout_ThrowsAndSkipsConfigurators()
+    {
+        // Arrange
+        var migrationRunner = new RecordingMigrationRunner(_ => Task.FromResult(new MongoMigrationResult
+        {
+            Skipped = true,
+            AppliedMigrationIds = []
+        }));
+
+        var configuratorRunner = new RecordingConfiguratorRunner();
+        var mockServiceScopeFactory = CreateFakeServiceScopeFactory(configuratorRunner, migrationRunner);
+        var options = Options.Create(new MongoOptions
+        {
+            ApplyMigrationsOnStartup = true,
+            RunConfiguratorsOnStartup = true,
+            MigrationLockWaitTimeout = null
+        });
+        var logger = new NUnitTestLogger<MongoHostedService>();
+        var service = new MongoHostedService([], mockServiceScopeFactory, options, logger);
+
+        // Act
+        var act = async () => await service.StartingAsync(CancellationToken.None);
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        configuratorRunner.RunCallCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task StartingAsync_WhenMigrationsAreSkippedWithPositiveWaitTimeout_ThrowsAndSkipsConfigurators()
+    {
+        // Arrange
+        var migrationRunner = new RecordingMigrationRunner(_ => Task.FromResult(new MongoMigrationResult
+        {
+            Skipped = true,
+            AppliedMigrationIds = []
+        }));
+
+        var configuratorRunner = new RecordingConfiguratorRunner();
+        var mockServiceScopeFactory = CreateFakeServiceScopeFactory(configuratorRunner, migrationRunner);
+        var options = Options.Create(new MongoOptions
+        {
+            ApplyMigrationsOnStartup = true,
+            RunConfiguratorsOnStartup = true,
+            MigrationLockWaitTimeout = TimeSpan.FromMinutes(5)
+        });
+        var logger = new NUnitTestLogger<MongoHostedService>();
+        var service = new MongoHostedService([], mockServiceScopeFactory, options, logger);
+
+        // Act
+        var act = async () => await service.StartingAsync(CancellationToken.None);
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        configuratorRunner.RunCallCount.Should().Be(0);
     }
 
     [Test]
@@ -446,6 +592,14 @@ public class MongoHostedServiceTests
         // Should complete without errors
     }
 
+    /// <summary>
+    /// Hand-crafted <see cref="IServiceScopeFactory"/>/<see cref="IServiceScope"/>/<see cref="IServiceProvider"/>
+    /// triple for the migration-related tests, following tests/AGENTS.md's rule against introducing new
+    /// mocking-framework usage for new tests.
+    /// </summary>
+    private static IServiceScopeFactory CreateFakeServiceScopeFactory(IMongoConfiguratorRunner configuratorRunner, IMongoMigrationRunner? migrationRunner = null) =>
+        new FakeServiceScopeFactory(new FakeServiceProvider(configuratorRunner, migrationRunner));
+
     private static Mock<IMongoQueue> CreateMockQueue(Boolean autoStart)
     {
         var mockQueue = new Mock<IMongoQueue>();
@@ -485,4 +639,93 @@ public class MongoHostedServiceTests
     }
 
     public class TestPayload;
+
+    /// <summary>
+    /// Hand-crafted <see cref="IServiceProvider"/> double resolving only <see cref="IMongoConfiguratorRunner"/> and
+    /// <see cref="IMongoMigrationRunner"/>, the two services <see cref="MongoHostedService.StartingAsync"/> resolves
+    /// from its created scope.
+    /// </summary>
+    private sealed class FakeServiceProvider : IServiceProvider
+    {
+        private readonly IMongoConfiguratorRunner? _configuratorRunner;
+        private readonly IMongoMigrationRunner? _migrationRunner;
+
+        public FakeServiceProvider(IMongoConfiguratorRunner? configuratorRunner, IMongoMigrationRunner? migrationRunner)
+        {
+            _configuratorRunner = configuratorRunner;
+            _migrationRunner = migrationRunner;
+        }
+
+        public Object? GetService(Type serviceType)
+        {
+            if (serviceType == typeof(IMongoConfiguratorRunner))
+            {
+                return _configuratorRunner;
+            }
+
+            if (serviceType == typeof(IMongoMigrationRunner))
+            {
+                return _migrationRunner;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Hand-crafted <see cref="IServiceScope"/> double wrapping a fixed <see cref="IServiceProvider"/>.
+    /// </summary>
+    private sealed class FakeServiceScope : IServiceScope
+    {
+        public FakeServiceScope(IServiceProvider serviceProvider) => ServiceProvider = serviceProvider;
+
+        public IServiceProvider ServiceProvider { get; }
+
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// Hand-crafted <see cref="IServiceScopeFactory"/> double that always returns a scope over a fixed
+    /// <see cref="IServiceProvider"/>.
+    /// </summary>
+    private sealed class FakeServiceScopeFactory : IServiceScopeFactory
+    {
+        private readonly IServiceProvider _serviceProvider;
+
+        public FakeServiceScopeFactory(IServiceProvider serviceProvider) => _serviceProvider = serviceProvider;
+
+        public IServiceScope CreateScope() => new FakeServiceScope(_serviceProvider);
+    }
+
+    /// <summary>
+    /// Hand-crafted recording double for <see cref="IMongoConfiguratorRunner"/>, following tests/AGENTS.md's rule
+    /// against introducing new Moq usage for new tests.
+    /// </summary>
+    private sealed class RecordingConfiguratorRunner : IMongoConfiguratorRunner
+    {
+        private readonly Func<CancellationToken, Task>? _runConfiguratorsAsync;
+
+        public RecordingConfiguratorRunner(Func<CancellationToken, Task>? runConfiguratorsAsync = null) => _runConfiguratorsAsync = runConfiguratorsAsync;
+
+        public Int32 RunCallCount { get; private set; }
+
+        public Task RunConfiguratorsAsync(CancellationToken cancellationToken = default)
+        {
+            RunCallCount++;
+            return _runConfiguratorsAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Hand-crafted recording double for <see cref="IMongoMigrationRunner"/>, following tests/AGENTS.md's rule
+    /// against introducing new Moq usage for new tests.
+    /// </summary>
+    private sealed class RecordingMigrationRunner : IMongoMigrationRunner
+    {
+        private readonly Func<CancellationToken, Task<MongoMigrationResult>> _runMigrationsAsync;
+
+        public RecordingMigrationRunner(Func<CancellationToken, Task<MongoMigrationResult>> runMigrationsAsync) => _runMigrationsAsync = runMigrationsAsync;
+
+        public Task<MongoMigrationResult> RunMigrationsAsync(CancellationToken cancellationToken = default) => _runMigrationsAsync(cancellationToken);
+    }
 }

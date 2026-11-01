@@ -10,15 +10,15 @@ This plan makes `RunMigrationsAsync` wait for the lock by default (bounded by a 
 
 ## Acceptance Criteria
 
-- [ ] `IMongoMigrationRunner.RunMigrationsAsync` returns a result object that reports whether the run was skipped and which migration IDs were applied, instead of a plain `Task`.
-- [ ] By default, `RunMigrationsAsync` waits for the migration lock (instead of skipping immediately when it is held), bounded by a configurable timeout; a second instance waits for the first to finish before it continues starting, covered by a test.
-- [ ] When `MongoHostedService` runs migrations automatically on startup and the lock wait times out (a skipped result with a positive `MigrationLockWaitTimeout`), hosted startup fails instead of continuing to configurators against a potentially stale schema, covered by a test proving a blocked first runner prevents a second instance's hosted startup from completing.
-- [ ] The migration lock's lease is renewed while a migration is executing, so a migration that runs longer than the lease duration keeps its lock instead of losing it, covered by a test. This holds even when the lease is exceeded by the cumulative duration of several individually short migrations, not only by a single long-running one.
-- [ ] When the lease cannot be renewed (extension refused or fails) while protected work is in progress, that work is stopped instead of running to completion, the affected migration is not recorded as applied, and any active transaction is aborted, covered by a test.
-- [ ] The `MongoMigrationRunner` constructor throws a clear, descriptive exception when two or more registered migrations share the same `Id`, naming the duplicate ID(s).
-- [ ] `MongoHostedService` runs migrations before configurators during startup.
-- [ ] `docs/migrations.md` and `docs/configurators.md` state the startup execution order and the lock-wait/renewal behavior; `docs/migrating-from-0.x.md` lists the `RunMigrationsAsync` signature change and the new default wait-for-lock behavior.
-- [ ] The Release build produces no warnings and the full test suite (`dotnet test Chaos.Mongo.slnx`) passes.
+- [x] `IMongoMigrationRunner.RunMigrationsAsync` returns a result object that reports whether the run was skipped and which migration IDs were applied, instead of a plain `Task`.
+- [x] By default, `RunMigrationsAsync` waits for the migration lock (instead of skipping immediately when it is held), bounded by a configurable timeout; a second instance waits for the first to finish before it continues starting, covered by a test.
+- [x] When `MongoHostedService` runs migrations automatically on startup and the lock wait times out (a skipped result with a positive `MigrationLockWaitTimeout`), hosted startup fails instead of continuing to configurators against a potentially stale schema, covered by a test proving a blocked first runner prevents a second instance's hosted startup from completing.
+- [x] The migration lock's lease is renewed while a migration is executing, so a migration that runs longer than the lease duration keeps its lock instead of losing it, covered by a test. This holds even when the lease is exceeded by the cumulative duration of several individually short migrations, not only by a single long-running one.
+- [x] When the lease cannot be renewed (extension refused or fails) while protected work is in progress, that work is stopped instead of running to completion, the affected migration is not recorded as applied, and any active transaction is aborted, covered by a test.
+- [x] The `MongoMigrationRunner` constructor throws a clear, descriptive exception when two or more registered migrations share the same `Id`, naming the duplicate ID(s).
+- [x] `MongoHostedService` runs migrations before configurators during startup.
+- [x] `docs/migrations.md` and `docs/configurators.md` state the startup execution order and the lock-wait/renewal behavior; `docs/migrating-from-0.x.md` lists the `RunMigrationsAsync` signature change and the new default wait-for-lock behavior.
+- [x] The Release build produces no warnings and the full test suite (`dotnet test Chaos.Mongo.slnx`) passes.
 
 ## Technical Details
 
