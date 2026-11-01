@@ -1197,7 +1197,7 @@ Erasure permanently needs `update` on the events collection and, with checkpoint
 | `MongoDuplicateEventException`  | Event with same ID already exists                                                                      | Safe to ignore (idempotent)           |
 | `MongoEventValidationException` | Event preconditions not met, or an observational event has no preceding state-changing event          | Fix the event data or aggregate state |
 | `MongoEventStoreException`      | The stream contains events but the aggregate's read model is missing                                   | Restore or rebuild the read model     |
-| `ArgumentException`             | Invalid input (empty events, mixed aggregates, mixed unset and explicit versions, versions below 1, version gaps, non-sequential batches, a `PersonalDataErased<TAggregate>` event not created by the eraser) | Fix caller code                       |
+| `ArgumentException`             | Invalid input (empty events, mixed aggregates, mixed unset and explicit versions, versions below 1, version gaps, non-sequential batches, a `PersonalDataErased<TAggregate>` event not created by the eraser, or an event type not registered via `WithEvent<TEvent>()`) | Fix caller code                       |
 
 ```csharp
 try

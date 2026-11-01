@@ -78,6 +78,36 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <summary>
+    /// Classifies a duplicate-key write error from the events collection by its exact failed index name,
+    /// matched in full rather than as a substring, so a caller-defined index whose name merely contains
+    /// <c>"_id_"</c> or <see cref="IndexNames.AggregateIdWithVersionUnique"/> is never misclassified.
+    /// Returns <c>null</c> for an index this store does not recognize, which the caller rethrows unchanged.
+    /// </summary>
+    private static EventsCollectionDuplicateKeyConflict? ClassifyDuplicateKey(WriteError writeError, MongoException ex)
+    {
+        var message = writeError.Message;
+        var indexStart = message.IndexOf("index: ", StringComparison.Ordinal);
+        if (indexStart < 0)
+        {
+            return null;
+        }
+
+        indexStart += "index: ".Length;
+        var indexEnd = message.IndexOf(" dup key:", indexStart, StringComparison.Ordinal);
+        if (indexEnd < 0)
+        {
+            return null;
+        }
+
+        return message[indexStart..indexEnd] switch
+        {
+            "_id_" => new EventsCollectionDuplicateKeyConflict(false, ex),
+            IndexNames.AggregateIdWithVersionUnique => new EventsCollectionDuplicateKeyConflict(true, ex),
+            _ => null
+        };
+    }
+
+    /// <summary>
     /// Creates an identifier for an event that was appended without one. Version 7 GUIDs are
     /// time-ordered and reduce fragmentation of the unique <c>_id</c> index on the events
     /// collection.
@@ -85,13 +115,17 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     private static Guid CreateEventId()
         => Guid.CreateVersion7();
 
-    private static String GetDuplicateKeyMessage(MongoException ex)
+    /// <summary>
+    /// Normalizes the write errors of a duplicate-key exception to their index in the write, regardless of
+    /// which insert API reported it.
+    /// </summary>
+    private static IEnumerable<(Int32 Index, WriteError Error)> GetIndexedWriteErrors(MongoException ex)
         => ex switch
         {
-            MongoWriteException writeException => writeException.WriteError?.Message ?? ex.Message,
-            MongoBulkWriteException bulkWriteException => String.Join(" | ", bulkWriteException.WriteErrors.Select(error => error.Message)),
-            ClientBulkWriteException clientBulkWriteException => String.Join(" | ", clientBulkWriteException.WriteErrors.Values.Select(error => error.Message)),
-            _ => ex.Message
+            MongoWriteException { WriteError: { } error } => [(0, error)],
+            MongoBulkWriteException bulkWriteException => bulkWriteException.WriteErrors.Select(error => (error.Index, (WriteError)error)),
+            ClientBulkWriteException clientBulkWriteException => clientBulkWriteException.WriteErrors.Select(pair => (pair.Key, pair.Value)),
+            _ => []
         };
 
     private static Boolean IsDuplicateKeyException(MongoException ex)
@@ -211,6 +245,18 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
     }
 
     /// <summary>
+    /// Checks whether any of the batch's event IDs are already stored, the same lookup
+    /// <see cref="CreateStaleVersionExceptionAsync"/> uses to tell an idempotent retry from a genuine conflict.
+    /// </summary>
+    private async Task<Boolean> AnyEventAlreadyStoredAsync(List<Event<TAggregate>> eventList, CancellationToken cancellationToken)
+    {
+        var eventIds = eventList.Select(e => e.Id).ToList();
+        return await GetEventsCollection()
+                     .Find(Builders<Event<TAggregate>>.Filter.In(e => e.Id, eventIds))
+                     .AnyAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Makes one attempt to append the batch. Returns a conflict instead of throwing it when another writer
     /// committed to the stream after it was read, so store-assigned appends can retry against fresh state.
     /// </summary>
@@ -241,6 +287,14 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         if (AfterStreamHeadRead is not null)
         {
             await AfterStreamHeadRead(cancellationToken);
+        }
+
+        // A store-assigned append always gets a fresh position, so a retry can never be detected by position
+        // alone the way a stale explicit version is. Its IDs must be checked directly, on every attempt.
+        if (storeAssigned && await AnyEventAlreadyStoredAsync(eventList, cancellationToken))
+        {
+            throw new MongoDuplicateEventException(
+                "An event with the same ID already exists (idempotency conflict).");
         }
 
         var aggregate = await LoadAggregateAsync(aggregateId, head, now, cancellationToken);
@@ -340,25 +394,59 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                                            checkpoint.ToBsonDocument()));
                         }
 
-                        await helper.Client.BulkWriteAsync(
-                            session,
-                            models,
-                            new ClientBulkWriteOptions
+                        // The event documents occupy the first entries of models (added above, before the read-model
+                        // and checkpoint entries), so a write error at one of those indexes is the only one that can
+                        // be an events-collection conflict; a read-model or checkpoint duplicate key is never one.
+                        try
+                        {
+                            await helper.Client.BulkWriteAsync(
+                                session,
+                                models,
+                                new ClientBulkWriteOptions
+                                {
+                                    IsOrdered = true
+                                },
+                                ct);
+                        }
+                        catch (ClientBulkWriteException ex) when (IsDuplicateKeyException(ex))
+                        {
+                            var writeError = GetIndexedWriteErrors(ex)
+                                             .Where(e => e.Index < documents.Count)
+                                             .Select(e => e.Error)
+                                             .FirstOrDefault();
+                            if (writeError is not null && ClassifyDuplicateKey(writeError, ex) is { } conflict)
                             {
-                                IsOrdered = true
-                            },
-                            ct);
+                                throw conflict;
+                            }
+
+                            throw;
+                        }
                     }
                     else
                     {
-                        // 4a. Insert events
-                        if (documents is null)
+                        // 4a. Insert events. Only this call can ever report an events-collection duplicate key;
+                        // the read-model upsert, checkpoint insert, and onBeforeCommit callback below are never
+                        // classified, so their own duplicate-key errors always propagate unchanged.
+                        try
                         {
-                            await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
+                            if (documents is null)
+                            {
+                                await eventsCollection.InsertManyAsync(session, eventList, cancellationToken: ct);
+                            }
+                            else
+                            {
+                                await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
+                            }
                         }
-                        else
+                        catch (MongoException ex) when (IsDuplicateKeyException(ex))
                         {
-                            await GetEventDocumentsCollection().InsertManyAsync(session, documents, cancellationToken: ct);
+                            var writeError = GetIndexedWriteErrors(ex).Select(e => e.Error).FirstOrDefault();
+                            if (writeError is not null && ClassifyDuplicateKey(writeError, ex) is { } conflict)
+                            {
+                                throw conflict;
+                            }
+
+                            throw;
                         }
 
                         // 4b. Upsert read model; observational events leave it untouched
@@ -391,25 +479,17 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
 
             return AppendAttempt.Committed(aggregate);
         }
-        catch (MongoException ex) when (IsDuplicateKeyException(ex))
+        catch (EventsCollectionDuplicateKeyConflict ex)
         {
-            var message = GetDuplicateKeyMessage(ex);
-
-            if (message.Contains("index: _id_", StringComparison.Ordinal))
-            {
-                throw new MongoDuplicateEventException(
-                    "An event with the same ID already exists (idempotency conflict).", ex);
-            }
-
-            if (message.Contains(IndexNames.AggregateIdWithVersionUnique, StringComparison.Ordinal))
+            if (ex.IsConcurrencyIndex)
             {
                 return AppendAttempt.Conflicted(new MongoConcurrencyException(
                                                     "A concurrency conflict occurred — another process inserted an event for this aggregate version.",
-                                                    ex));
+                                                    ex.InnerException));
             }
 
-            // Unknown duplicate key error (e.g. user-defined index) — let it propagate
-            throw;
+            throw new MongoDuplicateEventException(
+                "An event with the same ID already exists (idempotency conflict).", ex.InnerException);
         }
     }
 
@@ -423,13 +503,7 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         Int64 headVersion,
         CancellationToken cancellationToken)
     {
-        var eventIds = eventList.Select(e => e.Id).ToList();
-
-        var alreadyStored = await GetEventsCollection()
-                                  .Find(Builders<Event<TAggregate>>.Filter.In(e => e.Id, eventIds))
-                                  .AnyAsync(cancellationToken);
-
-        if (alreadyStored)
+        if (await AnyEventAlreadyStoredAsync(eventList, cancellationToken))
         {
             return new MongoDuplicateEventException(
                 "An event with the same ID already exists (idempotency conflict).");
@@ -653,6 +727,18 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
                 nameof(events));
         }
 
+        // An unregistered type would append without error, then fail to deserialize on every later read:
+        // GetEventStreamAsync relies on a class map registered only by WithEvent<TEvent>(). PersonalDataErased
+        // is exempt because the store registers its class map itself and never requires it to be passed there.
+        var unregisteredEvent = eventList.FirstOrDefault(e => e is not PersonalDataErased<TAggregate> && !_options.EventTypes.ContainsKey(e.GetType()));
+        if (unregisteredEvent is not null)
+        {
+            throw new ArgumentException(
+                $"The event type '{unregisteredEvent.GetType()}' was not registered with " +
+                $"{nameof(MongoEventStoreBuilder<TAggregate>)}.{nameof(MongoEventStoreBuilder<TAggregate>.WithEvent)}<TEvent>().",
+                nameof(events));
+        }
+
         var now = DateTime.UtcNow;
         PrepareEvents(eventList, _aggregateTypeName, now);
 
@@ -757,6 +843,23 @@ internal sealed class MongoEventStore<TAggregate> : IEventStore<TAggregate>
         public static AppendAttempt Committed(TAggregate aggregate) => new(aggregate, null);
 
         public static AppendAttempt Conflicted(MongoConcurrencyException conflict) => new(null, conflict);
+    }
+
+    /// <summary>
+    /// Signals a duplicate-key error raised specifically by the events-collection insert, from a local
+    /// <c>catch</c> inside the transaction delegate to the outer <c>catch</c> in <see cref="AppendOnceAsync"/>.
+    /// Never exposed to callers: the read-model upsert, checkpoint insert, and <c>onBeforeCommit</c> callback
+    /// never throw this type, so their own duplicate-key errors are never caught by that outer handler.
+    /// </summary>
+    private sealed class EventsCollectionDuplicateKeyConflict : MongoException
+    {
+        public EventsCollectionDuplicateKeyConflict(Boolean isConcurrencyIndex, MongoException innerException)
+            : base(innerException.Message, innerException)
+        {
+            IsConcurrencyIndex = isConcurrencyIndex;
+        }
+
+        public Boolean IsConcurrencyIndex { get; }
     }
 
     /// <summary>

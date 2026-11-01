@@ -44,7 +44,7 @@ written.
 
 ## Acceptance Criteria
 
-- [ ] A duplicate-key error raised while committing an append (for example, from `onBeforeCommit`
+- [x] A duplicate-key error raised while committing an append (for example, from `onBeforeCommit`
       inserting into a collection with its own colliding `_id`, or from a checkpoint's `_id`
       colliding) propagates as the original `MongoException` rather than `MongoDuplicateEventException`,
       and no event, read model, or checkpoint from that attempt is stored. This holds even when the
@@ -54,27 +54,27 @@ written.
       the same exception type that an events-collection conflict would have), and correspondingly when
       a non-concurrency-index duplicate's message happens to contain `IndexNames.AggregateIdWithVersionUnique`
       as a substring.
-- [ ] A duplicate `_id` raised on the events collection itself still raises
+- [x] A duplicate `_id` raised on the events collection itself still raises
       `MongoDuplicateEventException` for the typed insert path, and for the serialized-document insert
       path used when `IntegrityProtectionEnabled` is true and `BulkWriteOptimizationEnabled` is false.
-- [ ] A duplicate `_id` on an event document raised via the bulk-write-optimization path
+- [x] A duplicate `_id` on an event document raised via the bulk-write-optimization path
       (`BulkWriteOptimizationEnabled` is true, surfaced as `ClientBulkWriteException`) still raises
       `MongoDuplicateEventException`.
-- [ ] A store-assigned append that retries with the same event IDs and `Version` left unset (0),
+- [x] A store-assigned append that retries with the same event IDs and `Version` left unset (0),
       after a prior attempt with those IDs already committed, raises `MongoDuplicateEventException`
       instead of `MongoConcurrencyException` or `MongoEventValidationException` — both when the
       retry carries the same (now stale) `expectedRevision` as the first attempt, and when it omits
       `expectedRevision`.
-- [ ] A store-assigned append whose events are genuinely superseded by a concurrent writer (different
+- [x] A store-assigned append whose events are genuinely superseded by a concurrent writer (different
       event IDs) still raises `MongoConcurrencyException` (or retries and succeeds, per
       `MaxAppendRetries`), unchanged from current behavior.
-- [ ] `AppendEventsAsync` throws `ArgumentException` when any event's runtime type was not registered
+- [x] `AppendEventsAsync` throws `ArgumentException` when any event's runtime type was not registered
       via `WithEvent<TEvent>()`, without writing any event, read model, or checkpoint. Events of type
       `PersonalDataErased<TAggregate>` are exempt, since the store registers that type's class map
       itself and never requires it to be passed to `WithEvent<TEvent>()`.
-- [ ] Automated tests cover all six behavioral criteria above, plus a regression check that an
+- [x] Automated tests cover all six behavioral criteria above, plus a regression check that an
       already registered, explicit-version append is unaffected.
-- [ ] The Release build has no warnings and the full test suite passes.
+- [x] The Release build has no warnings and the full test suite passes.
 
 ## Technical Details
 
