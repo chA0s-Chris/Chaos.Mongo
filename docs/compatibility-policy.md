@@ -9,13 +9,20 @@ This page states the compatibility guarantees Chaos.Mongo 1.x makes. If you are 
 Chaos.Mongo follows [Semantic Versioning](https://semver.org/) for source and binary compatibility of its public
 API: a breaking change to a public type or member ships only in a major release.
 
+- A public interface only grows through members that carry a default implementation; adding a member without one is
+  a breaking change.
+- A public enum used as a result type may gain new values in a minor release. Consumers must not assume its value
+  set is closed and should handle unrecognized values, for example with a default `switch` arm.
+- Adding a `required` member to an existing public type is a breaking change, because it breaks every existing
+  object initializer that does not set it.
+
 ## Stored data
 
 - Every 1.x release reads data written by every earlier 1.x release.
 - Adjacent minor versions can run side by side during a rolling upgrade, as long as no feature introduced in the
   newer version is used yet.
 - Default collection names, index names, lock names, persisted enum values (names or numbers, depending on their
-  representation) and metric names and tags are contract: changing one is a breaking change.
+  representation) and metric names, tags and units are contract: changing one is a breaking change.
 - The lock document's per-acquisition token is an internal implementation detail, not part of the documented
   contract. A document written without it, by an earlier release or by an older instance taking over an expired
   lock, keeps expiring and being reacquired normally. This guarantee assumes no instance sharing a configured

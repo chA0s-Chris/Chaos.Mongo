@@ -84,6 +84,10 @@ internal static class TimestampTokenValidation
         ArgumentNullException.ThrowIfNull(settings);
 
         using var chain = new X509Chain();
+        // Every call site supplies the full certificate set a legitimate chain needs through ExtraStore, so a chain
+        // never needs a download; an incomplete chain must fail instead of letting stored or received data make the
+        // process fetch a certificate from an AIA location it names.
+        chain.ChainPolicy.DisableCertificateDownloads = true;
         chain.ChainPolicy.RevocationMode = settings.RevocationMode;
         chain.ChainPolicy.UrlRetrievalTimeout = settings.RevocationCheckTimeout;
         chain.ChainPolicy.ApplicationPolicy.Add(new Oid(TimeStampingPurposeOid));

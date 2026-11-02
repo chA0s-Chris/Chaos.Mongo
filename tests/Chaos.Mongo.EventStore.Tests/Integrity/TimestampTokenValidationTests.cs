@@ -6,12 +6,54 @@ using Chaos.Mongo.EventStore.Integrity;
 using FluentAssertions;
 using NUnit.Framework;
 using System.Formats.Asn1;
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 
 public class TimestampTokenValidationTests
 {
+    [Test]
+    public void BuildChain_IntermediateOnlyReachableByAiaDownload_DoesNotFetchItAndFailsToBuild()
+    {
+        using var scenario = CreateAiaScenario();
+
+        var act = () => TimestampTokenValidation.BuildChain(scenario.Token,
+                                                            scenario.Signer,
+                                                            new ChainSettings(new X509Certificate2Collection(scenario.Root),
+                                                                              X509RevocationMode.NoCheck,
+                                                                              TimeSpan.FromSeconds(5),
+                                                                              new X509Certificate2Collection()));
+
+        act.Should().Throw<TimestampTokenValidationException>();
+        scenario.Listener.RequestCount.Should().Be(0, "chain building must never fetch a certificate named by an AIA extension");
+    }
+
+    /// <summary>
+    /// A positive control for <see cref="BuildChain_IntermediateOnlyReachableByAiaDownload_DoesNotFetchItAndFailsToBuild"/>:
+    /// the same incomplete chain, built directly with <see cref="X509Chain"/> instead of through production code, with
+    /// certificate downloads left enabled. It must reach the listener and complete the chain, so the paired test above
+    /// is shown to actually depend on the fix rather than passing regardless of it.
+    /// </summary>
+    [Test]
+    public void BuildChain_IntermediateOnlyReachableByAiaDownload_PositiveControlWithDownloadsEnabledFetchesItAndBuilds()
+    {
+        using var scenario = CreateAiaScenario();
+        using var chain = new X509Chain();
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.UrlRetrievalTimeout = TimeSpan.FromSeconds(5);
+        chain.ChainPolicy.VerificationTime = scenario.Token.TokenInfo.Timestamp.UtcDateTime;
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(scenario.Root);
+        chain.ChainPolicy.ExtraStore.AddRange(scenario.Token.AsSignedCms().Certificates);
+
+        var built = chain.Build(scenario.Signer);
+
+        built.Should().BeTrue("without the fix, the missing intermediate is downloaded and completes the chain");
+        scenario.Listener.RequestCount.Should().BeGreaterThan(0, "the test setup must actually require fetching the intermediate");
+    }
+
     [Test]
     public void GetCrlSources_CaCertificate_MarksItsPoints()
     {
@@ -148,5 +190,168 @@ public class TimestampTokenValidationTests
         var act = () => TimestampTokenValidation.ValidateSigner(signer);
 
         act.Should().Throw<TimestampTokenValidationException>().WithMessage("*must be critical*");
+    }
+
+    /// <summary>
+    /// Creates a token whose signing certificate is issued by an intermediate that is not among the token's own
+    /// certificates or the chain settings' extra certificates, with an Authority Information Access extension naming
+    /// the returned scenario's listener as the location to complete the chain from.
+    /// </summary>
+    private static AiaScenario CreateAiaScenario()
+    {
+        var listener = new AiaListener();
+        var notBefore = DateTimeOffset.UtcNow.AddDays(-1);
+        var notAfter = DateTimeOffset.UtcNow.AddDays(1);
+
+        // Each certificate's subject must be unique per call: .NET's chain engine on Linux keeps a persistent on-disk
+        // cache of CA certificates it has already fetched or seen, keyed so that a later chain build can find a
+        // candidate issuer by subject name without downloading again. A fixed subject name would let a stale, unrelated
+        // intermediate from an earlier test run satisfy that lookup, which would mask the fetch this test must observe.
+        var unique = Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
+        using var rootKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var rootRequest = new CertificateRequest($"CN=Chaos.Mongo AIA Test Root {unique}", rootKey, HashAlgorithmName.SHA256);
+        rootRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        rootRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        var root = rootRequest.CreateSelfSigned(notBefore, notAfter);
+
+        using var intermediateKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var intermediateRequest = new CertificateRequest($"CN=Chaos.Mongo AIA Test Intermediate {unique}", intermediateKey, HashAlgorithmName.SHA256);
+        intermediateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        intermediateRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        using var intermediate = intermediateRequest.Create(root.SubjectName, X509SignatureGenerator.CreateForECDsa(rootKey), notBefore, notAfter,
+                                                            RandomNumberGenerator.GetBytes(8));
+        listener.Response = intermediate.RawData;
+
+        using var signerKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var signerRequest = new CertificateRequest($"CN=Chaos.Mongo AIA Test Signer {unique}", signerKey, HashAlgorithmName.SHA256);
+        signerRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        signerRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        signerRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection
+        {
+            new Oid(TimestampTokenValidation.TimeStampingPurposeOid)
+        }, true));
+        signerRequest.CertificateExtensions.Add(new X509Extension("1.3.6.1.5.5.7.1.1", EncodeAuthorityInfoAccess(listener.Uri), false));
+        using var signerPublic = signerRequest.Create(intermediate.SubjectName, X509SignatureGenerator.CreateForECDsa(intermediateKey), notBefore, notAfter,
+                                                      RandomNumberGenerator.GetBytes(8));
+        var signer = signerPublic.CopyWithPrivateKey(signerKey);
+
+        var info = new Rfc3161TimestampTokenInfo(new Oid("1.2.3.4.5.6"), new Oid("2.16.840.1.101.3.4.2.1"), SHA256.HashData([1]), new Byte[] { 0x01 }, DateTimeOffset.UtcNow);
+        var signedCms = new SignedCms(new ContentInfo(new Oid("1.2.840.113549.1.9.16.1.4"), info.Encode()));
+        var cmsSigner = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, signer)
+        {
+            IncludeOption = X509IncludeOption.EndCertOnly,
+            DigestAlgorithm = new Oid("2.16.840.1.101.3.4.2.1")
+        };
+
+        // RFC 3161 requires the signing-certificate attribute (RFC 5035, ESSCertIDv2); without it, Rfc3161TimestampToken
+        // does not recognize the structure as a timestamp token.
+        var essCertId = new AsnWriter(AsnEncodingRules.DER);
+        using (essCertId.PushSequence())
+        using (essCertId.PushSequence())
+        using (essCertId.PushSequence())
+        {
+            essCertId.WriteOctetString(SHA256.HashData(signer.RawData));
+        }
+
+        cmsSigner.SignedAttributes.Add(new AsnEncodedData("1.2.840.113549.1.9.16.2.47", essCertId.Encode()));
+        signedCms.ComputeSignature(cmsSigner);
+        Rfc3161TimestampToken.TryDecode(signedCms.Encode(), out var token, out _).Should().BeTrue();
+
+        return new AiaScenario(listener, root, signer, token ?? throw new AssertionException("The constructed token does not decode."));
+    }
+
+    /// <summary>
+    /// Encodes an Authority Information Access extension value naming <paramref name="caIssuersUri"/> as the location
+    /// of the issuing certificate (OID <c>1.3.6.1.5.5.7.48.2</c>, <c>id-ad-caIssuers</c>).
+    /// </summary>
+    private static Byte[] EncodeAuthorityInfoAccess(Uri caIssuersUri)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            using (writer.PushSequence())
+            {
+                writer.WriteObjectIdentifier("1.3.6.1.5.5.7.48.2");
+                writer.WriteCharacterString(UniversalTagNumber.IA5String, caIssuersUri.AbsoluteUri, new Asn1Tag(TagClass.ContextSpecific, 6));
+            }
+        }
+
+        return writer.Encode();
+    }
+
+    /// <summary>
+    /// A loopback HTTP server bound to an ephemeral port, serving one fixed response to every request; used to detect
+    /// whether chain building fetched a certificate from an Authority Information Access location.
+    /// </summary>
+    private sealed class AiaListener : IDisposable
+    {
+        private readonly HttpListener _listener;
+        private Int32 _requestCount;
+
+        public AiaListener()
+        {
+            _listener = new HttpListener();
+            _listener.Prefixes.Add($"http://127.0.0.1:{GetFreePort()}/");
+            _listener.Start();
+            Uri = new Uri(_listener.Prefixes.Single() + "intermediate.cer");
+            _ = ServeAsync();
+        }
+
+        public Int32 RequestCount => Volatile.Read(ref _requestCount);
+
+        public Byte[] Response { get; set; } = [];
+
+        public Uri Uri { get; }
+
+        private static Int32 GetFreePort()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0);
+            socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port;
+            socket.Stop();
+            return port;
+        }
+
+        private async Task ServeAsync()
+        {
+            while (true)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await _listener.GetContextAsync();
+                }
+                catch (Exception)
+                {
+                    // The listener was closed while a request was pending, or the test completed.
+                    return;
+                }
+
+                try
+                {
+                    Interlocked.Increment(ref _requestCount);
+                    context.Response.ContentType = "application/pkix-cert";
+                    context.Response.ContentLength64 = Response.Length;
+                    await context.Response.OutputStream.WriteAsync(Response);
+                    context.Response.OutputStream.Close();
+                }
+                catch (Exception)
+                {
+                    // Best effort: a response failure must not crash the background loop.
+                }
+            }
+        }
+
+        public void Dispose() => _listener.Close();
+    }
+
+    private sealed record AiaScenario(AiaListener Listener, X509Certificate2 Root, X509Certificate2 Signer, Rfc3161TimestampToken Token) : IDisposable
+    {
+        public void Dispose()
+        {
+            Listener.Dispose();
+            Root.Dispose();
+            Signer.Dispose();
+        }
     }
 }
