@@ -40,11 +40,12 @@ internal sealed class QueueMetricsCollector : IDisposable
 
         _measurements.Add(new QueueMetricMeasurement(instrument.Name,
                                                      Convert.ToDouble(measurement),
-                                                     tagDictionary));
+                                                     tagDictionary,
+                                                     instrument.Unit));
     }
 
     public void Dispose()
         => _listener.Dispose();
 }
 
-internal sealed record QueueMetricMeasurement(String InstrumentName, Double Value, Dictionary<String, String?> Tags);
+internal sealed record QueueMetricMeasurement(String InstrumentName, Double Value, Dictionary<String, String?> Tags, String? Unit);

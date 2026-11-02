@@ -171,7 +171,17 @@ members above instead.
 
 Queues emit structured logs for lock recovery, retry and terminal transitions, cleanup mode, and successful processing.
 
-Runtime metrics use `MongoQueueMetrics.MeterName`. Instrument and tag names are available through `MongoQueueMetrics.Instruments` and `MongoQueueMetrics.Tags`, including published items, recovered locks, processing outcomes, recovery age, processing duration, and queue age.
+Runtime metrics use `MongoQueueMetrics.MeterName`. Instrument and tag names are available through `MongoQueueMetrics.Instruments` and `MongoQueueMetrics.Tags`, whose instruments are:
+
+| Instrument | Type | Measures |
+|---|---|---|
+| `chaos.mongo.queue.lock.recovered` | Counter | Expired or malformed queue item locks recovered. |
+| `chaos.mongo.queue.lock.recovery_age` | Histogram (s) | Age of recovered queue item locks. |
+| `chaos.mongo.queue.processing.duration` | Histogram (s) | Queue item processing duration. |
+| `chaos.mongo.queue.processing.failed` | Counter | Failed queue item processing attempts. |
+| `chaos.mongo.queue.processing.queue_age` | Histogram (s) | Time from queue item creation to lock acquisition. |
+| `chaos.mongo.queue.processing.succeeded` | Counter | Successfully completed queue items. |
+| `chaos.mongo.queue.published` | Counter | Queue items published. |
 
 ## Recommendations
 

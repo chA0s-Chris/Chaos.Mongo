@@ -674,14 +674,25 @@ public class MongoQueueSubscriptionTests
         VerifyLoggedWarning(loggerMock, "Recovering queue item lock", Times.Once());
         VerifyLoggedInformation(loggerMock, "Processed queue item", Times.Once());
         metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecovered);
-        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecoveryAge);
+        var lockRecoveryAgeMeasurement = metricsCollector.Measurements.Should()
+                                                         .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecoveryAge)
+                                                         .Subject;
+        lockRecoveryAgeMeasurement.Unit.Should().Be("s");
+        lockRecoveryAgeMeasurement.Value.Should().Be(120.0);
         var successMeasurement = metricsCollector.Measurements.Should()
                                                  .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingSucceeded)
                                                  .Subject;
         successMeasurement.Tags[MongoQueueMetrics.Tags.CleanupMode].Should().Be("ttl-retention");
         successMeasurement.Tags[MongoQueueMetrics.Tags.QueueCollection].Should().Be("test-queue");
-        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingDuration);
-        metricsCollector.Measurements.Should().Contain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingQueueAge);
+        var processingDurationMeasurement = metricsCollector.Measurements.Should()
+                                                            .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingDuration)
+                                                            .Subject;
+        processingDurationMeasurement.Unit.Should().Be("s");
+        var queueAgeMeasurement = metricsCollector.Measurements.Should()
+                                                  .ContainSingle(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingQueueAge)
+                                                  .Subject;
+        queueAgeMeasurement.Unit.Should().Be("s");
+        queueAgeMeasurement.Value.Should().Be(300.0);
     }
 
     private static Boolean BranchHasLockedRecoveryClause(BsonDocument document)
