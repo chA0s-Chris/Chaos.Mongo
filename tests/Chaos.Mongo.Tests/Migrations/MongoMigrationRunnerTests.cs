@@ -171,8 +171,8 @@ public class MongoMigrationRunnerTests
                                       timeProvider.GetUtcNow().UtcDateTime.AddMilliseconds(-1),
                                       leaseTime,
                                       timeProvider,
-                                      _ => Task.CompletedTask,
-                                      (_, _, _) => throw new InvalidOperationException("No extension should be attempted once the lock is already invalid."));
+                                      () => Task.CompletedTask,
+                                      (_, _) => throw new InvalidOperationException("No extension should be attempted once the lock is already invalid."));
 
         var historyCollection = new FakeHistoryCollection();
         var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
@@ -231,7 +231,7 @@ public class MongoMigrationRunnerTests
         var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var extensionResult = new TaskCompletionSource<DateTime?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _, _) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) =>
         {
             extensionStarted.SetResult();
             return extensionResult.Task;
@@ -281,7 +281,7 @@ public class MongoMigrationRunnerTests
         var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var extensionCancelled = false;
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, _, ct) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, ct) =>
         {
             extensionStarted.SetResult();
             try
@@ -335,25 +335,25 @@ public class MongoMigrationRunnerTests
     }
 
     [Test]
-    public async Task RunMigrationsAsync_WithExtensionInFlightWhenMigrationsFinish_WaitsForItAndReleasesWithItsExpiry()
+    public async Task RunMigrationsAsync_WithExtensionInFlightWhenMigrationsFinish_WaitsForItBeforeReleasing()
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var leaseTime = TimeSpan.FromMinutes(10);
         var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var extensionResult = new TaskCompletionSource<DateTime?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        DateTime? releasedWithExpiry = null;
+        var releaseInvoked = false;
 
         var mongoLock = CreateMongoLock(timeProvider,
                                         leaseTime,
-                                        async (_, _, ct) =>
+                                        async (_, ct) =>
                                         {
                                             extensionStarted.SetResult();
                                             return await extensionResult.Task.WaitAsync(ct);
                                         },
-                                        validUntilUtc =>
+                                        () =>
                                         {
-                                            releasedWithExpiry = validUntilUtc;
+                                            releaseInvoked = true;
                                             return Task.CompletedTask;
                                         });
 
@@ -395,7 +395,7 @@ public class MongoMigrationRunnerTests
 
         // Assert
         finishedDuringExtension.Should().BeFalse();
-        releasedWithExpiry.Should().Be(extendedUntilUtc);
+        releaseInvoked.Should().BeTrue();
         result.AppliedMigrationIds.Should().Equal("001_Finishing");
     }
 
@@ -407,7 +407,7 @@ public class MongoMigrationRunnerTests
         var leaseTime = TimeSpan.FromMinutes(10);
         var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, _, ct) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, ct) =>
         {
             extensionStarted.SetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
@@ -454,7 +454,7 @@ public class MongoMigrationRunnerTests
         var leaseTime = TimeSpan.FromMinutes(10);
 
         // Every extension is refused, simulating a lease another instance has already taken over.
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _, _) => Task.FromResult<DateTime?>(null));
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult<DateTime?>(null));
 
         var historyReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var historyReadObservedCancellation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -506,7 +506,7 @@ public class MongoMigrationRunnerTests
         var timeProvider = new FakeTimeProvider();
         var leaseTime = TimeSpan.FromMinutes(10);
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _, _) => throw new InvalidOperationException("Lease extension failed unexpectedly"));
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => throw new InvalidOperationException("Lease extension failed unexpectedly"));
 
         var historyCollection = new FakeHistoryCollection();
         var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
@@ -594,7 +594,7 @@ public class MongoMigrationRunnerTests
         var leaseTime = TimeSpan.FromMinutes(10);
         var extendCallCount = 0;
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, duration, _) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (duration, _) =>
         {
             Interlocked.Increment(ref extendCallCount);
             return Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime);
@@ -671,7 +671,7 @@ public class MongoMigrationRunnerTests
         var timeProvider = new FakeTimeProvider();
         var leaseTime = TimeSpan.FromMinutes(10);
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _, _) => Task.FromResult<DateTime?>(null)); // every extension is refused
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult<DateTime?>(null)); // every extension is refused
 
         var historyCollection = new FakeHistoryCollection();
         var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
@@ -722,7 +722,7 @@ public class MongoMigrationRunnerTests
         var leaseTime = TimeSpan.FromMinutes(10);
         var extendCallCount = 0;
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, duration, _) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (duration, _) =>
         {
             Interlocked.Increment(ref extendCallCount);
             return Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime);
@@ -769,7 +769,7 @@ public class MongoMigrationRunnerTests
         var leaseTime = TimeSpan.FromMinutes(10);
         var extendCallCount = 0;
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, duration, _) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (duration, _) =>
         {
             Interlocked.Increment(ref extendCallCount);
             return Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime);
@@ -823,7 +823,7 @@ public class MongoMigrationRunnerTests
         var leaseTime = TimeSpan.FromMinutes(10);
         var extendCallCount = 0;
 
-        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, duration, _) =>
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (duration, _) =>
         {
             var validUntilUtc = timeProvider.GetUtcNow().Add(duration).UtcDateTime;
 
@@ -876,13 +876,13 @@ public class MongoMigrationRunnerTests
 
     private static MongoLock CreateMongoLock(TimeProvider timeProvider,
                                              TimeSpan leaseTime,
-                                             Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction,
-                                             Func<DateTime, Task>? releaseAction = null) =>
+                                             Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction,
+                                             Func<Task>? releaseAction = null) =>
         new("migration-lock",
             timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime,
             leaseTime,
             timeProvider,
-            releaseAction ?? (_ => Task.CompletedTask),
+            releaseAction ?? (() => Task.CompletedTask),
             extendAction);
 
     private static async Task WaitForAsync(Func<Boolean> condition)

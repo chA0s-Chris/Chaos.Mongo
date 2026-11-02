@@ -179,3 +179,21 @@ the same `Id`, naming the duplicate ID(s), instead of silently applying only one
 
 During hosted startup, migrations now run before configurators instead of after, so a configurator cannot create an
 index before a migration that cleans up the data it depends on.
+
+## Distributed Locking: per-acquisition token
+
+Lock documents gain an internal per-acquisition token; release and extension now key off it instead of the
+last-known lease expiry. This also fixes a renewal that reached the server but whose response the caller never
+observed (including a cancelled renewal on shutdown) from leaving the lock held past disposal, or from refusing a
+legitimate retry. A lock already held when upgrading, or taken over by an older instance after its lease expired,
+lacks the token but still expires and can be acquired normally. No public API changed (`MongoLock` and
+`MongoLockDocument` are internal), so there is nothing for consumers to change beyond this behavior note.
+
+**Boundary: do not run old and new binaries with a shared, configured `HolderId` concurrently against the same
+lock.** An older (pre-upgrade) instance's take-over of an expired lock only `$set`s `Holder`/`LeaseUntilUtc`; it has
+no `AcquisitionToken` field to write, so a token already on the document (written by a newer instance's earlier
+acquisition) survives unchanged. The original newer-version handle still holds that token and can therefore still
+release or renew the lease the older instance now believes it owns. This only matters when multiple instances share
+one configured `MongoOptions.HolderId`; instances using the default, independently generated `HolderId` are
+unaffected because no other instance can ever present a matching `Holder`. Upgrade every instance sharing a
+`HolderId` together, or give each instance a unique `HolderId` for the duration of any rollout overlap.

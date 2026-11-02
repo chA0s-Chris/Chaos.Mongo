@@ -16,6 +16,12 @@ API: a breaking change to a public type or member ships only in a major release.
   newer version is used yet.
 - Default collection names, index names, lock names, persisted enum values (names or numbers, depending on their
   representation) and metric names and tags are contract: changing one is a breaking change.
+- The lock document's per-acquisition token is an internal implementation detail, not part of the documented
+  contract. A document written without it, by an earlier release or by an older instance taking over an expired
+  lock, keeps expiring and being reacquired normally. This guarantee assumes no instance sharing a configured
+  `HolderId` runs an older, pre-token release concurrently against the same lock; see
+  [Migrating from 0.x](migrating-from-0.x.md#distributed-locking-per-acquisition-token) for the rolling-upgrade
+  boundary this implies.
 
 ## Tamper-evidence format
 

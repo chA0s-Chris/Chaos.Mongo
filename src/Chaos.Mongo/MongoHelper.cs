@@ -59,13 +59,13 @@ internal sealed class MongoHelper : IMongoHelper
     /// </remarks>
     /// <param name="lockName">The name of the lock to extend.</param>
     /// <param name="holder">The holder ID that currently owns the lock.</param>
-    /// <param name="expectedLeaseUntilUtc">The lease expiry owned by the lock instance.</param>
+    /// <param name="acquisitionToken">The per-acquisition token owned by the lock instance.</param>
     /// <param name="leaseTime">The new lease duration.</param>
     /// <param name="cancellationToken">Optional cancellation token.</param>
     /// <returns>The stored lease expiry when extension succeeds; otherwise, <see langword="null"/>.</returns>
     internal async Task<DateTime?> ExtendLockAsync(String lockName,
                                                    String holder,
-                                                   DateTime expectedLeaseUntilUtc,
+                                                   String acquisitionToken,
                                                    TimeSpan leaseTime,
                                                    CancellationToken cancellationToken = default)
     {
@@ -75,7 +75,7 @@ internal sealed class MongoHelper : IMongoHelper
 
         var filter = Builders<MongoLockDocument>.Filter.Eq(x => x.Id, lockName) &
                      Builders<MongoLockDocument>.Filter.Eq(x => x.Holder, holder) &
-                     Builders<MongoLockDocument>.Filter.Eq(x => x.LeaseUntilUtc, expectedLeaseUntilUtc) &
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.AcquisitionToken, acquisitionToken) &
                      Builders<MongoLockDocument>.Filter.Gt(x => x.LeaseUntilUtc, now);
 
         var update = Builders<MongoLockDocument>.Update.Set(x => x.LeaseUntilUtc, leaseUntilUtc);
@@ -93,15 +93,15 @@ internal sealed class MongoHelper : IMongoHelper
     /// </summary>
     /// <param name="lockName">The name of the lock to release.</param>
     /// <param name="holder">The holder ID that currently owns the lock.</param>
-    /// <param name="leaseUntilUtc">The lease expiry owned by the lock instance.</param>
+    /// <param name="acquisitionToken">The per-acquisition token owned by the lock instance.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    internal async Task ReleaseLockAsync(String lockName, String holder, DateTime leaseUntilUtc)
+    internal async Task ReleaseLockAsync(String lockName, String holder, String acquisitionToken)
     {
         var lockCollection = Database.GetCollection<MongoLockDocument>(_lockCollectionName);
 
         var filter = Builders<MongoLockDocument>.Filter.Eq(x => x.Id, lockName) &
                      Builders<MongoLockDocument>.Filter.Eq(x => x.Holder, holder) &
-                     Builders<MongoLockDocument>.Filter.Eq(x => x.LeaseUntilUtc, leaseUntilUtc);
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.AcquisitionToken, acquisitionToken);
 
         await lockCollection.DeleteOneAsync(filter);
     }
@@ -129,6 +129,7 @@ internal sealed class MongoHelper : IMongoHelper
         var lockCollection = Database.GetCollection<MongoLockDocument>(_lockCollectionName);
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         var leaseUntil = now.Add(leaseTime.Value);
+        var acquisitionToken = Guid.NewGuid().ToString();
 
         // Try to atomically take or extend the lock if expired
         var filter = Builders<MongoLockDocument>.Filter.Eq(x => x.Id, lockName) &
@@ -137,7 +138,8 @@ internal sealed class MongoHelper : IMongoHelper
         var update = Builders<MongoLockDocument>.Update
                                                 .SetOnInsert(x => x.Id, lockName)
                                                 .Set(x => x.Holder, _holderId)
-                                                .Set(x => x.LeaseUntilUtc, leaseUntil);
+                                                .Set(x => x.LeaseUntilUtc, leaseUntil)
+                                                .Set(x => x.AcquisitionToken, acquisitionToken);
 
         var options = new FindOneAndUpdateOptions<MongoLockDocument>
         {
@@ -156,9 +158,9 @@ internal sealed class MongoHelper : IMongoHelper
                                      lockDocument.LeaseUntilUtc,
                                      leaseTime.Value,
                                      _timeProvider,
-                                     validUntilUtc => ReleaseLockAsync(lockName, _holderId, validUntilUtc),
-                                     (validUntilUtc, extensionLeaseTime, token) =>
-                                         ExtendLockAsync(lockName, _holderId, validUntilUtc, extensionLeaseTime, token));
+                                     () => ReleaseLockAsync(lockName, _holderId, acquisitionToken),
+                                     (extensionLeaseTime, token) =>
+                                         ExtendLockAsync(lockName, _holderId, acquisitionToken, extensionLeaseTime, token));
             }
 
             return null;

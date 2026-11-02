@@ -10,6 +10,29 @@ using NUnit.Framework;
 public class MongoLockDocumentTests
 {
     [Test]
+    public void Deserialize_DocumentWithAcquisitionToken_RestoresValue()
+    {
+        // Arrange: the shape written by this and every later version of this type.
+        var leaseUntilUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+        var document = new BsonDocument
+        {
+            { "_id", "lock-name" },
+            { "Holder", "holder-id" },
+            { "LeaseUntilUtc", leaseUntilUtc },
+            { "AcquisitionToken", "token-value" }
+        };
+
+        // Act
+        var result = BsonSerializer.Deserialize<MongoLockDocument>(document);
+
+        // Assert
+        result.Id.Should().Be("lock-name");
+        result.Holder.Should().Be("holder-id");
+        result.LeaseUntilUtc.Should().Be(leaseUntilUtc);
+        result.AcquisitionToken.Should().Be("token-value");
+    }
+
+    [Test]
     public void Deserialize_DocumentWithUnrecognizedElement_DeserializesSuccessfully()
     {
         // Arrange
@@ -32,7 +55,7 @@ public class MongoLockDocumentTests
     [Test]
     public void Deserialize_ReleasedShapeBsonDocument_RestoresValues()
     {
-        // Arrange: the exact field names/types written by every shipped version of this type.
+        // Arrange: the exact field names/types written before AcquisitionToken existed.
         var leaseUntilUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc);
         var document = new BsonDocument
         {
@@ -48,5 +71,6 @@ public class MongoLockDocumentTests
         result.Id.Should().Be("lock-name");
         result.Holder.Should().Be("holder-id");
         result.LeaseUntilUtc.Should().Be(leaseUntilUtc);
+        result.AcquisitionToken.Should().BeNull();
     }
 }

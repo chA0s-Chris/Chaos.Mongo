@@ -7,13 +7,13 @@ namespace Chaos.Mongo;
 /// </summary>
 internal class MongoLock : IMongoLock
 {
-    private readonly Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> _extendAction;
+    private readonly Func<TimeSpan, CancellationToken, Task<DateTime?>> _extendAction;
     private readonly TimeSpan _leaseTime;
 
     // Serializes extension against disposal. Deliberately never disposed: an extension arriving after disposal must
     // observe the disposed flag and return false, not throw ObjectDisposedException out of WaitAsync.
     private readonly SemaphoreSlim _operationSemaphore = new(1, 1);
-    private readonly Func<DateTime, Task> _releaseAction;
+    private readonly Func<Task> _releaseAction;
     private readonly Object _stateLock = new();
     private readonly TimeProvider _timeProvider;
     private Boolean _disposed;
@@ -27,7 +27,7 @@ internal class MongoLock : IMongoLock
     /// <param name="validUntilUtc">The UTC date and time when the lock will automatically expire.</param>
     /// <param name="leaseTime">The duration used to acquire the lock.</param>
     /// <param name="timeProvider">The time provider for getting current time.</param>
-    /// <param name="releaseAction">The action to execute with the current expiry when the lock is released.</param>
+    /// <param name="releaseAction">The action to execute when the lock is released.</param>
     /// <param name="extendAction">The action to execute when the lock lease is extended.</param>
     /// <exception cref="ArgumentException">Thrown when <paramref name="id"/> is null or whitespace.</exception>
     /// <exception cref="ArgumentNullException">
@@ -39,8 +39,8 @@ internal class MongoLock : IMongoLock
                      DateTime validUntilUtc,
                      TimeSpan leaseTime,
                      TimeProvider timeProvider,
-                     Func<DateTime, Task> releaseAction,
-                     Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction)
+                     Func<Task> releaseAction,
+                     Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -88,26 +88,23 @@ internal class MongoLock : IMongoLock
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
-        // Waits for an in-flight extension so the release below uses the expiry that extension stored. The wait is
-        // unbounded by design: disposal is a cold path, and a bounded wait would race the extension it exists to exclude.
+        // Waits for an in-flight extension to finish before releasing. The wait is unbounded by design: disposal is
+        // a cold path, and a bounded wait would race the extension it exists to exclude.
         await _operationSemaphore.WaitAsync();
 
         try
         {
-            DateTime validUntilUtc;
-
             lock (_stateLock)
             {
                 if (_disposed)
                     return;
 
                 _disposed = true;
-                validUntilUtc = _validUntilUtc;
             }
 
             try
             {
-                await _releaseAction(validUntilUtc);
+                await _releaseAction();
             }
             catch
             {
@@ -131,17 +128,13 @@ internal class MongoLock : IMongoLock
 
         try
         {
-            DateTime validUntilUtc;
-
             lock (_stateLock)
             {
                 if (_disposed || _lost)
                     return false;
-
-                validUntilUtc = _validUntilUtc;
             }
 
-            var extendedUntilUtc = await _extendAction(validUntilUtc, requestedLeaseTime, cancellationToken);
+            var extendedUntilUtc = await _extendAction(requestedLeaseTime, cancellationToken);
 
             lock (_stateLock)
             {

@@ -11,6 +11,14 @@ using MongoDB.Bson.Serialization.Attributes;
 internal class MongoLockDocument
 {
     /// <summary>
+    /// Gets or sets the token identifying the acquisition that currently holds the lock. Generated once per
+    /// acquisition and never changed by extension, so it distinguishes acquisitions that happen to share the same
+    /// <see cref="Holder"/> and <see cref="LeaseUntilUtc"/>. <see langword="null"/> for documents written before
+    /// this field existed; such documents are never extended or released, only taken over once their lease expires.
+    /// </summary>
+    public String? AcquisitionToken { get; internal set; }
+
+    /// <summary>
     /// Gets or sets the holder ID that currently owns the lock.
     /// </summary>
     public String? Holder { get; internal set; }
