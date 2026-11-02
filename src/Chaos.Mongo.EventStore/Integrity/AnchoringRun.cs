@@ -89,7 +89,7 @@ internal sealed class AnchoringRun
         _verification = verification;
         _store = new AnchorStore(mongoHelper, options);
         _evidence = new AnchorEvidenceStore(mongoHelper, options);
-        _confirmer = new TimestampRevocationConfirmer(_store, _evidence, authorities, options, timeProvider, logger);
+        _confirmer = new TimestampRevocationConfirmer(_store, _evidence, authorities, options, timeProvider, logger, verification);
     }
 
     /// <summary>

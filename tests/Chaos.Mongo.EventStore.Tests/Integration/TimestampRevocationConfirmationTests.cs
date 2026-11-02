@@ -34,7 +34,8 @@ public class TimestampRevocationConfirmationTests
                                                          [fixture.Authority],
                                                          fixture.Options,
                                                          fixture.Time,
-                                                         fixture.Logger);
+                                                         fixture.Logger,
+                                                         fixture.Verification);
         var lockChecks = 0;
 
         // The check before the authority is asked succeeds; the one after it answers fails.
@@ -123,6 +124,13 @@ public class TimestampRevocationConfirmationTests
         var healthyTestAuthority = new TestTimestampAuthority();
         _testAuthorities.Add(healthyTestAuthority);
         var healthy = healthyTestAuthority.CreateAuthority(name: "healthy", timeProvider: fixture.Time);
+        fixture.Verification.Authorities["healthy"] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                healthyTestAuthority.Root
+            }
+        };
         var anchors = new List<AnchorRecord>();
         for (var anchor = 0; anchor < 4; anchor++)
         {
@@ -372,6 +380,24 @@ public class TimestampRevocationConfirmationTests
     }
 
     [Test]
+    public async Task RunAsync_NoTrustConfiguredForAuthority_DoesNotRequestCrlsAndRetriesLikeOtherFailures()
+    {
+        var fixture = await CreateFixtureAsync();
+        var anchor = await fixture.AnchorAsync();
+        var timestamp = anchor.Timestamps[0];
+        fixture.Verification.Authorities.Remove(fixture.Authority.Name);
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+
+        await fixture.CreateRun().RunAsync();
+
+        var failed = await fixture.ReadTimestampAsync(anchor);
+        failed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        failed.ConfirmationFailure.Should().NotBeNull();
+        failed.ConfirmationFailure.LastFailure.Should().Contain("no trust settings");
+        fixture.TestAuthority.CrlRequests.Should().Be(1, "only stamping downloaded a CRL; confirmation never asked without configured trust");
+    }
+
+    [Test]
     public async Task RunAsync_PendingAnchorCannotComplete_StillConfirmsEarlierTimestamps()
     {
         var fixture = await CreateFixtureAsync();
@@ -414,6 +440,52 @@ public class TimestampRevocationConfirmationTests
         (await fixture.ReadAnchorAsync(anchor)).Status.Should().Be(AnchorStatus.Completed);
     }
 
+    [Test]
+    public async Task RunAsync_StoredChainWithExtraCertificateNotOnTheTrustedPath_DoesNotRequestCrls()
+    {
+        var fixture = await CreateFixtureAsync();
+        var anchor = await fixture.AnchorAsync();
+        var timestamp = anchor.Timestamps[0];
+
+        // The extra certificate names its own CRL distribution point, at a location distinct from the real chain's,
+        // so a request to it is separately observable; it is a non-root authority certificate, which is exactly what
+        // GetCrlSources reads a CRL location from, rather than the root TestTimestampAuthority itself carries no
+        // distribution point extension on.
+        var unrelatedCrlUri = new Uri("http://tsa.test/unrelated.crl");
+        var unrelatedAuthority = new TestTimestampAuthority([unrelatedCrlUri]);
+        _testAuthorities.Add(unrelatedAuthority);
+        fixture.TestAuthority.AdditionalCrlUris.Add(unrelatedCrlUri);
+        var evidence = new AnchorEvidenceStore(fixture.Context.MongoHelper, fixture.Options);
+        var extraHash = await evidence.StoreAsync(unrelatedAuthority.SigningCertificate.RawData, CancellationToken.None);
+
+        // The real chain still builds to the trusted root for the token's signer. The extra certificate is spliced in
+        // before the stored root, exactly where GetCrlSources reads non-root certificates from (it excludes only the
+        // final, root entry), so skipping the rebuild-and-compare guard would make the confirmer fetch its unrelated
+        // CRL location; it must never be trusted for its URL.
+        await fixture.Store.Anchors.UpdateOneAsync(new BsonDocument("_id", new BsonBinaryData(anchor.Id, GuidRepresentation.Standard)),
+                                                   new BsonDocument("$push", new BsonDocument("Timestamps.0.CertificateChainHashes",
+                                                                                              new BsonDocument
+                                                                                              {
+                                                                                                  {
+                                                                                                      "$each", new BsonArray
+                                                                                                      {
+                                                                                                          new BsonBinaryData(extraHash)
+                                                                                                      }
+                                                                                                  },
+                                                                                                  { "$position", 1 }
+                                                                                              })));
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+
+        await fixture.CreateRun().RunAsync();
+
+        var failed = await fixture.ReadTimestampAsync(anchor);
+        failed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        failed.ConfirmationFailure.Should().NotBeNull();
+        failed.ConfirmationFailure.LastFailure.Should().Contain("differs from the chain built");
+        fixture.TestAuthority.CrlRequests.Should().Be(1, "only stamping downloaded a CRL; the untrusted stored chain's extra certificate's CRL location " +
+                                                         "must never be fetched for confirmation");
+    }
+
     [TearDown]
     public async Task TearDown()
     {
@@ -446,7 +518,16 @@ public class TimestampRevocationConfirmationTests
         var options = new IntegrityAnchoringOptions();
         await new IntegrityAnchoringConfigurator(options).ConfigureAsync(context.MongoHelper);
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        return new Fixture(context, options, testAuthority, testAuthority.CreateAuthority(timeProvider: time), time, new CapturingLogger<AnchoringRun>());
+        var authority = testAuthority.CreateAuthority(timeProvider: time);
+        var verification = new IntegrityVerificationOptions();
+        verification.Authorities[authority.Name] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                testAuthority.Root
+            }
+        };
+        return new Fixture(context, options, testAuthority, authority, time, new CapturingLogger<AnchoringRun>(), verification);
     }
 
     /// <summary>
@@ -481,7 +562,8 @@ public class TimestampRevocationConfirmationTests
         TestTimestampAuthority TestAuthority,
         ITimestampAuthority Authority,
         FakeTimeProvider Time,
-        CapturingLogger<AnchoringRun> Logger)
+        CapturingLogger<AnchoringRun> Logger,
+        IntegrityVerificationOptions Verification)
     {
         public AnchorStore Store => new(Context.MongoHelper, Options);
 
@@ -501,7 +583,7 @@ public class TimestampRevocationConfirmationTests
             => CreateRun(new InMemoryAnchorCandidateSource([], Context.MongoHelper.Database), authorities.Length > 0 ? authorities : [Authority]);
 
         public AnchoringRun CreateRun(IAnchorCandidateSource source, params ITimestampAuthority[] authorities)
-            => new(Context.MongoHelper, source, authorities, Options, Time, Logger);
+            => new(Context.MongoHelper, source, authorities, Options, Time, Logger, verification: Verification);
 
         public async Task<AnchorRecord> ReadAnchorAsync(AnchorRecord anchor)
             => await Store.FindAsync(anchor.Id, CancellationToken.None) ?? throw new InvalidOperationException("The anchor is gone.");

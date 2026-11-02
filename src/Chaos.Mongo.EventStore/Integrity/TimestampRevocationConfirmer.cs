@@ -4,6 +4,8 @@ namespace Chaos.Mongo.EventStore.Integrity;
 
 using Microsoft.Extensions.Logging;
 using System.Formats.Asn1;
+using System.Security.Cryptography;
+using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 
 /// <summary>
@@ -48,13 +50,15 @@ internal sealed class TimestampRevocationConfirmer
     private readonly IntegrityAnchoringOptions _options;
     private readonly AnchorStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly IntegrityVerificationOptions? _verification;
 
     public TimestampRevocationConfirmer(AnchorStore store,
                                         AnchorEvidenceStore evidence,
                                         IReadOnlyList<ITimestampAuthority> authorities,
                                         IntegrityAnchoringOptions options,
                                         TimeProvider timeProvider,
-                                        ILogger logger)
+                                        ILogger logger,
+                                        IntegrityVerificationOptions? verification = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(evidence);
@@ -68,6 +72,7 @@ internal sealed class TimestampRevocationConfirmer
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _verification = verification;
     }
 
     /// <summary>
@@ -132,6 +137,7 @@ internal sealed class TimestampRevocationConfirmer
         try
         {
             var certificateChain = await ReadChainAsync(timestamps[0].CertificateChainHashes, cancellationToken);
+            await RequireTrustedChainAsync(authority.Name, timestamps[0].TokenHash, certificateChain, cancellationToken);
             var result = await authority.GetRevocationListsAsync(certificateChain,
                                                                  issuedNotBeforeUtc,
                                                                  cancellationToken);
@@ -287,5 +293,59 @@ internal sealed class TimestampRevocationConfirmer
         }
 
         _logger.LogDebug("Confirmed the revocation status of {TimestampCount} timestamps of authority {AuthorityName}", statuses.Count, authority.Name);
+    }
+
+    /// <summary>
+    /// Requires the stored chain to build to a trusted root before any URL it names is trusted, applying the same rule
+    /// <see cref="StoredTimestampVerifier.Verify"/> already applies to the on-demand verifier: no configured trust, or a
+    /// stored chain that differs from the one built to a trusted root, is an invalid chain, never one the confirmer
+    /// requests CRLs for. This also stops a chain whose real path is trusted but that carries an extra or substituted
+    /// certificate naming an unrelated CRL distribution point.
+    /// </summary>
+    /// <exception cref="TimestampTokenValidationException">
+    /// Thrown when no trust is configured for the authority, the chain does not build to a trusted root, or the built
+    /// chain differs from the stored one.
+    /// </exception>
+    private async Task RequireTrustedChainAsync(String authorityName, Byte[] tokenHash, IReadOnlyList<Byte[]> certificateChain, CancellationToken cancellationToken)
+    {
+        if (_verification?.FindTrust(authorityName) is not { } trust)
+        {
+            throw new TimestampTokenValidationException($"no trust settings are configured for timestamp authority '{authorityName}'.");
+        }
+
+        var tokenBytes = await _evidence.ReadAsync(tokenHash, cancellationToken);
+        if (!Rfc3161TimestampToken.TryDecode(tokenBytes, out var token, out var bytesConsumed) || bytesConsumed != tokenBytes.Length)
+        {
+            throw new TimestampTokenValidationException("the stored token is not a single RFC 3161 token.");
+        }
+
+        var storedCertificates = new X509Certificate2Collection();
+        try
+        {
+            foreach (var certificate in certificateChain)
+            {
+                storedCertificates.Add(X509CertificateLoader.LoadCertificate(certificate));
+            }
+
+            var built = TimestampTokenValidation.BuildChain(token,
+                                                            storedCertificates[0],
+                                                            new ChainSettings(trust.TrustedRoots, X509RevocationMode.NoCheck, TimeSpan.Zero, storedCertificates));
+            if (built.Certificates.Count != certificateChain.Count ||
+                !built.Certificates.Zip(certificateChain).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)))
+            {
+                throw new TimestampTokenValidationException("the stored certificate chain differs from the chain built to a trusted root.");
+            }
+        }
+        catch (CryptographicException ex)
+        {
+            throw new TimestampTokenValidationException("a certificate of the stored chain is malformed.", ex);
+        }
+        finally
+        {
+            foreach (var certificate in storedCertificates)
+            {
+                certificate.Dispose();
+            }
+        }
     }
 }
