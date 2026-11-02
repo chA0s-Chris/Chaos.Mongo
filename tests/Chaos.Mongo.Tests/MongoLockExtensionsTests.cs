@@ -143,7 +143,7 @@ public class MongoLockExtensionsTests
             "refused-lock",
             timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
             timeProvider,
-            (_, _, _) => Task.FromResult<DateTime?>(null));
+            (_, _) => Task.FromResult<DateTime?>(null));
 
         // Act
         var act = async () => await mongoLock.ExtendAsync();
@@ -163,7 +163,7 @@ public class MongoLockExtensionsTests
             "test-lock",
             timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
             timeProvider,
-            (_, _, _) => Task.FromResult<DateTime?>(extendedExpiry));
+            (_, _) => Task.FromResult<DateTime?>(extendedExpiry));
 
         // Act
         var result = await mongoLock.ExtendAsync();
@@ -183,7 +183,7 @@ public class MongoLockExtensionsTests
             "test-lock",
             timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
             timeProvider,
-            (_, _, _) => Task.FromException<DateTime?>(expectedException));
+            (_, _) => Task.FromException<DateTime?>(expectedException));
 
         // Act
         var act = async () => await mongoLock.ExtendAsync();
@@ -210,13 +210,13 @@ public class MongoLockExtensionsTests
         String id,
         DateTime validUntilUtc,
         TimeProvider timeProvider,
-        Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null)
+        Func<TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null)
     {
         return new MongoLock(id,
                              validUntilUtc,
                              DefaultLeaseTime,
                              timeProvider,
-                             _ => Task.CompletedTask,
-                             extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
+                             () => Task.CompletedTask,
+                             extendAction ?? ((duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
     }
 }

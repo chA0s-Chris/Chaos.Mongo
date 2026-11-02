@@ -17,8 +17,8 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var validUntil = timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime;
-        Func<DateTime, Task> releaseAction = _ => Task.CompletedTask;
-        Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _, _) => Task.FromResult<DateTime?>(validUntil);
+        var releaseAction = () => Task.CompletedTask;
+        Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _) => Task.FromResult<DateTime?>(validUntil);
 
         // Act
         var act = () => new MongoLock(String.Empty, validUntil, DefaultLeaseTime, timeProvider, releaseAction, extendAction);
@@ -42,8 +42,8 @@ public class MongoLockTests
                                       validUntil,
                                       leaseTime,
                                       timeProvider,
-                                      _ => Task.CompletedTask,
-                                      (_, _, _) => Task.FromResult<DateTime?>(validUntil));
+                                      () => Task.CompletedTask,
+                                      (_, _) => Task.FromResult<DateTime?>(validUntil));
 
         // Assert
         act.Should().Throw<ArgumentOutOfRangeException>();
@@ -61,7 +61,7 @@ public class MongoLockTests
                                       validUntil,
                                       DefaultLeaseTime,
                                       timeProvider,
-                                      _ => Task.CompletedTask,
+                                      () => Task.CompletedTask,
                                       null!);
 
         // Assert
@@ -74,8 +74,8 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var validUntil = timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime;
-        Func<DateTime, Task> releaseAction = _ => Task.CompletedTask;
-        Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _, _) => Task.FromResult<DateTime?>(validUntil);
+        var releaseAction = () => Task.CompletedTask;
+        Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _) => Task.FromResult<DateTime?>(validUntil);
 
         // Act
         var act = () => new MongoLock(null!, validUntil, DefaultLeaseTime, timeProvider, releaseAction, extendAction);
@@ -98,7 +98,7 @@ public class MongoLockTests
                                       DefaultLeaseTime,
                                       timeProvider,
                                       null!,
-                                      (_, _, _) => Task.FromResult<DateTime?>(validUntil));
+                                      (_, _) => Task.FromResult<DateTime?>(validUntil));
 
         // Assert
         act.Should().Throw<ArgumentNullException>();
@@ -111,7 +111,7 @@ public class MongoLockTests
         var timeProvider = new FakeTimeProvider();
         var lockId = "test-lock";
         var validUntil = timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime;
-        Func<DateTime, Task> releaseAction = _ => Task.CompletedTask;
+        var releaseAction = () => Task.CompletedTask;
 
         // Act
         var mongoLock = CreateMongoLock(lockId, validUntil, timeProvider, releaseAction);
@@ -127,8 +127,8 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var validUntil = timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime;
-        Func<DateTime, Task> releaseAction = _ => Task.CompletedTask;
-        Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _, _) => Task.FromResult<DateTime?>(validUntil);
+        var releaseAction = () => Task.CompletedTask;
+        Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction = (_, _) => Task.FromResult<DateTime?>(validUntil);
 
         // Act
         var act = () => new MongoLock("   ", validUntil, DefaultLeaseTime, timeProvider, releaseAction, extendAction);
@@ -143,7 +143,7 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var releaseInvoked = false;
-        Func<DateTime, Task> releaseAction = _ =>
+        var releaseAction = () =>
         {
             releaseInvoked = true;
             return Task.CompletedTask;
@@ -163,7 +163,7 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var releaseCount = 0;
-        Func<DateTime, Task> releaseAction = _ =>
+        var releaseAction = () =>
         {
             releaseCount++;
             return Task.CompletedTask;
@@ -180,7 +180,7 @@ public class MongoLockTests
     }
 
     [Test]
-    public async Task DisposeAsync_WhenExtensionIsInFlight_ShouldReleaseExtendedExpiryWithoutResurrectingLock()
+    public async Task DisposeAsync_WhenExtensionIsInFlight_ShouldWaitForExtensionBeforeReleasing()
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
@@ -188,17 +188,17 @@ public class MongoLockTests
         var extendedExpiry = timeProvider.GetUtcNow().AddMinutes(10).UtcDateTime;
         var extensionStarted = new TaskCompletionSource<Boolean>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completeExtension = new TaskCompletionSource<DateTime?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        DateTime? releasedExpiry = null;
+        var releaseInvoked = false;
         var mongoLock = CreateMongoLock(
             "test-lock",
             originalExpiry,
             timeProvider,
-            validUntilUtc =>
+            () =>
             {
-                releasedExpiry = validUntilUtc;
+                releaseInvoked = true;
                 return Task.CompletedTask;
             },
-            async (_, _, _) =>
+            async (_, _) =>
             {
                 extensionStarted.SetResult(true);
                 return await completeExtension.Task;
@@ -209,12 +209,13 @@ public class MongoLockTests
 
         // Act
         var disposalTask = mongoLock.DisposeAsync().AsTask();
+        releaseInvoked.Should().BeFalse();
         completeExtension.SetResult(extendedExpiry);
 
         // Assert
         (await extensionTask).Should().BeTrue();
         await disposalTask;
-        releasedExpiry.Should().Be(extendedExpiry);
+        releaseInvoked.Should().BeTrue();
         mongoLock.ValidUntilUtc.Should().Be(extendedExpiry);
         mongoLock.IsValid.Should().BeFalse();
     }
@@ -224,7 +225,7 @@ public class MongoLockTests
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
-        Func<DateTime, Task> releaseAction = _ => throw new InvalidOperationException("Release failed");
+        Func<Task> releaseAction = () => throw new InvalidOperationException("Release failed");
         var mongoLock = CreateMongoLock("test-lock", timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime, timeProvider, releaseAction);
 
         // Act
@@ -240,7 +241,7 @@ public class MongoLockTests
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var releaseCompleted = false;
-        Func<DateTime, Task> releaseAction = _ =>
+        var releaseAction = () =>
         {
             releaseCompleted = true;
             return Task.CompletedTask;
@@ -323,22 +324,22 @@ public class MongoLockTests
     }
 
     [Test]
-    public async Task TryExtendAsync_AfterSuccessfulExtension_ShouldPassUpdatedExpiryToDelegate()
+    public async Task TryExtendAsync_WhenCalledMultipleTimes_ShouldUpdateExpiryFromDelegateResultEachTime()
     {
         // Arrange
         var timeProvider = new FakeTimeProvider();
         var originalExpiry = timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime;
         var firstExtendedExpiry = timeProvider.GetUtcNow().AddMinutes(10).UtcDateTime;
         var secondExtendedExpiry = timeProvider.GetUtcNow().AddMinutes(15).UtcDateTime;
-        var expectedExpiries = new List<DateTime>();
+        var invocationCount = 0;
         var mongoLock = CreateMongoLock(
             "test-lock",
             originalExpiry,
             timeProvider,
-            extendAction: (validUntilUtc, _, _) =>
+            extendAction: (_, _) =>
             {
-                expectedExpiries.Add(validUntilUtc);
-                return Task.FromResult<DateTime?>(expectedExpiries.Count == 1 ? firstExtendedExpiry : secondExtendedExpiry);
+                invocationCount++;
+                return Task.FromResult<DateTime?>(invocationCount == 1 ? firstExtendedExpiry : secondExtendedExpiry);
             });
 
         // Act
@@ -348,7 +349,7 @@ public class MongoLockTests
         // Assert
         firstResult.Should().BeTrue();
         secondResult.Should().BeTrue();
-        expectedExpiries.Should().Equal(originalExpiry, firstExtendedExpiry);
+        invocationCount.Should().Be(2);
         mongoLock.ValidUntilUtc.Should().Be(secondExtendedExpiry);
     }
 
@@ -363,7 +364,7 @@ public class MongoLockTests
             "test-lock",
             originalExpiry,
             timeProvider,
-            extendAction: (_, _, _) =>
+            extendAction: (_, _) =>
             {
                 extendInvoked = true;
                 return Task.FromResult<DateTime?>(originalExpiry);
@@ -392,7 +393,7 @@ public class MongoLockTests
             "test-lock",
             originalExpiry,
             timeProvider,
-            extendAction: (_, _, _) => Task.FromResult<DateTime?>(null));
+            extendAction: (_, _) => Task.FromResult<DateTime?>(null));
 
         // Act
         var result = await mongoLock.TryExtendAsync();
@@ -415,7 +416,7 @@ public class MongoLockTests
             "test-lock",
             timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
             timeProvider,
-            extendAction: (_, _, _) =>
+            extendAction: (_, _) =>
             {
                 extendInvoked = true;
                 return Task.FromResult<DateTime?>(timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime);
@@ -440,7 +441,7 @@ public class MongoLockTests
             "test-lock",
             timeProvider.GetUtcNow().AddMilliseconds(-1).UtcDateTime,
             timeProvider,
-            extendAction: (_, _, _) => Task.FromResult<DateTime?>(null));
+            extendAction: (_, _) => Task.FromResult<DateTime?>(null));
 
         // Act
         var result = await mongoLock.TryExtendAsync();
@@ -461,7 +462,7 @@ public class MongoLockTests
             "test-lock",
             originalExpiry,
             timeProvider,
-            extendAction: (_, _, _) => Task.FromException<DateTime?>(expectedException));
+            extendAction: (_, _) => Task.FromException<DateTime?>(expectedException));
 
         // Act
         var act = async () => await mongoLock.TryExtendAsync();
@@ -485,7 +486,7 @@ public class MongoLockTests
             "test-lock",
             timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime,
             timeProvider,
-            extendAction: (_, _, _) =>
+            extendAction: (_, _) =>
             {
                 extendInvoked = true;
                 return Task.FromResult<DateTime?>(timeProvider.GetUtcNow().AddMinutes(5).UtcDateTime);
@@ -507,15 +508,13 @@ public class MongoLockTests
         var timeProvider = new FakeTimeProvider();
         var originalExpiry = timeProvider.GetUtcNow().AddMinutes(1).UtcDateTime;
         var extendedExpiry = timeProvider.GetUtcNow().Add(DefaultLeaseTime).UtcDateTime;
-        DateTime? expectedExpiry = null;
         TimeSpan? requestedLeaseTime = null;
         var mongoLock = CreateMongoLock(
             "test-lock",
             originalExpiry,
             timeProvider,
-            extendAction: (validUntilUtc, leaseTime, _) =>
+            extendAction: (leaseTime, _) =>
             {
-                expectedExpiry = validUntilUtc;
                 requestedLeaseTime = leaseTime;
                 return Task.FromResult<DateTime?>(extendedExpiry);
             });
@@ -525,7 +524,6 @@ public class MongoLockTests
 
         // Assert
         result.Should().BeTrue();
-        expectedExpiry.Should().Be(originalExpiry);
         requestedLeaseTime.Should().Be(DefaultLeaseTime);
         mongoLock.ValidUntilUtc.Should().Be(extendedExpiry);
         mongoLock.IsValid.Should().BeTrue();
@@ -534,15 +532,15 @@ public class MongoLockTests
     private static MongoLock CreateMongoLock(String id,
                                              DateTime validUntilUtc,
                                              TimeProvider timeProvider,
-                                             Func<DateTime, Task>? releaseAction = null,
-                                             Func<DateTime, TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null,
+                                             Func<Task>? releaseAction = null,
+                                             Func<TimeSpan, CancellationToken, Task<DateTime?>>? extendAction = null,
                                              TimeSpan? leaseTime = null)
     {
         return new MongoLock(id,
                              validUntilUtc,
                              leaseTime ?? DefaultLeaseTime,
                              timeProvider,
-                             releaseAction ?? (_ => Task.CompletedTask),
-                             extendAction ?? ((_, duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
+                             releaseAction ?? (() => Task.CompletedTask),
+                             extendAction ?? ((duration, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(duration).UtcDateTime)));
     }
 }
