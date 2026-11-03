@@ -273,33 +273,35 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     /// whose aggregate identifier cannot be read instead of comparing their raw stored value: such a value has
     /// nothing that can be safely substituted into the next lookup's <c>$gt</c> filter, because the filter compares
     /// the operand's own BSON type/value directly and does not reproduce <c>$sort</c>'s handling of every type the
-    /// malformed value might hold. Retrying the same filter with an incrementing <c>Skip</c> instead relies only on
-    /// the database's own sort order, which is already correct for every BSON type.
+    /// malformed value might hold. A single server cursor avoids positional offsets across live queries, which
+    /// could skip an unchanged stream when an earlier malformed document is deleted or repaired.
     /// </summary>
     private async Task<Guid?> FindNextAggregateIdAsync(IMongoCollection<BsonDocument> events,
                                                        ProtectedStreamType type,
                                                        Guid? cursor,
                                                        CancellationToken cancellationToken)
     {
-        var skip = 0;
-        while (true)
+        var nextQuery = type.NextStream(cursor);
+        using var documents = await events.Find(nextQuery.Filter, new FindOptions
+                                          {
+                                              BatchSize = 1
+                                          })
+                                          .Sort(nextQuery.Sort).Project(nextQuery.Projection)
+                                          .ToCursorAsync(cancellationToken);
+        while (await documents.MoveNextAsync(cancellationToken))
         {
-            var nextQuery = type.NextStream(cursor);
-            var next = await events.Find(nextQuery.Filter).Sort(nextQuery.Sort).Project(nextQuery.Projection).Limit(1).Skip(skip)
-                                   .FirstOrDefaultAsync(cancellationToken);
-            if (next is null)
+            foreach (var next in documents.Current)
             {
-                return null;
-            }
+                if (StoredAggregateId.TryRead(next.GetValue(type.AggregateIdElement, BsonNull.Value), out var aggregateId))
+                {
+                    return aggregateId;
+                }
 
-            if (StoredAggregateId.TryRead(next.GetValue(type.AggregateIdElement, BsonNull.Value), out var aggregateId))
-            {
-                return aggregateId;
+                ReportSkippedCandidate(type.EventsCollectionName, null, MalformedCandidateReason.AggregateId);
             }
-
-            ReportSkippedCandidate(type.EventsCollectionName, null, MalformedCandidateReason.AggregateId);
-            skip++;
         }
+
+        return null;
     }
 
     /// <summary>

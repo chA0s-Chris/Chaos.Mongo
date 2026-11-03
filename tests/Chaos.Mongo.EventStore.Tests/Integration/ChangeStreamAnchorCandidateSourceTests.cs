@@ -285,6 +285,50 @@ public class ChangeStreamAnchorCandidateSourceTests
         again.Candidates.Should().ContainSingle(candidate => candidate.AggregateId == aggregateId);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ReadBatchAsync_MalformedDocumentChangesDuringRecovery_DoesNotSkipHealthyStreams(Boolean repair)
+    {
+        var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
+        var context = await CreateContextAsync(configureMongo: builder =>
+                                                   builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
+        var healthy = new[]
+        {
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(1)
+        };
+        var malformed = await context.AppendStreamAsync(1);
+        var filter = EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed);
+        await context.Events.UpdateOneAsync(filter, Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+        var changed = false;
+        logger.OnLog = (level, message) =>
+        {
+            if (changed || level != LogLevel.Warning || !message.Contains("was skipped"))
+            {
+                return;
+            }
+
+            // Change the first result after it has been read, before traversal asks for the next result.
+            changed = true;
+            var malformedFilter = new BsonDocument("AggregateId", "malformed");
+            if (repair)
+            {
+                context.Events.UpdateOne(malformedFilter,
+                                         Builders<BsonDocument>.Update.Set(
+                                             "AggregateId", new BsonBinaryData(Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff"), GuidRepresentation.Standard)));
+            }
+            else
+            {
+                context.Events.DeleteOne(malformedFilter);
+            }
+        };
+
+        var candidates = await ConsumeRecoveryScanAsync(context, 10);
+
+        changed.Should().BeTrue();
+        candidates.Select(candidate => candidate.AggregateId).Should().Contain(healthy);
+    }
+
     [Test]
     [TestCase("AggregateId")]
     [TestCase("Version")]

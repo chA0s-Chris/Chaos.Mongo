@@ -91,8 +91,13 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
 
         while (await EnsureLockAsync(sweepLock, cancellationToken))
         {
-            var aggregateId = await FindNextStreamAsync(state.Cursor, state, cancellationToken);
-            if (aggregateId is not { } streamId)
+            var next = await FindNextStreamAsync(state.Cursor, state, sweepLock, cancellationToken);
+            if (!next.LockHeld || !await EnsureLockAsync(sweepLock, cancellationToken))
+            {
+                break;
+            }
+
+            if (next.AggregateId is not { } streamId)
             {
                 state.Cursor = null;
                 state.PassCompletedUtc = _timeProvider.GetUtcNow().UtcDateTime;
@@ -214,39 +219,57 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     /// cannot be read instead of comparing their raw stored value in the next lookup's <c>$gt</c> filter, which has
     /// nothing safe to substitute for such a value (see <see cref="ChangeStreamAnchorCandidateSource"/>'s matching
     /// scan for the reasoning). Each skip counts as a failed stream, the same way a stream that could not be sealed
-    /// does, so the pass still completes and the skip is visible.
+    /// does, so the pass still completes and the skip is visible. The lock is checked throughout the traversal;
+    /// losing it is distinct from reaching the end of the collection.
     /// </summary>
-    private async Task<Guid?> FindNextStreamAsync(Guid? cursor, IntegritySealingState state, CancellationToken cancellationToken)
+    private async Task<(Boolean LockHeld, Guid? AggregateId)> FindNextStreamAsync(Guid? cursor,
+                                                                                  IntegritySealingState state,
+                                                                                  IMongoLock sweepLock,
+                                                                                  CancellationToken cancellationToken)
     {
-        var skip = 0;
-        while (true)
+        var query = SealingSweepQueries<TAggregate>.NextStream(cursor);
+        using var documents = await GetEventsCollection()
+                                    .Find(query.Filter, new FindOptions
+                                    {
+                                        BatchSize = 1
+                                    })
+                                    .Sort(query.Sort)
+                                    .Project(query.Projection)
+                                    .ToCursorAsync(cancellationToken);
+        while (await EnsureLockAsync(sweepLock, cancellationToken))
         {
-            var query = SealingSweepQueries<TAggregate>.NextStream(cursor);
-            var next = await GetEventsCollection()
-                             .Find(query.Filter)
-                             .Sort(query.Sort)
-                             .Project(query.Projection)
-                             .Limit(1)
-                             .Skip(skip)
-                             .FirstOrDefaultAsync(cancellationToken);
-            if (next is null)
+            if (!await documents.MoveNextAsync(cancellationToken))
             {
-                return null;
+                return (true, null);
             }
 
-            if (StoredAggregateId.TryRead(next.GetValue(EventDocumentFields<TAggregate>.AggregateId, BsonNull.Value), out var aggregateId))
+            foreach (var next in documents.Current)
             {
-                return aggregateId;
-            }
+                if (!await EnsureLockAsync(sweepLock, cancellationToken))
+                {
+                    return (false, null);
+                }
 
-            _logger.LogWarning("A document in collection {CollectionName} was skipped while finding the next stream to seal; " +
-                               "its aggregate identifier could not be read",
-                               _options.EventsCollectionName);
-            IntegrityAnchoringDiagnostics.RecordMalformedCandidateSkipped(MalformedCandidateReason.AggregateId);
-            state.StreamsFailed++;
-            await SaveProgressAsync(state, cancellationToken);
-            skip++;
+                if (StoredAggregateId.TryRead(next.GetValue(EventDocumentFields<TAggregate>.AggregateId, BsonNull.Value), out var aggregateId))
+                {
+                    return (true, aggregateId);
+                }
+
+                _logger.LogWarning("A document in collection {CollectionName} was skipped while finding the next stream to seal; " +
+                                   "its aggregate identifier could not be read",
+                                   _options.EventsCollectionName);
+                IntegrityAnchoringDiagnostics.RecordMalformedCandidateSkipped(MalformedCandidateReason.AggregateId);
+                if (!await EnsureLockAsync(sweepLock, cancellationToken))
+                {
+                    return (false, null);
+                }
+
+                state.StreamsFailed++;
+                await SaveProgressAsync(state, cancellationToken);
+            }
         }
+
+        return (false, null);
     }
 
     private IMongoCollection<BsonDocument> GetEventsCollection()
