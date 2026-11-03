@@ -283,6 +283,82 @@ public class IntegritySealingIntegrationTests
         status.StreamsChecked.Should().Be(1);
     }
 
+    [TestCase(3, false, true)]
+    [TestCase(6, false, true)]
+    [TestCase(3, true, true)]
+    [TestCase(6, false, false)]
+    public async Task RunPassAsync_LeaseChangesWhileSkippingMalformedDocuments_RenewsOrStopsWithoutOverwritingProgress(
+        Int32 elapsedMinutes, Boolean replaceHolder, Boolean includeHealthyStream)
+    {
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var unprotected = await CreateContextAsync(false, databaseName);
+        var context = await CreateContextAsync(true, databaseName, timeProvider: timeProvider,
+                                               configureMongo: builder => builder.Services.AddSingleton<ILogger<EventStreamSealingSweep<LedgerAggregate>>>(logger));
+        for (var i = 0; i < 2; i++)
+        {
+            var malformed = await unprotected.AppendStreamAsync(1);
+            await unprotected.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed),
+                                                    Builders<BsonDocument>.Update.Set("AggregateId", $"malformed-{i}"));
+        }
+
+        Guid? healthy = includeHealthyStream ? await unprotected.AppendStreamAsync(1) : null;
+        var locks = context.MongoHelper.Database.GetCollection<BsonDocument>(Chaos.Mongo.MongoDefaults.LockCollectionName);
+        var states = context.MongoHelper.Database.GetCollection<IntegritySealingState>(context.Options.IntegrityStateCollectionName);
+        var sentinelCursor = Guid.NewGuid();
+        DateTime? initialLease = null;
+        var renewed = false;
+        var skips = 0;
+        logger.OnLog = (level, message) =>
+        {
+            if (level != LogLevel.Warning || !message.Contains("was skipped while finding"))
+            {
+                return;
+            }
+
+            var lease = locks.Find(new BsonDocument("_id", context.Sweep.LockName)).Single()["LeaseUntilUtc"].ToUniversalTime();
+            initialLease ??= lease;
+            renewed |= lease > initialLease.Value;
+            skips++;
+            timeProvider.Advance(TimeSpan.FromMinutes(elapsedMinutes));
+            if (replaceHolder)
+            {
+                locks.UpdateOne(new BsonDocument("_id", context.Sweep.LockName), Builders<BsonDocument>.Update.Set("Holder", "another-instance"));
+                states.UpdateOne(state => state.Id == IntegritySealingState.DocumentId,
+                                 Builders<IntegritySealingState>.Update.Set(state => state.Cursor, sentinelCursor)
+                                                                .Set(state => state.StreamsChecked, 42)
+                                                                .Set(state => state.StreamsFailed, 43));
+            }
+        };
+
+        var outcome = await context.Sweep.RunPassAsync();
+
+        var state = await context.Sweep.GetStatusAsync();
+        state.Should().NotBeNull();
+        if (elapsedMinutes < 5 && !replaceHolder)
+        {
+            outcome.Should().Be(SealingPassOutcome.Completed);
+            skips.Should().Be(2);
+            renewed.Should().BeTrue();
+            state.StreamsFailed.Should().Be(2);
+            state.StreamsChecked.Should().Be(1);
+            healthy.Should().NotBeNull();
+            (await context.CreateVerifier().VerifyStreamAsync(healthy.Value)).IsIntact.Should().BeTrue();
+        }
+        else
+        {
+            outcome.Should().Be(SealingPassOutcome.LockLost);
+            skips.Should().Be(1);
+            state.IsPassInProgress.Should().BeTrue();
+            state.PassCompletedUtc.Should().BeNull();
+            state.Cursor.Should().Be(replaceHolder ? sentinelCursor : null);
+            state.StreamsChecked.Should().Be(replaceHolder ? 42 : 0);
+            state.StreamsFailed.Should().Be(replaceHolder ? 43 : 0);
+            state.EventsSealed.Should().Be(0);
+        }
+    }
+
     [Test]
     public async Task RunPassAsync_LockHeldByAnotherInstance_ReturnsLockUnavailableWithoutSealing()
     {
@@ -344,6 +420,81 @@ public class IntegritySealingIntegrationTests
         status.EventsSealed.Should().Be(5);
         status.StreamsSealed.Should().Be(1);
         status.StreamsChecked.Should().Be(1);
+    }
+
+    [Test]
+    public async Task RunPassAsync_MalformedAggregateIdWhileFindingNextStream_SkipsDocumentAndSealsLaterStreams()
+    {
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync(
+            configureProtectedMongo: builder => builder.Services.AddSingleton<ILogger<EventStreamSealingSweep<LedgerAggregate>>>(logger));
+        var malformed = await unprotected.AppendStreamAsync(1);
+        // A string sorts before any binary-typed AggregateId in BSON order, so the next-stream lookup finds it first.
+        await unprotected.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed),
+                                                Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+        var healthy = await unprotected.AppendStreamAsync(1);
+        using var metrics = new AnchoringMetricsCollector();
+
+        var outcome = await protectedContext.Sweep.RunPassAsync();
+
+        outcome.Should().Be(SealingPassOutcome.Completed);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(healthy)).IsIntact.Should().BeTrue();
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.StreamsFailed.Should().Be(1);
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning)
+              .Which.Message.Should().Contain("aggregate identifier could not be read");
+        metrics.Measurements.Should()
+               .ContainSingle(measurement => measurement.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped &&
+                                             measurement.Tags[IntegrityMetrics.Tags.MalformedReason] == nameof(MalformedCandidateReason.AggregateId));
+        (await protectedContext.ServiceProvider.GetRequiredService<IEventStoreIntegrity<LedgerAggregate>>().GetSealingStatusAsync())
+            .Should().Match<IntegritySealingStatus?>(s => s != null && s.StreamsFailed == 1 && !s.IsCompleteWithoutFailures);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task RunPassAsync_MalformedDocumentChangesDuringTraversal_SealsEveryHealthyStream(Boolean repair)
+    {
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var (unprotected, context) = await CreateSharedContextsAsync(
+            configureProtectedMongo: builder => builder.Services.AddSingleton<ILogger<EventStreamSealingSweep<LedgerAggregate>>>(logger));
+        var healthy = new[]
+        {
+            await unprotected.AppendStreamAsync(1),
+            await unprotected.AppendStreamAsync(1)
+        };
+        var malformed = await unprotected.AppendStreamAsync(1);
+        await unprotected.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed),
+                                                Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+        var changed = false;
+        logger.OnLog = (level, message) =>
+        {
+            if (changed || level != LogLevel.Warning || !message.Contains("was skipped while finding"))
+            {
+                return;
+            }
+
+            changed = true;
+            var filter = new BsonDocument("AggregateId", "malformed");
+            if (repair)
+            {
+                unprotected.Events.UpdateOne(filter,
+                                             Builders<BsonDocument>.Update.Set(
+                                                 "AggregateId", new BsonBinaryData(Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff"), GuidRepresentation.Standard)));
+            }
+            else
+            {
+                unprotected.Events.DeleteOne(filter);
+            }
+        };
+
+        (await context.Sweep.RunPassAsync()).Should().Be(SealingPassOutcome.Completed);
+
+        changed.Should().BeTrue();
+        foreach (var aggregateId in healthy)
+        {
+            (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
+        }
     }
 
     [Test]
@@ -639,14 +790,16 @@ public class IntegritySealingIntegrationTests
     private async Task<LedgerStoreContext> CreateContextAsync(Boolean integrityProtection,
                                                               String? databaseName = null,
                                                               Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
-                                                              TimeProvider? timeProvider = null)
+                                                              TimeProvider? timeProvider = null,
+                                                              Action<MongoBuilder>? configureMongo = null)
     {
         var context = await LedgerStoreContext.CreateAsync(
             _container,
             integrityProtection,
             databaseName: databaseName,
             configureOptions: configureOptions,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider,
+            configureMongo: configureMongo);
         _contexts.Add(context);
         return context;
     }
@@ -656,11 +809,12 @@ public class IntegritySealingIntegrationTests
     /// can write events without integrity data for the protected one to seal.
     /// </summary>
     private async Task<(LedgerStoreContext Unprotected, LedgerStoreContext Protected)> CreateSharedContextsAsync(
-        Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null)
+        Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
+        Action<MongoBuilder>? configureProtectedMongo = null)
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
         var unprotected = await CreateContextAsync(false, databaseName);
-        var protectedContext = await CreateContextAsync(true, databaseName, configureOptions);
+        var protectedContext = await CreateContextAsync(true, databaseName, configureOptions, configureMongo: configureProtectedMongo);
         return (unprotected, protectedContext);
     }
 

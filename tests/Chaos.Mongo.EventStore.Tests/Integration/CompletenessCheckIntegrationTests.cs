@@ -227,6 +227,22 @@ public class CompletenessCheckIntegrationTests
     }
 
     [Test]
+    public async Task CheckAsync_MalformedAggregateIdSkippedDuringAnchoring_StillReportsMalformedEvent()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var malformed = await context.AppendStreamAsync(1);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed),
+                                            Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+
+        // Anchoring a healthy stream alongside the malformed one shows the skip does not stall the run.
+        await AnchorNewStreamAsync(context, 1);
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().Contain(f => f.Kind == CompletenessFindingKind.MalformedEvent);
+    }
+
+    [Test]
     public async Task CheckAsync_MalformedEventAfterDeletedStream_ReportsFindingsInIdentifierOrder()
     {
         var deleted = Guid.Parse("00000001-0000-0000-0000-000000000000");
@@ -408,6 +424,25 @@ public class CompletenessCheckIntegrationTests
             HeadVersion = 4,
             Anchor = anchor
         });
+    }
+
+    [Test]
+    public async Task CheckAsync_ShortHashSkippedDuringAnchoring_StillFailsStreamVerificationButNotMalformedEvent()
+    {
+        var context = await CreateAnchoredContextAsync();
+        var malformed = await context.AppendStreamAsync(1);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(malformed, 1),
+                                            Builders<BsonDocument>.Update.Set($"{EventIntegrityChain.ElementName}.Hash",
+                                                                              new BsonBinaryData(new Byte[16], BsonBinarySubType.Binary)));
+
+        // Anchoring a healthy stream alongside the malformed one shows the skip does not stall the run.
+        await AnchorNewStreamAsync(context, 1);
+
+        var findings = await CheckAsync(context);
+
+        findings.Should().NotContain(f => f.Kind == CompletenessFindingKind.MalformedEvent && f.AggregateId == malformed);
+        (await context.CreateVerifier().VerifyStreamAsync(malformed))
+            .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.HashMismatch));
     }
 
     [Test]

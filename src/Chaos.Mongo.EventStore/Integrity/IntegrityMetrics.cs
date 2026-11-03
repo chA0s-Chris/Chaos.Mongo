@@ -28,6 +28,12 @@ public static class IntegrityMetrics
         public const String AnchorDelayExceeded = "chaos.mongo.eventstore.anchoring.delay_exceeded";
 
         /// <summary>
+        /// The counter name for candidate documents skipped, during anchoring or sealing, because their aggregate
+        /// identifier, version or integrity hash could not be read.
+        /// </summary>
+        public const String MalformedCandidatesSkipped = "chaos.mongo.eventstore.anchoring.malformed_candidates_skipped";
+
+        /// <summary>
         /// The histogram name for the age of the oldest timestamp token with an unconfirmed revocation status.
         /// </summary>
         public const String RevocationConfirmationDelay = "chaos.mongo.eventstore.anchoring.revocation_confirmation_delay";
@@ -53,5 +59,10 @@ public static class IntegrityMetrics
         /// The tag name describing the timestamp authority.
         /// </summary>
         public const String Authority = "anchoring.authority";
+
+        /// <summary>
+        /// The tag name describing why a candidate document was skipped.
+        /// </summary>
+        public const String MalformedReason = "anchoring.malformed_reason";
     }
 }

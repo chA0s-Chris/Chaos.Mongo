@@ -131,25 +131,6 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
                recovery[ScanStartedElement].ToUniversalTime(),
                null);
 
-    private static AnchorCandidate? TryCreateCandidate(BsonDocument change, Dictionary<String, ProtectedStreamType> types)
-    {
-        if (!change.TryGetValue("fullDocument", out var fullDocumentValue) ||
-            fullDocumentValue is not BsonDocument fullDocument ||
-            !types.TryGetValue(change["ns"]["coll"].AsString, out var type) ||
-            !fullDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) ||
-            !EventIntegrityChain.TryRead(integrityValue, out var integrity))
-        {
-            // Unsealed inserts are anchored once the sweep seals them; deleted documents have no head to anchor.
-            return null;
-        }
-
-        return new AnchorCandidate(type.AggregateTypeName,
-                                   fullDocument[type.AggregateIdElement].AsGuid,
-                                   fullDocument[type.VersionElement].ToInt64(),
-                                   integrity.Hash,
-                                   ToCommittedUtc(change["clusterTime"].AsBsonTimestamp));
-    }
-
     /// <summary>
     /// Takes the cluster time before scanning, so the stream started at it afterwards misses no commit. A snapshot
     /// read's cluster time lies behind every uncommitted write, so the scan cannot miss a commit that the stream
@@ -288,6 +269,42 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
     }
 
     /// <summary>
+    /// Finds the next stream after <paramref name="cursor"/> in aggregate identifier order, skipping over documents
+    /// whose aggregate identifier cannot be read instead of comparing their raw stored value: such a value has
+    /// nothing that can be safely substituted into the next lookup's <c>$gt</c> filter, because the filter compares
+    /// the operand's own BSON type/value directly and does not reproduce <c>$sort</c>'s handling of every type the
+    /// malformed value might hold. A single server cursor avoids positional offsets across live queries, which
+    /// could skip an unchanged stream when an earlier malformed document is deleted or repaired.
+    /// </summary>
+    private async Task<Guid?> FindNextAggregateIdAsync(IMongoCollection<BsonDocument> events,
+                                                       ProtectedStreamType type,
+                                                       Guid? cursor,
+                                                       CancellationToken cancellationToken)
+    {
+        var nextQuery = type.NextStream(cursor);
+        using var documents = await events.Find(nextQuery.Filter, new FindOptions
+                                          {
+                                              BatchSize = 1
+                                          })
+                                          .Sort(nextQuery.Sort).Project(nextQuery.Projection)
+                                          .ToCursorAsync(cancellationToken);
+        while (await documents.MoveNextAsync(cancellationToken))
+        {
+            foreach (var next in documents.Current)
+            {
+                if (StoredAggregateId.TryRead(next.GetValue(type.AggregateIdElement, BsonNull.Value), out var aggregateId))
+                {
+                    return aggregateId;
+                }
+
+                ReportSkippedCandidate(type.EventsCollectionName, null, MalformedCandidateReason.AggregateId);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// The events collections the stream and the recovery scan cover, in registry order, which is the order the
     /// scan's type index refers to.
     /// </summary>
@@ -415,6 +432,23 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         return new AnchorCandidateBatch(candidates, position, hasMore);
     }
 
+    private void ReportSkippedCandidate(String collectionName, Guid? aggregateId, MalformedCandidateReason reason)
+    {
+        if (aggregateId is { } id)
+        {
+            _logger.LogWarning("An anchor candidate document in collection {CollectionName} with aggregate identifier {AggregateId} " +
+                               "was skipped because its {Reason} could not be read",
+                               collectionName, id, reason);
+        }
+        else
+        {
+            _logger.LogWarning("An anchor candidate document in collection {CollectionName} was skipped because its {Reason} could not be read",
+                               collectionName, reason);
+        }
+
+        IntegrityAnchoringDiagnostics.RecordMalformedCandidateSkipped(reason);
+    }
+
     /// <summary>
     /// Scans stream heads from the scan position, two index point reads per stream, until it has examined
     /// <paramref name="maxCandidates"/> streams or every protected type is scanned.
@@ -430,10 +464,8 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         {
             var type = _registry.Types[typeIndex];
             var events = _mongoHelper.Database.GetCollection<BsonDocument>(type.EventsCollectionName);
-            var nextQuery = type.NextStream(cursor);
-            var next = await events.Find(nextQuery.Filter).Sort(nextQuery.Sort).Project(nextQuery.Projection).Limit(1)
-                                   .FirstOrDefaultAsync(cancellationToken);
-            if (next is null)
+            var aggregateId = await FindNextAggregateIdAsync(events, type, cursor, cancellationToken);
+            if (aggregateId is not { } resolvedAggregateId)
             {
                 typeIndex++;
                 cursor = null;
@@ -441,22 +473,22 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
             }
 
             examined++;
-            var aggregateId = next[type.AggregateIdElement].AsGuid;
-            var headQuery = type.StreamHead(aggregateId);
+            var headQuery = type.StreamHead(resolvedAggregateId);
             var head = await events.Find(headQuery.Filter).Sort(headQuery.Sort).Project(headQuery.Projection).Limit(1)
                                    .FirstOrDefaultAsync(cancellationToken);
             if (head is not null &&
                 head.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) &&
-                EventIntegrityChain.TryRead(integrityValue, out var integrity))
+                EventIntegrityChain.TryRead(integrityValue, out var integrity) &&
+                TryReadVersionAndHash(head, type, integrity, resolvedAggregateId, out var version, out var hash))
             {
                 candidates.Add(new AnchorCandidate(type.AggregateTypeName,
-                                                   aggregateId,
-                                                   head[type.VersionElement].ToInt64(),
-                                                   integrity.Hash,
+                                                   resolvedAggregateId,
+                                                   version,
+                                                   hash,
                                                    ToCommittedUtc(position.OperationTime)));
             }
 
-            cursor = aggregateId;
+            cursor = resolvedAggregateId;
         }
 
         var isComplete = typeIndex >= _registry.Types.Count;
@@ -474,6 +506,59 @@ internal sealed class ChangeStreamAnchorCandidateSource : IAnchorCandidateSource
         return new AnchorCandidateBatch(candidates,
                                         new ScanPosition(position.OperationTime, typeIndex, cursor, position.StartedUtc, completedUtc),
                                         true);
+    }
+
+    private AnchorCandidate? TryCreateCandidate(BsonDocument change, Dictionary<String, ProtectedStreamType> types)
+    {
+        if (!change.TryGetValue("fullDocument", out var fullDocumentValue) ||
+            fullDocumentValue is not BsonDocument fullDocument ||
+            !types.TryGetValue(change["ns"]["coll"].AsString, out var type) ||
+            !fullDocument.TryGetValue(EventIntegrityChain.ElementName, out var integrityValue) ||
+            !EventIntegrityChain.TryRead(integrityValue, out var integrity))
+        {
+            // Unsealed inserts are anchored once the sweep seals them; deleted documents have no head to anchor.
+            return null;
+        }
+
+        if (!StoredAggregateId.TryRead(fullDocument.GetValue(type.AggregateIdElement, BsonNull.Value), out var aggregateId))
+        {
+            ReportSkippedCandidate(type.EventsCollectionName, null, MalformedCandidateReason.AggregateId);
+            return null;
+        }
+
+        if (!TryReadVersionAndHash(fullDocument, type, integrity, aggregateId, out var version, out var hash))
+        {
+            return null;
+        }
+
+        return new AnchorCandidate(type.AggregateTypeName, aggregateId, version, hash, ToCommittedUtc(change["clusterTime"].AsBsonTimestamp));
+    }
+
+    /// <summary>
+    /// Reads a candidate's version and validates its integrity hash length, reporting and skipping either field
+    /// that cannot be read the same way as an unreadable aggregate identifier.
+    /// </summary>
+    private Boolean TryReadVersionAndHash(BsonDocument document,
+                                          ProtectedStreamType type,
+                                          EventIntegrity integrity,
+                                          Guid aggregateId,
+                                          out Int64 version,
+                                          out Byte[] hash)
+    {
+        hash = integrity.Hash;
+        if (!StoredVersion.TryRead(document.GetValue(type.VersionElement, BsonNull.Value), out version))
+        {
+            ReportSkippedCandidate(type.EventsCollectionName, aggregateId, MalformedCandidateReason.Version);
+            return false;
+        }
+
+        if (hash.Length != AnchorEncoding.HashLength)
+        {
+            ReportSkippedCandidate(type.EventsCollectionName, aggregateId, MalformedCandidateReason.Hash);
+            return false;
+        }
+
+        return true;
     }
 
     /// <inheritdoc/>

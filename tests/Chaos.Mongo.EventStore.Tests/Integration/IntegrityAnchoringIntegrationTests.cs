@@ -304,6 +304,25 @@ public class IntegrityAnchoringIntegrationTests
     }
 
     [Test]
+    public async Task RunOnceAsync_EveryCandidateMalformed_RecordsNoDelayMeasurement()
+    {
+        using var metrics = new AnchoringMetricsCollector();
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var malformed = await context.AppendStreamAsync(1);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed),
+                                            Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+
+        var result = await service.RunOnceAsync(CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result.Outcome.Should().Be(AnchoringRunOutcome.NoCandidates);
+        result.OldestCandidateUtc.Should().BeNull();
+        metrics.Measurements.Should().NotContain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelay);
+    }
+
+    [Test]
     public async Task RunOnceAsync_FailingRunWhileAnchorAwaitsTimestamps_StillReportsTheDelay()
     {
         using var metrics = new AnchoringMetricsCollector();
@@ -395,6 +414,43 @@ public class IntegrityAnchoringIntegrationTests
         });
 
         (await GetStore(context).Anchors.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(0, "the run fails before its commit point");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_MalformedCandidateBetweenWellFormedOnes_ReportsDelayFromTheOldestReadableCandidate()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var service = context.ServiceProvider.GetRequiredService<IntegrityAnchoringService>();
+
+        // Completes the (empty) recovery scan and hands over to the live change stream, so the three streams below
+        // are each read with their own commit time instead of the scan's single snapshot time.
+        (await service.RunOnceAsync(CancellationToken.None))!.Outcome.Should().Be(AnchoringRunOutcome.NoCandidates);
+
+        await context.AppendStreamAsync(1);
+
+        // Cluster-time commit timestamps have a resolution of one second, so later streams need a real gap to sort
+        // as strictly newer than the oldest one, with the malformed stream committed in between.
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        var malformed = await context.AppendStreamAsync(1);
+
+        // The live change stream only reports an update whose changed fields include _integrity, so the malformed
+        // aggregate identifier is delivered through a replace instead of a plain field update.
+        var malformedEvent = await context.Events.Find(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed)).SingleAsync();
+        malformedEvent["AggregateId"] = "malformed";
+        await context.Events.ReplaceOneAsync(new BsonDocument("_id", malformedEvent["_id"]), malformedEvent);
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        var beforeNewer = DateTime.UtcNow;
+        await context.AppendStreamAsync(1);
+        using var metrics = new AnchoringMetricsCollector();
+
+        var result = await service.RunOnceAsync(CancellationToken.None);
+
+        // Only the older and the newer stream are valid candidates, the malformed one between them is excluded;
+        // reporting the newer stream's commit time instead, or no delay at all, would both fail this comparison.
+        result.Should().NotBeNull();
+        result.OldestCandidateUtc.Should().NotBeNull().And.BeBefore(beforeNewer.AddSeconds(-1));
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelay && measurement.Value > 5);
     }
 
     [Test]

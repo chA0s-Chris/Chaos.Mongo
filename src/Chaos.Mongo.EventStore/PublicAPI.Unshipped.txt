@@ -4,11 +4,13 @@ Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments
 Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Tags
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments.AnchorDelay = "chaos.mongo.eventstore.anchoring.delay" -> string!
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments.AnchorDelayExceeded = "chaos.mongo.eventstore.anchoring.delay_exceeded" -> string!
+const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments.MalformedCandidatesSkipped = "chaos.mongo.eventstore.anchoring.malformed_candidates_skipped" -> string!
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments.RevocationConfirmationDelay = "chaos.mongo.eventstore.anchoring.revocation_confirmation_delay" -> string!
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments.RevocationConfirmationDelayExceeded = "chaos.mongo.eventstore.anchoring.revocation_confirmation_delay_exceeded" -> string!
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Instruments.RevokedTimestamps = "chaos.mongo.eventstore.anchoring.revoked_timestamps" -> string!
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.MeterName = "Chaos.Mongo.EventStore.Integrity" -> string!
 const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Tags.Authority = "anchoring.authority" -> string!
+const Chaos.Mongo.EventStore.Integrity.IntegrityMetrics.Tags.MalformedReason = "anchoring.malformed_reason" -> string!
 *REMOVED*Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>
 *REMOVED*Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.CheckpointDocument() -> void
 *REMOVED*Chaos.Mongo.EventStore.CheckpointDocument<TAggregate>.Id.get -> Chaos.Mongo.EventStore.CheckpointId

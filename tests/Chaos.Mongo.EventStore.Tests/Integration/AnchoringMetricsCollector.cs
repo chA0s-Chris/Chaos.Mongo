@@ -22,12 +22,24 @@ internal sealed class AnchoringMetricsCollector : IDisposable
                 listener.EnableMeasurementEvents(instrument);
             }
         };
-        _listener.SetMeasurementEventCallback<Int64>((instrument, measurement, _, _) => Measurements.Enqueue((instrument.Name, measurement, instrument.Unit)));
-        _listener.SetMeasurementEventCallback<Double>((instrument, measurement, _, _) => Measurements.Enqueue((instrument.Name, measurement, instrument.Unit)));
+        _listener.SetMeasurementEventCallback<Int64>(RecordMeasurement);
+        _listener.SetMeasurementEventCallback<Double>(RecordMeasurement);
         _listener.Start();
     }
 
-    public ConcurrentQueue<(String Instrument, Double Value, String? Unit)> Measurements { get; } = new();
+    public ConcurrentQueue<(String Instrument, Double Value, String? Unit, IReadOnlyDictionary<String, String?> Tags)> Measurements { get; } = new();
+
+    private void RecordMeasurement<T>(Instrument instrument, T measurement, ReadOnlySpan<KeyValuePair<String, Object?>> tags, Object? state)
+        where T : struct
+    {
+        var tagDictionary = new Dictionary<String, String?>(tags.Length);
+        foreach (var tag in tags)
+        {
+            tagDictionary[tag.Key] = tag.Value?.ToString();
+        }
+
+        Measurements.Enqueue((instrument.Name, Convert.ToDouble(measurement), instrument.Unit, tagDictionary));
+    }
 
     public void Dispose() => _listener.Dispose();
 }

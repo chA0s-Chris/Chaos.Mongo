@@ -159,6 +159,35 @@ public class ChangeStreamAnchorCandidateSourceTests
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    public async Task ReadBatchAsync_ConsecutiveMalformedAggregateIdsDuringRecoveryScan_SkipsBothAndFindsTheNextStream()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
+        var context = await CreateContextAsync(databaseName,
+                                               configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
+        using var metrics = new AnchoringMetricsCollector();
+        var healthy = await context.AppendStreamAsync(1);
+        var malformed1 = await context.AppendStreamAsync(1);
+        var malformed2 = await context.AppendStreamAsync(1);
+        // A string sorts before binary data of any value in BSON order, so both malformed streams are found by the
+        // next-stream lookup before the healthy one, exercising the Skip(n) retry for two consecutive skips.
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed1),
+                                            Builders<BsonDocument>.Update.Set("AggregateId", "malformed-1"));
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed2),
+                                            Builders<BsonDocument>.Update.Set("AggregateId", "malformed-2"));
+
+        var candidates = await ConsumeRecoveryScanAsync(context, 10);
+
+        candidates.Should().ContainSingle(candidate => candidate.AggregateId == healthy);
+        logger.Entries.Count(entry => entry.Level == LogLevel.Warning &&
+                                      entry.Message.Contains(nameof(MalformedCandidateReason.AggregateId)))
+              .Should().Be(2);
+        metrics.Measurements.Count(measurement => measurement.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped &&
+                                                  measurement.Tags[IntegrityMetrics.Tags.MalformedReason] == nameof(MalformedCandidateReason.AggregateId))
+               .Should().Be(2);
+    }
+
+    [Test]
     public async Task ReadBatchAsync_ConsecutiveReadsDuringRecovery_ContinueScanAndHandOverToStream()
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
@@ -254,6 +283,155 @@ public class ChangeStreamAnchorCandidateSourceTests
         var again = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Any(c => c.AggregateId == aggregateId));
 
         again.Candidates.Should().ContainSingle(candidate => candidate.AggregateId == aggregateId);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ReadBatchAsync_MalformedDocumentChangesDuringRecovery_DoesNotSkipHealthyStreams(Boolean repair)
+    {
+        var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
+        var context = await CreateContextAsync(configureMongo: builder =>
+                                                   builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
+        var healthy = new[]
+        {
+            await context.AppendStreamAsync(1),
+            await context.AppendStreamAsync(1)
+        };
+        var malformed = await context.AppendStreamAsync(1);
+        var filter = EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed);
+        await context.Events.UpdateOneAsync(filter, Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+        var changed = false;
+        logger.OnLog = (level, message) =>
+        {
+            if (changed || level != LogLevel.Warning || !message.Contains("was skipped"))
+            {
+                return;
+            }
+
+            // Change the first result after it has been read, before traversal asks for the next result.
+            changed = true;
+            var malformedFilter = new BsonDocument("AggregateId", "malformed");
+            if (repair)
+            {
+                context.Events.UpdateOne(malformedFilter,
+                                         Builders<BsonDocument>.Update.Set(
+                                             "AggregateId", new BsonBinaryData(Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff"), GuidRepresentation.Standard)));
+            }
+            else
+            {
+                context.Events.DeleteOne(malformedFilter);
+            }
+        };
+
+        var candidates = await ConsumeRecoveryScanAsync(context, 10);
+
+        changed.Should().BeTrue();
+        candidates.Select(candidate => candidate.AggregateId).Should().Contain(healthy);
+    }
+
+    [Test]
+    [TestCase("AggregateId")]
+    [TestCase("Version")]
+    [TestCase("Hash")]
+    public async Task ReadBatchAsync_MalformedFieldInStreamUpdate_SkipsCandidateAndKeepsOthers(String field)
+    {
+        var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
+        var context = await CreateContextAsync(
+            configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
+        using var metrics = new AnchoringMetricsCollector();
+        var malformedId = await context.AppendStreamAsync(1);
+        await context.CreateConsumer().DrainAsync(10);
+
+        // A replacement stands in for a sealing update that the server reports as a replace event. It must change
+        // the document, because the server logs an identical replacement as a no-op.
+        var sealedEvent = await context.Events.Find(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformedId)).SingleAsync();
+        sealedEvent["Replaced"] = true;
+        switch (field)
+        {
+            case "AggregateId":
+                sealedEvent["AggregateId"] = "not-a-guid";
+                break;
+
+            case "Version":
+                sealedEvent["Version"] = "not-a-version";
+                break;
+
+            case "Hash":
+                sealedEvent[EventIntegrityChain.ElementName].AsBsonDocument["Hash"] = new BsonBinaryData(new Byte[16], BsonBinarySubType.Binary);
+                break;
+        }
+
+        await context.Events.ReplaceOneAsync(new BsonDocument("_id", sealedEvent["_id"]), sealedEvent);
+        var healthy = await context.AppendStreamAsync(1);
+
+        var batch = await ReadUntilAsync(context.CandidateSource, 10, read => read.Candidates.Any(candidate => candidate.AggregateId == healthy));
+
+        batch.Candidates.Should().NotContain(candidate => candidate.AggregateId == malformedId);
+        var reason = Enum.Parse<MalformedCandidateReason>(field);
+        var warning = logger.Entries.Should()
+                            .ContainSingle(entry => entry.Level == LogLevel.Warning && entry.Message.Contains(reason.ToString())).Which;
+        if (reason != MalformedCandidateReason.AggregateId)
+        {
+            // The aggregate identifier is only readable, and therefore reported, when it is not itself the malformed field.
+            warning.Message.Should().Contain(malformedId.ToString());
+        }
+
+        metrics.Measurements.Should()
+               .ContainSingle(measurement => measurement.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped &&
+                                             measurement.Tags[IntegrityMetrics.Tags.MalformedReason] == reason.ToString());
+    }
+
+    [Test]
+    public async Task ReadBatchAsync_MalformedHashAtStreamHeadDuringRecoveryScan_SkipsStreamAndContinues()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
+        var context = await CreateContextAsync(databaseName,
+                                               configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
+        using var metrics = new AnchoringMetricsCollector();
+        var malformed = await context.AppendStreamAsync(1);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(malformed, 1),
+                                            Builders<BsonDocument>.Update.Set($"{EventIntegrityChain.ElementName}.Hash",
+                                                                              new BsonBinaryData(new Byte[16], BsonBinarySubType.Binary)));
+        var healthy = await context.AppendStreamAsync(1);
+
+        var candidates = await ConsumeRecoveryScanAsync(context, 10);
+
+        candidates.Should().ContainSingle(candidate => candidate.AggregateId == healthy);
+        candidates.Should().NotContain(candidate => candidate.AggregateId == malformed);
+        var warning = logger.Entries.Should()
+                            .ContainSingle(entry => entry.Level == LogLevel.Warning &&
+                                                    entry.Message.Contains(nameof(MalformedCandidateReason.Hash))).Which;
+        warning.Message.Should().Contain(malformed.ToString());
+        metrics.Measurements.Should()
+               .ContainSingle(measurement => measurement.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped &&
+                                             measurement.Tags[IntegrityMetrics.Tags.MalformedReason] == nameof(MalformedCandidateReason.Hash));
+    }
+
+    [Test]
+    public async Task ReadBatchAsync_MalformedVersionAtStreamHeadDuringRecoveryScan_SkipsStreamAndContinues()
+    {
+        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
+        var context = await CreateContextAsync(databaseName,
+                                               configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
+        using var metrics = new AnchoringMetricsCollector();
+        var malformed = await context.AppendStreamAsync(1);
+        await context.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(malformed, 1),
+                                            Builders<BsonDocument>.Update.Set("Version", "not-a-version"));
+        var healthy = await context.AppendStreamAsync(1);
+
+        var candidates = await ConsumeRecoveryScanAsync(context, 10);
+
+        candidates.Should().ContainSingle(candidate => candidate.AggregateId == healthy);
+        candidates.Should().NotContain(candidate => candidate.AggregateId == malformed);
+        var warning = logger.Entries.Should()
+                            .ContainSingle(entry => entry.Level == LogLevel.Warning &&
+                                                    entry.Message.Contains(nameof(MalformedCandidateReason.Version))).Which;
+        warning.Message.Should().Contain(malformed.ToString());
+        metrics.Measurements.Should()
+               .ContainSingle(measurement => measurement.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped &&
+                                             measurement.Tags[IntegrityMetrics.Tags.MalformedReason] == nameof(MalformedCandidateReason.Version));
     }
 
     [Test]
