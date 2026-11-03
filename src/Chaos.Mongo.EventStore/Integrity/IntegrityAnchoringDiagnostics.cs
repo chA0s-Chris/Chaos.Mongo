@@ -22,6 +22,12 @@ internal static class IntegrityAnchoringDiagnostics
         "Age of the oldest unanchored candidate in seconds.");
 
 
+    private static readonly Counter<Int64> MalformedCandidatesSkippedCounter = Meter.CreateCounter<Int64>(
+        IntegrityMetrics.Instruments.MalformedCandidatesSkipped,
+        description: "Number of candidate documents skipped, during anchoring or sealing, because their aggregate " +
+                     "identifier, version or integrity hash could not be read.");
+
+
     private static readonly Counter<Int64> RevocationConfirmationDelayExceededCounter = Meter.CreateCounter<Int64>(
         IntegrityMetrics.Instruments.RevocationConfirmationDelayExceeded,
         description: "Number of anchoring runs after which the revocation confirmation delay exceeded its threshold.");
@@ -50,6 +56,17 @@ internal static class IntegrityAnchoringDiagnostics
         {
             AnchorDelayExceededCounter.Add(1);
         }
+    }
+
+    /// <summary>
+    /// Records a candidate document skipped during anchoring or sealing because it could not be read.
+    /// </summary>
+    /// <param name="reason">Why the document could not be read.</param>
+    internal static void RecordMalformedCandidateSkipped(MalformedCandidateReason reason)
+    {
+        TagList tags = [];
+        tags.Add(IntegrityMetrics.Tags.MalformedReason, reason.ToString());
+        MalformedCandidatesSkippedCounter.Add(1, tags);
     }
 
     /// <summary>

@@ -1000,9 +1000,14 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
   |---|---|---|
   | `chaos.mongo.eventstore.anchoring.delay` | Histogram (s) | Age of the oldest unanchored candidate after a run. |
   | `chaos.mongo.eventstore.anchoring.delay_exceeded` | Counter | Runs after which the anchor delay exceeded its threshold. |
+  | `chaos.mongo.eventstore.anchoring.malformed_candidates_skipped` | Counter | Candidate documents skipped, during anchoring or sealing, because their aggregate identifier, version or integrity hash could not be read, tagged `anchoring.malformed_reason` with `AggregateId`, `Version` or `Hash`. |
   | `chaos.mongo.eventstore.anchoring.revocation_confirmation_delay` | Histogram (s) | Age of the oldest token whose revocation status is unconfirmed. |
   | `chaos.mongo.eventstore.anchoring.revocation_confirmation_delay_exceeded` | Counter | Runs after which the revocation confirmation delay exceeded its threshold. |
   | `chaos.mongo.eventstore.anchoring.revoked_timestamps` | Counter | Tokens whose chain a confirming CRL lists as revoked at or before the token's time. |
+
+  A document whose aggregate identifier, version or integrity hash cannot be read, for example after someone with
+  database write access tampered with it, is logged and counted in `malformed_candidates_skipped` instead of
+  stopping anchoring or sealing; the anchor delay still reflects the oldest remaining readable candidate.
 - **Revocation confirmation.** The CRLs captured when a token is issued usually predate it. After a grace period (default 24 hours, `WithRevocationGracePeriod`), later anchoring runs fetch CRLs issued after the token's time and store them with the token, but only once the stored chain is first rebuilt to one of the authority's trusted roots configured with `WithIntegrityVerification`; an authority without configured trust, or a stored chain that no longer builds to it, is never asked for CRLs, and its entries stay unconfirmed and are retried like any other authority failure. Tokens still unconfirmed beyond a threshold (default 72 hours, `WithRevocationConfirmationDelayThreshold`) are reported like the anchor delay. A token whose chain turns out to be revoked at or before its time is no evidence; its anchor's events stay protected by the next anchor, from that anchor's time.
 - **Evidence collections.** Tokens, certificate chains and CRLs are stored once per distinct content in `{Prefix}AnchorEvidence` and `{Prefix}AnchorEvidenceChunks`, referenced by hash from the anchors in `{Prefix}Anchors`; leaves and their inclusion proofs are stored in `{Prefix}AnchorLeaves`. Evidence is only ever inserted, so the anchoring role needs no `update` or `remove` on it.
 
@@ -1184,7 +1189,7 @@ MongoDB roles cannot restrict `update` to documents without `_integrity`, so sea
 
 1. Enable protection.
 2. Let the sealing sweep seal all existing events.
-3. Wait until `GetSealingStatusAsync` reports a pass that completed without failures (`IsCompleteWithoutFailures`). A pass also completes when it skipped streams it could not seal; it logs them and counts them in `StreamsFailed`. Fix those streams, for example from the logged errors and `CheckCompletenessAsync`'s `Unsealed` findings, and wait for the next pass.
+3. Wait until `GetSealingStatusAsync` reports a pass that completed without failures (`IsCompleteWithoutFailures`). A pass also completes when it skipped streams it could not seal, and when it skipped a document whose aggregate identifier could not be read while finding the next stream; both are logged and counted in `StreamsFailed`, and the latter is also counted in the `malformed_candidates_skipped` meter instrument documented above. Fix those streams, for example from the logged errors and `CheckCompletenessAsync`'s `Unsealed` or `MalformedEvent` findings, and wait for the next pass.
 4. Revoke `update`, leaving the application with insert and find on the events collection.
 
 Erasure permanently needs `update` on the events collection and, with checkpoints, on the checkpoint collection. Run it in a separate process or tool, or a separate dependency-injection container with its own connection and credentials, so the application role keeps insert and find only. Register that container's event stores with `WithIntegrityProtection(protection => protection.WithoutSealingSweep())`; otherwise its sweep fails for lack of permissions and logs errors.

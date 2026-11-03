@@ -28,6 +28,23 @@ public class IntegrityAnchoringDiagnosticsTests
     }
 
     [Test]
+    public void RecordMalformedCandidateSkipped_WithReason_RecordsCounterTaggedWithTheReason()
+    {
+        // Arrange
+        using var metrics = new AnchoringMetricsCollector();
+
+        // Act
+        IntegrityAnchoringDiagnostics.RecordMalformedCandidateSkipped(MalformedCandidateReason.Version);
+
+        // Assert
+        var measurement = metrics.Measurements.Should()
+                                 .ContainSingle(x => x.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped)
+                                 .Subject;
+        measurement.Value.Should().Be(1);
+        measurement.Tags.Should().Contain(IntegrityMetrics.Tags.MalformedReason, nameof(MalformedCandidateReason.Version));
+    }
+
+    [Test]
     public void RecordRevocationConfirmationDelay_WithDelay_RecordsSecondsWithSecondsUnit()
     {
         // Arrange

@@ -347,6 +347,35 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task RunPassAsync_MalformedAggregateIdWhileFindingNextStream_SkipsDocumentAndSealsLaterStreams()
+    {
+        var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync(
+            configureProtectedMongo: builder => builder.Services.AddSingleton<ILogger<EventStreamSealingSweep<LedgerAggregate>>>(logger));
+        var malformed = await unprotected.AppendStreamAsync(1);
+        // A string sorts before any binary-typed AggregateId in BSON order, so the next-stream lookup finds it first.
+        await unprotected.Events.UpdateOneAsync(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed),
+                                                Builders<BsonDocument>.Update.Set("AggregateId", "malformed"));
+        var healthy = await unprotected.AppendStreamAsync(1);
+        using var metrics = new AnchoringMetricsCollector();
+
+        var outcome = await protectedContext.Sweep.RunPassAsync();
+
+        outcome.Should().Be(SealingPassOutcome.Completed);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(healthy)).IsIntact.Should().BeTrue();
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.StreamsFailed.Should().Be(1);
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning)
+              .Which.Message.Should().Contain("aggregate identifier could not be read");
+        metrics.Measurements.Should()
+               .ContainSingle(measurement => measurement.Instrument == IntegrityMetrics.Instruments.MalformedCandidatesSkipped &&
+                                             measurement.Tags[IntegrityMetrics.Tags.MalformedReason] == nameof(MalformedCandidateReason.AggregateId));
+        (await protectedContext.ServiceProvider.GetRequiredService<IEventStoreIntegrity<LedgerAggregate>>().GetSealingStatusAsync())
+            .Should().Match<IntegritySealingStatus?>(s => s != null && s.StreamsFailed == 1 && !s.IsCompleteWithoutFailures);
+    }
+
+    [Test]
     public async Task RunPassAsync_MalformedIntegrityOnSealedPrefix_SkipsStreamAndSealsLaterStreams()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -639,14 +668,16 @@ public class IntegritySealingIntegrationTests
     private async Task<LedgerStoreContext> CreateContextAsync(Boolean integrityProtection,
                                                               String? databaseName = null,
                                                               Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
-                                                              TimeProvider? timeProvider = null)
+                                                              TimeProvider? timeProvider = null,
+                                                              Action<MongoBuilder>? configureMongo = null)
     {
         var context = await LedgerStoreContext.CreateAsync(
             _container,
             integrityProtection,
             databaseName: databaseName,
             configureOptions: configureOptions,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider,
+            configureMongo: configureMongo);
         _contexts.Add(context);
         return context;
     }
@@ -656,11 +687,12 @@ public class IntegritySealingIntegrationTests
     /// can write events without integrity data for the protected one to seal.
     /// </summary>
     private async Task<(LedgerStoreContext Unprotected, LedgerStoreContext Protected)> CreateSharedContextsAsync(
-        Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null)
+        Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
+        Action<MongoBuilder>? configureProtectedMongo = null)
     {
         var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
         var unprotected = await CreateContextAsync(false, databaseName);
-        var protectedContext = await CreateContextAsync(true, databaseName, configureOptions);
+        var protectedContext = await CreateContextAsync(true, databaseName, configureOptions, configureMongo: configureProtectedMongo);
         return (unprotected, protectedContext);
     }
 

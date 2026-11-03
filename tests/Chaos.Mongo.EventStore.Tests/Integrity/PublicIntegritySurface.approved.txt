@@ -209,11 +209,13 @@ static class IntegrityMetrics
 static class IntegrityMetrics.Instruments
   const String AnchorDelay = "chaos.mongo.eventstore.anchoring.delay"
   const String AnchorDelayExceeded = "chaos.mongo.eventstore.anchoring.delay_exceeded"
+  const String MalformedCandidatesSkipped = "chaos.mongo.eventstore.anchoring.malformed_candidates_skipped"
   const String RevocationConfirmationDelay = "chaos.mongo.eventstore.anchoring.revocation_confirmation_delay"
   const String RevocationConfirmationDelayExceeded = "chaos.mongo.eventstore.anchoring.revocation_confirmation_delay_exceeded"
   const String RevokedTimestamps = "chaos.mongo.eventstore.anchoring.revoked_timestamps"
 static class IntegrityMetrics.Tags
   const String Authority = "anchoring.authority"
+  const String MalformedReason = "anchoring.malformed_reason"
 sealed class IntegrityProtectionBuilder<TAggregate>
   IntegrityProtectionBuilder<TAggregate> WithSealingChunkSize(Int32 chunkSize)
   IntegrityProtectionBuilder<TAggregate> WithSealingSweepInterval(TimeSpan interval)

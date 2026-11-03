@@ -22,36 +22,36 @@ documents instead of throwing, and keep the anchor delay metric accurate while a
 
 ## Acceptance Criteria
 
-- [ ] A change-stream batch containing one malformed insert/update/replace (wrong-typed `AggregateId`, wrong-typed
+- [x] A change-stream batch containing one malformed insert/update/replace (wrong-typed `AggregateId`, wrong-typed
       `Version`, or a short `_integrity.Hash`) is skipped; other candidates in the same batch, and later batches,
       are still returned and the batch is still acknowledged.
-- [ ] The recovery scan's next-stream lookup skips a stream whose `AggregateId` field has an unexpected type and
+- [x] The recovery scan's next-stream lookup skips a stream whose `AggregateId` field has an unexpected type and
       continues scanning the remaining streams of that aggregate type and the other registered types; a stream
       head whose `Version` field has an unexpected type is skipped the same way without stopping the scan.
-- [ ] `EventStreamSealingSweep<TAggregate>.RunPassAsync` skips a stream whose `AggregateId` field has an
+- [x] `EventStreamSealingSweep<TAggregate>.RunPassAsync` skips a stream whose `AggregateId` field has an
       unexpected type and continues the pass over the remaining streams of that collection, instead of the whole
       pass failing and retrying from the same point indefinitely.
-- [ ] A candidate whose `_integrity.Hash` is not exactly 32 bytes is treated as malformed and skipped at the same
+- [x] A candidate whose `_integrity.Hash` is not exactly 32 bytes is treated as malformed and skipped at the same
       point as a wrong-typed `AggregateId`/`Version`, instead of reaching `AnchorEncoding.EncodeLeaf`.
-- [ ] Each skipped document produces one log entry identifying the collection and, when readable, the aggregate
+- [x] Each skipped document produces one log entry identifying the collection and, when readable, the aggregate
       identifier, and is counted in a `Counter<Int64>` metric on the `Chaos.Mongo.EventStore.Integrity` meter, for
       both the anchoring candidate source and the sealing sweep. The anchoring metric is documented in
       `docs/event-store.md` alongside the existing anchor delay metrics; the sealing sweep's skip metric is
       documented next to `StreamsFailed` in the same file.
-- [ ] `AnchoringRun`'s anchor delay (`chaos.mongo.eventstore.anchoring.delay` / `..delay_exceeded`) still reflects
+- [x] `AnchoringRun`'s anchor delay (`chaos.mongo.eventstore.anchoring.delay` / `..delay_exceeded`) still reflects
       the oldest unread/unanchored candidate while a malformed document exists among newer candidates, instead of
       stopping once that document is reached, verified through `IntegrityAnchoringService.RunOnceAsync`/the
       `chaos.mongo.eventstore.anchoring.delay` histogram, not only through candidate delivery.
-- [ ] A document skipped during anchoring/sealing because its `AggregateId` or `Version` could not be read still
+- [x] A document skipped during anchoring/sealing because its `AggregateId` or `Version` could not be read still
       surfaces as a `MalformedEvent` finding from `CheckCompletenessAsync` after the skip. A document skipped
       because its `_integrity.Hash` is not exactly 32 bytes (its identity is otherwise readable) still fails
       `VerifyStreamAsync`/`VerifyEvent`'s hash check after the skip — it is not expected to become a
       `CheckCompletenessAsync`/`MalformedEvent` finding, since `CheckCompletenessAsync` classifies by readability
       of the identity, not by hash content. Neither skip hides the tampering from verification.
-- [ ] Integration tests insert a raw document with a wrong-typed `AggregateId`, a wrong-typed `Version`, and a
+- [x] Integration tests insert a raw document with a wrong-typed `AggregateId`, a wrong-typed `Version`, and a
       short `_integrity.Hash` (as applicable per scenario) alongside well-formed events of other streams, and
       assert that anchoring and sealing still make progress on the well-formed streams.
-- [ ] The Release build (`dotnet build -c Release`) has no warnings, and the full test suite passes.
+- [x] The Release build (`dotnet build -c Release`) has no warnings, and the full test suite passes.
 
 ## Technical Details
 
