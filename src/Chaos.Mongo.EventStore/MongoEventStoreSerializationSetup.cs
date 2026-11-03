@@ -95,6 +95,9 @@ internal static class MongoEventStoreSerializationSetup
                         cm.AutoMap();
                         cm.SetIgnoreExtraElements(true);
                         cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
+                        cm.GetMemberMap(a => a.CreatedUtc).SetElementName(nameof(Aggregate.CreatedUtc));
+                        cm.GetMemberMap(a => a.Revision).SetElementName(nameof(Aggregate.Revision));
+                        cm.GetMemberMap(a => a.Version).SetElementName(nameof(Aggregate.Version));
                     });
                 }
 
@@ -128,7 +131,11 @@ internal static class MongoEventStoreSerializationSetup
                 cm.AutoMap();
                 cm.SetIgnoreExtraElements(true);
                 cm.MapIdMember(e => e.Id).SetSerializer(GuidStandardSerializer);
-                cm.MapMember(e => e.AggregateId).SetSerializer(GuidStandardSerializer);
+                cm.MapMember(e => e.AggregateId).SetSerializer(GuidStandardSerializer).SetElementName(nameof(Event<TAggregate>.AggregateId));
+                cm.GetMemberMap(e => e.AggregateType).SetElementName(nameof(Event<TAggregate>.AggregateType));
+                cm.GetMemberMap(e => e.CreatedUtc).SetElementName(nameof(Event<TAggregate>.CreatedUtc));
+                cm.GetMemberMap(e => e.Revision).SetElementName(nameof(Event<TAggregate>.Revision));
+                cm.GetMemberMap(e => e.Version).SetElementName(nameof(Event<TAggregate>.Version));
                 cm.MapMember(e => e.Integrity)
                   .SetElementName(EventIntegrityChain.ElementName)
                   .SetIgnoreIfNull(true);
@@ -199,7 +206,8 @@ internal static class MongoEventStoreSerializationSetup
             {
                 cm.AutoMap();
                 cm.SetIgnoreExtraElements(true);
-                cm.MapMember(c => c.AggregateId).SetSerializer(GuidStandardSerializer);
+                cm.MapMember(c => c.AggregateId).SetSerializer(GuidStandardSerializer).SetElementName(nameof(CheckpointId.AggregateId));
+                cm.MapMember(c => c.Version).SetElementName(nameof(CheckpointId.Version));
             });
         }
 
@@ -215,6 +223,8 @@ internal static class MongoEventStoreSerializationSetup
                     cm.AutoMap();
                     cm.SetIgnoreExtraElements(true);
                     cm.MapIdMember(c => c.Id);
+                    cm.GetMemberMap(c => c.Revision).SetElementName(nameof(CheckpointDocument<TAggregate>.Revision));
+                    cm.GetMemberMap(c => c.State).SetElementName(nameof(CheckpointDocument<TAggregate>.State));
                     cm.MapMember(c => c.ChainHash)
                       .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
                       .SetIgnoreIfNull(true);

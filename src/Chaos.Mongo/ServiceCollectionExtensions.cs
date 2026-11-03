@@ -186,6 +186,8 @@ public static class ServiceCollectionExtensions
 
     private static MongoBuilder AddMongoInternal(this IServiceCollection services, OptionsBuilder<MongoOptions> builder)
     {
+        MongoSerializationSetup.RegisterClassMaps();
+
         services.AddSingleton<IValidateOptions<MongoOptions>, MongoOptionsValidation>();
         builder.ValidateOnStart();
 

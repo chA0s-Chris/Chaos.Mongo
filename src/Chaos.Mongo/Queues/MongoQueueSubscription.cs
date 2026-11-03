@@ -5,8 +5,26 @@ namespace Chaos.Mongo.Queues;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using System.Diagnostics;
+
+/// <summary>
+/// Index option names that the legacy, unnamed four-key queue processing index never requested. Their presence
+/// on an index that otherwise matches the legacy key specification means it is a different, custom-configured
+/// index a consumer created independently (for example a partial, unique, or sparse index sharing the same
+/// keys), not the one the library created, so it must survive. Kept outside
+/// <see cref="MongoQueueSubscription{TPayload}"/>, which is generic, so this does not become a separate static
+/// field per closed payload type.
+/// </summary>
+file static class LegacyProcessingIndexOptions
+{
+    public static readonly String[] UnexpectedNames =
+    [
+        "unique", "prepareUnique", "sparse", "partialFilterExpression", "hidden",
+        "expireAfterSeconds", "textIndexVersion", "weights", "2dsphereIndexVersion", "bits", "min", "max"
+    ];
+}
 
 /// <summary>
 /// Manages a MongoDB-based queue subscription that monitors and processes queue items.
@@ -24,6 +42,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     where TPayload : class, new()
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
+    private const String ProcessingIndexName = "IX_Queue_Processing";
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
@@ -75,6 +94,41 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     /// <inheritdoc/>
     public Boolean IsActive => _isActive && !_isDisposed;
 
+    /// <summary>
+    /// Builds the closed-item TTL index's partial filter from the element names the registered class map of the
+    /// non-generic <see cref="MongoQueueItem"/> base type actually uses, instead of raw <c>nameof(...)</c> string
+    /// literals, so the filter keeps matching even if a member is ever pinned to a different element name.
+    /// <see cref="MongoQueueItem.IsClosed"/>, <see cref="MongoQueueItem.IsTerminal"/> and
+    /// <see cref="MongoQueueItem.ClosedUtc"/> are declared on <see cref="MongoQueueItem"/>, not on
+    /// <see cref="MongoQueueItem{TPayload}"/>, and <see cref="BsonClassMap.GetMemberMap"/> only searches members
+    /// declared on the class whose map it is called on, so the lookup is resolved through the base class's own
+    /// registered map.
+    /// </summary>
+    private static BsonDocumentFilterDefinition<MongoQueueItem<TPayload>> CreateClosedItemTtlPartialFilter()
+    {
+        var baseClassMap = BsonClassMap.LookupClassMap(typeof(MongoQueueItem));
+        var isClosedElementName = baseClassMap.GetMemberMap(nameof(MongoQueueItem.IsClosed)).ElementName;
+        var isTerminalElementName = baseClassMap.GetMemberMap(nameof(MongoQueueItem.IsTerminal)).ElementName;
+        var closedUtcElementName = baseClassMap.GetMemberMap(nameof(MongoQueueItem.ClosedUtc)).ElementName;
+
+        // IsTerminal keeps the $in: [false, null] shape: it is a supported partialFilterExpression operator, and
+        // MongoDB's equality-to-null semantics already make it match false, an explicit BSON null, and a
+        // genuinely missing field (documents written before IsTerminal existed) in one expression. An $or of
+        // $eq/$not($exists) would need $not/$exists:false, which is not a supported partial-filter operator.
+        return new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(new BsonDocument
+        {
+            { isClosedElementName, true },
+            { isTerminalElementName, new BsonDocument("$in", new BsonArray([false, BsonNull.Value])) },
+            {
+                closedUtcElementName, new BsonDocument
+                {
+                    { "$exists", true },
+                    { "$type", (Int32)BsonType.DateTime }
+                }
+            }
+        });
+    }
+
     private static FilterDefinition<MongoQueueItem<TPayload>> CreateLockOwnershipFilter(ObjectId queueItemId, DateTime acquiredLockUtc)
     {
         var filterBuilder = Builders<MongoQueueItem<TPayload>>.Filter;
@@ -82,6 +136,57 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                filterBuilder.Eq(x => x.IsClosed, false) &
                filterBuilder.Eq(x => x.IsLocked, true) &
                filterBuilder.Eq(x => x.LockedUtc, acquiredLockUtc);
+    }
+
+    /// <summary>
+    /// Drops the processing index this library created before it had an explicit name and included the trailing
+    /// <see cref="MongoQueueItem.Id"/> sort key: the exact four-key IsClosed/IsLocked/LockedUtc/IsTerminal index,
+    /// under the exact name MongoDB generates for that key specification, with none of the extra options
+    /// (partial filter, uniqueness, sparsity, collation, ...) that definition never requested. Its key
+    /// specification differs from the current, five-key <see cref="ProcessingIndexName"/> definition, so
+    /// <see cref="MongoIndexManagerExtensions"/>'s key-specification-based conflict resolution never sees it as
+    /// conflicting and leaves it in place untouched. A consumer-created index that happens to share the same four
+    /// keys under a custom name, or with extra options this library's definition never had, is left alone.
+    /// Tolerates the index already being absent, whether because an earlier run already dropped it or because the
+    /// collection never had the four-key shape to begin with.
+    /// </summary>
+    /// <remarks>
+    /// Neither the legacy four-key definition nor the current <see cref="ProcessingIndexName"/> definition ever
+    /// specifies an explicit <c>collation</c>, so both inherit whatever default collation the collection itself
+    /// has. MongoDB's <c>listIndexes</c> reports that inherited collation on every index regardless, so requiring
+    /// the legacy index to have none at all would wrongly leave it behind on any collection with a non-simple
+    /// default collation. Comparing against the collation the just-created <see cref="ProcessingIndexName"/> index
+    /// itself inherited (rather than requiring either index to have none) still rejects a consumer-created index
+    /// that explicitly requested a genuinely different collation.
+    /// </remarks>
+    private static async Task DropLegacyProcessingIndexAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, CancellationToken cancellationToken)
+    {
+        var legacyKeys = Builders<MongoQueueItem<TPayload>>.IndexKeys
+                                                           .Ascending(x => x.IsClosed)
+                                                           .Ascending(x => x.IsLocked)
+                                                           .Ascending(x => x.LockedUtc)
+                                                           .Ascending(x => x.IsTerminal)
+                                                           .Render(new RenderArgs<MongoQueueItem<TPayload>>(
+                                                                       collection.DocumentSerializer,
+                                                                       collection.Settings.SerializerRegistry));
+        var legacyGeneratedName = String.Join("_", legacyKeys.Select(element => $"{element.Name}_{element.Value}"));
+
+        using var cursor = await collection.Indexes.ListAsync(cancellationToken);
+        var existingIndexes = await cursor.ToListAsync(cancellationToken);
+        var expectedCollation = existingIndexes.FirstOrDefault(index => index["name"].AsString == ProcessingIndexName)
+                                               ?.GetValue("collation", null)
+                                               ?.AsBsonDocument;
+
+        foreach (var index in existingIndexes)
+        {
+            if (index["name"].AsString == legacyGeneratedName &&
+                index["key"].AsBsonDocument.Equals(legacyKeys) &&
+                Equals(index.GetValue("collation", null)?.AsBsonDocument, expectedCollation) &&
+                !LegacyProcessingIndexOptions.UnexpectedNames.Any(index.Contains))
+            {
+                await collection.Indexes.DropOneIfExistsAsync(index["name"].AsString, cancellationToken);
+            }
+        }
     }
 
     private FilterDefinition<MongoQueueItem<TPayload>> CreateAvailableQueueItemFilter()
@@ -116,8 +221,19 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                                                                   .Ascending(x => x.IsClosed)
                                                                   .Ascending(x => x.IsLocked)
                                                                   .Ascending(x => x.LockedUtc)
-                                                                  .Ascending(x => x.IsTerminal)),
+                                                                  .Ascending(x => x.IsTerminal)
+                                                                  .Ascending(x => x.Id),
+                                new CreateIndexOptions<MongoQueueItem<TPayload>>
+                                {
+                                    Name = ProcessingIndexName
+                                }),
                             cancellationToken: cancellationToken);
+
+        // The index above gained the trailing Id key (and its explicit name) after this library had already
+        // created it, unnamed, with only the first four keys. CreateOneOrUpdateAsync resolves a conflicting
+        // index by key specification, so a key specification it has never seen before raises no conflict and
+        // would otherwise leave the old generated-name index behind forever. Find and drop it explicitly.
+        await DropLegacyProcessingIndexAsync(collection, cancellationToken);
 
         _logger.LogDebug("Ensured queue processing index for collection {CollectionName}", _queueDefinition.CollectionName);
 
@@ -129,19 +245,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                 {
                     Name = ClosedItemTtlIndexName,
                     ExpireAfter = _queueDefinition.RetentionPeriod.Value,
-                    PartialFilterExpression = new BsonDocumentFilterDefinition<MongoQueueItem<TPayload>>(
-                        new BsonDocument
-                        {
-                            { nameof(MongoQueueItem.IsClosed), true },
-                            { nameof(MongoQueueItem.IsTerminal), new BsonDocument("$in", new BsonArray([false, BsonNull.Value])) },
-                            {
-                                nameof(MongoQueueItem.ClosedUtc), new BsonDocument
-                                {
-                                    { "$exists", true },
-                                    { "$type", (Int32)BsonType.DateTime }
-                                }
-                            }
-                        })
+                    PartialFilterExpression = CreateClosedItemTtlPartialFilter()
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(ttlIndex, cancellationToken: cancellationToken);

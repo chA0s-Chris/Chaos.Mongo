@@ -3,9 +3,12 @@
 namespace Chaos.Mongo.Tests.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Conventions;
 using NUnit.Framework;
 
 public class MongoQueueItemTests
@@ -80,6 +83,125 @@ public class MongoQueueItemTests
         result.PayloadType.Should().Be(typeof(TestPayload).FullName);
     }
 
+    [Test]
+    [Explicit("Runs only via process isolation from " + nameof(ToBsonDocument_CamelCaseConventionRegisteredFirst_StillPinsElementNamesToMemberNames) +
+              "; registers process-global convention and class-map state.")]
+    public void ToBsonDocument_CamelCaseConventionRegisteredFirst_IsolatedCase()
+    {
+        // Arrange: register a global camelCase convention for both MongoQueueItem and MongoQueueItem<TestPayload>
+        // before anything in this fresh process has used either type, then exercise the library's normal
+        // WithQueue registration path.
+        ConventionRegistry.Register(
+            nameof(ToBsonDocument_CamelCaseConventionRegisteredFirst_IsolatedCase),
+            new ConventionPack
+            {
+                new CamelCaseElementNameConvention()
+            },
+            type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<TestPayload>));
+
+        var builder = new MongoQueueBuilder<TestPayload>(new ServiceCollection());
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.RegisterQueue();
+
+        var item = new MongoQueueItem<TestPayload>
+        {
+            Id = ObjectId.GenerateNewId(),
+            CreatedUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc),
+            ClosedUtc = new DateTime(2025, 6, 1, 12, 5, 0, DateTimeKind.Utc),
+            LockedUtc = new DateTime(2025, 6, 1, 12, 1, 0, DateTimeKind.Utc),
+            Payload = new TestPayload
+            {
+                Name = "payload-value"
+            }
+        };
+
+        // Act
+        var bsonDocument = item.ToBsonDocument();
+
+        // Assert
+        bsonDocument.Names.Should().Contain([
+            nameof(MongoQueueItem.ClosedUtc),
+            nameof(MongoQueueItem.CreatedUtc),
+            nameof(MongoQueueItem.IsClosed),
+            nameof(MongoQueueItem.IsLocked),
+            nameof(MongoQueueItem.IsTerminal),
+            nameof(MongoQueueItem.LockedUtc),
+            nameof(MongoQueueItem.RetryCount),
+            nameof(MongoQueueItem<TestPayload>.Payload),
+            nameof(MongoQueueItem<TestPayload>.PayloadType)
+        ]);
+    }
+
+    [Test]
+    public void ToBsonDocument_CamelCaseConventionRegisteredFirst_StillPinsElementNamesToMemberNames()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because BsonClassMap/ConventionRegistry registration is process-global
+        // and irreversible, and every other test in this shared process may already have registered
+        // MongoQueueItem's and MongoQueueItem<TestPayload>'s class maps under the default convention.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(MongoQueueItemTests).FullName}.{nameof(ToBsonDocument_CamelCaseConventionRegisteredFirst_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
+
+    [Test]
+    [Explicit("Runs only via process isolation from " + nameof(ToBsonDocument_DefaultConvention_PinsElementNamesToMemberNames) +
+              "; registers process-global class-map state.")]
+    public void ToBsonDocument_DefaultConvention_IsolatedCase()
+    {
+        // Arrange: explicitly exercise the library's normal registration path, the same way the camelCase
+        // isolated case does, before anything in this fresh process has used MongoQueueItem or
+        // MongoQueueItem<TestPayload>, so this proves the pinned names independently of whichever class map an
+        // earlier test in a shared process may have already registered.
+        var builder = new MongoQueueBuilder<TestPayload>(new ServiceCollection());
+        builder.WithPayloadHandler<TestPayloadHandler>();
+        builder.RegisterQueue();
+
+        var item = new MongoQueueItem<TestPayload>
+        {
+            Id = ObjectId.GenerateNewId(),
+            CreatedUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc),
+            ClosedUtc = new DateTime(2025, 6, 1, 12, 5, 0, DateTimeKind.Utc),
+            LockedUtc = new DateTime(2025, 6, 1, 12, 1, 0, DateTimeKind.Utc),
+            Payload = new TestPayload
+            {
+                Name = "payload-value"
+            }
+        };
+
+        // Act
+        var bsonDocument = item.ToBsonDocument();
+
+        // Assert
+        bsonDocument.Names.Should().Contain([
+            nameof(MongoQueueItem.ClosedUtc),
+            nameof(MongoQueueItem.CreatedUtc),
+            nameof(MongoQueueItem.IsClosed),
+            nameof(MongoQueueItem.IsLocked),
+            nameof(MongoQueueItem.IsTerminal),
+            nameof(MongoQueueItem.LockedUtc),
+            nameof(MongoQueueItem.RetryCount),
+            nameof(MongoQueueItem<TestPayload>.Payload),
+            nameof(MongoQueueItem<TestPayload>.PayloadType)
+        ]);
+    }
+
+    [Test]
+    public void ToBsonDocument_DefaultConvention_PinsElementNamesToMemberNames()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because BsonClassMap/ConventionRegistry registration is process-global
+        // and irreversible, and every other test in this shared process may already have registered
+        // MongoQueueItem's and MongoQueueItem<TestPayload>'s class maps under the default convention.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(MongoQueueItemTests).FullName}.{nameof(ToBsonDocument_DefaultConvention_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated default-convention case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
+
     private static BsonDocument CreateReleasedShapeDocument()
         => new()
         {
@@ -98,5 +220,10 @@ public class MongoQueueItemTests
     public class TestPayload
     {
         public String? Name { get; set; }
+    }
+
+    public class TestPayloadHandler : IMongoQueuePayloadHandler<TestPayload>
+    {
+        public Task HandlePayloadAsync(TestPayload payload, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

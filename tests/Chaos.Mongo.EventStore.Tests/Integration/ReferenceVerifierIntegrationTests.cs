@@ -473,9 +473,14 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
-    public async Task Check_EventElementsRenamedByConvention_AreFoundWithElementNames()
+    public async Task Check_EventElementsPinnedAgainstConvention_AreFoundWithDefaultElementNames()
     {
-        ConventionRegistry.Register(nameof(Check_EventElementsRenamedByConvention_AreFoundWithElementNames),
+        // Event<TAggregate>'s own members (AggregateId, AggregateType, CreatedUtc, Revision, Version) are pinned
+        // to their member names by the event store's own class map (issue #243), so a convention registered for
+        // this event type, exactly as a host application might configure one globally, has no effect on them:
+        // the verifier must still find every event using the library's default element names, without the
+        // --element-name override an earlier, unpinned version of this type would have needed.
+        ConventionRegistry.Register(nameof(Check_EventElementsPinnedAgainstConvention_AreFoundWithDefaultElementNames),
                                     new ConventionPack
                                     {
                                         new CamelCaseElementNameConvention()
@@ -522,10 +527,89 @@ public class ReferenceVerifierIntegrationTests
 
         String[] arguments = ["check", "--events", file, "--aggregate-type", nameof(RenamedElementsAggregate), "--aggregate-id", aggregateId.ToString()];
         var (defaultCode, defaultReport) = await RunVerifierAsync(arguments);
+
+        library.IsIntact.Should().BeTrue();
+        (defaultCode, defaultReport["eventCount"]?.GetValue<Int32>(), defaultReport["stream"]?["intact"]?.GetValue<Boolean>())
+            .Should().Be((0, 2, true), defaultReport.ToJsonString());
+    }
+
+    [Test]
+    public async Task Check_EventElementsRenamedByConsumerClassMap_AreFoundWithElementNameOverride()
+    {
+        // Arrange: a convention registered for Event<TAggregate> can no longer rename AggregateId/AggregateType/
+        // Version (issue #243 pins them), but a consumer (or an older, pre-#243 release) can still register its
+        // own class map for Event<TAggregate> before the event store does: MongoEventStoreSerializationSetup only
+        // registers its own pinned base class map when none exists yet, and its later checks only require the
+        // Revision/Integrity members to be mapped by member name, not under any particular element name. Register
+        // such a class map here, renaming AggregateId/AggregateType/Version exactly as the deleted
+        // --element-name=... override of this test still needs to resolve, so that override itself (documented in
+        // tools/tamper-evidence-verifier/README.md and docs/tamper-evidence-specification.md, still relevant for
+        // streams written before this pin existed) keeps a real, renamed-element BSON file to run against.
+        var guidSerializer = new GuidSerializer(GuidRepresentation.Standard);
+        BsonClassMap.RegisterClassMap<Event<ElementNameOverrideAggregate>>(cm =>
+        {
+            cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(e => e.Id).SetSerializer(guidSerializer);
+            cm.MapMember(e => e.AggregateId).SetSerializer(guidSerializer).SetElementName("aggregateId");
+            cm.GetMemberMap(e => e.AggregateType).SetElementName("aggregateType");
+            cm.GetMemberMap(e => e.CreatedUtc).SetElementName(nameof(Event<ElementNameOverrideAggregate>.CreatedUtc));
+            cm.GetMemberMap(e => e.Revision).SetElementName(nameof(Event<ElementNameOverrideAggregate>.Revision));
+            cm.GetMemberMap(e => e.Version).SetElementName("version");
+            cm.MapMember(e => e.Integrity)
+              .SetElementName(EventIntegrityChain.ElementName)
+              .SetIgnoreIfNull(true);
+            cm.SetIsRootClass(true);
+        });
+
+        var services = new ServiceCollection();
+        services.AddMongo(new MongoUrl(_container.GetConnectionString()),
+                          configure: options =>
+                          {
+                              options.DefaultDatabase = $"ElementNameOverrideDb_{Guid.NewGuid():N}";
+                              options.RunConfiguratorsOnStartup = false;
+                          })
+                .WithEventStore<ElementNameOverrideAggregate>(es => es.WithEvent<ElementNameOverrideEvent>("ElementNameOverrideEvent").WithIntegrityProtection());
+        await using var provider = services.BuildServiceProvider();
+        var aggregateId = Guid.NewGuid();
+        await provider.GetRequiredService<IEventStore<ElementNameOverrideAggregate>>().AppendEventsAsync([
+            new ElementNameOverrideEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 1
+            },
+            new ElementNameOverrideEvent
+            {
+                Id = Guid.NewGuid(),
+                AggregateId = aggregateId,
+                Version = 2
+            }
+        ]);
+        var options = provider.GetRequiredService<MongoEventStoreOptions<ElementNameOverrideAggregate>>();
+        var library = await new EventStreamVerifier<ElementNameOverrideAggregate>(provider.GetRequiredService<IMongoHelper>(), options).VerifyStreamAsync(aggregateId);
+        var file = Path.Combine(_directory, "renamed-element-name-events.bson");
+        await using (var output = File.Create(file))
+        {
+            foreach (var document in await provider.GetRequiredService<IMongoHelper>().Database.GetCollection<RawBsonDocument>(options.EventsCollectionName)
+                                                   .Find(FilterDefinition<RawBsonDocument>.Empty).ToListAsync())
+            {
+                using (document)
+                {
+                    await output.WriteAsync(document.ToBson());
+                }
+            }
+        }
+
+        // Act: run the verifier without the override (the stored element names do not match its defaults, so it
+        // must find nothing and warn), then with the exact --element-name option this scenario exists for.
+        String[] arguments = ["check", "--events", file, "--aggregate-type", nameof(ElementNameOverrideAggregate), "--aggregate-id", aggregateId.ToString()];
+        var (defaultCode, defaultReport) = await RunVerifierAsync(arguments);
         var (namedCode, namedReport) = await RunVerifierAsync([
             .. arguments, "--element-name", "AggregateId=aggregateId", "--element-name", "AggregateType=aggregateType", "--element-name", "Version=version"
         ]);
 
+        // Assert
         library.IsIntact.Should().BeTrue();
         (defaultCode, defaultReport["eventCount"]?.GetValue<Int32>()).Should().Be((1, 0), defaultReport.ToJsonString());
         defaultReport["warnings"].Should().NotBeNull();
@@ -1438,4 +1522,11 @@ public sealed class RenamedElementsAggregate : Aggregate;
 public sealed class RenamedElementsEvent : Event<RenamedElementsAggregate>
 {
     public override void Execute(RenamedElementsAggregate aggregate) { }
+}
+
+public sealed class ElementNameOverrideAggregate : Aggregate;
+
+public sealed class ElementNameOverrideEvent : Event<ElementNameOverrideAggregate>
+{
+    public override void Execute(ElementNameOverrideAggregate aggregate) { }
 }

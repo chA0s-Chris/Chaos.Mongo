@@ -2,9 +2,11 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Conventions;
 using NUnit.Framework;
 
 public class OutboxSerializationSetupTests
@@ -87,4 +89,118 @@ public class OutboxSerializationSetupTests
         BsonClassMap.IsClassMapRegistered(typeof(TestPayload)).Should().BeTrue();
         BsonClassMap.IsClassMapRegistered(typeof(AnotherTestPayload)).Should().BeTrue();
     }
+
+    [Test]
+    [Explicit("Runs only via process isolation from " + nameof(ToBsonDocument_CamelCaseConventionRegisteredFirst_StillPinsElementNamesToMemberNames) +
+              "; registers process-global convention and class-map state.")]
+    public void ToBsonDocument_CamelCaseConventionRegisteredFirst_IsolatedCase()
+    {
+        // Arrange: register a global camelCase convention for OutboxMessage before anything in this fresh
+        // process has used the type, then exercise the library's normal registration path.
+        ConventionRegistry.Register(
+            nameof(ToBsonDocument_CamelCaseConventionRegisteredFirst_IsolatedCase),
+            new ConventionPack
+            {
+                new CamelCaseElementNameConvention()
+            },
+            type => type == typeof(OutboxMessage));
+        OutboxSerializationSetup.RegisterClassMaps(new Dictionary<Type, String>
+        {
+            [typeof(TestPayload)] = "TestPayload"
+        });
+
+        var message = CreateFullyPopulatedMessage();
+
+        // Act
+        var bsonDocument = message.ToBsonDocument();
+
+        // Assert
+        AssertPinnedElementNames(bsonDocument);
+    }
+
+    [Test]
+    public void ToBsonDocument_CamelCaseConventionRegisteredFirst_StillPinsElementNamesToMemberNames()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because BsonClassMap/ConventionRegistry registration is process-global
+        // and irreversible, and every other test in this shared process may already have registered
+        // OutboxMessage's class map under the default convention.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(OutboxSerializationSetupTests).FullName}.{nameof(ToBsonDocument_CamelCaseConventionRegisteredFirst_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
+
+    [Test]
+    [Explicit("Runs only via process isolation from " + nameof(ToBsonDocument_DefaultConvention_PinsElementNamesToMemberNames) +
+              "; registers process-global class-map state.")]
+    public void ToBsonDocument_DefaultConvention_IsolatedCase()
+    {
+        // Arrange: exercise the library's normal registration path before anything in this fresh process has
+        // used OutboxMessage, the same as the camelCase isolated case, but without registering any convention,
+        // so this proves the pinned names independently of whichever class map an earlier test in a shared
+        // process may have already registered.
+        OutboxSerializationSetup.RegisterClassMaps(new Dictionary<Type, String>
+        {
+            [typeof(TestPayload)] = "TestPayload"
+        });
+        var message = CreateFullyPopulatedMessage();
+
+        // Act
+        var bsonDocument = message.ToBsonDocument();
+
+        // Assert
+        AssertPinnedElementNames(bsonDocument);
+    }
+
+    [Test]
+    public void ToBsonDocument_DefaultConvention_PinsElementNamesToMemberNames()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because BsonClassMap/ConventionRegistry registration is process-global
+        // and irreversible, and every other test in this shared process may already have registered
+        // OutboxMessage's class map under the default convention.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(OutboxSerializationSetupTests).FullName}.{nameof(ToBsonDocument_DefaultConvention_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated default-convention case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
+
+    private static void AssertPinnedElementNames(BsonDocument bsonDocument)
+        => bsonDocument.Names.Should().Contain([
+            nameof(OutboxMessage.CorrelationId),
+            nameof(OutboxMessage.CreatedUtc),
+            nameof(OutboxMessage.Error),
+            nameof(OutboxMessage.FailedUtc),
+            nameof(OutboxMessage.IsLocked),
+            nameof(OutboxMessage.LockedUtc),
+            nameof(OutboxMessage.LockId),
+            nameof(OutboxMessage.NextAttemptUtc),
+            nameof(OutboxMessage.Payload),
+            nameof(OutboxMessage.ProcessedUtc),
+            nameof(OutboxMessage.RetryCount),
+            nameof(OutboxMessage.State),
+            nameof(OutboxMessage.Type)
+        ]);
+
+    private static OutboxMessage CreateFullyPopulatedMessage()
+        => new()
+        {
+            Id = ObjectId.GenerateNewId(),
+            Type = "TestPayload",
+            Payload = new BsonDocument("Name", "payload-value"),
+            State = OutboxMessageState.Failed,
+            CorrelationId = "correlation-id",
+            CreatedUtc = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Error = "boom",
+            FailedUtc = new DateTime(2025, 1, 1, 1, 0, 0, DateTimeKind.Utc),
+            IsLocked = true,
+            LockedUtc = new DateTime(2025, 1, 1, 0, 30, 0, DateTimeKind.Utc),
+            LockId = "lock-id",
+            NextAttemptUtc = new DateTime(2025, 1, 1, 2, 0, 0, DateTimeKind.Utc),
+            ProcessedUtc = new DateTime(2025, 1, 1, 0, 45, 0, DateTimeKind.Utc),
+            RetryCount = 2
+        };
 }
