@@ -22,7 +22,8 @@ API: a breaking change to a public type or member ships only in a major release.
 - Adjacent minor versions can run side by side during a rolling upgrade, as long as no feature introduced in the
   newer version is used yet.
 - Default collection names, index names, lock names, persisted enum values (names or numbers, depending on their
-  representation) and metric names, tags and units are contract: changing one is a breaking change.
+  representation) and metric names, tags and units are contract: changing one is a breaking change. The queue's
+  processing index is named `IX_Queue_Processing`.
 - The lock document's per-acquisition token is an internal implementation detail, not part of the documented
   contract. A document written without it, by an earlier release or by an older instance taking over an expired
   lock, keeps expiring and being reacquired normally. This guarantee assumes no instance sharing a configured

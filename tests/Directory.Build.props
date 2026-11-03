@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)MongoDbTestImages.cs" Link="MongoDbTestImages.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)IsolatedConventionTestProcess.cs" Link="IsolatedConventionTestProcess.cs" />
   </ItemGroup>
 
   <ItemGroup>

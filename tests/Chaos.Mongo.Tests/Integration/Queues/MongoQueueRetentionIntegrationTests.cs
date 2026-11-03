@@ -3,10 +3,12 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Linq.Expressions;
@@ -21,6 +23,329 @@ public class MongoQueueRetentionIntegrationTests
     [OneTimeSetUp]
     public async Task GetMongoDbContainer()
         => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [Test]
+    [Explicit("Runs only via process isolation from " +
+              nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_MatchesEveryLegacyIsTerminalValueAndExcludesOpenItems) +
+              "; registers process-global convention and class-map state.")]
+    public async Task Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase()
+    {
+        // Arrange: register a global camelCase convention for the queue item types before anything in this fresh
+        // process has used them, then start (and immediately stop) a subscription only to let production code
+        // create the real TTL index under that convention, exactly as the default-convention case above does, so
+        // the filter asserted below is the exact partialFilterExpression the server stored for a camelCase-
+        // registered host, not a hand-built approximation of it.
+        ConventionRegistry.Register(
+            nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase),
+            new ConventionPack
+            {
+                new CamelCaseElementNameConvention()
+            },
+            type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
+
+        var container = await MongoDbTestContainer.StartContainerAsync();
+        var uniqueDbName = $"QueueCamelCaseTtlFilterTest_{Guid.NewGuid():N}";
+        const String collectionName = "camelcase-retention-queue";
+
+        var services = new ServiceCollection();
+        services.AddNUnitTestLogging();
+        var url = MongoUrl.Create(container.GetConnectionString());
+        services.AddMongo(url, uniqueDbName)
+                .WithQueue<RetentionPayload>(queue => queue.WithCollectionName(collectionName)
+                                                           .WithPayloadHandler(_ => new PassivePayloadHandler())
+                                                           .WithoutAutoStartSubscription());
+        await using var serviceProvider = services.BuildServiceProvider();
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var indexCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+
+        BsonDocument ttlIndex;
+        await queue.StartSubscriptionAsync();
+        try
+        {
+            ttlIndex = await WaitForIndexAsync(indexCollection, x => x["name"] == ClosedItemTtlIndexName, TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            await queue.StopSubscriptionAsync();
+        }
+
+        // Act: insert raw legacy documents (bypassing the typed model) directly, with the subscription stopped so
+        // nothing else touches this collection while the filter below is evaluated. The field names are the
+        // library's pinned member names, not camelCase: pinning is convention-independent by design, which is the
+        // whole point of this change, so a camelCase-registered host still writes (and must still match) exactly
+        // these stored names, not renamed ones. An open, never-closed item is included as a retained control: the
+        // partial filter requires IsClosed: true, so it must never be selected.
+        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        await rawCollection.InsertManyAsync([
+            new BsonDocument
+            {
+                { "Name", "terminal-false" },
+                { "IsClosed", true },
+                { "IsTerminal", false },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "terminal-null" },
+                { "IsClosed", true },
+                { "IsTerminal", BsonNull.Value },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "terminal-missing" },
+                { "IsClosed", true },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "terminal-true" },
+                { "IsClosed", true },
+                { "IsTerminal", true },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "open-item" },
+                { "IsClosed", false },
+                { "IsTerminal", false }
+            }
+        ]);
+
+        var matches = await rawCollection.Find(new BsonDocumentFilterDefinition<BsonDocument>(ttlIndex["partialFilterExpression"].AsBsonDocument))
+                                         .ToListAsync();
+
+        // Assert
+        matches.Select(x => x["Name"].AsString).Should().BeEquivalentTo(["terminal-false", "terminal-null", "terminal-missing"]);
+    }
+
+    [Test]
+    public async Task Queue_ClosedItemTtlFilterUnderCamelCaseConvention_MatchesEveryLegacyIsTerminalValueAndExcludesOpenItems()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because BsonClassMap/ConventionRegistry registration is process-global
+        // and irreversible, and every other test in this shared process may already have registered
+        // MongoQueueItem's class map under the default convention.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
+
+    [Test]
+    public async Task Queue_ClosedItemTtlFilter_MatchesEveryLegacyIsTerminalValue()
+    {
+        // Arrange: start (and then stop) the subscription only to let production code create the real TTL
+        // index, so the filter asserted below is the exact partialFilterExpression the server stored, not a
+        // hand-built approximation of it.
+        var uniqueDbName = $"QueueLegacyTerminalFilterTest_{Guid.NewGuid():N}";
+        const String collectionName = "retention-queue";
+
+        await using var serviceProvider = CreateServiceProvider(uniqueDbName,
+                                                                collectionName,
+                                                                queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
+                                                                              .WithoutAutoStartSubscription());
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var indexCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+
+        BsonDocument ttlIndex;
+        await queue.StartSubscriptionAsync();
+        try
+        {
+            ttlIndex = await WaitForIndexAsync(indexCollection, x => x["name"] == ClosedItemTtlIndexName, TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            await queue.StopSubscriptionAsync();
+        }
+
+        // Act: insert raw legacy documents (bypassing the typed model, which cannot represent a missing or
+        // explicit-null IsTerminal for a non-nullable member) directly, with the subscription stopped so nothing
+        // else touches this collection while the filter below is evaluated.
+        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        await rawCollection.InsertManyAsync([
+            new BsonDocument
+            {
+                { "Name", "terminal-false" },
+                { "IsClosed", true },
+                { "IsTerminal", false },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "terminal-null" },
+                { "IsClosed", true },
+                { "IsTerminal", BsonNull.Value },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "terminal-missing" },
+                { "IsClosed", true },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "terminal-true" },
+                { "IsClosed", true },
+                { "IsTerminal", true },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "not-closed" },
+                { "IsClosed", false },
+                { "IsTerminal", false },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "Name", "closed-utc-missing" },
+                { "IsClosed", true },
+                { "IsTerminal", false }
+            }
+        ]);
+
+        var matches = await rawCollection.Find(new BsonDocumentFilterDefinition<BsonDocument>(ttlIndex["partialFilterExpression"].AsBsonDocument))
+                                         .ToListAsync();
+
+        // Assert
+        matches.Select(x => x["Name"].AsString).Should().BeEquivalentTo(["terminal-false", "terminal-null", "terminal-missing"]);
+    }
+
+    [Test]
+    [Explicit("Runs only via process isolation from " + nameof(Queue_RetentionUnderCamelCaseConvention_StillFiltersAndDeletesCorrectly) +
+              "; registers process-global convention and class-map state.")]
+    public async Task Queue_RetentionUnderCamelCaseConvention_IsolatedCase()
+    {
+        // Arrange: register a global camelCase convention for the queue item types before anything in this fresh
+        // process has used them, then start (and immediately stop) a subscription only to let production code
+        // create the real TTL index under that convention, exactly as the filter-selection isolated case above
+        // does. The container's TTL monitor is sped up so the eventual deletion assertion below stays within a
+        // bounded wait.
+        ConventionRegistry.Register(
+            nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase),
+            new ConventionPack
+            {
+                new CamelCaseElementNameConvention()
+            },
+            type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
+
+        var container = await MongoDbTestContainer.StartContainerAsync();
+        var adminClient = new MongoClient(container.GetConnectionString());
+        await adminClient.GetDatabase("admin")
+                         .RunCommandAsync<BsonDocument>(new BsonDocument
+                         {
+                             { "setParameter", 1 },
+                             { "ttlMonitorSleepSecs", 1 }
+                         });
+
+        var uniqueDbName = $"QueueCamelCaseRetentionTest_{Guid.NewGuid():N}";
+        const String collectionName = "camelcase-retention-queue";
+
+        await using var serviceProvider = CreateServiceProvider(uniqueDbName,
+                                                                collectionName,
+                                                                queue => queue.WithPayloadHandler(_ => new PassivePayloadHandler())
+                                                                              .WithRetentionPeriod(TimeSpan.FromSeconds(2))
+                                                                              .WithoutAutoStartSubscription());
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var indexCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<RetentionPayload>>();
+
+        // Act: start (and then stop) the subscription only to let production code create the real TTL index.
+        // The subscription is stopped, with nothing published through it, before any document is inserted below:
+        // a running subscription would itself pick up and close the raw open-item control inserted next, which
+        // must instead reach the assertion below exactly as seeded.
+        await queue.StartSubscriptionAsync();
+        try
+        {
+            _ = await WaitForIndexAsync(indexCollection, x => x["name"] == ClosedItemTtlIndexName, TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            await queue.StopSubscriptionAsync();
+        }
+
+        // Insert raw legacy documents (bypassing the typed model, which cannot represent a missing or
+        // explicit-null IsTerminal for a non-nullable member) directly: three closed items with IsTerminal
+        // false/null/missing, eligible for TTL deletion, plus a closed-and-terminal item and a never-closed
+        // "open" item, both ineligible controls. The field names are the library's pinned member names, not
+        // camelCase: pinning is convention-independent by design, which is the whole point of this change, so a
+        // camelCase-registered host still writes (and must still have TTL match) exactly these stored names, not
+        // renamed ones.
+        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
+        var eligibleIds = new[]
+        {
+            ObjectId.GenerateNewId(),
+            ObjectId.GenerateNewId(),
+            ObjectId.GenerateNewId()
+        };
+        var terminalId = ObjectId.GenerateNewId();
+        var openId = ObjectId.GenerateNewId();
+        await rawCollection.InsertManyAsync([
+            new BsonDocument
+            {
+                { "_id", eligibleIds[0] },
+                { "IsClosed", true },
+                { "IsTerminal", false },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "_id", eligibleIds[1] },
+                { "IsClosed", true },
+                { "IsTerminal", BsonNull.Value },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "_id", eligibleIds[2] },
+                { "IsClosed", true },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "_id", terminalId },
+                { "IsClosed", true },
+                { "IsTerminal", true },
+                { "ClosedUtc", closedUtc }
+            },
+            new BsonDocument
+            {
+                { "_id", openId },
+                { "IsClosed", false },
+                { "IsTerminal", false }
+            }
+        ]);
+
+        // Assert: all three eligible closed items are eventually deleted by TTL, while the terminal and open
+        // controls, seeded under the camelCase convention's own pinned element names, remain untouched.
+        await WaitUntilAsync(
+            async cancellationToken => await rawCollection.Find(Builders<BsonDocument>.Filter.In("_id", eligibleIds))
+                                                          .CountDocumentsAsync(cancellationToken) == 0,
+            TimeSpan.FromSeconds(30));
+        (await rawCollection.Find(Builders<BsonDocument>.Filter.In("_id", [terminalId, openId])).CountDocumentsAsync()).Should().Be(2);
+    }
+
+    [Test]
+    public async Task Queue_RetentionUnderCamelCaseConvention_StillFiltersAndDeletesCorrectly()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because BsonClassMap/ConventionRegistry registration is process-global
+        // and irreversible, and every other test in this shared process may already have registered
+        // MongoQueueItem's class map under the default convention.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
 
     [Test]
     public async Task Queue_WithImmediateDelete_RemovesProcessedItemAndDropsTtlIndex()

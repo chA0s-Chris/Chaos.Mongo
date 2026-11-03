@@ -25,14 +25,19 @@ internal static class OutboxSerializationSetup
                 cm.AutoMap();
                 cm.SetIgnoreExtraElements(true);
                 cm.MapIdMember(m => m.Id);
-                cm.GetMemberMap(m => m.CorrelationId).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.Error).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.FailedUtc).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.LockedUtc).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.LockId).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.NextAttemptUtc).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.ProcessedUtc).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.RetryCount).SetIgnoreIfDefault(true);
+                cm.GetMemberMap(m => m.CorrelationId).SetElementName(nameof(OutboxMessage.CorrelationId)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.CreatedUtc).SetElementName(nameof(OutboxMessage.CreatedUtc));
+                cm.GetMemberMap(m => m.Error).SetElementName(nameof(OutboxMessage.Error)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.FailedUtc).SetElementName(nameof(OutboxMessage.FailedUtc)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.IsLocked).SetElementName(nameof(OutboxMessage.IsLocked));
+                cm.GetMemberMap(m => m.LockedUtc).SetElementName(nameof(OutboxMessage.LockedUtc)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.LockId).SetElementName(nameof(OutboxMessage.LockId)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.NextAttemptUtc).SetElementName(nameof(OutboxMessage.NextAttemptUtc)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.Payload).SetElementName(nameof(OutboxMessage.Payload));
+                cm.GetMemberMap(m => m.ProcessedUtc).SetElementName(nameof(OutboxMessage.ProcessedUtc)).SetIgnoreIfNull(true);
+                cm.GetMemberMap(m => m.RetryCount).SetElementName(nameof(OutboxMessage.RetryCount)).SetIgnoreIfDefault(true);
+                cm.GetMemberMap(m => m.State).SetElementName(nameof(OutboxMessage.State));
+                cm.GetMemberMap(m => m.Type).SetElementName(nameof(OutboxMessage.Type));
             });
         }
 

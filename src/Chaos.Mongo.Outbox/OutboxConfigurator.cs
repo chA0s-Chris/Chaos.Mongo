@@ -61,8 +61,8 @@ internal sealed class OutboxConfigurator : IMongoConfigurator
                     Name = ProcessedTtlIndexName,
                     ExpireAfter = _options.RetentionPeriod.Value,
                     PartialFilterExpression = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Processed) &
-                                              Builders<OutboxMessage>.Filter.Exists(nameof(OutboxMessage.ProcessedUtc)) &
-                                              Builders<OutboxMessage>.Filter.Type(nameof(OutboxMessage.ProcessedUtc), BsonType.DateTime)
+                                              Builders<OutboxMessage>.Filter.Exists(m => m.ProcessedUtc) &
+                                              Builders<OutboxMessage>.Filter.Type(m => m.ProcessedUtc, BsonType.DateTime)
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(processedTtlIndex, cancellationToken: cancellationToken);
@@ -74,8 +74,8 @@ internal sealed class OutboxConfigurator : IMongoConfigurator
                     Name = FailedTtlIndexName,
                     ExpireAfter = _options.RetentionPeriod.Value,
                     PartialFilterExpression = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Failed) &
-                                              Builders<OutboxMessage>.Filter.Exists(nameof(OutboxMessage.FailedUtc)) &
-                                              Builders<OutboxMessage>.Filter.Type(nameof(OutboxMessage.FailedUtc), BsonType.DateTime)
+                                              Builders<OutboxMessage>.Filter.Exists(m => m.FailedUtc) &
+                                              Builders<OutboxMessage>.Filter.Type(m => m.FailedUtc, BsonType.DateTime)
                 });
 
             await collection.Indexes.CreateOneOrUpdateAsync(failedTtlIndex, cancellationToken: cancellationToken);

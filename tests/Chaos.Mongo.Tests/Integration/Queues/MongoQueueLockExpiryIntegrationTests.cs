@@ -183,11 +183,13 @@ public class MongoQueueLockExpiryIntegrationTests
 
         // Assert
         indexDocuments.Should().Contain(x =>
-                                            x["key"].AsBsonDocument.ElementCount == 4 &&
+                                            x["name"] == "IX_Queue_Processing" &&
+                                            x["key"].AsBsonDocument.ElementCount == 5 &&
                                             x["key"]["IsClosed"] == 1 &&
                                             x["key"]["IsLocked"] == 1 &&
                                             x["key"]["LockedUtc"] == 1 &&
                                             x["key"]["IsTerminal"] == 1 &&
+                                            x["key"]["_id"] == 1 &&
                                             !x.Contains("partialFilterExpression"));
 
         // Cleanup

@@ -37,7 +37,7 @@ migration logic is needed for that part.
 
 ## Acceptance Criteria
 
-- [ ] `MongoQueueItem`, `MongoQueueItem<TPayload>`, `MongoLockDocument`, `MongoMigrationHistoryItem`, `OutboxMessage`,
+- [x] `MongoQueueItem`, `MongoQueueItem<TPayload>`, `MongoLockDocument`, `MongoMigrationHistoryItem`, `OutboxMessage`,
       and the currently-unpinned members of `Aggregate` (including `Version`), `Event<TAggregate>` (including
       `Version`), `CheckpointDocument<TAggregate>`, and `CheckpointId` serialize to the same BSON element names
       whether or not a global camelCase convention pack is registered, verified by asserting the exact rendered
@@ -45,27 +45,27 @@ migration logic is needed for that part.
       registered before the type is first used (default-convention and camelCase-convention cases run in separate
       fresh processes, since class-map/convention registration is global and irreversible within a process; see the
       isolation approach in Technical Details).
-- [ ] With that camelCase convention registered, the queue's closed-item TTL partial filter and the outbox's
+- [x] With that camelCase convention registered, the queue's closed-item TTL partial filter and the outbox's
       processed/failed TTL partial filters still match the documents they are meant to expire: inserting documents in
       the relevant states and executing each partial filter as a query returns exactly the expected documents, both
       with and without the convention active.
-- [ ] With that camelCase convention registered, a real queue TTL index and real outbox TTL indexes, created through
+- [x] With that camelCase convention registered, a real queue TTL index and real outbox TTL indexes, created through
       `EnsureIndexesAsync`/the outbox configurator exactly as production code builds them, actually expire and delete
       eligible old, successfully closed, non-terminal queue items (`IsClosed: true` and `IsTerminal` false, missing, or
       an explicit `null`) and eligible processed/failed outbox messages, while leaving ineligible documents in
       place — open queue items, terminal queue items (`IsTerminal: true`, retained for dead-letter handling per
       `docs/queues.md`), and pending outbox messages — observed as an eventual outcome bounded for MongoDB's TTL
       background monitor.
-- [ ] The queue's processing index (`MongoQueueSubscription.cs:110-120`) has an explicit, version-controlled name.
-- [ ] An existing collection whose processing index was created under the old generated name is transparently
+- [x] The queue's processing index (`MongoQueueSubscription.cs:110-120`) has an explicit, version-controlled name.
+- [x] An existing collection whose processing index was created under the old generated name is transparently
       migrated to the new explicit name the next time `EnsureIndexesAsync` runs, without throwing and without leaving
       both indexes present.
 - [ ] The PR description records an `explain()` result, captured against a collection seeded with a representative
       backlog (a mix of locked, unlocked, closed, and terminal items), justifying the final key order of the
       processing index, including whether appending the default FIFO sort key (`_id`) avoids an in-memory sort stage.
-- [ ] `docs/compatibility-policy.md` lists the processing index's frozen name alongside the existing "default
+- [x] `docs/compatibility-policy.md` lists the processing index's frozen name alongside the existing "default
       collection names, index names, lock names... are contract" statement.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the complete test
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the complete test
       suite (`bash ./build.sh Test`) passes while maintaining the repository's required merged line coverage.
 
 ## Technical Details

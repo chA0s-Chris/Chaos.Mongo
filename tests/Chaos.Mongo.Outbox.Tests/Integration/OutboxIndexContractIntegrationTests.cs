@@ -73,6 +73,60 @@ public class OutboxIndexContractIntegrationTests
         });
     }
 
+    [Test]
+    public async Task ConfigureAsync_ProcessedAndFailedTtlFilters_SelectOnlyEligibleMessages()
+    {
+        // Arrange
+        var databaseName = $"OutboxTtlFilterSelection_{Guid.NewGuid():N}";
+        await using var serviceProvider = CreateServiceProvider(databaseName, builder => builder.WithRetentionPeriod(TimeSpan.FromMinutes(20)));
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        await ConfigureAsync(serviceProvider, helper);
+
+        var collection = helper.Database.GetCollection<BsonDocument>(OutboxOptions.DefaultCollectionName);
+        var now = DateTime.UtcNow;
+        var processedMessageId = ObjectId.GenerateNewId();
+        var failedMessageId = ObjectId.GenerateNewId();
+        var pendingMessageId = ObjectId.GenerateNewId();
+        await collection.InsertManyAsync([
+            new BsonDocument
+            {
+                { "_id", processedMessageId },
+                { nameof(OutboxMessage.Type), "TestPayload" },
+                { nameof(OutboxMessage.Payload), new BsonDocument("Name", "processed-message") },
+                { nameof(OutboxMessage.State), (Int32)OutboxMessageState.Processed },
+                { nameof(OutboxMessage.ProcessedUtc), now.AddMinutes(-10) }
+            },
+            new BsonDocument
+            {
+                { "_id", failedMessageId },
+                { nameof(OutboxMessage.Type), "TestPayload" },
+                { nameof(OutboxMessage.Payload), new BsonDocument("Name", "failed-message") },
+                { nameof(OutboxMessage.State), (Int32)OutboxMessageState.Failed },
+                { nameof(OutboxMessage.FailedUtc), now.AddMinutes(-10) }
+            },
+            new BsonDocument
+            {
+                { "_id", pendingMessageId },
+                { nameof(OutboxMessage.Type), "TestPayload" },
+                { nameof(OutboxMessage.Payload), new BsonDocument("Name", "pending-message") },
+                { nameof(OutboxMessage.State), (Int32)OutboxMessageState.Pending }
+            }
+        ]);
+
+        // Act: execute the real, server-stored partialFilterExpression of each TTL index directly, independent
+        // of MongoDB's asynchronous TTL monitor, proving filter selection rather than only eventual deletion.
+        var indexes = await (await collection.Indexes.ListAsync()).ToListAsync();
+        var processedTtlFilter = indexes.Single(x => x["name"] == "IX_Outbox_ProcessedUtc_TTL")["partialFilterExpression"].AsBsonDocument;
+        var failedTtlFilter = indexes.Single(x => x["name"] == "IX_Outbox_FailedUtc_TTL")["partialFilterExpression"].AsBsonDocument;
+
+        var processedMatches = await collection.Find(new BsonDocumentFilterDefinition<BsonDocument>(processedTtlFilter)).ToListAsync();
+        var failedMatches = await collection.Find(new BsonDocumentFilterDefinition<BsonDocument>(failedTtlFilter)).ToListAsync();
+
+        // Assert
+        processedMatches.Select(x => x["_id"].AsObjectId).Should().BeEquivalentTo([processedMessageId]);
+        failedMatches.Select(x => x["_id"].AsObjectId).Should().BeEquivalentTo([failedMessageId]);
+    }
+
     [OneTimeSetUp]
     public async Task GetMongoDbContainer()
         => _container = await MongoDbTestContainer.StartContainerAsync();
