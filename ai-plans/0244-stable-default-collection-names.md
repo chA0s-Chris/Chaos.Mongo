@@ -28,11 +28,11 @@ breaking change as narrow as the issue's acceptance criteria require.
 
 ## Acceptance Criteria
 
-- [ ] `CollectionTypeMap.GetCollectionName` returns a name for an unmapped closed generic type that includes the
+- [x] `CollectionTypeMap.GetCollectionName` returns a name for an unmapped closed generic type that includes the
       type arguments and contains no assembly-qualification. A test pins the exact literal string for two different
       closed generics of the same generic type definition (e.g. a test-only `Envelope<T>` instantiated with two
       different type arguments) and asserts the two literals differ.
-- [ ] `MongoQueueCollectionNameGenerator.GenerateQueueCollectionName` produces a name for a closed generic payload
+- [x] `MongoQueueCollectionNameGenerator.GenerateQueueCollectionName` produces a name for a closed generic payload
       type that does not depend on the assembly version of any type argument, including an array-typed argument
       whose element type is itself a closed generic (e.g. `Envelope<List<Payload>[]>`). A test pins the exact
       literal name for a closed generic payload type. A second, version-invariance regression test emits two
@@ -41,29 +41,29 @@ breaking change as narrow as the issue's acceptance criteria require.
       assembly (including the array-wrapped case above), and asserts `GenerateQueueCollectionName` returns an
       identical name for both — a test that fails against today's `FullName`-hashing implementation. Collection
       names for non-generic payload types are unchanged.
-- [ ] `WithEventStore<TAggregate>` throws `InvalidOperationException` — naming both aggregate types and the shared
+- [x] `WithEventStore<TAggregate>` throws `InvalidOperationException` — naming both aggregate types and the shared
       collection name — when two aggregate types registered on the same `MongoBuilder` resolve to the same
       read-model, events, checkpoint, or (when enabled) integrity-state collection name. This applies regardless of
       whether either aggregate has integrity protection enabled. Tests cover a colliding pair where neither aggregate
       has integrity protection enabled, and confirm non-colliding aggregates still register successfully.
-- [ ] `tests/Chaos.Mongo.EventStore.Tests/Integrity/AnchorCandidateRegistrationTests.cs:32-42`
+- [x] `tests/Chaos.Mongo.EventStore.Tests/Integrity/AnchorCandidateRegistrationTests.cs:32-42`
       (`AddMongo_ProtectedTypesWithSameEventsCollection_Throws`) still passes, updated if its expected message text
       changes because the general check now reports the collision before `ProtectedStreamRegistry` is reached.
-- [ ] `docs/compatibility-policy.md`'s "Stored data" section states: a closed generic type's default collection name
+- [x] `docs/compatibility-policy.md`'s "Stored data" section states: a closed generic type's default collection name
       is derived from its type arguments and never from assembly identity, and two event-store aggregates whose
       default collection names collide fail registration instead of silently sharing data.
-- [ ] `docs/migrating-from-0.x.md` gains a section describing the generic-payload queue collection rename (old
+- [x] `docs/migrating-from-0.x.md` gains a section describing the generic-payload queue collection rename (old
       assembly-version-dependent name to the new stable name) and the manual migration step for an existing queue
       with a generic payload type, plus a section describing the generic default-collection-name fix and the new
       startup collision check for event-store aggregates, consistent with the existing "Event Store: integrity
       collection naming" section's style.
-- [ ] `docs/compatibility-policy.md` and/or `docs/migrating-from-0.x.md` document that renaming an aggregate class
+- [x] `docs/compatibility-policy.md` and/or `docs/migrating-from-0.x.md` document that renaming an aggregate class
       changes its default collection names (because they derive from `typeof(TAggregate).Name`), and show how to
       keep the prior names after a rename via `WithEventStore<TAggregate>(...).WithCollectionPrefix(string)`. The
       same section points to `MongoOptions.CollectionTypeMap` as the equivalent explicit pin for the general
       type-to-collection map, and to `MongoQueueBuilder<TPayload>.WithCollectionName(string)` as the equivalent pin
       for queues.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the full test suite
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the full test suite
       passes.
 
 ## Technical Details

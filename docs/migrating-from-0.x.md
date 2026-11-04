@@ -75,6 +75,52 @@ physical collections are renamed to match, existing anchors, leaves and timestam
 new names. The change-stream-state collection needs no migration: it was never configurable, and anchoring's
 recovery scan repopulates it from scratch if it starts empty.
 
+## Queue: stable collection names for generic payload types
+
+`MongoQueueCollectionNameGenerator` hashed a generic payload type's `Type.FullName` to build the queue's default
+collection name. For a closed generic type, `.NET` embeds the assembly-qualified name (including version) of every
+type argument in `FullName`, so bumping a referenced package that defines a generic payload's type argument changed
+the hash and silently moved the queue to a new, empty collection, stranding its pending items.
+
+The generator now hashes a recursively formatted name that includes the type arguments but never an assembly
+identity, so the hash — and therefore the collection name — no longer depends on any type argument's assembly
+version. A non-generic payload type's collection name is unchanged.
+
+**Before upgrading a queue with a generic payload type** (for example `MongoQueueBuilder<Envelope<Payload>>`),
+either accept the one-time move to the new collection name (any items already queued under the old,
+version-dependent name are stranded there and must be migrated or drained manually), or pin the old name explicitly
+with `MongoQueueBuilder<TPayload>.WithCollectionName(string)` before upgrading.
+
+## Event Store: generic default collection names and startup collision detection
+
+`CollectionTypeMap.GetCollectionName`'s fallback for an unmapped type used `Type.Name`, which for a closed generic
+type is the backtick-arity form with no type arguments (for example `` Envelope`1 ``), so `Envelope<A>` and
+`Envelope<B>` resolved to the same default collection name. The fallback now includes the recursively formatted type
+arguments (for example `Envelope<A>` and `Envelope<B>`) for a closed generic type; a non-generic type's default name
+is unchanged.
+
+Separately, two event-store aggregate types could resolve to the same read-model, events, or checkpoint collection
+with no error — for example two differently namespaced aggregate types sharing a simple name, because the default
+collection prefix is `typeof(TAggregate).Name`. `WithEventStore<TAggregate>` now throws `InvalidOperationException`,
+naming both aggregate types and the shared collection name, as soon as a second aggregate type is registered with a
+colliding read-model, events, checkpoint, or (when enabled) integrity-state collection name. This applies regardless
+of whether either aggregate has integrity protection enabled, and runs before the two previous integrity-only checks.
+
+**Before upgrading**, confirm no two registered aggregate types already resolve to the same default collection
+name; such a configuration now fails startup instead of continuing to silently share data. Pin a distinct name for
+one of them in its `WithEventStore<TAggregate>` configure callback, for example:
+
+```csharp
+builder.WithEventStore<RenamedAggregate>(es => es.WithCollectionPrefix("OldAggregateName")
+                                                  .WithEvent<SomeEvent>());
+```
+
+Renaming a mapped class, an aggregate type, or a queue payload type changes its default collection name, because
+every default is derived from the CLR type name. Pin the previous name explicitly across a rename with
+`MongoOptions.CollectionTypeMap`, `WithEventStore<TAggregate>`'s configure callback
+(`MongoEventStoreBuilder<TAggregate>.WithCollectionPrefix(string)`, shown above), or
+`MongoQueueBuilder<TPayload>.WithCollectionName(string)`, respectively.
+
 ## Public API trim: Chaos.Mongo
 
 `Chaos.Mongo`'s public surface is now trimmed to its 1.0 contract:

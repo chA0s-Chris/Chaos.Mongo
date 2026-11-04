@@ -38,6 +38,10 @@ public static class MongoBuilderExtensions
         var options = esBuilder.Options;
         ValidateIntegrityOptions(options);
 
+        var collectionNames = CollectionNames(options);
+        var collectionNameRegistry = GetOrAddSingleton<EventStoreCollectionNameRegistry>(builder.Services);
+        collectionNameRegistry.CheckForCollisions(typeof(TAggregate), collectionNames);
+
         if (options.MaxAppendRetries < 0)
         {
             throw new InvalidOperationException(
@@ -54,6 +58,10 @@ public static class MongoBuilderExtensions
         // Register serialization (discriminators, GuidSerializer)
         MongoEventStoreSerializationSetup.EnsureGuidSerializer();
         MongoEventStoreSerializationSetup.RegisterClassMaps(options);
+
+        // Committed only now, so a corrected retry for this aggregate type is not rejected as colliding with its
+        // own abandoned attempt if a later check above failed.
+        collectionNameRegistry.Commit(typeof(TAggregate), collectionNames);
 
         // Register options as singleton
         builder.Services.AddSingleton(options);
@@ -289,6 +297,28 @@ public static class MongoBuilderExtensions
         var verification = GetOrAddSingleton<IntegrityVerificationOptions>(services);
         services.AddSingleton(sp => new AnchorVerifier(sp.GetRequiredService<IMongoHelper>(), anchoring, verification));
         services.AddSingleton<IAnchorVerifier>(sp => sp.GetRequiredService<AnchorVerifier>());
+    }
+
+    /// <summary>
+    /// Gets every collection name <paramref name="options"/> resolves to, so the startup collision check can detect
+    /// an overlap with another aggregate type on any of them.
+    /// </summary>
+    private static IReadOnlyList<String> CollectionNames<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        List<String> names =
+        [
+            options.ReadModelCollectionName,
+            options.EventsCollectionName,
+            options.CheckpointCollectionName
+        ];
+
+        if (options.IntegrityProtectionEnabled)
+        {
+            names.Add(options.IntegrityStateCollectionName);
+        }
+
+        return names;
     }
 
     private static EventStreamSealingSweep<TAggregate> CreateSealingSweep<TAggregate>(IServiceProvider services, MongoEventStoreOptions<TAggregate> options)

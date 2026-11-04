@@ -38,7 +38,7 @@ public class AnchorCandidateRegistrationTests
                                                                           .WithCollectionPrefix("Ledgers")
                                                                           .WithIntegrityProtection());
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*share the events collection 'Ledgers_Events'*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*LedgerAggregate*ShipmentAggregate*both resolve to the collection 'Ledgers'*");
     }
 
     [Test]
