@@ -75,6 +75,11 @@ Add one internal helper shared by `Chaos.Mongo.CollectionTypeMap` and `Chaos.Mon
 
 - For a closed generic type, it strips the backtick-arity suffix from the generic type definition's base name and
   appends `<...>` with the comma-joined, recursively formatted names of its type arguments.
+- For a closed generic type nested in a generic type, it formats the outermost generic declaring type with the
+  caller-supplied base name and each nested level with its simple name, joined with `+`, attaching each type
+  argument to the level that declares it (e.g. `Outer<A>+Inner<B>`). `GetGenericArguments()` also returns the
+  arguments a nested type inherits from its declaring types, so stripping the arity markers alone would format
+  `Outer<A>.Inner` and a non-nested `Inner<A>` identically (raised in PR review).
 - For an array type (any rank, including jagged arrays), it recurses into the element type and reconstructs the
   array's rank/jagged suffix around the recursively formatted element name, instead of falling back to the array
   type's own base name. This case is required because `Type.FullName` for an array always embeds the

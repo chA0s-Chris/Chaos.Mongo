@@ -112,6 +112,41 @@ public class MongoQueueCollectionNameGeneratorTests
     }
 
     [Test]
+    public void GenerateQueueCollectionName_WithPayloadTypeNestedInClosedGeneric_IncludesHashOfOwnedTypeArguments()
+    {
+        // Arrange
+        var generator = new MongoQueueCollectionNameGenerator();
+        var payloadType = typeof(GenericContainer<PayloadArgument>.NestedGenericPayload<PayloadArgument>);
+
+        // Act
+        var result = generator.GenerateQueueCollectionName(payloadType);
+
+        // Assert
+        // Pinned as a literal for the same frozen-name reason as the non-nested closed generic case above. The hashed
+        // name assigns each type argument to its declaring type: "{Tests}+GenericContainer<{Tests}+PayloadArgument>
+        // +NestedGenericPayload<{Tests}+PayloadArgument>", where {Tests} is this test class's full name.
+        result.Should().Be("_Queue.3B1886814603D8A7.NestedGenericPayload`1");
+    }
+
+    [Test]
+    public void GenerateQueueCollectionName_WithPayloadTypesNestedInGenericsOfDifferentArity_ReturnsDifferentHashes()
+    {
+        // Arrange
+        var generator = new MongoQueueCollectionNameGenerator();
+        var innerOwnsArgument = typeof(GenericContainer<PayloadArgument>.NestedGenericPayload<TestPayload>);
+        var outerOwnsArgument = typeof(GenericContainer<PayloadArgument, TestPayload>.NestedGenericPayload);
+
+        // Act
+        var result1 = generator.GenerateQueueCollectionName(innerOwnsArgument);
+        var result2 = generator.GenerateQueueCollectionName(outerOwnsArgument);
+
+        // Assert
+        // The trailing type names already differ by arity marker, so compare the hash segments: both types share the
+        // same type arguments and would hash identically if their ownership by declaring type were not preserved.
+        result1.Split('.')[1].Should().NotBe(result2.Split('.')[1]);
+    }
+
+    [Test]
     public void GenerateQueueCollectionName_WithValidType_IncludesHashOfFullName()
     {
         // Arrange
@@ -157,6 +192,16 @@ public class MongoQueueCollectionNameGeneratorTests
         var moduleBuilder = assemblyBuilder.DefineDynamicModule("MainModule");
         var typeBuilder = moduleBuilder.DefineType("Chaos.Mongo.Tests.Queues.VersionedPayload", TypeAttributes.Public);
         return typeBuilder.CreateType();
+    }
+
+    private static class GenericContainer<T>
+    {
+        public sealed class NestedGenericPayload<TValue>;
+    }
+
+    private static class GenericContainer<T1, T2>
+    {
+        public sealed class NestedGenericPayload;
     }
 
     private static class NestedContainer

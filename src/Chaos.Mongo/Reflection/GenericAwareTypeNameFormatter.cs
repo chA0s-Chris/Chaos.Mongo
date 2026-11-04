@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Reflection;
 
+using System.Text;
 using System.Text.RegularExpressions;
 
 /// <summary>
@@ -20,7 +21,10 @@ internal static class GenericAwareTypeNameFormatter
     /// <param name="baseName">Resolves the name of a type that is neither a closed generic type nor an array type.</param>
     /// <returns>
     /// The formatted name: for a closed generic type, its generic type definition's base name (arity marker
-    /// stripped) followed by its recursively formatted type arguments in angle brackets; for an array type, its
+    /// stripped) followed by its recursively formatted type arguments in angle brackets, where a type nested in a
+    /// generic type is formatted as its outermost generic declaring type's base name followed by each nested
+    /// level's simple name, joined with <c>+</c>, and each type argument is attached to the level that declares it
+    /// (e.g. <c>Outer&lt;A&gt;+Inner&lt;B&gt;</c>); for an array type, its
     /// recursively formatted element name with the array's rank/jagged suffix reconstructed around it; otherwise,
     /// <paramref name="baseName"/> applied to <paramref name="type"/> unchanged.
     /// </returns>
@@ -41,13 +45,54 @@ internal static class GenericAwareTypeNameFormatter
 
         if (type.IsGenericType && !type.IsGenericTypeDefinition)
         {
-            var definitionName = baseName(type.GetGenericTypeDefinition());
-            var simpleName = GenericArityMarker.Replace(definitionName, String.Empty);
-            var typeArguments = type.GetGenericArguments().Select(argument => FormatGenericAwareName(argument, baseName));
-
-            return $"{simpleName}<{String.Join(",", typeArguments)}>";
+            return FormatClosedGenericName(type, baseName);
         }
 
         return baseName(type);
+    }
+
+    private static String FormatClosedGenericName(Type type, Func<Type, String> baseName)
+    {
+        // A type nested in a generic type inherits its declaring types' type arguments, so they are assigned to the
+        // declaring type that owns them; otherwise Outer<A>.Inner and a non-nested Inner<A> would format identically.
+        var definition = type.GetGenericTypeDefinition();
+        var levels = new Stack<Type>();
+        levels.Push(definition);
+
+        while (definition.DeclaringType is { IsGenericType: true } declaringType)
+        {
+            definition = declaringType;
+            levels.Push(definition);
+        }
+
+        var typeArguments = type.GetGenericArguments();
+        var builder = new StringBuilder();
+        var consumedArguments = 0;
+        var isOutermostLevel = true;
+
+        foreach (var level in levels)
+        {
+            var levelName = isOutermostLevel ? baseName(level) : level.Name;
+            var levelArgumentCount = level.GetGenericArguments().Length;
+
+            if (!isOutermostLevel)
+            {
+                builder.Append('+');
+            }
+
+            builder.Append(GenericArityMarker.Replace(levelName, String.Empty));
+
+            if (levelArgumentCount > consumedArguments)
+            {
+                var ownArguments = typeArguments[consumedArguments..levelArgumentCount]
+                    .Select(argument => FormatGenericAwareName(argument, baseName));
+                builder.Append('<').Append(String.Join(",", ownArguments)).Append('>');
+                consumedArguments = levelArgumentCount;
+            }
+
+            isOutermostLevel = false;
+        }
+
+        return builder.ToString();
     }
 }

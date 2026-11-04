@@ -26,7 +26,9 @@ API: a breaking change to a public type or member ships only in a major release.
   processing index is named `IX_Queue_Processing`.
 - A closed generic type's default collection name is derived from its type arguments, recursively formatted the
   same way, and never from the assembly identity of any type argument: `Envelope<A>` and `Envelope<B>` get different
-  names, and a package upgrade that only changes a type argument's assembly version never changes the name.
+  names, and a package upgrade that only changes a type argument's assembly version never changes the name. A type
+  nested in a generic type keeps each type argument on the declaring type that owns it, so `Outer<A>.Inner` is named
+  `Outer<A>+Inner` and never collides with a non-nested `Inner<A>`.
 - Two event-store aggregate types registered with `WithEventStore<TAggregate>` whose default collection names
   collide (read-model, events, checkpoint, or, when enabled, integrity-state) fail registration with
   `InvalidOperationException` naming both aggregate types, instead of silently sharing data.
