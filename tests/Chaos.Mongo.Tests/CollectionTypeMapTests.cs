@@ -58,6 +58,49 @@ public class CollectionTypeMapTests
     }
 
     [Test]
+    public void GetCollectionName_WhenNotMappedClosedGenericWithDifferentTypeArguments_ReturnsDifferentStableNames()
+    {
+        // Arrange
+        var options = new MongoOptions
+        {
+            UseDefaultCollectionNames = true,
+            CollectionTypeMap = new Dictionary<Type, String>()
+        };
+
+        var sut = new CollectionTypeMap(Options.Create(options));
+
+        // Act
+        var nameA = sut.GetCollectionName(typeof(Envelope<EnvelopePayloadA>));
+        var nameB = sut.GetCollectionName(typeof(Envelope<EnvelopePayloadB>));
+
+        // Assert
+        nameA.Should().Be("Envelope<EnvelopePayloadA>");
+        nameB.Should().Be("Envelope<EnvelopePayloadB>");
+        nameA.Should().NotBe(nameB);
+    }
+
+    [Test]
+    public void GetCollectionName_WhenNotMappedTypeNestedInClosedGeneric_ReturnsNameDistinctFromSameNamedGeneric()
+    {
+        // Arrange
+        var options = new MongoOptions
+        {
+            UseDefaultCollectionNames = true,
+            CollectionTypeMap = new Dictionary<Type, String>()
+        };
+
+        var sut = new CollectionTypeMap(Options.Create(options));
+
+        // Act
+        var nestedName = sut.GetCollectionName(typeof(EnvelopeContainer<EnvelopePayloadA>.Envelope));
+        var genericName = sut.GetCollectionName(typeof(Envelope<EnvelopePayloadA>));
+
+        // Assert
+        nestedName.Should().Be("EnvelopeContainer<EnvelopePayloadA>+Envelope");
+        genericName.Should().Be("Envelope<EnvelopePayloadA>");
+    }
+
+    [Test]
     public void GetCollectionName_WhenTypeIsNull_ThrowsArgumentNull()
     {
         // Arrange
@@ -92,6 +135,20 @@ public class CollectionTypeMapTests
         // Assert
         name.Should().Be("mapped_collection");
     }
+
+    private static class EnvelopeContainer<T>
+    {
+        public sealed class Envelope;
+    }
+
+    private sealed class Envelope<T>
+    {
+        public T? Payload { get; set; }
+    }
+
+    private sealed class EnvelopePayloadA { }
+
+    private sealed class EnvelopePayloadB { }
 
     private sealed class MappedType { }
 

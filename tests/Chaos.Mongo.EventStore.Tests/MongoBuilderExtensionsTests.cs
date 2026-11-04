@@ -11,6 +11,36 @@ using NUnit.Framework;
 public class MongoBuilderExtensionsTests
 {
     [Test]
+    public void WithEventStore_CollidingCollectionNames_ThrowsInvalidOperationException()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        builder.WithEventStore<TestAggregate>(es => es.WithEvent<TestCreatedEvent>());
+
+        var act = () => builder.WithEventStore<OtherAggregate>(es => es.WithEvent<OtherCreatedEvent>()
+                                                                       .WithCollectionPrefix(nameof(TestAggregate)));
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage($"*{nameof(TestAggregate)}*{nameof(OtherAggregate)}*both resolve to the collection '{nameof(TestAggregate)}'*");
+    }
+
+    [Test]
+    public void WithEventStore_CollidingSameSimpleNameAggregates_ThrowsWithDistinguishableTypeIdentities()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        builder.WithEventStore<Billing.Order>(es => es.WithEvent<Billing.OrderCreatedEvent>());
+
+        var act = () => builder.WithEventStore<Shipping.Order>(es => es.WithEvent<Shipping.OrderCreatedEvent>());
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage($"*{typeof(Billing.Order).FullName}*{typeof(Shipping.Order).FullName}*both resolve to the collection " +
+                        $"'{nameof(Billing.Order)}'*");
+    }
+
+    [Test]
     public void WithEventStore_DuplicateRegistration_ThrowsInvalidOperationException()
     {
         var services = new ServiceCollection();
@@ -50,6 +80,19 @@ public class MongoBuilderExtensionsTests
 
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("*at least one event type*TestAggregate*");
+    }
+
+    [Test]
+    public void WithEventStore_NonCollidingAggregates_RegistersBothEventStores()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        builder.WithEventStore<TestAggregate>(es => es.WithEvent<TestCreatedEvent>());
+        builder.WithEventStore<OtherAggregate>(es => es.WithEvent<OtherCreatedEvent>());
+
+        services.Any(s => s.ServiceType == typeof(IEventStore<TestAggregate>)).Should().BeTrue();
+        services.Any(s => s.ServiceType == typeof(IEventStore<OtherAggregate>)).Should().BeTrue();
     }
 
     [Test]
@@ -152,6 +195,38 @@ public class MongoBuilderExtensionsTests
         result.Should().BeSameAs(builder);
     }
 
+    private static class Billing
+    {
+        public sealed class Order : IAggregate
+        {
+            public DateTime CreatedUtc { get; set; }
+            public Guid Id { get; set; }
+            public Int64 Revision { get; set; }
+            public Int64 Version { get; set; }
+        }
+
+        public sealed class OrderCreatedEvent : Event<Order>
+        {
+            public override void Execute(Order aggregate) { }
+        }
+    }
+
+    private static class Shipping
+    {
+        public sealed class Order : IAggregate
+        {
+            public DateTime CreatedUtc { get; set; }
+            public Guid Id { get; set; }
+            public Int64 Revision { get; set; }
+            public Int64 Version { get; set; }
+        }
+
+        public sealed class OrderCreatedEvent : Event<Order>
+        {
+            public override void Execute(Order aggregate) { }
+        }
+    }
+
     private sealed class FakeMongoHelper : IMongoHelper
     {
         public IMongoClient Client => throw new NotImplementedException();
@@ -162,6 +237,19 @@ public class MongoBuilderExtensionsTests
 
         public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
+    }
+
+    private sealed class OtherAggregate : IAggregate
+    {
+        public DateTime CreatedUtc { get; set; }
+        public Guid Id { get; set; }
+        public Int64 Revision { get; set; }
+        public Int64 Version { get; set; }
+    }
+
+    private sealed class OtherCreatedEvent : Event<OtherAggregate>
+    {
+        public override void Execute(OtherAggregate aggregate) { }
     }
 
     private sealed class TestAggregate : IAggregate

@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo;
 
+using Chaos.Mongo.Reflection;
 using Microsoft.Extensions.Options;
 using System.Collections.Frozen;
 
@@ -38,7 +39,9 @@ internal class CollectionTypeMap : ICollectionTypeMap
 
         if (_useDefaultCollectionNames)
         {
-            return type.Name;
+            return type.IsGenericType && !type.IsGenericTypeDefinition
+                ? GenericAwareTypeNameFormatter.FormatGenericAwareName(type, t => t.Name)
+                : type.Name;
         }
 
         throw new KeyNotFoundException($"Type {type} is not mapped and default collection names are not used");

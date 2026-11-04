@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Queues;
 
+using Chaos.Mongo.Reflection;
 using System.IO.Hashing;
 using System.Text;
 
@@ -22,9 +23,13 @@ public sealed class MongoQueueCollectionNameGenerator : IMongoQueueCollectionNam
 
         var builder = new StringBuilder(NamePrefix);
 
-        if (!String.IsNullOrEmpty(payloadType.FullName))
+        var nameToHash = payloadType.IsGenericType && !payloadType.IsGenericTypeDefinition
+            ? GenericAwareTypeNameFormatter.FormatGenericAwareName(payloadType, t => t.FullName ?? t.Name)
+            : payloadType.FullName;
+
+        if (!String.IsNullOrEmpty(nameToHash))
         {
-            var hash = XxHash3.Hash(Encoding.UTF8.GetBytes(payloadType.FullName));
+            var hash = XxHash3.Hash(Encoding.UTF8.GetBytes(nameToHash));
             var hexString = Convert.ToHexString(hash);
 
             builder.Append(hexString);

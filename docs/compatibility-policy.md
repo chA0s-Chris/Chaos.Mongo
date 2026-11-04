@@ -24,6 +24,19 @@ API: a breaking change to a public type or member ships only in a major release.
 - Default collection names, index names, lock names, persisted enum values (names or numbers, depending on their
   representation) and metric names, tags and units are contract: changing one is a breaking change. The queue's
   processing index is named `IX_Queue_Processing`.
+- A closed generic type's default collection name is derived from its type arguments, recursively formatted the
+  same way, and never from the assembly identity of any type argument: `Envelope<A>` and `Envelope<B>` get different
+  names, and a package upgrade that only changes a type argument's assembly version never changes the name. A type
+  nested in a generic type keeps each type argument on the declaring type that owns it, so `Outer<A>.Inner` is named
+  `Outer<A>+Inner` and never collides with a non-nested `Inner<A>`.
+- Two event-store aggregate types registered with `WithEventStore<TAggregate>` whose default collection names
+  collide (read-model, events, checkpoint, or, when enabled, integrity-state) fail registration with
+  `InvalidOperationException` naming both aggregate types, instead of silently sharing data.
+- A default collection name is derived from a mapped type's, an aggregate type's, or a queue payload type's CLR type
+  name, so renaming that class changes its default collection name. Pin the previous name explicitly across a
+  rename with `MongoOptions.CollectionTypeMap`, `WithEventStore<TAggregate>`'s configure callback
+  (`MongoEventStoreBuilder<TAggregate>.WithCollectionPrefix(string)`), or `MongoQueueBuilder<TPayload>.WithCollectionName(string)`,
+  respectively.
 - The lock document's per-acquisition token is an internal implementation detail, not part of the documented
   contract. A document written without it, by an earlier release or by an older instance taking over an expired
   lock, keeps expiring and being reacquired normally. This guarantee assumes no instance sharing a configured
