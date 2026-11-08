@@ -1,0 +1,4 @@
+# Commits that only reformat code. Use with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: apply repo-baseline cleanup to the whole solution (#274)
+6540bca9b5c16546c8cf8ee16ca7d4a9f99b563d
