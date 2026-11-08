@@ -11,6 +11,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class BulkWriteOptimizationIntegrationTests
 {
     private IAggregateRepository<OrderAggregate> _aggregateRepository = null!;

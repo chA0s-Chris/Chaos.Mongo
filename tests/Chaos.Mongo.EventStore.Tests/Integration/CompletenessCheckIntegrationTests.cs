@@ -12,6 +12,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class CompletenessCheckIntegrationTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];

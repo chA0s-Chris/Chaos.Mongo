@@ -14,6 +14,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class ObservationalEventIntegrationTests
 {
     private readonly Boolean _bulkWrite;

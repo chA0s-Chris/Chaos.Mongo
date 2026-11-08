@@ -16,6 +16,7 @@ using Testcontainers.MongoDb;
 /// </summary>
 [TestFixture(0)]
 [TestFixture(2)]
+[Category("Integration")]
 public class ReconstructionIntegrationTests
 {
     private readonly Int32 _checkpointInterval;

@@ -12,6 +12,7 @@ using NUnit.Framework;
 using System.Text;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class IntegrityFormatIntegrationTests
 {
     private const String RenamedAggregateType = "RenamedLedger";

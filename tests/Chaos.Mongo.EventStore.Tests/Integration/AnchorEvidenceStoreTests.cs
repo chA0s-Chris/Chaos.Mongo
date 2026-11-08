@@ -10,6 +10,7 @@ using NUnit.Framework;
 using System.Security.Cryptography;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class AnchorEvidenceStoreTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];

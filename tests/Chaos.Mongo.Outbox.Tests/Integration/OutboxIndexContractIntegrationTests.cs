@@ -11,6 +11,7 @@ using NUnit.Framework;
 using System.Collections.Concurrent;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class OutboxIndexContractIntegrationTests
 {
     private MongoDbContainer _container;

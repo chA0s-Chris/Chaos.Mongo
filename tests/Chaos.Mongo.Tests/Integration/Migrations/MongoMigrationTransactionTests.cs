@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoMigrationTransactionTests
 {
     private MongoDbContainer _container;

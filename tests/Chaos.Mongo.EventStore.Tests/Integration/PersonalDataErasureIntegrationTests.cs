@@ -15,6 +15,7 @@ using Testcontainers.MongoDb;
 /// <summary>
 /// Transactional erasure of personal data values, the rebuild it performs and how verification reports erasures.
 /// </summary>
+[Category("Integration")]
 public class PersonalDataErasureIntegrationTests
 {
     private const String AccountPath = "Counterparty.Account";

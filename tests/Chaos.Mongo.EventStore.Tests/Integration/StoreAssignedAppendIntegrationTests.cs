@@ -14,6 +14,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class StoreAssignedAppendIntegrationTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];

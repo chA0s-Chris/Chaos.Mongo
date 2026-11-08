@@ -18,6 +18,7 @@ using Testcontainers.MongoDb;
 /// reproduces every deterministic vector and validates the sample tokens, so the library and the specification cannot
 /// drift apart.
 /// </summary>
+[Category("Integration")]
 public class TamperEvidenceVectorTests
 {
     private const Int32 ChunkedIncrement = 7;

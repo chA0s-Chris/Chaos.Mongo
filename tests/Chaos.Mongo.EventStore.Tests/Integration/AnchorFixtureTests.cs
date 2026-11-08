@@ -33,6 +33,7 @@ using Testcontainers.MongoDb;
 /// —
 /// every field <see cref="AnchorStore.ReadLeaf"/> actually decodes is identical.
 /// </remarks>
+[Category("Integration")]
 public class AnchorFixtureTests
 {
     private const String AnchorFixtureFile = "anchor-with-failures.bson";

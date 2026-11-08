@@ -12,6 +12,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class DollarDiscriminatorReconstructionIntegrationTests
 {
     private readonly Boolean _variableDiscriminator;

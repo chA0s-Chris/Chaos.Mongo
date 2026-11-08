@@ -10,6 +10,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class OrdersApiIntegrationTests
 {
     private HttpClient? _client;

@@ -17,6 +17,7 @@ using Testcontainers.MongoDb;
 /// </summary>
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class ConcurrencyRaceIntegrationTests
 {
     private const Int32 ConcurrencyPerRound = 8;

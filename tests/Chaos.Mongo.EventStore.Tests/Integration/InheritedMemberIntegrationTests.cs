@@ -13,6 +13,7 @@ using Testcontainers.MongoDb;
 /// <summary>
 /// Covers members that aggregates and events inherit from intermediate base classes.
 /// </summary>
+[Category("Integration")]
 public class InheritedMemberIntegrationTests
 {
     private IAggregateRepository<InheritedLedgerAggregate> _aggregateRepository;

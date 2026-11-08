@@ -13,6 +13,7 @@ using Testcontainers.MongoDb;
 /// <summary>
 /// Sealing and verification of events whose members are marked as personal data.
 /// </summary>
+[Category("Integration")]
 public class PersonalDataCommitmentIntegrationTests
 {
     private static readonly DateTime FixedCreatedUtc = new(2026, 10, 7, 12, 30, 45, DateTimeKind.Utc);

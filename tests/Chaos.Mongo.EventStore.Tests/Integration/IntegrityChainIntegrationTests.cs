@@ -11,6 +11,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class IntegrityChainIntegrationTests
 {
     private static readonly DateTime FixedCreatedUtc = new DateTime(2026, 10, 7, 12, 30, 45, DateTimeKind.Utc).AddTicks(1234);

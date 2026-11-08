@@ -14,6 +14,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class AnchoringRunTests
 {
     private static readonly Comparer<Byte[]> LeafComparer = Comparer<Byte[]>.Create((x, y) => x.AsSpan().SequenceCompareTo(y));

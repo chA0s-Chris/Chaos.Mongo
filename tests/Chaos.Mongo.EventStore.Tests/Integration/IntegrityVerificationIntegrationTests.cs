@@ -16,6 +16,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class IntegrityVerificationIntegrationTests
 {
     private const String AuthorityName = "test-tsa";

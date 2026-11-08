@@ -26,6 +26,7 @@ using Testcontainers.MongoDb;
 /// and against data produced by the library. On CI a missing <c>python3</c> or <c>openssl</c> fails these tests;
 /// locally they are ignored.
 /// </summary>
+[Category("Integration")]
 public class ReferenceVerifierIntegrationTests
 {
     private const String CertificateIssuerOid = "2.5.29.29";

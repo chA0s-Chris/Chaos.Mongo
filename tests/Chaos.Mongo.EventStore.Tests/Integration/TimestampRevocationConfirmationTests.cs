@@ -12,6 +12,7 @@ using NUnit.Framework;
 using System.Security.Cryptography;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class TimestampRevocationConfirmationTests
 {
     private static readonly TimeSpan GracePeriod = TimeSpan.FromHours(24);

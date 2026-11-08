@@ -16,6 +16,7 @@ using Testcontainers.MongoDb;
 /// </summary>
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class LegacyRevisionIntegrationTests
 {
     private const String RevisionElement = nameof(Event<OrderAggregate>.Revision);

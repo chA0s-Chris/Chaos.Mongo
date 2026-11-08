@@ -13,6 +13,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class IntegritySealingIntegrationTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];

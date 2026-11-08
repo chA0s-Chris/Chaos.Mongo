@@ -19,6 +19,7 @@ using Testcontainers.MongoDb;
 /// reference verifier checks them independently.
 /// </summary>
 [Explicit("Regenerates the committed test vectors under spec/tamper-evidence/v1.")]
+[Category("Integration")]
 public class TamperEvidenceVectorGenerator
 {
     public static readonly Guid AppendedStream = Guid.Parse("0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e01");

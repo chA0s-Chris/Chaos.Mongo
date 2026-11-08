@@ -19,6 +19,7 @@ using Testcontainers.MongoDb;
 /// itself. This needs its own authenticated container; the shared <see cref="MongoDbTestContainer"/> runs without
 /// authentication.
 /// </summary>
+[Category("Integration")]
 public class RestrictedRoleIntegrationTests
 {
     private const String ApplicationPassword = "application-secret";

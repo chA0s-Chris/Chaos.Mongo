@@ -13,6 +13,7 @@ using NUnit.Framework;
 using System.Collections.Concurrent;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoConfiguratorIntegrationTests
 {
     private MongoDbContainer _container;

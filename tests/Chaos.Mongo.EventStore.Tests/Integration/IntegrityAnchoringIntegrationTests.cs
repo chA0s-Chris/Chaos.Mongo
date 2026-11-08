@@ -21,6 +21,7 @@ using Testcontainers.MongoDb;
 /// The operational surface of anchoring: module-level configuration, the hosted run, the completion hook, the delay
 /// alert and the sealing-anchor lookup.
 /// </summary>
+[Category("Integration")]
 public class IntegrityAnchoringIntegrationTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];

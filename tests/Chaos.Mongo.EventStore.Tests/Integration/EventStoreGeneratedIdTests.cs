@@ -15,6 +15,7 @@ using Testcontainers.MongoDb;
 /// Both append paths are exercised because the bulk-write path serializes events itself and therefore
 /// does not go through the driver's id generation.
 /// </summary>
+[Category("Integration")]
 public class EventStoreGeneratedIdTests
 {
     private MongoDbContainer _container = null!;

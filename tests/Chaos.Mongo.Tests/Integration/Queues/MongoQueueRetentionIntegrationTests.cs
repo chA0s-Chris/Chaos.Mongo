@@ -15,6 +15,7 @@ using System.Linq.Expressions;
 using Testcontainers.MongoDb;
 using MongoDefaults = MongoDefaults;
 
+[Category("Integration")]
 public class MongoQueueRetentionIntegrationTests
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";

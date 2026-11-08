@@ -13,6 +13,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class BatchMetadataIntegrationTests
 {
     private readonly Boolean _bulkWrite;

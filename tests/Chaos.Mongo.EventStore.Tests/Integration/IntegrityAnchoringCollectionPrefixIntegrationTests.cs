@@ -14,6 +14,7 @@ using Testcontainers.MongoDb;
 /// <summary>
 /// Two containers configured with different anchoring collection prefixes against the same database.
 /// </summary>
+[Category("Integration")]
 public class IntegrityAnchoringCollectionPrefixIntegrationTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];

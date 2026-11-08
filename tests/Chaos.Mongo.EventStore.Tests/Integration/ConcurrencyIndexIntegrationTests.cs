@@ -14,6 +14,7 @@ using Testcontainers.MongoDb;
 /// Covers the automatic concurrency index check that <see cref="MongoEventStore{TAggregate}"/> performs before an
 /// append relies on the unique <c>(AggregateId, Version)</c> index, independent of whether configurators ran.
 /// </summary>
+[Category("Integration")]
 public class ConcurrencyIndexIntegrationTests
 {
     private MongoDbContainer _container;

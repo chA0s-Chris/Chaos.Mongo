@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class BooksApiIntegrationTests
 {
     private HttpClient? _client;

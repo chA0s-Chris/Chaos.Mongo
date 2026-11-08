@@ -12,6 +12,7 @@ using Testcontainers.MongoDb;
 /// Correctness tests of the anchor candidate source: no gaps with late commits, at-least-once delivery
 /// across restarts, and coverage of every protected aggregate type.
 /// </summary>
+[Category("Integration")]
 public class AnchorCandidateSourceTests
 {
     private const Int32 BatchSize = 100;

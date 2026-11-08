@@ -12,6 +12,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class TypedOutboxIntegrationTests
 {
     private MongoDbContainer _container;

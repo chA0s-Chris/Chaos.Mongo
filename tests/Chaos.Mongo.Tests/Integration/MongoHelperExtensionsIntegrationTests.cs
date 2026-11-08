@@ -10,6 +10,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoHelperExtensionsIntegrationTests
 {
     private MongoDbContainer _container;

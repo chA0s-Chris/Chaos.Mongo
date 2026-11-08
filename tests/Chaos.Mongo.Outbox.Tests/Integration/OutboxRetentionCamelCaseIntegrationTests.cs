@@ -17,6 +17,7 @@ using Testcontainers.MongoDb;
 /// ineligible ones in place, when a global camelCase convention pack is registered before <see cref="OutboxMessage"/>
 /// is first used.
 /// </summary>
+[Category("Integration")]
 public class OutboxRetentionCamelCaseIntegrationTests
 {
     private MongoDbContainer _container;

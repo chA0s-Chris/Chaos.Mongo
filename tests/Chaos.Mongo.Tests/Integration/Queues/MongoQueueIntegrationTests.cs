@@ -11,6 +11,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoQueueIntegrationTests
 {
     private MongoDbContainer _container;

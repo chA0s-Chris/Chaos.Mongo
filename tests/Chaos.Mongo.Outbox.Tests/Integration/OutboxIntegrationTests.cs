@@ -11,6 +11,7 @@ using NUnit.Framework;
 using System.Diagnostics;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class OutboxIntegrationTests
 {
     private MongoDbContainer _container;

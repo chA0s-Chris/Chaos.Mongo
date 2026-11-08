@@ -10,6 +10,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class DerivedDataIntegrationTests
 {
     private const String MemoPath = "Memo";
