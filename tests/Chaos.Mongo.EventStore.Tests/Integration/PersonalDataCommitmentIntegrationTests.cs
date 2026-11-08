@@ -21,6 +21,20 @@ public class PersonalDataCommitmentIntegrationTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
+
     [Test]
     [TestCase(false)]
     [TestCase(true)]
@@ -135,9 +149,6 @@ public class PersonalDataCommitmentIntegrationTests
         (await marked.CreateVerifier().VerifyStreamAsync(markedStream)).IsIntact.Should().BeTrue();
     }
 
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
     [Test]
     public async Task RunPassAsync_LegacyDocumentWithoutMarkedElement_RecordsOnlyResolvedPaths()
     {
@@ -191,17 +202,6 @@ public class PersonalDataCommitmentIntegrationTests
 
         LedgerStoreContext.ReadIntegrity(await sealing.FindEventAsync(aggregateId, 3)).PersonalData.Should().BeNull();
         (await sealing.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     [Test]

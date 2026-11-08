@@ -15,6 +15,10 @@ public class OutboxIndexContractIntegrationTests
 {
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer()
+        => _container = await MongoDbTestContainer.StartContainerAsync();
+
     [Test]
     public async Task ConfigureAsync_CreatesOutboxIndexesWithExpectedContract()
     {
@@ -126,10 +130,6 @@ public class OutboxIndexContractIntegrationTests
         processedMatches.Select(x => x["_id"].AsObjectId).Should().BeEquivalentTo([processedMessageId]);
         failedMatches.Select(x => x["_id"].AsObjectId).Should().BeEquivalentTo([failedMessageId]);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-        => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task Processor_ProcessesEligibleMessagesInPollingIndexOrder()

@@ -18,6 +18,37 @@ public class BulkWriteOptimizationIntegrationTests
     private IEventStore<OrderAggregate> _eventStore = null!;
     private IMongoHelper _mongoHelper = null!;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [SetUp]
+    public void Setup()
+    {
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var sp = new ServiceCollection()
+                 .AddMongo(url, configure: options =>
+                 {
+                     options.DefaultDatabase = $"EventStoreBulkWriteTestDb_{Guid.NewGuid():N}";
+                     options.RunConfiguratorsOnStartup = false;
+                 })
+                 .WithEventStore<OrderAggregate>(es => es
+                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
+                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
+                                                       .WithEvent<OrderCompletedEvent>("OrderCompleted")
+                                                       .WithCollectionPrefix("Orders")
+                                                       .WithCheckpoints(3)
+                                                       .WithBulkWriteOptimization())
+                 .Services
+                 .BuildServiceProvider();
+
+        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
+        _aggregateRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
+        _mongoHelper = sp.GetRequiredService<IMongoHelper>();
+
+        foreach (var configurator in sp.GetServices<IMongoConfigurator>())
+            configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
+    }
+
     [Test]
     public async Task AppendEventsAsync_WithBulkWriteOptimization_DuplicateEventId_ThrowsMongoDuplicateEventException()
     {
@@ -188,36 +219,5 @@ public class BulkWriteOptimizationIntegrationTests
 
         await act.Should().ThrowAsync<MongoConcurrencyException>()
                  .WithMessage("*concurrency conflict*");
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [SetUp]
-    public void Setup()
-    {
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        var sp = new ServiceCollection()
-                 .AddMongo(url, configure: options =>
-                 {
-                     options.DefaultDatabase = $"EventStoreBulkWriteTestDb_{Guid.NewGuid():N}";
-                     options.RunConfiguratorsOnStartup = false;
-                 })
-                 .WithEventStore<OrderAggregate>(es => es
-                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
-                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
-                                                       .WithEvent<OrderCompletedEvent>("OrderCompleted")
-                                                       .WithCollectionPrefix("Orders")
-                                                       .WithCheckpoints(3)
-                                                       .WithBulkWriteOptimization())
-                 .Services
-                 .BuildServiceProvider();
-
-        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
-        _aggregateRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
-        _mongoHelper = sp.GetRequiredService<IMongoHelper>();
-
-        foreach (var configurator in sp.GetServices<IMongoConfigurator>())
-            configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
     }
 }

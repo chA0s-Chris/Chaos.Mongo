@@ -58,8 +58,19 @@ public class AnchorFixtureTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
 
-    private static String FixtureDirectory
-        => Path.Combine(TamperEvidenceVectorTests.RepositoryRoot, "tests", "Chaos.Mongo.EventStore.Tests", "Integration", "Fixtures");
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
 
     /// <summary>
     /// Not the source of the committed fixtures, which are frozen pre-conversion writer output (see the class
@@ -86,9 +97,6 @@ public class AnchorFixtureTests
         var evidenceDocument = await WriteEvidenceDocumentAsync(context.MongoHelper);
         File.WriteAllBytes(Path.Combine(FixtureDirectory, EvidenceFixtureFile), evidenceDocument.ToBson());
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public void ReadAnchor_FixtureWithAuthorityFailureAndConfirmationFailure_DecodesStoredValues()
@@ -127,16 +135,8 @@ public class AnchorFixtureTests
         leaf.Should().BeEquivalentTo(BuildExpectedLeaf());
     }
 
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
-    }
+    private static String FixtureDirectory
+        => Path.Combine(TamperEvidenceVectorTests.RepositoryRoot, "tests", "Chaos.Mongo.EventStore.Tests", "Integration", "Fixtures");
 
     private static AnchorRecord BuildExpectedAnchor()
         => new(FixtureAnchorId,

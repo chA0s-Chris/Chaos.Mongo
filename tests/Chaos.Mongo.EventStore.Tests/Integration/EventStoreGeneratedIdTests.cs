@@ -19,6 +19,9 @@ public class EventStoreGeneratedIdTests
 {
     private MongoDbContainer _container = null!;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
     [TestCase(true)]
     [TestCase(false)]
     public async Task AppendEventsAsync_PreservesExplicitEventIds(Boolean bulkWriteOptimizationEnabled)
@@ -87,9 +90,6 @@ public class EventStoreGeneratedIdTests
         var persistedEvents = await ReadEventStreamAsync(eventStore, aggregateId);
         persistedEvents.Select(e => e.Id).Should().Equal(generatedIds);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     private static async Task<List<Event<OrderAggregate>>> ReadEventStreamAsync(
         IEventStore<OrderAggregate> eventStore,

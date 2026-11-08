@@ -18,6 +18,20 @@ public class IntegrityFormatIntegrationTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
+
     [Test]
     [TestCase("unset")]
     [TestCase("number")]
@@ -48,9 +62,6 @@ public class IntegrityFormatIntegrationTests
         LedgerStoreContext.ReadIntegrity(first).PreviousHash
                           .Should().Equal(EventIntegrityChain.ComputeGenesis(nameof(LedgerAggregate), aggregateId));
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task RunPassAsync_StoredAggregateTypeDiffersFromClassName_SealsAndVerifies()
@@ -91,17 +102,6 @@ public class IntegrityFormatIntegrationTests
         (await protectedContext.CreateVerifier().VerifyStreamAsync(brokenStream))
             .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.MissingAggregateType));
         (await CountSealedAsync(protectedContext, brokenStream)).Should().Be(0);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     [Test]

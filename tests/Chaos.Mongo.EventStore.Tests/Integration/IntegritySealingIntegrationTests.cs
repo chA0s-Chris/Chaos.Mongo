@@ -18,6 +18,20 @@ public class IntegritySealingIntegrationTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
+
     [Test]
     [TestCase("_integrity")]
     [TestCase("_integrity.Hash")]
@@ -103,9 +117,6 @@ public class IntegritySealingIntegrationTests
             (await protectedContext.CountEventsAsync(aggregateId)).Should().Be(3);
         }
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task HostedService_AfterStart_RunsPassImmediatelyAndAfterEachInterval()
@@ -710,17 +721,6 @@ public class IntegritySealingIntegrationTests
             stats["totalKeysExamined"].ToInt64().Should().BeLessThanOrEqualTo(2);
             stats["totalDocsExamined"].ToInt64().Should().BeLessThanOrEqualTo(1);
         }
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     private static async Task AppendNextWithRetryAsync(LedgerStoreContext context, Guid aggregateId, Int64 version)

@@ -46,6 +46,7 @@ public static class MongoQueueMetrics
         /// The counter name for successfully completed queue items.
         /// </summary>
         public const String ProcessingSucceeded = "chaos.mongo.queue.processing.succeeded";
+
         /// <summary>
         /// The counter name for published queue items.
         /// </summary>

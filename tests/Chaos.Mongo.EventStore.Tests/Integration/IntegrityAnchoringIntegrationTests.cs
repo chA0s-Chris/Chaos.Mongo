@@ -27,6 +27,26 @@ public class IntegrityAnchoringIntegrationTests
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
+
     [Test]
     public async Task FindAsync_AnchorAwaitingTimestamps_ReturnsNoneUntilItCompletes()
     {
@@ -108,9 +128,6 @@ public class IntegrityAnchoringIntegrationTests
         afterSealing!.Leaf.Version.Should().Be(4);
         afterSealing.Leaf.Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(stream, 4)).Hash);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task NotifyAsync_EvidenceMissing_KeepsTheAnchorUnnotifiedUntilItCanBeResolved()
@@ -565,23 +582,6 @@ public class IntegrityAnchoringIntegrationTests
             await hostedService.StopAsync(CancellationToken.None);
             await hostedService.StoppedAsync(CancellationToken.None);
         }
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
     }
 
     private static AnchorStore GetStore(LedgerStoreContext context)

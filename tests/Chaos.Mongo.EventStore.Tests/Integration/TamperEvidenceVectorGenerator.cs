@@ -33,6 +33,13 @@ public class TamperEvidenceVectorGenerator
     [OneTimeTearDown]
     public void DisposeTestAuthority() => _testAuthority.Dispose();
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer()
+    {
+        _testAuthority = new TestTimestampAuthority();
+        _container = await MongoDbTestContainer.StartContainerAsync();
+    }
+
     [Test]
     public async Task Generate()
     {
@@ -82,13 +89,6 @@ public class TamperEvidenceVectorGenerator
         await File.WriteAllTextAsync(Path.Combine(directory, "anchors.json"), Serialize(anchors));
         await File.WriteAllTextAsync(Path.Combine(directory, "merkle.json"), Serialize(TamperEvidenceVectorTests.BuildMerkleVectors()));
         await File.WriteAllTextAsync(Path.Combine(directory, "evidence-chunked.json"), Serialize(TamperEvidenceVectorTests.BuildChunkedEvidenceVector()));
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-    {
-        _testAuthority = new TestTimestampAuthority();
-        _container = await MongoDbTestContainer.StartContainerAsync();
     }
 
     private static Task AppendAsync(LedgerStoreContext context, Guid aggregateId, Int64 firstVersion, Int32 count)

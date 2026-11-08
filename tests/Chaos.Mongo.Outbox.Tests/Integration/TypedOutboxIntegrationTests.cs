@@ -16,6 +16,9 @@ public class TypedOutboxIntegrationTests
 {
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
     [Test]
     public async Task AddMessageAsync_DestinationRegistry_RejectsUnregisteredPayloadAndRequiresTransaction()
     {
@@ -81,9 +84,6 @@ public class TypedOutboxIntegrationTests
             }
         }
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [TestCase(false)]
     [TestCase(true)]

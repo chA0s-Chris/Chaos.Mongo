@@ -18,6 +18,26 @@ public class CompletenessCheckIntegrationTests
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
+
     [Test]
     public async Task CheckAsync_AnchorAwaitingTimestamps_DoesNotCountAsCoverage()
     {
@@ -521,26 +541,6 @@ public class CompletenessCheckIntegrationTests
         var act = () => context.ServiceProvider.GetRequiredService<CompletenessChecker<LedgerAggregate>>().CheckAsync();
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*needs anchors*");
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
     }
 
     private static async Task<List<CompletenessFinding>> CheckAsync(LedgerStoreContext context, TrustedAnchorHead? trustedHead = null)

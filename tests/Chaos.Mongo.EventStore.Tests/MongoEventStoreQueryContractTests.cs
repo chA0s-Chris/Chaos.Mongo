@@ -14,14 +14,6 @@ using NUnit.Framework;
 
 public class MongoEventStoreQueryContractTests
 {
-    /// <summary>
-    /// Gets the expected exclusion of observational events: the concrete discriminator is the last element of a
-    /// hierarchical discriminator array, or the scalar discriminator itself. The erasure event of the event store
-    /// is always excluded.
-    /// </summary>
-    private static BsonDocument ObservationalEventExclusion
-        => CreateObservationalEventExclusion("OrderViewed", PersonalDataErased<OrderAggregate>.Discriminator);
-
     [Test]
     [TestCase(true)]
     [TestCase(false)]
@@ -287,6 +279,14 @@ public class MongoEventStoreQueryContractTests
             { "_id", 0 }
         });
     }
+
+    /// <summary>
+    /// Gets the expected exclusion of observational events: the concrete discriminator is the last element of a
+    /// hierarchical discriminator array, or the scalar discriminator itself. The erasure event of the event store
+    /// is always excluded.
+    /// </summary>
+    private static BsonDocument ObservationalEventExclusion
+        => CreateObservationalEventExclusion("OrderViewed", PersonalDataErased<OrderAggregate>.Discriminator);
 
     private static void BootstrapSerialization(MongoEventStoreOptions<OrderAggregate> options)
     {

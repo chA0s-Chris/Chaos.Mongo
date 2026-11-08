@@ -8,7 +8,8 @@
 
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)MongoDbTestImages.cs" Link="MongoDbTestImages.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)IsolatedConventionTestProcess.cs" Link="IsolatedConventionTestProcess.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)IsolatedConventionTestProcess.cs"
+             Link="IsolatedConventionTestProcess.cs" />
   </ItemGroup>
 
   <!-- Moq is not part of the shared test packages. Older tests still use it until they are migrated to

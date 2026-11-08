@@ -13,6 +13,31 @@ public class EventStoreCreatedUtcTests
     private MongoDbContainer _container;
     private IEventStore<OrderAggregate> _eventStore;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [SetUp]
+    public void Setup()
+    {
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var sp = new ServiceCollection()
+                 .AddMongo(url, configure: options =>
+                 {
+                     options.DefaultDatabase = $"CreatedUtcTestDb_{Guid.NewGuid():N}";
+                     options.RunConfiguratorsOnStartup = false;
+                 })
+                 .WithEventStore<OrderAggregate>(es => es
+                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
+                                                       .WithCollectionPrefix("Orders"))
+                 .Services
+                 .BuildServiceProvider();
+
+        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
+
+        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
+            configurator.ConfigureAsync(sp.GetRequiredService<IMongoHelper>()).GetAwaiter().GetResult();
+    }
+
     [Test]
     public async Task AppendEventsAsync_NullEvents_ThrowsArgumentNullException()
     {
@@ -46,30 +71,5 @@ public class EventStoreCreatedUtcTests
 
         events.Should().HaveCount(1);
         events[0].CreatedUtc.Should().Be(explicitTimestamp);
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [SetUp]
-    public void Setup()
-    {
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        var sp = new ServiceCollection()
-                 .AddMongo(url, configure: options =>
-                 {
-                     options.DefaultDatabase = $"CreatedUtcTestDb_{Guid.NewGuid():N}";
-                     options.RunConfiguratorsOnStartup = false;
-                 })
-                 .WithEventStore<OrderAggregate>(es => es
-                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
-                                                       .WithCollectionPrefix("Orders"))
-                 .Services
-                 .BuildServiceProvider();
-
-        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
-
-        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
-            configurator.ConfigureAsync(sp.GetRequiredService<IMongoHelper>()).GetAwaiter().GetResult();
     }
 }

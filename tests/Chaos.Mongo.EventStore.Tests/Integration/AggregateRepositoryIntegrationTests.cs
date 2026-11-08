@@ -14,6 +14,33 @@ public class AggregateRepositoryIntegrationTests
     private IEventStore<OrderAggregate> _eventStore;
     private IAggregateRepository<OrderAggregate> _repository;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [SetUp]
+    public void Setup()
+    {
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var sp = new ServiceCollection()
+                 .AddMongo(url, configure: options =>
+                 {
+                     options.DefaultDatabase = $"RepoTestDb_{Guid.NewGuid():N}";
+                     options.RunConfiguratorsOnStartup = false;
+                 })
+                 .WithEventStore<OrderAggregate>(es => es
+                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
+                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
+                                                       .WithCollectionPrefix("Orders"))
+                 .Services
+                 .BuildServiceProvider();
+
+        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
+        _repository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
+
+        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
+            configurator.ConfigureAsync(sp.GetRequiredService<IMongoHelper>()).GetAwaiter().GetResult();
+    }
+
     [Test]
     public async Task Collection_AllowsCustomQueries()
     {
@@ -119,32 +146,5 @@ public class AggregateRepositoryIntegrationTests
 
         aggregate.Should().NotBeNull();
         aggregate.CreatedUtc.Should().BeCloseTo(before, TimeSpan.FromSeconds(2));
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [SetUp]
-    public void Setup()
-    {
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        var sp = new ServiceCollection()
-                 .AddMongo(url, configure: options =>
-                 {
-                     options.DefaultDatabase = $"RepoTestDb_{Guid.NewGuid():N}";
-                     options.RunConfiguratorsOnStartup = false;
-                 })
-                 .WithEventStore<OrderAggregate>(es => es
-                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
-                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
-                                                       .WithCollectionPrefix("Orders"))
-                 .Services
-                 .BuildServiceProvider();
-
-        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
-        _repository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
-
-        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
-            configurator.ConfigureAsync(sp.GetRequiredService<IMongoHelper>()).GetAwaiter().GetResult();
     }
 }

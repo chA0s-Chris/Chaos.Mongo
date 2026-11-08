@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Hosting;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using System.Text.RegularExpressions;
 
@@ -364,7 +365,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
                     Builders<BookAggregate>.Filter.Eq(x => x.IsDeleted, false),
                     Builders<BookAggregate>.Filter.Regex(
                         x => x.Name,
-                        new(Regex.Escape(name), "i")));
+                        new BsonRegularExpression(Regex.Escape(name), "i")));
 
                 var books = await repository.Collection
                                             .Find(filter)

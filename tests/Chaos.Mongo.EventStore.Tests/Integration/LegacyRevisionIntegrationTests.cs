@@ -28,6 +28,11 @@ public class LegacyRevisionIntegrationTests
     private MongoEventStoreOptions<OrderAggregate> _options;
     private ServiceProvider? _serviceProvider;
 
+    public LegacyRevisionIntegrationTests(Boolean bulkWrite)
+    {
+        _bulkWrite = bulkWrite;
+    }
+
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
@@ -84,11 +89,6 @@ public class LegacyRevisionIntegrationTests
         {
             await _serviceProvider.DisposeAsync();
         }
-    }
-
-    public LegacyRevisionIntegrationTests(Boolean bulkWrite)
-    {
-        _bulkWrite = bulkWrite;
     }
 
     [Test]

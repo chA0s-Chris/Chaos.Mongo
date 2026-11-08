@@ -23,6 +23,43 @@ public class OutboxProcessorTests
     private Mock<IServiceScopeFactory> _scopeFactoryMock;
     private FakeTimeProvider _timeProvider;
 
+    [SetUp]
+    public void SetUp()
+    {
+        _options = new OutboxOptions
+        {
+            CollectionName = "TestOutbox",
+            BatchSize = 10,
+            MaxRetries = 3,
+            PollingInterval = TimeSpan.FromMilliseconds(50),
+            LockLeaseTime = TimeSpan.FromMinutes(5),
+            RetryBackoffInitialDelay = TimeSpan.FromSeconds(1),
+            RetryBackoffMaxDelay = TimeSpan.FromSeconds(30)
+        };
+
+        _timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        _loggerMock = new Mock<ILogger<OutboxProcessor>>();
+
+        _collectionMock = new Mock<IMongoCollection<OutboxMessage>>();
+        _databaseMock = new Mock<IMongoDatabase>();
+        _databaseMock
+            .Setup(d => d.GetCollection<OutboxMessage>(_options.CollectionName, null))
+            .Returns(_collectionMock.Object);
+
+        _mongoHelperMock = new Mock<IMongoHelper>();
+        _mongoHelperMock.Setup(h => h.Database).Returns(_databaseMock.Object);
+
+        _publisherMock = new Mock<IOutboxPublisher>();
+
+        var serviceScopeMock = new Mock<IServiceScope>();
+        var services = new ServiceCollection();
+        services.AddSingleton(_publisherMock.Object);
+        serviceScopeMock.Setup(s => s.ServiceProvider).Returns(services.BuildServiceProvider());
+
+        _scopeFactoryMock = new Mock<IServiceScopeFactory>();
+        _scopeFactoryMock.Setup(f => f.CreateScope()).Returns(serviceScopeMock.Object);
+    }
+
     [Test]
     public void Constructor_NullLogger_ThrowsArgumentNullException()
     {
@@ -479,43 +516,6 @@ public class OutboxProcessorTests
             Times.Once);
 
         VerifyLoggedWarning("ownership was lost");
-    }
-
-    [SetUp]
-    public void SetUp()
-    {
-        _options = new OutboxOptions
-        {
-            CollectionName = "TestOutbox",
-            BatchSize = 10,
-            MaxRetries = 3,
-            PollingInterval = TimeSpan.FromMilliseconds(50),
-            LockLeaseTime = TimeSpan.FromMinutes(5),
-            RetryBackoffInitialDelay = TimeSpan.FromSeconds(1),
-            RetryBackoffMaxDelay = TimeSpan.FromSeconds(30)
-        };
-
-        _timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        _loggerMock = new Mock<ILogger<OutboxProcessor>>();
-
-        _collectionMock = new Mock<IMongoCollection<OutboxMessage>>();
-        _databaseMock = new Mock<IMongoDatabase>();
-        _databaseMock
-            .Setup(d => d.GetCollection<OutboxMessage>(_options.CollectionName, null))
-            .Returns(_collectionMock.Object);
-
-        _mongoHelperMock = new Mock<IMongoHelper>();
-        _mongoHelperMock.Setup(h => h.Database).Returns(_databaseMock.Object);
-
-        _publisherMock = new Mock<IOutboxPublisher>();
-
-        var serviceScopeMock = new Mock<IServiceScope>();
-        var services = new ServiceCollection();
-        services.AddSingleton(_publisherMock.Object);
-        serviceScopeMock.Setup(s => s.ServiceProvider).Returns(services.BuildServiceProvider());
-
-        _scopeFactoryMock = new Mock<IServiceScopeFactory>();
-        _scopeFactoryMock.Setup(f => f.CreateScope()).Returns(serviceScopeMock.Object);
     }
 
     [Test]

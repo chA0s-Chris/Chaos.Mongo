@@ -14,6 +14,10 @@ public class EventStoreIndexContractIntegrationTests
 {
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer()
+        => _container = await MongoDbTestContainer.StartContainerAsync();
+
     [Test]
     public async Task ConfigureAsync_CreatesNearestCheckpointLookupIndexes()
     {
@@ -91,10 +95,6 @@ public class EventStoreIndexContractIntegrationTests
         var collectionNames = await (await helper.Database.ListCollectionNamesAsync()).ToListAsync();
         collectionNames.Should().NotContain("Orders_Checkpoints");
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-        => _container = await MongoDbTestContainer.StartContainerAsync();
 
     private ServiceProvider CreateServiceProvider(String databaseName, Int32 checkpointInterval = 3)
     {

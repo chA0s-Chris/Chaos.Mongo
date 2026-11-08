@@ -20,6 +20,11 @@ public class StoreAssignedAppendIntegrationTests
     private readonly Boolean _integrityProtection;
     private MongoDbContainer _container;
 
+    public StoreAssignedAppendIntegrationTests(Boolean integrityProtection)
+    {
+        _integrityProtection = integrityProtection;
+    }
+
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
@@ -32,11 +37,6 @@ public class StoreAssignedAppendIntegrationTests
         }
 
         _contexts.Clear();
-    }
-
-    public StoreAssignedAppendIntegrationTests(Boolean integrityProtection)
-    {
-        _integrityProtection = integrityProtection;
     }
 
     [Test]

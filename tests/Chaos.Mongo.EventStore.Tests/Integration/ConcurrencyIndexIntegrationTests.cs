@@ -18,6 +18,9 @@ public class ConcurrencyIndexIntegrationTests
 {
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
     [Test]
     public async Task AppendEventsAsync_ConflictingIndexUnderConcurrencyIndexName_ThrowsAndLeavesExistingIndexIntact()
     {
@@ -115,9 +118,6 @@ public class ConcurrencyIndexIntegrationTests
         var indexes = await (await eventsCollection.Indexes.ListAsync()).ToListAsync();
         indexes.Should().NotContain(x => x["name"] == IndexNames.AggregateIdWithVersionUnique);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     private static OrderCreatedEvent CreateOrder(Guid aggregateId)
         => new()

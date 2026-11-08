@@ -30,41 +30,6 @@ public class RestrictedRoleIntegrationTests
 
     private MongoDbContainer _container;
 
-    [Test]
-    public async Task AppendEventsAsync_RestrictedRoleWithOptOutAfterIndexProvisionedOutOfBand_Succeeds()
-    {
-        await ProvisionConcurrencyIndexWithElevatedConnectionAsync();
-
-        await using var serviceProvider = CreateApplicationServiceProvider(true);
-        var store = serviceProvider.GetRequiredService<IEventStore<OrderAggregate>>();
-
-        var aggregate = await store.AppendEventsAsync([CreateOrder(Guid.NewGuid())]);
-
-        aggregate.Status.Should().Be("Created");
-    }
-
-    [Test]
-    public async Task AppendEventsAsync_RestrictedRoleWithoutOptOut_ThrowsMongoConcurrencyIndexMissingException()
-    {
-        // Independent of execution order relative to the opt-out test above: reset the events collection with the
-        // elevated connection first, so the missing-index precondition this test is named for actually holds,
-        // rather than coincidentally passing because the restricted role lacks createIndex regardless of whether
-        // the index already exists.
-        var eventsCollection = await ResetEventsCollectionWithElevatedConnectionAsync();
-        (await (await eventsCollection.Indexes.ListAsync()).ToListAsync())
-            .Should().NotContain(index => index["name"] == IndexNames.AggregateIdWithVersionUnique);
-
-        await using var serviceProvider = CreateApplicationServiceProvider(false);
-        var store = serviceProvider.GetRequiredService<IEventStore<OrderAggregate>>();
-
-        var act = () => store.AppendEventsAsync([CreateOrder(Guid.NewGuid())]);
-
-        await act.Should().ThrowAsync<MongoConcurrencyIndexMissingException>()
-                 .WithMessage("*lacks permission to create indexes*");
-
-        (await eventsCollection.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(0);
-    }
-
     [OneTimeSetUp]
     public async Task StartContainerAndCreateApplicationUserAsync()
     {
@@ -117,6 +82,41 @@ public class RestrictedRoleIntegrationTests
 
     [OneTimeTearDown]
     public async Task StopContainerAsync() => await _container.DisposeAsync();
+
+    [Test]
+    public async Task AppendEventsAsync_RestrictedRoleWithOptOutAfterIndexProvisionedOutOfBand_Succeeds()
+    {
+        await ProvisionConcurrencyIndexWithElevatedConnectionAsync();
+
+        await using var serviceProvider = CreateApplicationServiceProvider(true);
+        var store = serviceProvider.GetRequiredService<IEventStore<OrderAggregate>>();
+
+        var aggregate = await store.AppendEventsAsync([CreateOrder(Guid.NewGuid())]);
+
+        aggregate.Status.Should().Be("Created");
+    }
+
+    [Test]
+    public async Task AppendEventsAsync_RestrictedRoleWithoutOptOut_ThrowsMongoConcurrencyIndexMissingException()
+    {
+        // Independent of execution order relative to the opt-out test above: reset the events collection with the
+        // elevated connection first, so the missing-index precondition this test is named for actually holds,
+        // rather than coincidentally passing because the restricted role lacks createIndex regardless of whether
+        // the index already exists.
+        var eventsCollection = await ResetEventsCollectionWithElevatedConnectionAsync();
+        (await (await eventsCollection.Indexes.ListAsync()).ToListAsync())
+            .Should().NotContain(index => index["name"] == IndexNames.AggregateIdWithVersionUnique);
+
+        await using var serviceProvider = CreateApplicationServiceProvider(false);
+        var store = serviceProvider.GetRequiredService<IEventStore<OrderAggregate>>();
+
+        var act = () => store.AppendEventsAsync([CreateOrder(Guid.NewGuid())]);
+
+        await act.Should().ThrowAsync<MongoConcurrencyIndexMissingException>()
+                 .WithMessage("*lacks permission to create indexes*");
+
+        (await eventsCollection.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(0);
+    }
 
     private static OrderCreatedEvent CreateOrder(Guid aggregateId)
         => new()

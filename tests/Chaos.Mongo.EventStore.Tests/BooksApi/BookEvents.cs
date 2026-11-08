@@ -17,7 +17,7 @@ public sealed class BookCreatedEvent : Event<BookAggregate>
         aggregate.Name = Name;
         aggregate.Author = Author;
         aggregate.ReleaseYear = ReleaseYear;
-        aggregate.Metadata = new(Metadata, StringComparer.Ordinal);
+        aggregate.Metadata = new Dictionary<String, String>(Metadata, StringComparer.Ordinal);
         aggregate.Editions = [];
         aggregate.IsDeleted = false;
     }
@@ -89,7 +89,7 @@ public sealed class BookEditionAddedEvent : Event<BookAggregate>
             throw new MongoEventValidationException("Edition already exists.");
         }
 
-        aggregate.Editions.Add(new()
+        aggregate.Editions.Add(new BookEdition
         {
             Id = EditionId,
             Name = Name,

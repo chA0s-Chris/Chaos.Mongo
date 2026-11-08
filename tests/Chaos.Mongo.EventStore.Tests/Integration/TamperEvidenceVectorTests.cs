@@ -32,6 +32,109 @@ public class TamperEvidenceVectorTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
 
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
+
+    [Test]
+    public void BuildMerkleVectors_LibraryTrees_MatchCommittedVectors()
+        => JsonNode.DeepEquals(ReadJson("merkle.json"), BuildMerkleVectors()).Should().BeTrue();
+
+    [Test]
+    public async Task StoreAsync_ChunkedEvidenceVector_ReproducesCommittedHashesAndChunks()
+    {
+        var context = await CreateContextAsync();
+        var store = new AnchorEvidenceStore(context.MongoHelper, new IntegrityAnchoringOptions());
+        var expected = ReadJson("evidence-chunked.json");
+        var item = ChunkedItem();
+
+        var hash = await store.StoreAsync(item, CancellationToken.None);
+        var read = await store.ReadAsync(hash, CancellationToken.None);
+        var chunks = await store.Chunks.Find(new BsonDocument($"_id.{AnchorEvidenceStore.HashField}", new BsonBinaryData(hash)))
+                                .Sort(new BsonDocument($"_id.{AnchorEvidenceStore.IndexField}", 1))
+                                .ToListAsync();
+
+        JsonNode.DeepEquals(expected, BuildChunkedEvidenceVector()).Should().BeTrue();
+        Hex(hash).Should().Be(expected["hash"]?.GetValue<String>());
+        read.Should().Equal(item);
+        chunks.Select(chunk => Hex(SHA256.HashData(chunk[AnchorEvidenceStore.DataField].AsByteArray)))
+              .Should().Equal((expected["chunkHashes"]?.AsArray() ?? []).Select(node => node?.GetValue<String>()));
+    }
+
+    [Test]
+    public async Task VerifyAnchorAsync_AnchorVectors_MatchExpectedDigestsAndTokens()
+    {
+        var root = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(Path.Combine(VectorDirectory, "tsa-root.pem")));
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
+                                                                                            "test-tsa",
+                                                                                            trust => trust.TrustedRoots.Add(root))));
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        await LoadAsync(context, options.AnchorsCollectionName, "anchors.bson");
+        await LoadAsync(context, options.AnchorLeavesCollectionName, "leaves.bson");
+        await LoadAsync(context, options.AnchorEvidenceCollectionName, "evidence.bson");
+        var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
+        var expected = ReadJson("anchors.json");
+
+        var chain = await verifier.VerifyAnchorChainAsync();
+        var anchors = new JsonArray();
+        foreach (var document in await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).Sort(new BsonDocument(AnchorStore.SequenceField, 1)).ToListAsync())
+        {
+            var anchor = AnchorStore.ReadAnchor(document);
+            var result = await verifier.VerifyAnchorAsync(anchor);
+            AnchorEncoding.ComputeAnchorDigest(anchor.FormatVersion, anchor.Sequence, anchor.PreviousDigest, anchor.MerkleRoot).Should().Equal(anchor.AnchorDigest);
+            anchors.Add(new JsonObject
+            {
+                ["sequence"] = anchor.Sequence,
+                ["digest"] = Hex(anchor.AnchorDigest),
+                ["timestamps"] = new JsonArray(result.Timestamps.Select(t => (JsonNode)new JsonArray(t.IsValid, t.RevocationStatus.ToString())).ToArray())
+            });
+        }
+
+        chain.IsIntact.Should().BeTrue();
+        chain.AnchorCount.Should().Be(expected["chain"]?["anchorCount"]?.GetValue<Int64>() ?? -1);
+        JsonNode.DeepEquals(anchors, expected["anchors"]).Should().BeTrue(anchors.ToJsonString());
+        foreach (var leaf in await verifier.Store.Leaves.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync())
+        {
+            var anchoredLeaf = AnchorStore.ReadLeaf(leaf);
+            var anchor = AnchorStore.ReadAnchor(await verifier.Store.Anchors.Find(new BsonDocument("_id", leaf["AnchorId"])).SingleAsync());
+            var leafHash = MerkleTree.HashLeaf(AnchorEncoding.EncodeLeaf(new AnchorCandidate(anchoredLeaf.AggregateType,
+                                                                                             anchoredLeaf.AggregateId,
+                                                                                             anchoredLeaf.Version,
+                                                                                             anchoredLeaf.Hash,
+                                                                                             default)));
+            MerkleTree.VerifyInclusion(leafHash, anchoredLeaf.Index, anchor.LeafCount, anchoredLeaf.Proof, anchor.MerkleRoot).Should().BeTrue();
+        }
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_StreamVectors_MatchExpectedResults()
+    {
+        var context = await CreateContextAsync();
+        await LoadAsync(context, context.Options.EventsCollectionName, "streams.bson");
+        var verifier = context.CreateVerifier();
+
+        foreach (var stream in ReadJson("streams.json")["streams"]?.AsArray() ?? [])
+        {
+            var aggregateId = Guid.Parse(stream?["aggregateId"]?.GetValue<String>() ?? String.Empty);
+            var first = await context.FindEventAsync(aggregateId, 1);
+            var result = await verifier.VerifyStreamAsync(aggregateId);
+
+            Hex(EventIntegrityChain.ComputeGenesis(first["AggregateType"].AsString, aggregateId))
+                .Should().Be(stream?["genesis"]?.GetValue<String>());
+            JsonNode.DeepEquals(ToJson(result), stream?["result"]).Should().BeTrue($"{stream?["name"]}: {ToJson(result).ToJsonString()}");
+        }
+    }
+
     /// <summary>
     /// Gets the repository root, the first ancestor of the test directory that holds the solution.
     /// </summary>
@@ -129,109 +232,6 @@ public class TamperEvidenceVectorTests
     /// Encodes bytes as lower-case hexadecimal, the encoding of the vector files.
     /// </summary>
     public static String Hex(ReadOnlySpan<Byte> bytes) => Convert.ToHexString(bytes).ToLowerInvariant();
-
-    [Test]
-    public void BuildMerkleVectors_LibraryTrees_MatchCommittedVectors()
-        => JsonNode.DeepEquals(ReadJson("merkle.json"), BuildMerkleVectors()).Should().BeTrue();
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [Test]
-    public async Task StoreAsync_ChunkedEvidenceVector_ReproducesCommittedHashesAndChunks()
-    {
-        var context = await CreateContextAsync();
-        var store = new AnchorEvidenceStore(context.MongoHelper, new IntegrityAnchoringOptions());
-        var expected = ReadJson("evidence-chunked.json");
-        var item = ChunkedItem();
-
-        var hash = await store.StoreAsync(item, CancellationToken.None);
-        var read = await store.ReadAsync(hash, CancellationToken.None);
-        var chunks = await store.Chunks.Find(new BsonDocument($"_id.{AnchorEvidenceStore.HashField}", new BsonBinaryData(hash)))
-                                .Sort(new BsonDocument($"_id.{AnchorEvidenceStore.IndexField}", 1))
-                                .ToListAsync();
-
-        JsonNode.DeepEquals(expected, BuildChunkedEvidenceVector()).Should().BeTrue();
-        Hex(hash).Should().Be(expected["hash"]?.GetValue<String>());
-        read.Should().Equal(item);
-        chunks.Select(chunk => Hex(SHA256.HashData(chunk[AnchorEvidenceStore.DataField].AsByteArray)))
-              .Should().Equal((expected["chunkHashes"]?.AsArray() ?? []).Select(node => node?.GetValue<String>()));
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
-    }
-
-    [Test]
-    public async Task VerifyAnchorAsync_AnchorVectors_MatchExpectedDigestsAndTokens()
-    {
-        var root = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(Path.Combine(VectorDirectory, "tsa-root.pem")));
-        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
-                                                                                            "test-tsa",
-                                                                                            trust => trust.TrustedRoots.Add(root))));
-        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
-        await LoadAsync(context, options.AnchorsCollectionName, "anchors.bson");
-        await LoadAsync(context, options.AnchorLeavesCollectionName, "leaves.bson");
-        await LoadAsync(context, options.AnchorEvidenceCollectionName, "evidence.bson");
-        var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
-        var expected = ReadJson("anchors.json");
-
-        var chain = await verifier.VerifyAnchorChainAsync();
-        var anchors = new JsonArray();
-        foreach (var document in await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).Sort(new BsonDocument(AnchorStore.SequenceField, 1)).ToListAsync())
-        {
-            var anchor = AnchorStore.ReadAnchor(document);
-            var result = await verifier.VerifyAnchorAsync(anchor);
-            AnchorEncoding.ComputeAnchorDigest(anchor.FormatVersion, anchor.Sequence, anchor.PreviousDigest, anchor.MerkleRoot).Should().Equal(anchor.AnchorDigest);
-            anchors.Add(new JsonObject
-            {
-                ["sequence"] = anchor.Sequence,
-                ["digest"] = Hex(anchor.AnchorDigest),
-                ["timestamps"] = new JsonArray(result.Timestamps.Select(t => (JsonNode)new JsonArray(t.IsValid, t.RevocationStatus.ToString())).ToArray())
-            });
-        }
-
-        chain.IsIntact.Should().BeTrue();
-        chain.AnchorCount.Should().Be(expected["chain"]?["anchorCount"]?.GetValue<Int64>() ?? -1);
-        JsonNode.DeepEquals(anchors, expected["anchors"]).Should().BeTrue(anchors.ToJsonString());
-        foreach (var leaf in await verifier.Store.Leaves.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync())
-        {
-            var anchoredLeaf = AnchorStore.ReadLeaf(leaf);
-            var anchor = AnchorStore.ReadAnchor(await verifier.Store.Anchors.Find(new BsonDocument("_id", leaf["AnchorId"])).SingleAsync());
-            var leafHash = MerkleTree.HashLeaf(AnchorEncoding.EncodeLeaf(new AnchorCandidate(anchoredLeaf.AggregateType,
-                                                                                             anchoredLeaf.AggregateId,
-                                                                                             anchoredLeaf.Version,
-                                                                                             anchoredLeaf.Hash,
-                                                                                             default)));
-            MerkleTree.VerifyInclusion(leafHash, anchoredLeaf.Index, anchor.LeafCount, anchoredLeaf.Proof, anchor.MerkleRoot).Should().BeTrue();
-        }
-    }
-
-    [Test]
-    public async Task VerifyStreamAsync_StreamVectors_MatchExpectedResults()
-    {
-        var context = await CreateContextAsync();
-        await LoadAsync(context, context.Options.EventsCollectionName, "streams.bson");
-        var verifier = context.CreateVerifier();
-
-        foreach (var stream in ReadJson("streams.json")["streams"]?.AsArray() ?? [])
-        {
-            var aggregateId = Guid.Parse(stream?["aggregateId"]?.GetValue<String>() ?? String.Empty);
-            var first = await context.FindEventAsync(aggregateId, 1);
-            var result = await verifier.VerifyStreamAsync(aggregateId);
-
-            Hex(EventIntegrityChain.ComputeGenesis(first["AggregateType"].AsString, aggregateId))
-                .Should().Be(stream?["genesis"]?.GetValue<String>());
-            JsonNode.DeepEquals(ToJson(result), stream?["result"]).Should().BeTrue($"{stream?["name"]}: {ToJson(result).ToJsonString()}");
-        }
-    }
 
     /// <summary>
     /// Inserts the raw documents of a vector file into a collection.

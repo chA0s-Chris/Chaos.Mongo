@@ -49,7 +49,7 @@ public sealed class BookResponse
 
     public static BookResponse FromAggregate(BookAggregate aggregate)
     {
-        return new()
+        return new BookResponse
         {
             Id = aggregate.Id,
             Name = aggregate.Name,
@@ -57,7 +57,7 @@ public sealed class BookResponse
             ReleaseYear = aggregate.ReleaseYear,
             IsDeleted = aggregate.IsDeleted,
             Version = aggregate.Version,
-            Metadata = new(aggregate.Metadata, StringComparer.Ordinal),
+            Metadata = new Dictionary<String, String>(aggregate.Metadata, StringComparer.Ordinal),
             Editions = aggregate.Editions
                                 .Select(x => new BookEditionResponse
                                 {

@@ -19,6 +19,44 @@ public class OutboxIntegrationTests
     private IOutbox _outbox;
     private ServiceProvider _serviceProvider;
 
+    [SetUp]
+    public async Task Setup()
+    {
+        _container = await MongoDbTestContainer.StartContainerAsync();
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        _serviceProvider = new ServiceCollection()
+                           .AddLogging(l => l.SetMinimumLevel(LogLevel.Debug))
+                           .AddMongo(url, configure: options =>
+                           {
+                               options.DefaultDatabase = $"OutboxTestDb_{Guid.NewGuid():N}";
+                               options.RunConfiguratorsOnStartup = false;
+                           })
+                           .WithOutbox(o => o
+                                            .WithPublisher<TestOutboxPublisher>(ServiceLifetime.Singleton)
+                                            .WithMessage<TestPayload>("TestPayload")
+                                            .WithMessage<AnotherTestPayload>("AnotherPayload")
+                                            .WithMaxRetries(3)
+                                            .WithPollingInterval(TimeSpan.FromMilliseconds(100))
+                                            .WithLockLeaseTime(TimeSpan.FromSeconds(10))
+                                            .WithBatchSize(10))
+                           .Services
+                           .BuildServiceProvider();
+
+        _mongoHelper = _serviceProvider.GetRequiredService<IMongoHelper>();
+        _outbox = _serviceProvider.GetRequiredService<IOutbox>();
+        _options = _serviceProvider.GetRequiredService<OutboxOptions>();
+
+        // Run configurators to create indexes
+        foreach (var configurator in _serviceProvider.GetServices<IMongoConfigurator>())
+            await configurator.ConfigureAsync(_mongoHelper);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _serviceProvider.Dispose();
+    }
+
     [Test]
     public async Task AddMessageAsync_MultipleMessagesInSameTransaction_AllPersisted()
     {
@@ -323,44 +361,6 @@ public class OutboxIntegrationTests
         var act = () => processor.StopAsync();
 
         await act.Should().NotThrowAsync();
-    }
-
-    [SetUp]
-    public async Task Setup()
-    {
-        _container = await MongoDbTestContainer.StartContainerAsync();
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        _serviceProvider = new ServiceCollection()
-                           .AddLogging(l => l.SetMinimumLevel(LogLevel.Debug))
-                           .AddMongo(url, configure: options =>
-                           {
-                               options.DefaultDatabase = $"OutboxTestDb_{Guid.NewGuid():N}";
-                               options.RunConfiguratorsOnStartup = false;
-                           })
-                           .WithOutbox(o => o
-                                            .WithPublisher<TestOutboxPublisher>(ServiceLifetime.Singleton)
-                                            .WithMessage<TestPayload>("TestPayload")
-                                            .WithMessage<AnotherTestPayload>("AnotherPayload")
-                                            .WithMaxRetries(3)
-                                            .WithPollingInterval(TimeSpan.FromMilliseconds(100))
-                                            .WithLockLeaseTime(TimeSpan.FromSeconds(10))
-                                            .WithBatchSize(10))
-                           .Services
-                           .BuildServiceProvider();
-
-        _mongoHelper = _serviceProvider.GetRequiredService<IMongoHelper>();
-        _outbox = _serviceProvider.GetRequiredService<IOutbox>();
-        _options = _serviceProvider.GetRequiredService<OutboxOptions>();
-
-        // Run configurators to create indexes
-        foreach (var configurator in _serviceProvider.GetServices<IMongoConfigurator>())
-            await configurator.ConfigureAsync(_mongoHelper);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        _serviceProvider.Dispose();
     }
 
     private static async Task WaitUntilAsync(Func<Task<Boolean>> condition, TimeSpan? timeout = null)
