@@ -23,8 +23,21 @@ public sealed record TimestampVerificationResult
     public required Boolean IsValid { get; init; }
 
     /// <summary>
+    /// Gets the same recomputed revocation status as <see cref="RevocationStatus"/>, exposed separately from it so a
+    /// caller can read "what today's rule computes from the stored evidence" under its own name, apart from
+    /// <see cref="StoredRevocationStatus"/>'s historical value. The two values can diverge: a chain whose non-root
+    /// certificates genuinely name no CRL distribution point is stored as <see cref="TimestampRevocationStatus.Confirmed"/>
+    /// under the rule in effect before this status existed, stays cryptographically valid, and is not retroactively
+    /// invalidated, but this field reports <see cref="TimestampRevocationStatus.NoRevocationSource"/> for it, so a
+    /// caller can tell "there was nothing to check" apart from "it was genuinely confirmed," without the library
+    /// claiming a stronger historical guarantee than was actually recorded.
+    /// </summary>
+    public required TimestampRevocationStatus RecomputedRevocationStatus { get; init; }
+
+    /// <summary>
     /// Gets the revocation status of the token's chain at the token's time, recomputed from the stored confirming
-    /// CRLs.
+    /// CRLs, used for the revoked/valid decision: only <see cref="TimestampRevocationStatus.Revoked"/> invalidates the
+    /// token. Equal to <see cref="RecomputedRevocationStatus"/>.
     /// </summary>
     public required TimestampRevocationStatus RevocationStatus { get; init; }
 

@@ -16,6 +16,14 @@ public sealed record EventAnchorVerificationResult
     public AnchorReference? Anchor { get; init; }
 
     /// <summary>
+    /// Gets the earlier covering anchor the verified evidence degraded from, because every one of its tokens was
+    /// invalid: <c>null</c> unless an earlier covering anchor was skipped for that reason before <see cref="Anchor"/>
+    /// settled the result. This lets a reader tell the evidence degraded to a later anchor's time, rather than the
+    /// event having been covered by only one anchor from the start.
+    /// </summary>
+    public AnchorReference? DegradedFromAnchor { get; init; }
+
+    /// <summary>
     /// Gets why the anchoring does not verify, or <c>null</c> unless <see cref="Status"/> is
     /// <see cref="EventAnchorStatus.Failed"/>.
     /// </summary>

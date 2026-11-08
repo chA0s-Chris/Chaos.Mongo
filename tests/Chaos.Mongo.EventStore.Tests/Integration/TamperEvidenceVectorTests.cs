@@ -75,16 +75,31 @@ public class TamperEvidenceVectorTests
     [Test]
     public async Task VerifyAnchorAsync_AnchorVectors_MatchExpectedDigestsAndTokens()
     {
-        var root = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(Path.Combine(VectorDirectory, "tsa-root.pem")));
-        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
-                                                                                            "test-tsa",
-                                                                                            trust => trust.TrustedRoots.Add(root))));
+        var expected = ReadJson("anchors.json");
+
+        // "trustedRoots" maps each authority name to its own trusted roots, never merged with another authority's:
+        // X509Chain resolves an ambiguous candidate (for example two certificates sharing a subject name or key) by
+        // what else is in its CustomTrustStore, so pooling every authority's roots into one shared trust could
+        // change which genuine path a scenario's own chain resolves to.
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(verification =>
+        {
+            foreach (var (authorityName, fileNames) in (expected["trustedRoots"] as JsonObject ?? [])
+                     .Select(entry => (entry.Key, FileNames: entry.Value?.AsArray().Select(node => node?.GetValue<String>()).ToList() ?? [])))
+            {
+                var roots = new X509Certificate2Collection();
+                foreach (var fileName in fileNames)
+                {
+                    roots.ImportFromPemFile(Path.Combine(VectorDirectory, fileName!));
+                }
+
+                verification.WithTimestampAuthorityTrust(authorityName, trust => trust.TrustedRoots.AddRange(roots));
+            }
+        }));
         var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
         await LoadAsync(context, options.AnchorsCollectionName, "anchors.bson");
         await LoadAsync(context, options.AnchorLeavesCollectionName, "leaves.bson");
         await LoadAsync(context, options.AnchorEvidenceCollectionName, "evidence.bson");
         var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
-        var expected = ReadJson("anchors.json");
 
         var chain = await verifier.VerifyAnchorChainAsync();
         var anchors = new JsonArray();
@@ -118,20 +133,62 @@ public class TamperEvidenceVectorTests
     }
 
     [Test]
+    public async Task VerifyEventAnchorAsync_DegradedEvidenceVector_MatchesExpectedDegradation()
+    {
+        var root = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(Path.Combine(VectorDirectory, "tsa-root.pem")));
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
+                                                                                            "test-tsa",
+                                                                                            trust => trust.TrustedRoots.Add(root))));
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        await LoadAsync(context, context.Options.EventsCollectionName, "streams.bson");
+        await LoadAsync(context, options.AnchorsCollectionName, "anchors.bson");
+        await LoadAsync(context, options.AnchorLeavesCollectionName, "leaves.bson");
+        await LoadAsync(context, options.AnchorEvidenceCollectionName, "evidence.bson");
+        var expected = ReadJson("anchors.json")["eventAnchors"] ?? throw new InvalidDataException("The eventAnchors vector is missing.");
+        var aggregateId = Guid.Parse(expected["aggregateId"]?.GetValue<String>() ?? String.Empty);
+        var version = expected["version"]?.GetValue<Int64>() ?? 0;
+
+        var result = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, version);
+
+        result.Status.ToString().Should().Be(expected["status"]?.GetValue<String>());
+        (result.Anchor?.Sequence).Should().Be(expected["anchorSequence"]?.GetValue<Int64>());
+        (result.DegradedFromAnchor?.Sequence).Should().Be(expected["degradedFromSequence"]?.GetValue<Int64>());
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_StreamVectors_MatchExpectedResults()
     {
-        var context = await CreateContextAsync();
+        var root = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(Path.Combine(VectorDirectory, "tsa-root.pem")));
+        var context = await CreateContextAsync(mongo =>
+        {
+            LedgerStoreContext.AddShipmentStore(mongo);
+            mongo.WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
+                                                "test-tsa",
+                                                trust => trust.TrustedRoots.Add(root)));
+        });
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        var shipmentOptions = context.ServiceProvider.GetRequiredService<MongoEventStoreOptions<ShipmentAggregate>>();
         await LoadAsync(context, context.Options.EventsCollectionName, "streams.bson");
-        var verifier = context.CreateVerifier();
+        await LoadAsync(context, shipmentOptions.EventsCollectionName, "shipment-events.bson");
+        await LoadAsync(context, options.AnchorsCollectionName, "anchors.bson");
+        await LoadAsync(context, options.AnchorLeavesCollectionName, "leaves.bson");
+        await LoadAsync(context, options.AnchorEvidenceCollectionName, "evidence.bson");
+        var ledgerVerifier = context.CreateVerifier();
+        var shipmentVerifier = context.ServiceProvider.GetRequiredService<EventStreamVerifier<ShipmentAggregate>>();
 
         foreach (var stream in ReadJson("streams.json")["streams"]?.AsArray() ?? [])
         {
             var aggregateId = Guid.Parse(stream?["aggregateId"]?.GetValue<String>() ?? String.Empty);
-            var first = await context.FindEventAsync(aggregateId, 1);
-            var result = await verifier.VerifyStreamAsync(aggregateId);
+            var isShipment = stream?["aggregateType"]?.GetValue<String>() == nameof(ShipmentAggregate);
+            var result = isShipment ? await shipmentVerifier.VerifyStreamAsync(aggregateId) : await ledgerVerifier.VerifyStreamAsync(aggregateId);
 
-            Hex(EventIntegrityChain.ComputeGenesis(first["AggregateType"].AsString, aggregateId))
-                .Should().Be(stream?["genesis"]?.GetValue<String>());
+            // The empty stream vector has no version-1 event to read a genesis value from.
+            if (stream?["genesis"] is { } genesis)
+            {
+                var first = isShipment ? await context.FindShipmentEventAsync(aggregateId, 1) : await context.FindEventAsync(aggregateId, 1);
+                Hex(EventIntegrityChain.ComputeGenesis(first["AggregateType"].AsString, aggregateId)).Should().Be(genesis.GetValue<String>());
+            }
+
             JsonNode.DeepEquals(ToJson(result), stream?["result"]).Should().BeTrue($"{stream?["name"]}: {ToJson(result).ToJsonString()}");
         }
     }
@@ -266,6 +323,7 @@ public class TamperEvidenceVectorTests
             ["intact"] = result.IsIntact,
             ["firstBrokenVersion"] = result.FirstBrokenVersion,
             ["failure"] = result.Failure?.ToString(),
+            ["comparedLeafCount"] = result.ComparedLeafCount,
             ["events"] = new JsonArray(result.Events.Select(e => (JsonNode)new JsonObject
                                              {
                                                  ["version"] = e.Version,

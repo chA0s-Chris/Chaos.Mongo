@@ -185,8 +185,223 @@ public class TimestampRevocationConfirmationTests
                                                                                                         .RevocationStatus));
     }
 
+    /// <summary>
+    /// Same shape as <see cref="RunAsync_ChainKeepsFailing_DoesNotKeepOtherChainsFromBeingConfirmed"/>, but the
+    /// stuck chain reaches its bounded read every time not via the thrown exception that case catches, but via the
+    /// stored <see cref="TimestampRevocationStatus.Unconfirmed"/> status this plan records instead of throwing for a
+    /// CRL that genuinely never covers the chain (every certificate has a source, but the only CRL returned does not
+    /// count for it): the deferral must still free the next run's bounded read for the healthy chain.
+    /// </summary>
     [Test]
-    public async Task RunAsync_ChainWithoutDistributionPoints_ConfirmsWithoutCrls()
+    public async Task RunAsync_ChainWithCrlThatNeverCoversIt_DoesNotKeepOtherChainsFromBeingConfirmed()
+    {
+        var fixture = await CreateFixtureAsync();
+        var healthyTestAuthority = new TestTimestampAuthority();
+        _testAuthorities.Add(healthyTestAuthority);
+        var healthy = healthyTestAuthority.CreateAuthority(name: "healthy", timeProvider: fixture.Time);
+        fixture.Verification.Authorities["healthy"] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                healthyTestAuthority.Root
+            }
+        };
+        var anchors = new List<AnchorRecord>();
+        for (var anchor = 0; anchor < 4; anchor++)
+        {
+            anchors.Add(await fixture.AnchorAsync(authorities: [fixture.Authority, healthy]));
+        }
+
+        var latest = anchors.SelectMany(anchor => anchor.Timestamps).Max(timestamp => timestamp.TimestampUtc);
+        var neverCoveringCrl = BreakSignature(fixture.TestAuthority.BuildCrl(latest + GracePeriod + TimeSpan.FromMinutes(1)));
+        var stuck = new FixedRevocationListsAuthority(fixture.Authority, RevocationLists.Issued([neverCoveringCrl]));
+        healthyTestAuthority.ServedCrl = healthyTestAuthority.BuildCrl(latest + GracePeriod + TimeSpan.FromMinutes(1));
+        fixture.Time.SetUtcNow(latest + GracePeriod + TimeSpan.FromMinutes(2));
+        var run = fixture.CreateRun(stuck, healthy);
+        run.MaximumConfirmationAnchorsPerRun = 1;
+
+        // Each run reads one anchor: on the first, the stuck chain's CRL never covers it and the healthy one is
+        // confirmed; on the later ones, the stuck chain's deferred entries wait, so every run reaches the next anchor.
+        for (var runs = 1; runs <= anchors.Count; runs++)
+        {
+            await run.RunAsync();
+            (await ReadStatusesAsync("healthy")).Count(status => status == TimestampRevocationStatus.Confirmed).Should().Be(runs);
+        }
+
+        var stuckEntries = await Task.WhenAll(
+            anchors.Select(async anchor => (await fixture.ReadAnchorAsync(anchor)).Timestamps.Single(timestamp => timestamp.Authority == fixture.Authority.Name)));
+        stuckEntries.Should().OnlyContain(timestamp => timestamp.RevocationStatus == TimestampRevocationStatus.Unconfirmed);
+        stuckEntries.Should().OnlyContain(timestamp => timestamp.ConfirmationFailure == null,
+                                          "a CRL that genuinely never covers the chain is recorded as unconfirmed, not a failure");
+        stuckEntries.Should().OnlyContain(timestamp => timestamp.ConfirmationNotBeforeUtc == stuckEntries[0].ConfirmationNotBeforeUtc);
+
+        async Task<TimestampRevocationStatus[]> ReadStatusesAsync(String authority)
+            => await Task.WhenAll(anchors.Select(async anchor => (await fixture.ReadAnchorAsync(anchor)).Timestamps
+                                                                                                        .Single(timestamp => timestamp.Authority == authority)
+                                                                                                        .RevocationStatus));
+    }
+
+    /// <summary>
+    /// Covers demonstrated revocation taking precedence over a sibling certificate's missing source: the signer
+    /// names a CRL distribution point and is genuinely revoked by it, while the intermediate names none at all. The
+    /// chain must still settle as <see cref="TimestampRevocationStatus.Revoked"/>, exactly as the plan requires,
+    /// not <see cref="TimestampRevocationStatus.Unconfirmed"/> because of the intermediate's missing coverage.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_ChainWithDemonstratedRevocationAlongsideMissingCoverage_RecordsRevoked()
+    {
+        using var chained = new ChainedTimestampAuthority(signerCrlLocations: [new Uri("http://chained-tsa.test/signer.crl")]);
+        var fixture = await CreateFixtureAsync();
+        fixture.Verification.Authorities[chained.Name] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                chained.Root
+            }
+        };
+        var anchor = await fixture.AnchorAsync(authorities: [chained]);
+        var timestamp = anchor.Timestamps[0];
+        var crl = chained.BuildIntermediateCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1),
+                                               revoked: (chained.Signer.SerialNumberBytes.ToArray(), timestamp.TimestampUtc));
+        var authority = new FixedRevocationListsAuthority(chained, RevocationLists.Issued([crl]));
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(2));
+
+        await fixture.CreateRun(authority).RunAsync();
+
+        var revoked = await fixture.ReadTimestampAsync(anchor);
+        revoked.RevocationStatus.Should().Be(TimestampRevocationStatus.Revoked);
+        revoked.ConfirmingRevocationLists.Should().ContainSingle().Which.Should().Equal(crl);
+    }
+
+    /// <summary>
+    /// Same shape as <see cref="RunAsync_ChainWithCrlThatNeverCoversIt_DoesNotKeepOtherChainsFromBeingConfirmed"/>,
+    /// but for the structurally partial case itself (one non-root certificate's missing CRL source, not a CRL that
+    /// fails to cover a certificate that does have one), proving the bounded read's fairness guarantee also holds
+    /// for the branch <see cref="RunAsync_ChainWithStructurallyPartialSourceCoverage_RecordsUnconfirmedUnconditionally"/>
+    /// covers in isolation. The signer's own distribution point is backed by a genuine, confirming
+    /// <see cref="ChainedTimestampAuthority.CrlRequests">counted</see> CRL that actually covers it, while the
+    /// intermediate's remains structurally absent, so the chain is proven to stay unconfirmed because of the
+    /// missing source, not because its one existing source was never actually requested.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_ChainWithStructurallyPartialSourceCoverage_DoesNotKeepOtherChainsFromBeingConfirmed()
+    {
+        using var stuck = new ChainedTimestampAuthority(signerCrlLocations: [new Uri("http://chained-tsa.test/signer.crl")]);
+        var fixture = await CreateFixtureAsync();
+        fixture.Verification.Authorities[stuck.Name] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                stuck.Root
+            }
+        };
+        var healthyTestAuthority = new TestTimestampAuthority();
+        _testAuthorities.Add(healthyTestAuthority);
+        var healthy = healthyTestAuthority.CreateAuthority(name: "healthy", timeProvider: fixture.Time);
+        fixture.Verification.Authorities["healthy"] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                healthyTestAuthority.Root
+            }
+        };
+        var anchors = new List<AnchorRecord>();
+        for (var anchor = 0; anchor < 4; anchor++)
+        {
+            anchors.Add(await fixture.AnchorAsync(authorities: [stuck, healthy]));
+        }
+
+        var latest = anchors.SelectMany(anchor => anchor.Timestamps).Max(timestamp => timestamp.TimestampUtc);
+        healthyTestAuthority.ServedCrl = healthyTestAuthority.BuildCrl(latest + GracePeriod + TimeSpan.FromMinutes(1));
+        fixture.Time.SetUtcNow(latest + GracePeriod + TimeSpan.FromMinutes(2));
+        var run = fixture.CreateRun(stuck, healthy);
+        run.MaximumConfirmationAnchorsPerRun = 1;
+
+        // Each run reads one anchor: on the first, the structurally partial chain settles as unconfirmed and the
+        // healthy one is confirmed; on the later ones, the stuck chain's deferred entries wait, so every run reaches
+        // the next anchor.
+        for (var runs = 1; runs <= anchors.Count; runs++)
+        {
+            await run.RunAsync();
+            (await ReadStatusesAsync("healthy")).Count(status => status == TimestampRevocationStatus.Confirmed).Should().Be(runs);
+        }
+
+        stuck.CrlRequests.Should().Be(1, "the signer's genuinely covering source is requested once, covering all four due entries together, " +
+                                         "rather than never being checked at all");
+        var stuckEntries = await ReadStuckEntriesAsync();
+        stuckEntries.Should().OnlyContain(timestamp => timestamp.RevocationStatus == TimestampRevocationStatus.Unconfirmed);
+        stuckEntries.Should().OnlyContain(timestamp => timestamp.ConfirmationFailure == null, "a structurally partial chain is recorded as unconfirmed, not a failure");
+        stuckEntries.Should().OnlyContain(timestamp => timestamp.ConfirmationNotBeforeUtc == stuckEntries[0].ConfirmationNotBeforeUtc);
+        var deferredUntil = stuckEntries[0].ConfirmationNotBeforeUtc!.Value;
+        deferredUntil.Should().BeCloseTo(fixture.Time.GetUtcNow().UtcDateTime + TimestampRevocationConfirmer.MaximumRetryDelay, TimeSpan.FromMilliseconds(1));
+
+        // The deferred chain is not asked again before its deferral elapses, even though its entries are still due
+        // by grace period, and is asked exactly once more once it does: the signer's source is genuinely
+        // re-evaluated on the retry schedule, not silently skipped.
+        fixture.Time.SetUtcNow(deferredUntil - TimeSpan.FromMilliseconds(1));
+        await run.RunAsync();
+        stuck.CrlRequests.Should().Be(1, "the deferral has not elapsed yet");
+        fixture.Time.SetUtcNow(deferredUntil + TimeSpan.FromMilliseconds(1));
+        await run.RunAsync();
+        stuck.CrlRequests.Should().Be(2, "the deferral elapsed, so the chain is genuinely re-evaluated");
+        (await ReadStuckEntriesAsync()).Should().OnlyContain(timestamp => timestamp.RevocationStatus == TimestampRevocationStatus.Unconfirmed,
+                                                             "the intermediate's missing source still prevents confirmation even though the signer's source is fully covered");
+
+        async Task<TimestampRevocationStatus[]> ReadStatusesAsync(String authority)
+            => await Task.WhenAll(anchors.Select(async anchor => (await fixture.ReadAnchorAsync(anchor)).Timestamps
+                                                                                                        .Single(timestamp => timestamp.Authority == authority)
+                                                                                                        .RevocationStatus));
+
+        Task<AnchorTimestampReference[]> ReadStuckEntriesAsync()
+            => Task.WhenAll(anchors.Select(async anchor => (await fixture.ReadAnchorAsync(anchor)).Timestamps.Single(timestamp => timestamp.Authority == stuck.Name)));
+    }
+
+    /// <summary>
+    /// Covers the structurally partial case of the three-way decision in
+    /// <see cref="TimestampRevocationConfirmer.RecordStatusesAsync"/>:
+    /// the signer names a CRL distribution point and the intermediate does not (<see cref="ChainedTimestampAuthority"/>'s
+    /// genuine intermediate makes this representable at all; <see cref="TestTimestampAuthority"/>'s two-certificate
+    /// chain cannot be). This can never settle as <see cref="TimestampRevocationStatus.Confirmed"/>, unconditionally,
+    /// even though the signer's own source is genuinely requested, counted (<see cref="ChainedTimestampAuthority.CrlRequests"/>)
+    /// and found to cover it every time, because the intermediate's own revocation status is never checked at all.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_ChainWithStructurallyPartialSourceCoverage_RecordsUnconfirmedUnconditionally()
+    {
+        using var chained = new ChainedTimestampAuthority(signerCrlLocations: [new Uri("http://chained-tsa.test/signer.crl")]);
+        var fixture = await CreateFixtureAsync();
+        fixture.Verification.Authorities[chained.Name] = new TimestampAuthorityTrust
+        {
+            TrustedRoots =
+            {
+                chained.Root
+            }
+        };
+        var anchor = await fixture.AnchorAsync(authorities: [chained]);
+        var timestamp = anchor.Timestamps[0];
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1));
+
+        await fixture.CreateRun(chained).RunAsync();
+
+        var unconfirmed = await fixture.ReadTimestampAsync(anchor);
+        unconfirmed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        unconfirmed.ConfirmingRevocationLists.Should().BeEmpty();
+        unconfirmed.ConfirmationFailure.Should().BeNull("a structurally partial chain is recorded as unconfirmed, not a failure");
+        unconfirmed.ConfirmationNotBeforeUtc.Should().BeCloseTo(fixture.Time.GetUtcNow().UtcDateTime + TimestampRevocationConfirmer.MaximumRetryDelay,
+                                                                TimeSpan.FromMilliseconds(1));
+        chained.CrlRequests.Should().Be(1, "the signer's genuinely covering source is requested, not merely absent like the intermediate's");
+
+        // It stays unconfirmed, not eventually confirmed, however many times it is retried, and the signer's source
+        // is genuinely requested again each time, not silently skipped because the chain is known to be stuck.
+        fixture.Time.Advance(TimestampRevocationConfirmer.MaximumRetryDelay + TimeSpan.FromMinutes(1));
+        await fixture.CreateRun(chained).RunAsync();
+        (await fixture.ReadTimestampAsync(anchor)).RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed,
+                                                                                "a chain where at least one certificate has no source can never become confirmed");
+        chained.CrlRequests.Should().Be(2, "the retried attempt also genuinely requests and evaluates the signer's source");
+    }
+
+    [Test]
+    public async Task RunAsync_ChainWithoutDistributionPoints_RecordsNoRevocationSourceWithoutCrls()
     {
         var fixture = await CreateFixtureAsync(new TestTimestampAuthority([]));
         var anchor = await fixture.AnchorAsync();
@@ -195,7 +410,7 @@ public class TimestampRevocationConfirmationTests
         await fixture.CreateRun().RunAsync();
 
         var confirmed = await fixture.ReadTimestampAsync(anchor);
-        confirmed.RevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed);
+        confirmed.RevocationStatus.Should().Be(TimestampRevocationStatus.NoRevocationSource);
         confirmed.ConfirmingRevocationLists.Should().BeEmpty();
         fixture.TestAuthority.CrlRequests.Should().Be(0);
     }
@@ -319,6 +534,28 @@ public class TimestampRevocationConfirmationTests
         fixture.Logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("revocation status"));
     }
 
+    [TestCase("broken signature")]
+    [TestCase("delta CRL")]
+    public async Task RunAsync_CustomAuthorityReturnsCrlThatDoesNotCoverTheChain_RecordsUnconfirmedWithoutFailure(String kind)
+    {
+        var fixture = await CreateFixtureAsync();
+        var anchor = await fixture.AnchorAsync();
+        var timestamp = anchor.Timestamps[0];
+        var crl = kind == "broken signature"
+            ? BreakSignature(fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1)))
+            : fixture.TestAuthority.BuildCrlWithExtensions(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1), ("2.5.29.27", true, [0x02, 0x01, 0x01]));
+        var authority = new FixedRevocationListsAuthority(fixture.Authority, RevocationLists.Issued([crl]));
+        fixture.Time.SetUtcNow(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(2));
+
+        await fixture.CreateRun(authority).RunAsync();
+
+        var unconfirmed = await fixture.ReadTimestampAsync(anchor);
+        unconfirmed.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        unconfirmed.ConfirmationFailure.Should().BeNull("the chain still has no counting CRL, but that no longer throws; it is recorded and retried");
+        unconfirmed.ConfirmationNotBeforeUtc.Should().BeCloseTo(fixture.Time.GetUtcNow().UtcDateTime + TimestampRevocationConfirmer.MaximumRetryDelay,
+                                                                TimeSpan.FromSeconds(1));
+    }
+
     [Test]
     public async Task RunAsync_CustomAuthorityReturnsNonUtcNextUpdate_RecordsConfirmationFailure()
     {
@@ -338,8 +575,6 @@ public class TimestampRevocationConfirmationTests
     [TestCase("malformed", "not a single DER-encoded CRL")]
     [TestCase("issued too early", "before the required")]
     [TestCase("without next update", "states no next update")]
-    [TestCase("broken signature", "verifies against its issuer")]
-    [TestCase("delta CRL", "verifies against its issuer")]
     public async Task RunAsync_CustomAuthorityReturnsUnusableCrl_CountsTheFailure(String kind, String reason)
     {
         var fixture = await CreateFixtureAsync();
@@ -349,9 +584,6 @@ public class TimestampRevocationConfirmationTests
         {
             "malformed" => "not a CRL"u8.ToArray(),
             "issued too early" => fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod - TimeSpan.FromMinutes(1)),
-            "broken signature" => BreakSignature(fixture.TestAuthority.BuildCrl(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1))),
-            "delta CRL" => fixture.TestAuthority.BuildCrlWithExtensions(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1),
-                                                                        ("2.5.29.27", true, [0x02, 0x01, 0x01])),
             _ => fixture.TestAuthority.BuildCrlWithoutNextUpdate(timestamp.TimestampUtc + GracePeriod + TimeSpan.FromMinutes(1))
         };
         var authority = new FixedRevocationListsAuthority(fixture.Authority, RevocationLists.Issued([crl]));

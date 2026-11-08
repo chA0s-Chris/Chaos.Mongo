@@ -167,6 +167,7 @@ enum EventAnchorStatus
   NotChecked = 0
 sealed class EventAnchorVerificationResult
   AnchorReference? Anchor { get; init; }
+  AnchorReference? DegradedFromAnchor { get; init; }
   Boolean Equals(EventAnchorVerificationResult? other)
   EventAnchorFailure? Failure { get; init; }
   EventAnchorVerificationResult <Clone>$()
@@ -288,9 +289,11 @@ sealed class Rfc3161TimestampAuthorityOptions
   X509Certificate2Collection TrustedRoots { get; }
   X509RevocationMode RevocationMode { get; set; }
 enum StreamVerificationFailure
+  AggregateTypeMismatch = 13
   AnchoredHashMismatch = 10
   AnchoredLeafInvalid = 11
   AnchoredVersionMissing = 9
+  EmptyStream = 12
   ErasedPersonalDataPresent = 8
   HashMismatch = 6
   MalformedIntegrity = 3
@@ -306,6 +309,7 @@ sealed class StreamVerificationResult
   Boolean IsIntact { get; }
   IReadOnlyList<Int64> SealModeTransitions { get; init; }
   IReadOnlyList<VerifiedEvent> Events { get; init; }
+  Int32 ComparedLeafCount { get; init; }
   Int64? FirstBrokenVersion { get; init; }
   StreamVerificationFailure? Failure { get; init; }
   StreamVerificationResult <Clone>$()
@@ -329,6 +333,7 @@ sealed class TimestampConfirmationFailure
   required String LastFailure { get; init; }
 enum TimestampRevocationStatus
   Confirmed = 1
+  NoRevocationSource = 3
   Revoked = 2
   Unconfirmed = 0
 sealed class TimestampToken
@@ -348,6 +353,7 @@ sealed class TimestampVerificationResult
   required Boolean IsValid { get; init; }
   required DateTime TimestampUtc { get; init; }
   required String Authority { get; init; }
+  required TimestampRevocationStatus RecomputedRevocationStatus { get; init; }
   required TimestampRevocationStatus RevocationStatus { get; init; }
   required TimestampRevocationStatus StoredRevocationStatus { get; init; }
 sealed class TrustedAnchorHead

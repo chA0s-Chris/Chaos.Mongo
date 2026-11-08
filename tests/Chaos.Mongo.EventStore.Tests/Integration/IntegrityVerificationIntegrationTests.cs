@@ -445,10 +445,10 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
-    [TestCase("firstTokenHash", 2, 3)]
-    [TestCase("everyTokenHash", 1, 2)]
-    [TestCase("firstDigest", 1, 2)]
-    public async Task VerifyEventAnchorAsync_EventCoveredByTwoAnchors_FallsBackOnlyWhenNoTokenIsValid(String change, Int64 sequence, Int64 leafVersion)
+    [TestCase("firstTokenHash", 2, 3, 1L)]
+    [TestCase("everyTokenHash", 1, 2, null)]
+    [TestCase("firstDigest", 1, 2, null)]
+    public async Task VerifyEventAnchorAsync_EventCoveredByTwoAnchors_FallsBackOnlyWhenNoTokenIsValid(String change, Int64 sequence, Int64 leafVersion, Int64? degradedFromSequence)
     {
         var (status, failure) = change switch
         {
@@ -475,6 +475,8 @@ public class IntegrityVerificationIntegrationTests
         var result = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
 
         (result.Status, result.Failure, result.Anchor?.Sequence, result.LeafVersion).Should().Be((status, failure, sequence, leafVersion));
+        result.DegradedFromAnchor?.Sequence.Should().Be(degradedFromSequence,
+                                                        "only the first anchor's own token becoming invalid, while a later anchor still verifies, degrades the evidence");
     }
 
     [Test]
@@ -775,6 +777,18 @@ public class IntegrityVerificationIntegrationTests
     }
 
     [Test]
+    public async Task VerifyStreamAsync_LeafExistsOnlyUnderAnotherAggregateType_ReportsAggregateTypeMismatch()
+    {
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(_ => { }));
+        var aggregateId = await context.AppendStreamAsync(2);
+        await GetStore(context).InsertLeavesAsync([OtherTypeLeaf(aggregateId)], CancellationToken.None);
+
+        var result = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+
+        result.Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.AggregateTypeMismatch));
+    }
+
+    [Test]
     public async Task VerifyStreamAsync_LeafRewrittenWithStream_ReportsAnchoredLeafInvalid()
     {
         var (context, _) = await CreateAnchoredContextAsync();
@@ -848,6 +862,30 @@ public class IntegrityVerificationIntegrationTests
 
         result.Should().Be(StreamVerificationResult.Broken(3, StreamVerificationFailure.AnchoredHashMismatch));
         result.Events.Should().HaveCount(3, "the rewritten chain itself is consistent");
+    }
+
+    [Test]
+    public async Task VerifyStreamAsync_SnapshotSession_AggregateTypeMismatchReflectsOnlyTheSnapshot()
+    {
+        var context = await CreateContextAsync(mongo => mongo.WithIntegrityVerification(_ => { }));
+        var aggregateId = await context.AppendStreamAsync(2);
+        var store = GetStore(context);
+        var verifier = context.CreateVerifier();
+        using var session = await context.MongoHelper.Client.StartSessionAsync(new ClientSessionOptions
+        {
+            Snapshot = true
+        });
+        // The first read in the session pins its snapshot, before the other-type leaf exists anywhere.
+        var beforeInsert = await verifier.VerifyStreamAsync(aggregateId, session, CancellationToken.None);
+
+        await store.InsertLeavesAsync([OtherTypeLeaf(aggregateId)], CancellationToken.None);
+        var snapshotResult = await verifier.VerifyStreamAsync(aggregateId, session, CancellationToken.None);
+        var currentResult = await verifier.VerifyStreamAsync(aggregateId, null, CancellationToken.None);
+
+        beforeInsert.IsIntact.Should().BeTrue();
+        snapshotResult.Should().Be(beforeInsert, "the snapshot session must not see a leaf inserted after its snapshot was pinned");
+        currentResult.Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.AggregateTypeMismatch),
+                                  "a read outside the snapshot sees the leaf that was actually inserted");
     }
 
     [Test]
@@ -1005,6 +1043,23 @@ public class IntegrityVerificationIntegrationTests
     private static AnchorVerifier GetAnchorVerifier(LedgerStoreContext context) => context.ServiceProvider.GetRequiredService<AnchorVerifier>();
 
     private static AnchorStore GetStore(LedgerStoreContext context) => GetAnchorVerifier(context).Store;
+
+    /// <summary>
+    /// A leaf for <paramref name="aggregateId"/> under an aggregate type other than <see cref="LedgerAggregate"/>,
+    /// used solely to exercise the other-type presence query; its anchor identity and hash are not read by it.
+    /// </summary>
+    private static AnchorLeaf OtherTypeLeaf(Guid aggregateId)
+        => new()
+        {
+            AggregateId = aggregateId,
+            AggregateType = "OtherAggregateType",
+            AnchorId = Guid.NewGuid(),
+            AnchorSequence = 1,
+            Hash = [],
+            Index = 0,
+            Proof = [],
+            Version = 1
+        };
 
     /// <summary>
     /// Replaces a stored document by one that repeats an element, which the driver cannot read into a document.

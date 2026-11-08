@@ -38,6 +38,13 @@ See [Verifying Independently](../../docs/tamper-evidence-specification.md#verify
 specification for the full option reference — including `--aggregate-type`, `--element-name`, trusted roots and
 `--trusted-head` — and for the exact `mongodump` invocations that produce the input files.
 
+## Testing
+
+`python3 verify.py vectors DIRECTORY` replays the committed `spec/tamper-evidence/v1` vectors. `test_trusted_chain.py`
+additionally unit-tests `matches_trusted_chain`'s Check A/Check B chain-trust validation directly, using throwaway
+certificates built with the third-party `cryptography` package (`pip install cryptography`) — a test-only dependency
+that `verify.py` itself never imports. Run it with `python3 -m unittest test_trusted_chain.py -v`.
+
 ## Related documentation
 
 - [Tamper Evidence Specification](../../docs/tamper-evidence-specification.md)

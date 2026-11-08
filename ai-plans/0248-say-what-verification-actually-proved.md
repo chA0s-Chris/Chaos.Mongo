@@ -35,12 +35,12 @@ where called out below.
 
 ## Acceptance Criteria
 
-- [ ] `TimestampRevocationStatus` gains a member distinct from `Confirmed` for a chain whose non-root certificates
+- [x] `TimestampRevocationStatus` gains a member distinct from `Confirmed` for a chain whose non-root certificates
       contribute no CRL source at all; anchoring's `TimestampRevocationConfirmer` records it instead of `Confirmed`
       for such a chain, and `StoredTimestampVerifier` recomputes it the same way. Existing persisted
       `"Unconfirmed"`/`"Confirmed"`/`"Revoked"` values remain valid, are not migrated, and are not retroactively
       invalidated by `FindInconsistency` merely because the rebuilt chain now has zero sources.
-- [ ] A chain where at least one non-root certificate has a CRL source but at least one other non-root certificate
+- [x] A chain where at least one non-root certificate has a CRL source but at least one other non-root certificate
       has none is never recomputed as `Confirmed`; it stays `Unconfirmed` (the same treatment already given to a
       source whose issuer cannot be verified), both at anchoring-time confirmation and at stored-token verification
       — unless a counting CRL proves a certificate of the chain revoked, which still yields `Revoked` regardless of
@@ -52,33 +52,33 @@ where called out below.
       every run's bounded read once its status is settled while still being retried on that schedule, preserving
       today's fairness for other chains' entries exactly as the throw it replaces already did for the fully
       source-bearing case.
-- [ ] `TimestampVerificationResult` exposes the revocation status recomputed under today's rule
+- [x] `TimestampVerificationResult` exposes the revocation status recomputed under today's rule
       (`RecomputedRevocationStatus`) separately from the historically `StoredRevocationStatus`, so a historical
       zero-source chain stored as `Confirmed` is reported as cryptographically valid while also being identifiable
       as `NoRevocationSource` under current rules, without the library claiming a stronger historical guarantee
       than was actually recorded.
-- [ ] `StreamVerificationResult` reports a stream with zero events as not intact, through a new
+- [x] `StreamVerificationResult` reports a stream with zero events as not intact, through a new
       `StreamVerificationFailure` member, instead of `IsIntact` being unconditionally `true`. `verify.py`'s own
       `verify_stream()` reports the same verdict for the same input, not only `main()`'s CLI wrapper.
-- [ ] Verifying a stream whose anchored leaves were all recorded under an aggregate type name that no longer
+- [x] Verifying a stream whose anchored leaves were all recorded under an aggregate type name that no longer
       matches the verifier's configured type (a renamed aggregate class, or, for `verify.py`, a mismatched
       `--aggregate-type`), and for which leaves exist under a different type for the same `AggregateId`, is
       reported as a new, distinct failure (coverage could not be established) instead of an intact, fully-covered
       stream — without widening leaf selection to match across aggregate types, and without a new
       historical-name/producer identity contract. A regression covers two different aggregate types sharing one
       `AggregateId`, including through `SealingAnchorLookup`, staying isolated from each other.
-- [ ] `StreamVerificationResult` exposes how many anchored leaves were actually compared (`ComparedLeafCount`),
+- [x] `StreamVerificationResult` exposes how many anchored leaves were actually compared (`ComparedLeafCount`),
       counted after leaves at or beyond an existing chain break are excluded, so it reports zero when a break
       precedes every anchored leaf even if some of those leaves were otherwise readable; this is distinguishable
       from a result where anchors are configured but nothing was found to compare against, and from one where
       every available leaf matched.
-- [ ] `EventAnchorVerificationResult` reports when the verified anchor is not the first one that covers the event
+- [x] `EventAnchorVerificationResult` reports when the verified anchor is not the first one that covers the event
       because every token of an earlier covering anchor was invalid, so a reader can tell the evidence degraded to
       a later anchor's time. `verify.py check`'s production anchor verification (not only its vector fixtures)
       grants the same tolerance: an anchor whose only failure is invalid timestamps no longer fails the overall
       result when a later anchor of the same stream, covering at least the same versions, is itself verified, and
       that later anchor's report names the earlier one it degraded from.
-- [ ] Accepting a token whose rebuilt certificate chain reaches a different, independently trusted root than the
+- [x] Accepting a token whose rebuilt certificate chain reaches a different, independently trusted root than the
       one originally stored — including through a longer bridging path — is proven by tests, in the library and
       `verify.py`, covering: a genuine longer/cross-signed path is accepted while the stored chain's own root is
       independently validated to truly terminate it; a substituted root (including a same-subject/different-key
@@ -101,22 +101,22 @@ where called out below.
       it were a path's own final target. All cases are mirrored as committed `spec/tamper-evidence/v1` vectors
       replayed by `TamperEvidenceVectorTests` and `verify.py vectors`, and exercised through the production
       `verify_timestamp`/`verify.py check` paths, not only fixture replay.
-- [ ] Configuring a timestamp authority's trust (`IntegrityVerificationBuilder.WithTimestampAuthorityTrust`,
+- [x] Configuring a timestamp authority's trust (`IntegrityVerificationBuilder.WithTimestampAuthorityTrust`,
       `IntegrityAnchoringBuilder.WithRfc3161TimestampAuthority`) with an empty `TrustedRoots` throws instead of
       silently falling back to the OS trust store; `verify.py` already requires at least one `--trusted-root` for
       `check` whenever `--anchors` is given, and keeps that requirement with added regression coverage.
-- [ ] `docs/tamper-evidence-specification.md` defines the new revocation status (and its historical-compatibility
+- [x] `docs/tamper-evidence-specification.md` defines the new revocation status (and its historical-compatibility
       treatment), the empty-stream rule, the rename coverage-failure report, the degraded-evidence and
       compared-leaf-count reporting (including `verify.py check`'s production degradation tolerance), the
       possibly length-changing trusted-root relaxation together with the independent validation of the stored
       chain's own recorded root, and the non-empty-`TrustedRoots` requirement.
-- [ ] `spec/tamper-evidence/v1`'s shared test vectors cover: a chain with no revocation sources, a chain with
+- [x] `spec/tamper-evidence/v1`'s shared test vectors cover: a chain with no revocation sources, a chain with
       partial source coverage, a chain with demonstrated revocation alongside another certificate's missing
       coverage, an empty stream, a stream anchored under one aggregate type name and verified under another with
       no leaves found under the new name, two different aggregate types sharing one `AggregateId`, and anchor-token
       evidence that degrades to a later anchor (including in `verify.py check`'s production path, not only its
       fixture runner). `TamperEvidenceVectorTests` and `verify.py vectors` reproduce all of them identically.
-- [ ] The Release build (`dotnet build -c Release`) has no warnings, and the full test suite passes.
+- [x] The Release build (`dotnet build -c Release`) has no warnings, and the full test suite passes.
 
 ## Technical Details
 

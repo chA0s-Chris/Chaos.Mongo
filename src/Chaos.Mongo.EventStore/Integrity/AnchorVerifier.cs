@@ -169,6 +169,7 @@ internal sealed class AnchorVerifier : IAnchorVerifier
                 IsValid = false,
                 Failure = ex is AnchorEvidenceException ? ex.Message : "The timestamp references malformed evidence.",
                 RevocationStatus = TimestampRevocationStatus.Unconfirmed,
+                RecomputedRevocationStatus = TimestampRevocationStatus.Unconfirmed,
                 StoredRevocationStatus = reference.RevocationStatus
             };
         }

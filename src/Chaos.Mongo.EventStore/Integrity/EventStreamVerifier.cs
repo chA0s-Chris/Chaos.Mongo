@@ -78,7 +78,12 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             var result = await VerifyEventAtAnchorAsync(_anchors, covering, anchoredHash, cancellationToken);
             if (result.Failure != EventAnchorFailure.NoValidTimestamp)
             {
-                return result;
+                return firstWithoutValidToken is { } earlier
+                    ? result with
+                    {
+                        DegradedFromAnchor = earlier.Anchor
+                    }
+                    : result;
             }
 
             firstWithoutValidToken ??= result;
@@ -100,7 +105,13 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// <see cref="StreamVerificationFailure.AnchoredLeafInvalid"/> at its version, or at version 1 when its version is a
     /// number but not an integer. A leaf whose version is not a number is not selected by the query for the stream's
     /// leaves at all; the anchor-chain verification, which binds the leaves to the anchor digests and should run too,
-    /// reports it.
+    /// reports it. A stream with no events is always reported as
+    /// <see cref="StreamVerificationFailure.EmptyStream"/>, because the library cannot tell "this aggregate never
+    /// existed" apart from "every event of this stream, and its anchored leaves, were deleted." When the stream has
+    /// events but anchors are configured and no completed leaf could be compared against it
+    /// (<see cref="StreamVerificationResult.ComparedLeafCount"/> is zero) because the stream was anchored under a
+    /// different aggregate type name than the one configured here, it is reported as
+    /// <see cref="StreamVerificationFailure.AggregateTypeMismatch"/> instead of an intact, fully covered stream.
     /// </remarks>
     /// <param name="aggregateId">The aggregate identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
@@ -128,34 +139,54 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
         var transitions = FindSealModeTransitions(scan.Events);
 
         StreamVerificationResult result;
+        Int32 comparedLeafCount;
         if (scan is { BrokenVersion: { } brokenVersion, Failure: { } failure })
         {
             // Leaves below the break still judge the verified prefix, so a re-sealed prefix shows at its anchored version.
-            result = CompareWithLeaves(scan.Events, leaves, brokenVersion) is { } earlierBreak
-                ? StreamVerificationResult.Broken(earlierBreak.Version, earlierBreak.Failure)
+            (comparedLeafCount, var earlierBreak) = CompareWithLeaves(scan.Events, leaves, brokenVersion);
+            result = earlierBreak is { } found
+                ? StreamVerificationResult.Broken(found.Version, found.Failure)
                 : StreamVerificationResult.Broken(brokenVersion, failure);
-        }
-        else if (CompareWithLeaves(scan.Events, leaves, null) is { } anchoredBreak)
-        {
-            result = StreamVerificationResult.Broken(anchoredBreak.Version, anchoredBreak.Failure);
         }
         else
         {
-            var unrecorded = scan.Events.SelectMany(e => e.PersonalData.Where(p => p.Erased).Select(p => new UnrecordedErasure
-                                 {
-                                     Version = e.Version,
-                                     Path = p.Path
-                                 }))
-                                 .Where(erasure => !scan.RecordedErasures.Contains(erasure))
-                                 .ToList();
-            result = StreamVerificationResult.IntactWith(unrecorded);
+            (comparedLeafCount, var anchoredBreak) = CompareWithLeaves(scan.Events, leaves, null);
+            if (anchoredBreak is { } found)
+            {
+                result = StreamVerificationResult.Broken(found.Version, found.Failure);
+            }
+            else if (scan.Events.Count == 0)
+            {
+                // Neither the library nor an operator can tell "this aggregate never existed" apart from "every event
+                // of this stream, and its anchored leaves, were deleted."
+                result = StreamVerificationResult.Broken(1, StreamVerificationFailure.EmptyStream);
+            }
+            else if (comparedLeafCount == 0 && _anchors is not null &&
+                     await _anchors.Store.HasLeavesForOtherAggregateTypeAsync(_aggregateTypeName, aggregateId, session, cancellationToken))
+            {
+                // The stream was anchored under a different aggregate type name than the one configured here (a
+                // rename, or a mismatched --aggregate-type), so coverage could not be established under this name.
+                result = StreamVerificationResult.Broken(1, StreamVerificationFailure.AggregateTypeMismatch);
+            }
+            else
+            {
+                var unrecorded = scan.Events.SelectMany(e => e.PersonalData.Where(p => p.Erased).Select(p => new UnrecordedErasure
+                                     {
+                                         Version = e.Version,
+                                         Path = p.Path
+                                     }))
+                                     .Where(erasure => !scan.RecordedErasures.Contains(erasure))
+                                     .ToList();
+                result = StreamVerificationResult.IntactWith(unrecorded);
+            }
         }
 
         return result with
         {
             Events = events,
             SealModeTransitions = transitions,
-            AnchorCoverageChecked = _anchors is not null
+            AnchorCoverageChecked = _anchors is not null,
+            ComparedLeafCount = comparedLeafCount
         };
     }
 
@@ -256,16 +287,22 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
     /// truncation, and an anchored version whose stored hash differs from its leaf reveals a rewritten or rolled-back
     /// stream. For a chain broken at a version, only findings below it count.
     /// </summary>
-    /// <returns>The lowest broken version and why, or <c>null</c> when every anchored version matches.</returns>
-    private static (Int64 Version, StreamVerificationFailure Failure)? CompareWithLeaves(IReadOnlyList<ScannedEvent> events,
-                                                                                         StreamLeaves leaves,
-                                                                                         Int64? brokenVersion)
+    /// <returns>
+    /// The number of completed leaves actually compared (after leaves at or beyond <paramref name="brokenVersion"/>
+    /// are excluded), and the lowest broken version and why, or <c>null</c> when every anchored version matches.
+    /// </returns>
+    private static (Int32 ComparedLeafCount, (Int64 Version, StreamVerificationFailure Failure)? Finding) CompareWithLeaves(
+        IReadOnlyList<ScannedEvent> events,
+        StreamLeaves leaves,
+        Int64? brokenVersion)
     {
         (Int64 Version, StreamVerificationFailure Failure)? first = leaves.FirstUnreadableVersion is { } unreadable && !(unreadable >= brokenVersion)
             ? (unreadable, StreamVerificationFailure.AnchoredLeafInvalid)
             : null;
+        var comparedLeafCount = 0;
         foreach (var (leaf, anchor) in leaves.Completed.Where(completed => !(completed.Leaf.Version >= brokenVersion)))
         {
+            comparedLeafCount++;
             (Int64 Version, StreamVerificationFailure Failure)? finding = !AnchorVerifier.ProvesInclusion(leaf, anchor)
                 ? (leaf.Version, StreamVerificationFailure.AnchoredLeafInvalid)
                 : leaf.Version > events.Count
@@ -279,7 +316,7 @@ internal sealed class EventStreamVerifier<TAggregate> where TAggregate : class, 
             }
         }
 
-        return first;
+        return (comparedLeafCount, first);
     }
 
     /// <summary>

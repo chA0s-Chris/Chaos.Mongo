@@ -19,9 +19,12 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_CalledTwice_ThrowsInvalidOperationException()
     {
-        var builder = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri));
+        var root = TestRootCertificate.Create();
+        var builder = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri,
+                                                                                                                  o => o.TrustedRoots.Add(root)));
 
-        var act = () => builder.WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri));
+        var act = () => builder.WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri,
+                                                                                                            o => o.TrustedRoots.Add(root)));
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*configure it once at module level*");
     }
@@ -29,7 +32,9 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_CollectionPrefix_DerivesAllFiveCollectionNames()
     {
-        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+        var root = TestRootCertificate.Create();
+        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri,
+                                                                                              o => o.TrustedRoots.Add(root))
                                                                                           .WithCollectionPrefix("Custom"))
                                             .Services.BuildServiceProvider();
 
@@ -46,8 +51,9 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_CustomSettings_FillAnchoringOptions()
     {
-        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("first", AuthorityUri)
-                                                                                          .WithRfc3161TimestampAuthority("second", AuthorityUri)
+        var root = TestRootCertificate.Create();
+        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("first", AuthorityUri, o => o.TrustedRoots.Add(root))
+                                                                                          .WithRfc3161TimestampAuthority("second", AuthorityUri, o => o.TrustedRoots.Add(root))
                                                                                           .WithInterval(TimeSpan.FromMinutes(1))
                                                                                           .WithDelayThreshold(TimeSpan.FromMinutes(30))
                                                                                           .WithMinimumTimestampTokens(2)
@@ -89,7 +95,8 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_Defaults_RegisterPipelineWithFiveMinuteIntervalAndOneHourThreshold()
     {
-        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri))
+        var root = TestRootCertificate.Create();
+        using var services = CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root)))
                                             .Services.BuildServiceProvider();
 
         var options = services.GetRequiredService<IntegrityAnchoringOptions>();
@@ -118,17 +125,29 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_DuplicateAuthorityName_ThrowsArgumentException()
     {
-        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+        var root = TestRootCertificate.Create();
+
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root))
                                                                                      .WithRfc3161TimestampAuthority("tsa", AuthorityUri));
 
         act.Should().Throw<ArgumentException>().WithMessage("*'tsa' is used more than once*");
+    }
+
+    [Test]
+    public void WithIntegrityAnchoring_EmptyTrustedRoots_ThrowsArgumentException()
+    {
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri));
+
+        act.Should().Throw<ArgumentException>().WithMessage("*must configure at least one trusted root*");
     }
 
     [TestCase(24, 24)]
     [TestCase(48, 24)]
     public void WithIntegrityAnchoring_InvalidRevocationSettings_ThrowsInvalidOperationException(Int32 gracePeriodHours, Int32 thresholdHours)
     {
-        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+        var root = TestRootCertificate.Create();
+
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root))
                                                                                      .WithRevocationGracePeriod(TimeSpan.FromHours(gracePeriodHours))
                                                                                      .WithRevocationConfirmationDelayThreshold(TimeSpan.FromHours(thresholdHours)));
 
@@ -138,7 +157,9 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_MinimumAboveAuthorityCount_ThrowsInvalidOperationException()
     {
-        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+        var root = TestRootCertificate.Create();
+
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root))
                                                                                      .WithMinimumTimestampTokens(2));
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*must not exceed the number of authorities (1)*");
@@ -161,9 +182,11 @@ public class IntegrityAnchoringRegistrationTests
     [TestCase("confirmationThreshold")]
     public void WithIntegrityAnchoring_NonPositiveSetting_ThrowsArgumentOutOfRangeException(String setting)
     {
+        var root = TestRootCertificate.Create();
+
         var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring =>
         {
-            anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
+            anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root));
             _ = setting switch
             {
                 "interval" => anchoring.WithInterval(TimeSpan.Zero),
@@ -181,7 +204,9 @@ public class IntegrityAnchoringRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_WhitespaceCollectionPrefix_ThrowsArgumentException()
     {
-        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+        var root = TestRootCertificate.Create();
+
+        var act = () => CreateBuilder().WithIntegrityAnchoring(anchoring => anchoring.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root))
                                                                                      .WithCollectionPrefix(" "));
 
         act.Should().Throw<ArgumentException>();

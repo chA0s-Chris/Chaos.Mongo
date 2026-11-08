@@ -22,6 +22,15 @@ public sealed record StreamVerificationResult
     public Boolean AnchorCoverageChecked { get; init; }
 
     /// <summary>
+    /// Gets the number of completed anchors' leaves actually compared with the verified chain, counted after leaves
+    /// at or beyond an already-broken prefix are excluded. Together with <see cref="AnchorCoverageChecked"/>, this
+    /// lets a caller tell "anchors are configured, and every leaf available to compare matched" (a positive count)
+    /// apart from "anchors are configured, but there was nothing yet to compare" (zero, for example a brand-new
+    /// stream not yet anchored, or one whose anchors could not be found under the current aggregate type name).
+    /// </summary>
+    public Int32 ComparedLeafCount { get; init; }
+
+    /// <summary>
     /// Gets the integrity data of every version verified before the chain ended or broke, in version order.
     /// </summary>
     public IReadOnlyList<VerifiedEvent> Events { get; init; } = [];

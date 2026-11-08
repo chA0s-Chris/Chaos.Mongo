@@ -9,12 +9,15 @@ namespace Chaos.Mongo.EventStore.Integrity;
 public enum TimestampRevocationStatus
 {
     /// <summary>
-    /// No CRLs issued late enough have been obtained yet.
+    /// No CRLs issued late enough have been obtained yet, or at least one non-root certificate of the chain names a
+    /// CRL distribution point while at least one other does not, which can never reach <see cref="Confirmed"/> because
+    /// the silent certificate's revocation is never checked.
     /// </summary>
     Unconfirmed,
 
     /// <summary>
-    /// CRLs issued late enough list no certificate of the chain as revoked at or before the token's time.
+    /// CRLs issued late enough list no certificate of the chain as revoked at or before the token's time, and every
+    /// non-root certificate of the chain names at least one CRL distribution point, so every one of them was checked.
     /// </summary>
     Confirmed,
 
@@ -27,5 +30,14 @@ public enum TimestampRevocationStatus
     /// <see cref="Revoked"/> is an alert, not a final verdict. Verification recomputes the status from the stored CRLs
     /// and counts only CRLs whose signatures verify.
     /// </remarks>
-    Revoked
+    Revoked,
+
+    /// <summary>
+    /// No non-root certificate of the chain names a CRL distribution point, so there is nothing to confirm. Unlike
+    /// <see cref="Confirmed"/>, this does not mean every certificate's revocation was checked and found clear; it means
+    /// there was no revocation source to check in the first place. A chain where some certificates name a source and
+    /// others do not is <see cref="Unconfirmed"/>, never this value or <see cref="Confirmed"/>, because the silent
+    /// ones are never checked.
+    /// </summary>
+    NoRevocationSource
 }

@@ -84,14 +84,7 @@ internal static class TimestampTokenValidation
         ArgumentNullException.ThrowIfNull(settings);
 
         using var chain = new X509Chain();
-        // Every call site supplies the full certificate set a legitimate chain needs through ExtraStore, so a chain
-        // never needs a download; an incomplete chain must fail instead of letting stored or received data make the
-        // process fetch a certificate from an AIA location it names.
-        chain.ChainPolicy.DisableCertificateDownloads = true;
-        chain.ChainPolicy.RevocationMode = settings.RevocationMode;
-        chain.ChainPolicy.UrlRetrievalTimeout = settings.RevocationCheckTimeout;
-        chain.ChainPolicy.ApplicationPolicy.Add(new Oid(TimeStampingPurposeOid));
-        chain.ChainPolicy.VerificationTime = token.TokenInfo.Timestamp.UtcDateTime;
+        ConfigureChainPolicy(chain.ChainPolicy, token.TokenInfo.Timestamp, settings.RevocationMode, settings.RevocationCheckTimeout);
         var tokenCertificates = token.AsSignedCms().Certificates;
         chain.ChainPolicy.ExtraStore.AddRange(tokenCertificates);
         chain.ChainPolicy.ExtraStore.AddRange(settings.ExtraCertificates);
@@ -129,6 +122,95 @@ internal static class TimestampTokenValidation
     }
 
     /// <summary>
+    /// Builds a chain from a signer to a trusted root using exactly the given candidates, with no other certificate
+    /// available: unlike <see cref="BuildChain"/>, this takes no token, so there is nothing for it to implicitly add
+    /// to <see cref="X509ChainPolicy.ExtraStore"/>, and <paramref name="trustedRoot"/> is the chain's only trusted
+    /// root, never a wider trust store. Used in isolation, for one candidate path at a time, so the engine cannot
+    /// resolve through an unrelated, still-embedded certificate and pass or fail for the wrong candidate.
+    /// </summary>
+    /// <param name="signer">The certificate the chain is built from.</param>
+    /// <param name="verificationTime">The time the chain is validated at.</param>
+    /// <param name="candidates">The only certificates, besides the root, available to build the chain from.</param>
+    /// <param name="trustedRoot">The chain's only trusted root.</param>
+    /// <param name="revocationMode">How the chain's revocation status is checked.</param>
+    /// <param name="revocationCheckTimeout">The time an online revocation check may take.</param>
+    /// <returns>
+    /// The DER-encoded certificates from the signer to the root, in the order the engine built them, or <c>null</c>
+    /// when no such chain validates.
+    /// </returns>
+    public static IReadOnlyList<Byte[]>? BuildIsolatedChain(X509Certificate2 signer,
+                                                            DateTimeOffset verificationTime,
+                                                            IReadOnlyList<X509Certificate2> candidates,
+                                                            X509Certificate2 trustedRoot,
+                                                            X509RevocationMode revocationMode,
+                                                            TimeSpan revocationCheckTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(signer);
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(trustedRoot);
+
+        using var chain = new X509Chain();
+        ConfigureChainPolicy(chain.ChainPolicy, verificationTime, revocationMode, revocationCheckTimeout);
+        chain.ChainPolicy.ExtraStore.AddRange(candidates.ToArray());
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
+        if (!chain.Build(signer))
+        {
+            return null;
+        }
+
+        var elements = chain.ChainElements.Select(element => element.Certificate).ToList();
+        try
+        {
+            return elements.Select(certificate => certificate.RawData).ToList();
+        }
+        finally
+        {
+            foreach (var certificate in elements)
+            {
+                certificate.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets the distinct CRLs the distribution points of certificates name, together with whether every certificate, or
+    /// only some, named at least one. A chain where some certificates name a source and others do not can never reach
+    /// full confirmation, because the silent ones are never checked (see <see cref="CrlSourceCoverage"/>).
+    /// </summary>
+    /// <param name="certificates">The certificates, usually the non-root certificates of a chain.</param>
+    /// <returns>The coverage.</returns>
+    /// <exception cref="TimestampTokenValidationException">
+    /// Thrown when a certificate names distribution points, but none with an HTTP location covers all reasons.
+    /// </exception>
+    /// <exception cref="AsnContentException">Thrown when a distribution point extension is malformed.</exception>
+    public static CrlSourceCoverage GetCrlSourceCoverage(IEnumerable<X509Certificate2> certificates)
+    {
+        var perCertificate = certificates.Select(GetCrlSources).ToList();
+        var sources = perCertificate.SelectMany(list => list)
+                                    .GroupBy(source => (String.Join(" ", source.Locations.Select(uri => CrlLocation.Normalize(uri.OriginalString) ?? uri.AbsoluteUri)),
+                                                        Convert.ToHexString(source.Issuer ?? [])))
+                                    .Select(group => group.First() with
+                                    {
+                                        FromCaCertificate = group.Any(source => source.FromCaCertificate),
+                                        FromEndEntityCertificate = group.Any(source => source.FromEndEntityCertificate)
+                                    })
+                                    .ToList();
+        return new CrlSourceCoverage(sources,
+                                     perCertificate.Any(list => list.Count > 0),
+                                     perCertificate.Count > 0 && perCertificate.All(list => list.Count > 0));
+    }
+
+    /// <summary>
+    /// Gets the coverage (<see cref="CrlSourceCoverage"/>) of a stored chain's non-root certificates.
+    /// </summary>
+    /// <param name="certificateChain">The DER-encoded certificates from the signing certificate to the root.</param>
+    /// <returns>The coverage.</returns>
+    /// <exception cref="TimestampTokenValidationException">Thrown when a certificate or its distribution points are malformed.</exception>
+    public static CrlSourceCoverage GetCrlSourceCoverage(IReadOnlyList<Byte[]> certificateChain)
+        => WithLoadedNonRootCertificates(certificateChain, GetCrlSourceCoverage);
+
+    /// <summary>
     /// Gets the distinct CRLs the distribution points of certificates name, in the order they are captured. Sources with
     /// the same normalized locations and issuer are listed once, and count as named by a CA certificate when any of
     /// their certificates is one.
@@ -140,15 +222,7 @@ internal static class TimestampTokenValidation
     /// </exception>
     /// <exception cref="AsnContentException">Thrown when a distribution point extension is malformed.</exception>
     public static IReadOnlyList<CrlSource> GetCrlSources(IEnumerable<X509Certificate2> certificates)
-        => certificates.SelectMany(GetCrlSources)
-                       .GroupBy(source => (String.Join(" ", source.Locations.Select(uri => CrlLocation.Normalize(uri.OriginalString) ?? uri.AbsoluteUri)),
-                                           Convert.ToHexString(source.Issuer ?? [])))
-                       .Select(group => group.First() with
-                       {
-                           FromCaCertificate = group.Any(source => source.FromCaCertificate),
-                           FromEndEntityCertificate = group.Any(source => source.FromEndEntityCertificate)
-                       })
-                       .ToList();
+        => GetCrlSourceCoverage(certificates).Sources;
 
     /// <summary>
     /// Gets the distinct CRLs the distribution points of a stored chain's non-root certificates name, in the order they
@@ -158,34 +232,7 @@ internal static class TimestampTokenValidation
     /// <returns>The CRL sources.</returns>
     /// <exception cref="TimestampTokenValidationException">Thrown when a certificate or its distribution points are malformed.</exception>
     public static IReadOnlyList<CrlSource> GetCrlSources(IReadOnlyList<Byte[]> certificateChain)
-    {
-        ArgumentNullException.ThrowIfNull(certificateChain);
-        var certificates = new List<X509Certificate2>();
-        try
-        {
-            foreach (var certificate in certificateChain.Take(certificateChain.Count - 1))
-            {
-                certificates.Add(X509CertificateLoader.LoadCertificate(certificate));
-            }
-
-            return GetCrlSources(certificates);
-        }
-        catch (CryptographicException ex)
-        {
-            throw new TimestampTokenValidationException("a certificate of the stored chain is malformed.", ex);
-        }
-        catch (AsnContentException ex)
-        {
-            throw new TimestampTokenValidationException("a certificate of the stored chain has a malformed CRL distribution point.", ex);
-        }
-        finally
-        {
-            foreach (var certificate in certificates)
-            {
-                certificate.Dispose();
-            }
-        }
-    }
+        => WithLoadedNonRootCertificates(certificateChain, GetCrlSources);
 
     /// <summary>
     /// Gets the size of an RSA or ECDSA key and the minimum required for it; other key types are not size-checked. The
@@ -221,6 +268,91 @@ internal static class TimestampTokenValidation
     /// <returns><c>true</c> for RSA with MD2, MD4, MD5 or SHA-1, ECDSA with SHA-1 and DSA with SHA-1.</returns>
     public static Boolean IsWeakSignatureAlgorithm(String signatureAlgorithmOid)
         => WeakSignatureAlgorithmOids.Contains(signatureAlgorithmOid);
+
+    /// <summary>
+    /// Requires a chain the caller already built with <see cref="BuildChain"/> to prove the stored or received
+    /// chain's signer and intermediates remain genuinely trusted today (Check A), each uniquely so, and that the
+    /// stored or received chain's own recorded root is independently genuine, not merely configured (Check B).
+    /// Replaces a plain full-chain equality comparison, which would reject a genuine token whose chain now takes
+    /// another path to trust, for example through a cross-signed root, while the signer and every intermediate stay
+    /// the same.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     <b>Check A.</b> <paramref name="built"/> must begin, in order, with exactly <paramref name="storedOrReceived"/>'s
+    ///     signer and every intermediate; what the chain reaches after that prefix is free to vary, including in
+    ///     length. A passing prefix comparison alone does not prove the recorded prefix was the only candidate
+    ///     <see cref="BuildChain"/> could have selected at each position, since two certificates that genuinely share
+    ///     both subject name and key pair validate identically; for each recorded intermediate position, a search
+    ///     over every other simple path from the signer to a trusted root (built in isolation with
+    ///     <see cref="BuildIsolatedChain"/>, so an unrelated embedded certificate cannot be substituted) must find no
+    ///     alternate, or the excluded position was not unique and the token is rejected even though <paramref name="built"/>
+    ///     succeeded.
+    ///     </para>
+    ///     <para>
+    ///     <b>Check B.</b> Independently of Check A, <paramref name="storedOrReceived"/>'s own final certificate must
+    ///     itself be proven, in isolation, to be genuinely self-issued and the genuine cryptographic issuer of the
+    ///     certificate before it, recursively to the signer. This catches a corrupted or substituted stored root that
+    ///     Check A's path search alone would not: when two roots are configured and the signer is genuinely issued by
+    ///     one, but the stored chain records the other as its final certificate, Check A's search simply finds the
+    ///     real path through the first, while Check B fails to reproduce <paramref name="storedOrReceived"/> from its
+    ///     own certificates alone.
+    ///     </para>
+    /// </remarks>
+    /// <param name="token">The token, whose own embedded certificates can carry a bridging or cross-signing certificate.</param>
+    /// <param name="signer">The signing certificate.</param>
+    /// <param name="built">
+    /// The chain <see cref="BuildChain"/> built from <paramref name="signer"/> with
+    /// <paramref name="settings"/>.
+    /// </param>
+    /// <param name="storedOrReceived">The stored or received chain, from the signer to its own recorded root.</param>
+    /// <param name="settings">The trust settings <paramref name="built"/> was built with.</param>
+    /// <returns><c>true</c> when both checks succeed.</returns>
+    public static Boolean MatchesTrustedChain(Rfc3161TimestampToken token,
+                                              X509Certificate2 signer,
+                                              IReadOnlyList<Byte[]> built,
+                                              X509Certificate2Collection storedOrReceived,
+                                              ChainSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        ArgumentNullException.ThrowIfNull(signer);
+        ArgumentNullException.ThrowIfNull(built);
+        ArgumentNullException.ThrowIfNull(storedOrReceived);
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var stored = storedOrReceived.ToList();
+        var prefixLength = stored.Count - 1;
+        if (prefixLength < 1 ||
+            built.Count < prefixLength ||
+            !SequenceEqualBytes(built.Take(prefixLength).ToList(), stored.Take(prefixLength).Select(certificate => certificate.RawData).ToList()))
+        {
+            return false;
+        }
+
+        var verificationTime = token.TokenInfo.Timestamp;
+        var embedded = token.AsSignedCms().Certificates.ToList();
+        try
+        {
+            for (var position = 1; position <= stored.Count - 2; position++)
+            {
+                if (HasAlternatePath(signer, stored, position, embedded, settings, verificationTime))
+                {
+                    return false;
+                }
+            }
+
+            var ownPath = BuildIsolatedChain(signer, verificationTime, stored.Take(stored.Count - 1).ToList(), stored[^1], settings.RevocationMode,
+                                             settings.RevocationCheckTimeout);
+            return ownPath is not null && SequenceEqualBytes(ownPath, stored.Select(certificate => certificate.RawData).ToList());
+        }
+        finally
+        {
+            foreach (var certificate in embedded)
+            {
+                certificate.Dispose();
+            }
+        }
+    }
 
     /// <summary>
     /// Gets a value indicating whether two names are equal after decoding: the same relative distinguished names in
@@ -458,9 +590,9 @@ internal static class TimestampTokenValidation
                 if (trust is not null)
                 {
                     ValidatePolicy(token, trust.PolicyId is { } policyId ? new Oid(policyId) : null);
-                    var built = BuildChain(token, signer, new ChainSettings(trust.TrustedRoots, X509RevocationMode.NoCheck, TimeSpan.Zero, chain));
-                    if (built.Certificates.Count != received.CertificateChain.Count ||
-                        !built.Certificates.Zip(received.CertificateChain).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)))
+                    var settings = new ChainSettings(trust.TrustedRoots, X509RevocationMode.NoCheck, TimeSpan.Zero, chain);
+                    var built = BuildChain(token, signer, settings);
+                    if (!MatchesTrustedChain(token, signer, built.Certificates, chain, settings))
                     {
                         throw new TimestampTokenValidationException("the token's certificate chain differs from the chain built to a trusted root.");
                     }
@@ -553,6 +685,80 @@ internal static class TimestampTokenValidation
     }
 
     /// <summary>
+    /// Sets the chain policy fields <see cref="BuildChain"/> and <see cref="BuildIsolatedChain"/> share, so the two
+    /// cannot drift apart: no certificate download, the required revocation settings, the timestamping application
+    /// policy and the verification time.
+    /// </summary>
+    private static void ConfigureChainPolicy(X509ChainPolicy policy, DateTimeOffset verificationTime, X509RevocationMode revocationMode, TimeSpan revocationCheckTimeout)
+    {
+        // Every call site supplies the full certificate set a legitimate chain needs through ExtraStore, so a chain
+        // never needs a download; an incomplete chain must fail instead of letting stored or received data make the
+        // process fetch a certificate from an AIA location it names.
+        policy.DisableCertificateDownloads = true;
+        policy.RevocationMode = revocationMode;
+        policy.UrlRetrievalTimeout = revocationCheckTimeout;
+        policy.ApplicationPolicy.Add(new Oid(TimeStampingPurposeOid));
+        policy.VerificationTime = verificationTime.UtcDateTime;
+    }
+
+    /// <summary>
+    /// Enumerates every simple (non-repeating) path from <paramref name="start"/> to a member of
+    /// <paramref name="trustedRoots"/>, following only edges of direct cryptographic issuer adjacency
+    /// (<see cref="DirectSignatureVerification.IsDirectIssuer"/>) through <paramref name="pool"/>. A trusted root is
+    /// never recursed into further, so it is always a path's terminus.
+    /// </summary>
+    private static IEnumerable<List<X509Certificate2>> EnumerateSimplePaths(X509Certificate2 start,
+                                                                            IReadOnlyList<X509Certificate2> pool,
+                                                                            X509Certificate2Collection trustedRoots)
+    {
+        var trusted = trustedRoots.Select(root => Convert.ToHexString(root.RawData)).ToHashSet();
+        var path = new List<X509Certificate2>
+        {
+            start
+        };
+        var visited = new HashSet<String>
+        {
+            Convert.ToHexString(start.RawData)
+        };
+        foreach (var result in Walk(start))
+        {
+            yield return result;
+        }
+
+        yield break;
+
+        IEnumerable<List<X509Certificate2>> Walk(X509Certificate2 current)
+        {
+            foreach (var candidate in pool)
+            {
+                var key = Convert.ToHexString(candidate.RawData);
+                if (visited.Contains(key) || !DirectSignatureVerification.IsDirectIssuer(current, candidate))
+                {
+                    continue;
+                }
+
+                path.Add(candidate);
+                if (trusted.Contains(key))
+                {
+                    yield return [.. path];
+                }
+                else
+                {
+                    visited.Add(key);
+                    foreach (var result in Walk(candidate))
+                    {
+                        yield return result;
+                    }
+
+                    visited.Remove(key);
+                }
+
+                path.RemoveAt(path.Count - 1);
+            }
+        }
+    }
+
+    /// <summary>
     /// Gets the CRLs a certificate's distribution points name, with their HTTP locations and, unless a point names
     /// another CRL issuer, the issuer they must come from. Points without an HTTP location are skipped, but a
     /// certificate that names distribution points must yield at least one CRL that covers all revocation reasons
@@ -574,6 +780,40 @@ internal static class TimestampTokenValidation
                                                     fromCaCertificate,
                                                     !fromCaCertificate))
                      .ToList();
+    }
+
+    /// <summary>
+    /// Searches for a simple path from the signer to a trusted root that excludes the recorded certificate at a
+    /// position, proving by direct cryptographic issuer adjacency alone (never a chain-validation call, so no
+    /// constraint propagated along a complete path is missed) that the position was not the only way the chain could
+    /// reach trust.
+    /// </summary>
+    /// <returns><c>true</c> when an alternate path exists and fully validates in isolation.</returns>
+    private static Boolean HasAlternatePath(X509Certificate2 signer,
+                                            IReadOnlyList<X509Certificate2> stored,
+                                            Int32 excludedPosition,
+                                            IReadOnlyList<X509Certificate2> embedded,
+                                            ChainSettings settings,
+                                            DateTimeOffset verificationTime)
+    {
+        var excluded = stored[excludedPosition].RawData;
+        var pool = embedded.Concat(settings.ExtraCertificates)
+                           .Concat(settings.TrustedRoots)
+                           .Where(candidate => !candidate.RawData.AsSpan().SequenceEqual(excluded))
+                           .DistinctBy(candidate => Convert.ToHexString(candidate.RawData))
+                           .ToList();
+
+        foreach (var path in EnumerateSimplePaths(signer, pool, settings.TrustedRoots))
+        {
+            var candidates = path.Take(path.Count - 1).ToList();
+            var built = BuildIsolatedChain(signer, verificationTime, candidates, path[^1], settings.RevocationMode, settings.RevocationCheckTimeout);
+            if (built is not null && SequenceEqualBytes(built, path.Select(certificate => certificate.RawData).ToList()))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -689,6 +929,48 @@ internal static class TimestampTokenValidation
         }
     }
 
+    /// <summary>
+    /// Compares two lists of byte arrays for sequence equality by value, since
+    /// <see cref="Enumerable.SequenceEqual{T}(IEnumerable{T},IEnumerable{T})"/>
+    /// on <see cref="Byte"/> arrays compares references.
+    /// </summary>
+    private static Boolean SequenceEqualBytes(IReadOnlyList<Byte[]> first, IReadOnlyList<Byte[]> second)
+        => first.Count == second.Count && first.Zip(second).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second));
+
     private static DateTimeOffset TruncateToMilliseconds(DateTimeOffset time)
         => new(time.UtcTicks - (time.UtcTicks % TimeSpan.TicksPerMillisecond), TimeSpan.Zero);
+
+    /// <summary>
+    /// Loads a stored chain's non-root certificates and computes a result from them, wrapping loading and extension
+    /// decoding failures the same way for every caller.
+    /// </summary>
+    private static T WithLoadedNonRootCertificates<T>(IReadOnlyList<Byte[]> certificateChain, Func<IReadOnlyList<X509Certificate2>, T> compute)
+    {
+        ArgumentNullException.ThrowIfNull(certificateChain);
+        var certificates = new List<X509Certificate2>();
+        try
+        {
+            foreach (var certificate in certificateChain.Take(certificateChain.Count - 1))
+            {
+                certificates.Add(X509CertificateLoader.LoadCertificate(certificate));
+            }
+
+            return compute(certificates);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new TimestampTokenValidationException("a certificate of the stored chain is malformed.", ex);
+        }
+        catch (AsnContentException ex)
+        {
+            throw new TimestampTokenValidationException("a certificate of the stored chain has a malformed CRL distribution point.", ex);
+        }
+        finally
+        {
+            foreach (var certificate in certificates)
+            {
+                certificate.Dispose();
+            }
+        }
+    }
 }

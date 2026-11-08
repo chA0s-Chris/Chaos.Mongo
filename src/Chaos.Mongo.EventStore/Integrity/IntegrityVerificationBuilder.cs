@@ -62,17 +62,26 @@ public sealed class IntegrityVerificationBuilder
     /// <param name="name">The authority name stored on the anchors.</param>
     /// <param name="configure">Configures the trusted roots and the required policy.</param>
     /// <returns>The builder for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when the name is empty or already configured.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when the name is empty or already configured, or when <paramref name="configure"/> leaves
+    /// <see cref="TimestampAuthorityTrust.TrustedRoots"/> empty.
+    /// </exception>
     public IntegrityVerificationBuilder WithTimestampAuthorityTrust(String name, Action<TimestampAuthorityTrust>? configure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        var trust = new TimestampAuthorityTrust();
-        configure?.Invoke(trust);
-        if (!Options.Authorities.TryAdd(name, trust))
+        if (Options.Authorities.ContainsKey(name))
         {
             throw new ArgumentException($"Trust settings for timestamp authority '{name}' are configured more than once.", nameof(name));
         }
 
+        var trust = new TimestampAuthorityTrust();
+        configure?.Invoke(trust);
+        if (trust.TrustedRoots.Count == 0)
+        {
+            throw new ArgumentException($"Trust settings for timestamp authority '{name}' must configure at least one trusted root.", nameof(configure));
+        }
+
+        Options.Authorities.Add(name, trust);
         return this;
     }
 

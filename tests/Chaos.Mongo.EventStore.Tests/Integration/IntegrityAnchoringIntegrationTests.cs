@@ -131,6 +131,49 @@ public class IntegrityAnchoringIntegrationTests
     }
 
     [Test]
+    public async Task FindAsync_TwoAggregateTypesSharingOneIdentifier_ResolvesEachTypesOwnAnchorInIsolation()
+    {
+        // Format v1 keys leaves only by AggregateId within the leaf document (plan §3), so two different aggregate
+        // types can share one AggregateId. The shipment side is anchored first, in a strictly earlier run, so a
+        // lookup that dropped the AggregateType filter (SealingAnchorLookup.FindAsync's own, through
+        // AnchorStore.StreamLeavesFilter) would silently resolve the ledger side's lookup to the shipment's
+        // earlier, wrong-but-plausible anchor instead of its own, later one, rather than failing loudly.
+        var testAuthority = CreateTestAuthority();
+        var context = await LedgerStoreContext.CreateAsync(_container,
+                                                           configureMongo: mongo =>
+                                                           {
+                                                               LedgerStoreContext.AddShipmentStore(mongo);
+                                                               mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+                                                           });
+        _contexts.Add(context);
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var lookup = context.ServiceProvider.GetRequiredService<SealingAnchorLookup>();
+        var sharedId = Guid.NewGuid();
+
+        await context.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>()
+                     .AppendEventsAsync([ShipmentDispatchedEvent.Create(sharedId, 1)]);
+        await RunUntilAsync(run, _ => IsAggregateAnchoredAsync(store, nameof(ShipmentAggregate), sharedId));
+
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(sharedId, 1)]);
+        await RunUntilAsync(run, _ => IsAggregateAnchoredAsync(store, nameof(LedgerAggregate), sharedId));
+
+        var ledgerSealing = await lookup.FindAsync(nameof(LedgerAggregate), sharedId, 1);
+        var shipmentSealing = await lookup.FindAsync(nameof(ShipmentAggregate), sharedId, 1);
+
+        ledgerSealing.Should().NotBeNull();
+        shipmentSealing.Should().NotBeNull();
+        shipmentSealing.Anchor.Sequence.Should().BeLessThan(ledgerSealing.Anchor.Sequence,
+                                                            "the shipment side is anchored strictly earlier, so an isolation bug would surface as the ledger lookup wrongly returning it");
+        ledgerSealing.Anchor.Id.Should().NotBe(shipmentSealing.Anchor.Id);
+        ledgerSealing.Leaf.AggregateType.Should().Be(nameof(LedgerAggregate));
+        shipmentSealing.Leaf.AggregateType.Should().Be(nameof(ShipmentAggregate));
+        ledgerSealing.Leaf.Hash.Should().Equal(LedgerStoreContext.ReadIntegrity(await context.FindEventAsync(sharedId, 1)).Hash,
+                                               "the ledger lookup must resolve its own leaf's hash, not the shipment side's");
+        shipmentSealing.Leaf.Hash.Should().NotEqual(ledgerSealing.Leaf.Hash);
+    }
+
+    [Test]
     public async Task NotifyAsync_EvidenceMissing_KeepsTheAnchorUnnotifiedUntilItCanBeResolved()
     {
         var testAuthority = CreateTestAuthority();
@@ -587,6 +630,27 @@ public class IntegrityAnchoringIntegrationTests
 
     private static AnchorStore GetStore(LedgerStoreContext context)
         => new(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>());
+
+    /// <summary>
+    /// Like <see cref="IsAnchoredAsync"/>, but matched by <paramref name="aggregateType"/> too: used to force two
+    /// different aggregate types sharing one <see cref="AnchorLeaf.AggregateId"/> to be anchored in two strictly
+    /// separate, ordered runs.
+    /// </summary>
+    private static async Task<Boolean> IsAggregateAnchoredAsync(AnchorStore store, String aggregateType, Guid stream, Int64 version = 1)
+    {
+        var anchors = (await store.Anchors.Find(new BsonDocument(AnchorStore.StatusField, nameof(AnchorStatus.Completed))).ToListAsync())
+            .Select(AnchorStore.ReadAnchor);
+        foreach (var anchor in anchors)
+        {
+            var leaves = await store.ReadLeavesAsync(anchor.Id, CancellationToken.None);
+            if (leaves.Any(leaf => leaf.AggregateType == aggregateType && leaf.AggregateId == stream && leaf.Version >= version))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static async Task<Boolean> IsAnchoredAsync(AnchorStore store, Guid stream, Int64 version = 1)
     {
