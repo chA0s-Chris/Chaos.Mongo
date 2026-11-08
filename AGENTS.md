@@ -11,7 +11,7 @@
 
 ## Local Development Commands
 
-Run these commands from the repository root. The code-style scripts and coverage tooling use the local tools declared in `dotnet-tools.json`, so run `dotnet tool restore` after cloning or when the manifest changes.
+Run these commands from the repository root. The coverage tooling, like the code-style scripts, uses the local tools declared in `dotnet-tools.json`.
 
 | Purpose | Command |
 | --- | --- |
