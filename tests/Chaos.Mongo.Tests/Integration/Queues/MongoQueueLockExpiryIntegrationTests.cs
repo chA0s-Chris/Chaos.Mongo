@@ -22,7 +22,7 @@ public class MongoQueueLockExpiryIntegrationTests
         => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
-    public async Task QueueHandlerCrashesAcrossRepeatedLeaseExpiry_TerminalizesOnReclaimWithoutGrantingFurtherAttempt()
+    public async Task QueueHandlerCrashes_AcrossRepeatedLeaseExpiry_TerminalizesOnReclaimWithoutGrantingFurtherAttempt()
     {
         // Arrange: a handler that never throws and never completes, simulating a crashed or permanently hung
         // consumer. A single subscription instance processes items sequentially, so a handler invocation that

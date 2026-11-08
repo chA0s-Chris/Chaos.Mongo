@@ -263,8 +263,12 @@ public class OutboxIntegrationTests
 
         await WaitUntilAsync(async () =>
         {
+            // AttemptCount is granted atomically at claim time, before the publisher ever runs, so waiting on
+            // it alone could observe the claim before the resolved failure below is actually recorded. Wait for
+            // the failure's own writes instead: the error message set, the lock released, and the next attempt
+            // scheduled.
             var msg = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
-            return msg.AttemptCount > 0;
+            return msg.Error is not null && !msg.IsLocked && msg.NextAttemptUtc is not null;
         });
 
         await processor.StopAsync();

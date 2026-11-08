@@ -5,6 +5,7 @@ namespace Chaos.Mongo.Outbox;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 /// <summary>
@@ -94,7 +95,11 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// and it runs on every claim regardless of why a previous attempt stopped (a resolved failure, or a crash
     /// between claim and <see cref="HandleFailureAsync"/>/<see cref="MarkProcessedAsync"/>), which is what makes
     /// every claim count as a delivery attempt. The field paths below rely on <see cref="OutboxMessage"/>'s class
-    /// map pinning each element name to its member name (see <see cref="OutboxSerializationSetup"/>).
+    /// map pinning each element name to its member name (see <see cref="OutboxSerializationSetup"/>). The terminal
+    /// <see cref="OutboxMessageState.Failed"/> literal is rendered through that same registered class-map
+    /// serializer, looked up exactly like an unparented typed filter resolves it, instead of a hard-coded BSON
+    /// representation, so it stays correct however <see cref="OutboxMessage.State"/> is actually configured to
+    /// serialize — the exact path typed filters (for example the claim/TTL filters below) already go through.
     /// </summary>
     private UpdateDefinition<OutboxMessage> CreateClaimUpdate(DateTime now, String lockId)
     {
@@ -109,6 +114,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             _options.MaxRetries
         });
         BsonValue nowLiteral = new BsonDateTime(now);
+        var failedStateLiteral = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Failed)
+                                                        .Render(new RenderArgs<OutboxMessage>(BsonSerializer.LookupSerializer<OutboxMessage>(), BsonSerializer.SerializerRegistry))
+                                                        [nameof(OutboxMessage.State)];
 
         var setStage = new BsonDocument("$set", new BsonDocument
         {
@@ -129,7 +137,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 {
                     grant,
                     $"${nameof(OutboxMessage.State)}",
-                    (Int32)OutboxMessageState.Failed
+                    failedStateLiteral
                 })
             },
             {

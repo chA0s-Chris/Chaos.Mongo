@@ -20,7 +20,7 @@ public class MongoQueuePoisonPayloadIntegrationTests
         => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
-    public async Task QueueItemWithUndeserializablePayload_ReachesTerminalAfterMaxRetriesPlusOneAcquireAttemptsWithoutEverInvokingTheHandler()
+    public async Task QueueHandlerFailure_UndeserializablePayload_TerminalizesWithoutInvokingHandler()
     {
         // Arrange: a stored payload shape that can never deserialize into PoisonPayload. The acquire's own
         // projection never reads Payload, so this cannot fail the acquire itself; only the secondary typed read

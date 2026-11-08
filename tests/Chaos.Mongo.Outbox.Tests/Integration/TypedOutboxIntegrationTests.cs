@@ -276,8 +276,24 @@ public class TypedOutboxIntegrationTests
         try
         {
             await Task.WhenAll(first.StartAsync(), second.StartAsync(), original.StartAsync());
-            await WaitUntilAsync(async () => await StateAsync(provider, "First") == OutboxMessageState.Failed &&
-                                             (await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync()).AttemptCount == 1);
+            await WaitUntilAsync(async () =>
+            {
+                if (await StateAsync(provider, "First") != OutboxMessageState.Failed)
+                {
+                    return false;
+                }
+
+                // AttemptCount is granted atomically at claim time, before PublishAsync runs, so waiting on it
+                // alone could observe the Outbox claim before its own resolved failure is actually recorded. Wait
+                // for the failure's own writes too: the error message set, the lock released, and the next
+                // attempt scheduled.
+                var outboxMessage = await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
+
+                return outboxMessage.AttemptCount == 1 &&
+                       outboxMessage.Error is not null &&
+                       !outboxMessage.IsLocked &&
+                       outboxMessage.NextAttemptUtc is not null;
+            });
             (await StateAsync(provider, "Second")).Should().Be(OutboxMessageState.Pending);
             var retry = await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
             retry.State.Should().Be(OutboxMessageState.Pending);
