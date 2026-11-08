@@ -194,15 +194,21 @@ public class MongoQueueCollectionNameGeneratorTests
         return typeBuilder.CreateType();
     }
 
+    // Only the type name and its generic arity matter for the collection names under test.
+    // ReSharper disable once UnusedTypeParameter
     private static class GenericContainer<T>
     {
+        // ReSharper disable once UnusedTypeParameter
         public sealed class NestedGenericPayload<TValue>;
     }
 
+    // Only the type name and its generic arity matter for the collection names under test.
+    // ReSharper disable UnusedTypeParameter
     private static class GenericContainer<T1, T2>
     {
         public sealed class NestedGenericPayload;
     }
+    // ReSharper restore UnusedTypeParameter
 
     private static class NestedContainer
     {
@@ -213,6 +219,8 @@ public class MongoQueueCollectionNameGeneratorTests
 
     private sealed class GenericPayload<T>
     {
+        // Only the type name and its generic arity matter for the collection names under test.
+        // ReSharper disable once UnusedMember.Local
         public T? Value { get; set; }
     }
 

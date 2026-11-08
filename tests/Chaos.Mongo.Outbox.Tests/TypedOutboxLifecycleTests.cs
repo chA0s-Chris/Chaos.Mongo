@@ -20,6 +20,8 @@ public class TypedOutboxLifecycleTests
     public async Task ConfigureAsync_CanceledWaiter_DoesNotCancelSuccessfulInitializer()
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
+        // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+        // ReSharper disable once SuspiciousTypeConversion.Global
         var capture = (LifecycleDatabase)database;
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         capture.BeforeIndex = (_, token) => release.Task.WaitAsync(token);
@@ -46,6 +48,8 @@ public class TypedOutboxLifecycleTests
     public async Task RunAsync_ConcurrentInitialization_WaitsAndSharesSuccessfulCompletion()
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
+        // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+        // ReSharper disable once SuspiciousTypeConversion.Global
         var capture = (LifecycleDatabase)database;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -99,6 +103,8 @@ public class TypedOutboxLifecycleTests
     public async Task StartAsync_DifferentPollingIntervals_PollsEachDestinationOnItsOwnSchedule()
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
+        // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+        // ReSharper disable once SuspiciousTypeConversion.Global
         var capture = (LifecycleDatabase)database;
         var time = new FakeTimeProvider();
         using var host = CreateHost(database, false, false, timeProvider: time);
@@ -125,6 +131,8 @@ public class TypedOutboxLifecycleTests
     public async Task StartAsync_MultipleOutboxes_InitializesOnceBeforePolling(Boolean generalStartup, Boolean concurrentStartup)
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
+        // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+        // ReSharper disable once SuspiciousTypeConversion.Global
         var capture = (LifecycleDatabase)database;
         using var host = CreateHost(database, generalStartup, concurrentStartup);
         await host.StartAsync();
@@ -170,8 +178,12 @@ public class TypedOutboxLifecycleTests
     public async Task StartingAsync_FailedOrCanceledInitialization_DoesNotStartAndCanRetry(Boolean cancel)
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
+        // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+        // ReSharper disable once SuspiciousTypeConversion.Global
         var capture = (LifecycleDatabase)database;
         using var cancellation = new CancellationTokenSource();
+        // The callback only runs during the first start below and is removed before the source is disposed.
+        // ReSharper disable AccessToDisposedClosure
         capture.BeforeIndex = (_, _) =>
         {
             if (cancel)
@@ -182,8 +194,11 @@ public class TypedOutboxLifecycleTests
 
             throw new InvalidOperationException("Index initialization failed");
         };
+        // ReSharper restore AccessToDisposedClosure
         using var host = CreateHost(database, false, false);
         var service = (OutboxHostedService)host.Services.GetServices<IHostedService>().Single(s => s is OutboxHostedService);
+        // The assertion below invokes the delegate before the source is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var start = () => service.StartingAsync(cancellation.Token);
         if (cancel)
             await start.Should().ThrowAsync<OperationCanceledException>();
@@ -231,10 +246,7 @@ public class TypedOutboxLifecycleTests
     }
 }
 
-internal sealed class ManualDestination
-{
-    private ManualDestination() { }
-}
+internal abstract class ManualDestination;
 
 internal class LifecycleDatabase : DispatchProxy
 {
@@ -249,6 +261,8 @@ internal class LifecycleDatabase : DispatchProxy
             return Collections.GetOrAdd(name, _ =>
             {
                 var collection = Create<IMongoCollection<OutboxMessage>, LifecycleCollection>();
+                // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+                // ReSharper disable once SuspiciousTypeConversion.Global
                 var capture = (LifecycleCollection)collection;
                 capture.BeforeIndex = token => BeforeIndex?.Invoke(name, token) ?? Task.CompletedTask;
                 return capture;
@@ -268,6 +282,8 @@ internal class LifecycleCollection : DispatchProxy
     public LifecycleCollection()
     {
         _indexes = Create<IMongoIndexManager<OutboxMessage>, LifecycleIndexes>();
+        // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
+        // ReSharper disable once SuspiciousTypeConversion.Global
         ((LifecycleIndexes)_indexes).OnIndex = async token =>
         {
             Interlocked.Increment(ref _indexCalls);

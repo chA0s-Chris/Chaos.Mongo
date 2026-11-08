@@ -19,12 +19,15 @@ public class TimestampTokenValidationTests
     {
         using var scenario = CreateAiaScenario();
 
+        // The assertion below invokes the delegate before the scenario is disposed.
+        // ReSharper disable AccessToDisposedClosure
         var act = () => TimestampTokenValidation.BuildChain(scenario.Token,
                                                             scenario.Signer,
                                                             new ChainSettings(new X509Certificate2Collection(scenario.Root),
                                                                               X509RevocationMode.NoCheck,
                                                                               TimeSpan.FromSeconds(5),
                                                                               new X509Certificate2Collection()));
+        // ReSharper restore AccessToDisposedClosure
 
         act.Should().Throw<TimestampTokenValidationException>();
         scenario.Listener.RequestCount.Should().Be(0, "chain building must never fetch a certificate named by an AIA extension");

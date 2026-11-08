@@ -28,11 +28,15 @@ public class TypedOutboxIntegrationTests
         using var session = await helper.Client.StartSessionAsync();
         var first = provider.GetRequiredService<IOutbox<FirstDestination>>();
         var second = provider.GetRequiredService<IOutbox<SecondDestination>>();
+        // The assertion below invokes the delegate before the session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var noTransaction = () => first.AddMessageAsync(session, new AnotherTestPayload());
         await noTransaction.Should().ThrowAsync<InvalidOperationException>().WithMessage("*active MongoDB transaction*");
         await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
         session.StartTransaction();
         await first.AddMessageAsync(session, new AnotherTestPayload());
+        // The assertion below invokes the delegate before the session is disposed.
+        // ReSharper disable once AccessToDisposedClosure
         var wrongDestination = () => second.AddMessageAsync(session, new AnotherTestPayload());
         await wrongDestination.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not registered*");
         await session.CommitTransactionAsync();
@@ -361,6 +365,8 @@ public class TypedOutboxIntegrationTests
                     return;
                 callbackEntered.TrySetResult();
                 // Cancellation callbacks are synchronous; hold this one until the test releases it.
+                // The finally block sets the event and awaits the host shutdown before the event is disposed.
+                // ReSharper disable once AccessToDisposedClosure
                 callbackRelease.Wait();
             });
             firstEntered.TrySetResult();

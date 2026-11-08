@@ -136,6 +136,8 @@ public class CollectionTypeMapTests
         name.Should().Be("mapped_collection");
     }
 
+    // Only the type name and its generic arity matter for the collection names under test.
+    // ReSharper disable once UnusedTypeParameter
     private static class EnvelopeContainer<T>
     {
         public sealed class Envelope;
@@ -143,6 +145,8 @@ public class CollectionTypeMapTests
 
     private sealed class Envelope<T>
     {
+        // Only the type name and its generic arity matter for the collection names under test.
+        // ReSharper disable once UnusedMember.Local
         public T? Payload { get; set; }
     }
 
