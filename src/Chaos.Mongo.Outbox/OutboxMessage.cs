@@ -15,6 +15,13 @@ using MongoDB.Bson.Serialization;
 public sealed class OutboxMessage
 {
     /// <summary>
+    /// Gets or sets the number of times this message has been claimed for processing, not the number of
+    /// failures. Every lock claim increments this, including a lease-expiry reclaim after a crash, so a
+    /// message that succeeds on its very first claim has <c>AttemptCount == 1</c>.
+    /// </summary>
+    public Int64 AttemptCount { get; internal set; }
+
+    /// <summary>
     /// Gets or sets an optional correlation identifier for tracing across systems.
     /// </summary>
     public String? CorrelationId { get; internal init; }
@@ -72,11 +79,6 @@ public sealed class OutboxMessage
     /// Gets or sets the timestamp when the message was successfully published.
     /// </summary>
     public DateTime? ProcessedUtc { get; internal set; }
-
-    /// <summary>
-    /// Gets or sets the number of failed processing attempts so far.
-    /// </summary>
-    public Int32 RetryCount { get; internal set; }
 
     /// <summary>
     /// Gets or sets the processing state of the message.

@@ -115,9 +115,12 @@ public sealed class MongoQueueBuilder<TPayload>
     }
 
     /// <summary>
-    /// Configures the maximum number of retries for failed queue items before they become terminal.
+    /// Configures the number of retries allowed after the first delivery attempt before a queue item becomes
+    /// terminal. A configured value of <c>N</c> allows <c>N + 1</c> total delivery attempts; every lock
+    /// acquisition counts as a delivery attempt, not only a thrown handler exception. This is the same meaning
+    /// as the transactional outbox's <c>OutboxBuilder.WithMaxRetries</c>.
     /// </summary>
-    /// <param name="maxRetries">The number of retries allowed after the initial failed attempt.</param>
+    /// <param name="maxRetries">The number of retries allowed after the first delivery attempt.</param>
     /// <returns>This builder instance for method chaining.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxRetries"/> is less than or equal to zero.</exception>
     public MongoQueueBuilder<TPayload> WithMaxRetries(Int32 maxRetries)

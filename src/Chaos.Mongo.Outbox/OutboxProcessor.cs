@@ -62,7 +62,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         ["CollectionName"] = _options.CollectionName
     });
 
-    private DateTime ComputeNextAttemptUtc(Int32 retryCount)
+    private DateTime ComputeNextAttemptUtc(Int64 attemptCount)
     {
         var delay = _options.RetryBackoffInitialDelay;
         var maxDelay = _options.RetryBackoffMaxDelay;
@@ -72,7 +72,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             delay = maxDelay;
         }
 
-        for (var attempt = 1; attempt < retryCount && delay < maxDelay; attempt++)
+        for (var attempt = 1L; attempt < attemptCount && delay < maxDelay; attempt++)
         {
             if (delay.Ticks > maxDelay.Ticks / 2)
             {
@@ -86,30 +86,129 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         return _timeProvider.GetUtcNow().UtcDateTime.Add(delay);
     }
 
+    /// <summary>
+    /// Builds the claim aggregation-pipeline update that atomically decides, from the document's own
+    /// pre-update <see cref="OutboxMessage.AttemptCount"/> compared against <see cref="OutboxOptions.MaxRetries"/>,
+    /// whether this claim is <b>granted</b> a new attempt or the message transitions directly to <b>terminal</b>
+    /// without granting a lock. This is the only place <see cref="OutboxMessage.AttemptCount"/> is incremented,
+    /// and it runs on every claim regardless of why a previous attempt stopped (a resolved failure, or a crash
+    /// between claim and <see cref="HandleFailureAsync"/>/<see cref="MarkProcessedAsync"/>), which is what makes
+    /// every claim count as a delivery attempt. The field paths below rely on <see cref="OutboxMessage"/>'s class
+    /// map pinning each element name to its member name (see <see cref="OutboxSerializationSetup"/>).
+    /// </summary>
+    private UpdateDefinition<OutboxMessage> CreateClaimUpdate(DateTime now, String lockId)
+    {
+        BsonValue existingAttemptCount = new BsonDocument("$ifNull", new BsonArray
+        {
+            $"${nameof(OutboxMessage.AttemptCount)}",
+            0L
+        });
+        BsonValue grant = new BsonDocument("$lte", new BsonArray
+        {
+            existingAttemptCount,
+            _options.MaxRetries
+        });
+        BsonValue nowLiteral = new BsonDateTime(now);
+
+        var setStage = new BsonDocument("$set", new BsonDocument
+        {
+            {
+                nameof(OutboxMessage.AttemptCount), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    new BsonDocument("$add", new BsonArray
+                    {
+                        existingAttemptCount,
+                        1L
+                    }),
+                    $"${nameof(OutboxMessage.AttemptCount)}"
+                })
+            },
+            {
+                nameof(OutboxMessage.State), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    $"${nameof(OutboxMessage.State)}",
+                    (Int32)OutboxMessageState.Failed
+                })
+            },
+            {
+                nameof(OutboxMessage.FailedUtc), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    "$$REMOVE",
+                    nowLiteral
+                })
+            },
+            {
+                nameof(OutboxMessage.IsLocked), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    true,
+                    false
+                })
+            },
+            {
+                nameof(OutboxMessage.LockedUtc), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    nowLiteral,
+                    "$$REMOVE"
+                })
+            },
+            {
+                nameof(OutboxMessage.LockId), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    lockId,
+                    "$$REMOVE"
+                })
+            },
+            {
+                nameof(OutboxMessage.NextAttemptUtc), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    $"${nameof(OutboxMessage.NextAttemptUtc)}",
+                    "$$REMOVE"
+                })
+            }
+        });
+
+        var pipeline = new EmptyPipelineDefinition<OutboxMessage>()
+            .AppendStage<OutboxMessage, OutboxMessage, OutboxMessage>(setStage);
+
+        return Builders<OutboxMessage>.Update.Pipeline(pipeline);
+    }
+
     private IMongoCollection<OutboxMessage> GetCollection()
     {
         return _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
     }
 
+    /// <summary>
+    /// Handles a resolved failure (a failed <see cref="IOutboxPublisher.PublishAsync"/> call or a finalization
+    /// exception) for the attempt the caller already knows was just granted. Unlike claiming, a resolved failure
+    /// never needs to increment <see cref="OutboxMessage.AttemptCount"/> itself — that already happened
+    /// atomically when this attempt was granted — so this method only decides, from the already-known
+    /// <paramref name="attemptCount"/>, whether to schedule a retry or terminalize permanently.
+    /// </summary>
     private async Task HandleFailureAsync(IMongoCollection<OutboxMessage> collection,
                                           ObjectId messageId,
                                           String lockId,
-                                          Int32 currentRetryCount,
+                                          Int64 attemptCount,
                                           Exception exception)
     {
-        var newRetryCount = currentRetryCount + 1;
         var failureFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, messageId) &
                             Builders<OutboxMessage>.Filter.Eq(m => m.LockId, lockId);
 
         UpdateDefinition<OutboxMessage> failureUpdate;
 
-        if (newRetryCount >= _options.MaxRetries)
+        if (attemptCount > _options.MaxRetries)
         {
             // Permanently failed
             failureUpdate = Builders<OutboxMessage>.Update
                                                    .Set(m => m.State, OutboxMessageState.Failed)
                                                    .Set(m => m.FailedUtc, _timeProvider.GetUtcNow().UtcDateTime)
-                                                   .Set(m => m.RetryCount, newRetryCount)
                                                    .Set(m => m.Error, exception.Message)
                                                    .Set(m => m.IsLocked, false)
                                                    .Unset(m => m.NextAttemptUtc)
@@ -117,16 +216,15 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                                                    .Unset(m => m.LockId);
 
             _logger.LogWarning(
-                "Outbox message {MessageId} permanently failed after {RetryCount} attempts",
-                messageId, newRetryCount);
+                "Outbox message {MessageId} permanently failed after {AttemptCount} attempts",
+                messageId, attemptCount);
         }
         else
         {
             // Schedule retry with exponential backoff
-            var nextAttemptUtc = ComputeNextAttemptUtc(newRetryCount);
+            var nextAttemptUtc = ComputeNextAttemptUtc(attemptCount);
 
             failureUpdate = Builders<OutboxMessage>.Update
-                                                   .Set(m => m.RetryCount, newRetryCount)
                                                    .Set(m => m.Error, exception.Message)
                                                    .Set(m => m.NextAttemptUtc, nextAttemptUtc)
                                                    .Set(m => m.IsLocked, false)
@@ -134,8 +232,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                                                    .Unset(m => m.LockId);
 
             _logger.LogWarning(
-                "Outbox message {MessageId} failed (attempt {RetryCount}/{MaxRetries}); next attempt at {NextAttemptUtc}",
-                messageId, newRetryCount, _options.MaxRetries, nextAttemptUtc);
+                "Outbox message {MessageId} failed (attempt {AttemptCount}/{MaxRetries}); next attempt at {NextAttemptUtc}",
+                messageId, attemptCount, _options.MaxRetries, nextAttemptUtc);
         }
 
         var result = await collection.UpdateOneAsync(failureFilter, failureUpdate);
@@ -201,7 +299,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to finalize outbox message {MessageId} of type '{MessageType}' after publishing", claimed.Id, claimed.Type);
-            await HandleFailureAsync(collection, claimed.Id, lockId, claimed.RetryCount, ex);
+            await HandleFailureAsync(collection, claimed.Id, lockId, claimed.AttemptCount, ex);
         }
     }
 
@@ -326,7 +424,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         var staleLockThreshold = now - _options.LockLeaseTime;
         var lockId = Guid.NewGuid().ToString();
 
-        // Atomically claim the message
+        // Atomically claim the message. The claim itself decides, from the document's own pre-update
+        // AttemptCount, whether to grant this claim a new attempt or to terminalize the message directly, so a
+        // message that crashed on an earlier granted attempt (between claim and HandleFailureAsync/
+        // MarkProcessedAsync) still reaches terminal via a later claim instead of cycling forever.
         var claimFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, message.Id) &
                           Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Pending) &
                           (Builders<OutboxMessage>.Filter.Eq(m => m.NextAttemptUtc, null) |
@@ -339,14 +440,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             claimFilter &= processingFilter;
         }
 
-        var claimUpdate = Builders<OutboxMessage>.Update
-                                                 .Set(m => m.IsLocked, true)
-                                                 .Set(m => m.LockedUtc, now)
-                                                 .Set(m => m.LockId, lockId);
-
         var claimed = await collection.FindOneAndUpdateAsync(
             claimFilter,
-            claimUpdate,
+            CreateClaimUpdate(now, lockId),
             new FindOneAndUpdateOptions<OutboxMessage>
             {
                 ReturnDocument = ReturnDocument.After
@@ -356,6 +452,17 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         if (claimed is null)
         {
             _logger.LogDebug("Outbox message {MessageId} could not be claimed (no longer eligible or locked by another processor)", message.Id);
+            return;
+        }
+
+        if (claimed.State == OutboxMessageState.Failed)
+        {
+            // This claim's own terminal branch already fired atomically: the message crashed on an earlier
+            // granted attempt and this claim's own pre-update AttemptCount already exceeded MaxRetries, so it
+            // terminalizes here without ever calling the publisher.
+            _logger.LogWarning(
+                "Outbox message {MessageId} permanently failed after {AttemptCount} attempts without granting a further attempt",
+                claimed.Id, claimed.AttemptCount);
             return;
         }
 
@@ -372,7 +479,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to publish outbox message {MessageId} of type '{MessageType}'", message.Id, claimed.Type);
-            await HandleFailureAsync(collection, message.Id, lockId, claimed.RetryCount, ex);
+            await HandleFailureAsync(collection, message.Id, lockId, claimed.AttemptCount, ex);
             return;
         }
 

@@ -25,6 +25,7 @@ internal static class OutboxSerializationSetup
                 cm.AutoMap();
                 cm.SetIgnoreExtraElements(true);
                 cm.MapIdMember(m => m.Id);
+                cm.GetMemberMap(m => m.AttemptCount).SetElementName(nameof(OutboxMessage.AttemptCount)).SetIgnoreIfDefault(true);
                 cm.GetMemberMap(m => m.CorrelationId).SetElementName(nameof(OutboxMessage.CorrelationId)).SetIgnoreIfNull(true);
                 cm.GetMemberMap(m => m.CreatedUtc).SetElementName(nameof(OutboxMessage.CreatedUtc));
                 cm.GetMemberMap(m => m.Error).SetElementName(nameof(OutboxMessage.Error)).SetIgnoreIfNull(true);
@@ -35,7 +36,6 @@ internal static class OutboxSerializationSetup
                 cm.GetMemberMap(m => m.NextAttemptUtc).SetElementName(nameof(OutboxMessage.NextAttemptUtc)).SetIgnoreIfNull(true);
                 cm.GetMemberMap(m => m.Payload).SetElementName(nameof(OutboxMessage.Payload));
                 cm.GetMemberMap(m => m.ProcessedUtc).SetElementName(nameof(OutboxMessage.ProcessedUtc)).SetIgnoreIfNull(true);
-                cm.GetMemberMap(m => m.RetryCount).SetElementName(nameof(OutboxMessage.RetryCount)).SetIgnoreIfDefault(true);
                 cm.GetMemberMap(m => m.State).SetElementName(nameof(OutboxMessage.State));
                 cm.GetMemberMap(m => m.Type).SetElementName(nameof(OutboxMessage.Type));
             });

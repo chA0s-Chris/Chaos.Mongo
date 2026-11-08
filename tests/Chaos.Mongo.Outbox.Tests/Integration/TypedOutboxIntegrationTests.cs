@@ -244,7 +244,7 @@ public class TypedOutboxIntegrationTests
             {
                 await WaitUntilAsync(async () => await StateAsync(provider, "First") == OutboxMessageState.Failed);
                 var message = await Collection(provider, "First").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
-                message.RetryCount.Should().Be(1);
+                message.AttemptCount.Should().Be(1);
                 message.Error.Should().Be("First destination unavailable");
             }
             else
@@ -277,7 +277,7 @@ public class TypedOutboxIntegrationTests
         {
             await Task.WhenAll(first.StartAsync(), second.StartAsync(), original.StartAsync());
             await WaitUntilAsync(async () => await StateAsync(provider, "First") == OutboxMessageState.Failed &&
-                                             (await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync()).RetryCount == 1);
+                                             (await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync()).AttemptCount == 1);
             (await StateAsync(provider, "Second")).Should().Be(OutboxMessageState.Pending);
             var retry = await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
             retry.State.Should().Be(OutboxMessageState.Pending);
@@ -467,8 +467,11 @@ public class TypedOutboxIntegrationTests
                 .WithOutbox<FirstDestination>(o =>
                 {
                     Configure(o, "First", autoStart);
+                    // MaxRetries = 0 means one total attempt under the unified meaning, so the single failure
+                    // exercised by StartAsync_BlockedOrFailingDestination_OtherOutboxesProgressIndependently
+                    // exhausts it immediately, matching this test's expectations.
                     o.WithMessage<AnotherTestPayload>().WithPublisher<TrackedTypedPublisher>(lifetime)
-                     .WithRetentionPeriod(TimeSpan.FromDays(1)).WithBatchSize(1).WithMaxRetries(1)
+                     .WithRetentionPeriod(TimeSpan.FromDays(1)).WithBatchSize(1).WithMaxRetries(0)
                      .WithLockLeaseTime(TimeSpan.FromSeconds(20));
                 })
                 .WithOutbox<SecondDestination>(o =>

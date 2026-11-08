@@ -26,7 +26,7 @@ public class OutboxProcessingFilterQueryTests
         if (compound)
         {
             filter &= filters.Eq(message => message.CorrelationId, "Selected") |
-                      filters.Eq(message => message.RetryCount, 2);
+                      filters.Eq(message => message.AttemptCount, 2);
         }
 
         await AssertQueryContractAsync(filter);

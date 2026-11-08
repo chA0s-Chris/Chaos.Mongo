@@ -26,49 +26,49 @@ cause.
 
 ## Acceptance Criteria
 
-- [ ] `MongoQueueDefinition.MaxRetries` and `OutboxOptions.MaxRetries` document and implement the same meaning:
+- [x] `MongoQueueDefinition.MaxRetries` and `OutboxOptions.MaxRetries` document and implement the same meaning:
       the number of retries allowed after the first attempt, so a configured value of `N` allows `N + 1` total
       delivery attempts before the item/message becomes terminal (the queue's current behavior). The queue's
       `null` ("unlimited retries") stays queue-only; the outbox's `MaxRetries` stays a non-nullable `Int32`.
-- [ ] A queue item whose handler always throws, and an outbox message whose publisher always throws, each reach
+- [x] A queue item whose handler always throws, and an outbox message whose publisher always throws, each reach
       their terminal state (`IsClosed`/`IsTerminal` for the queue, `State == Failed` for the outbox) after exactly
       `MaxRetries + 1` attempts for the same configured `MaxRetries`, with tests covering both.
-- [ ] A queue item that is reclaimed after its lock lease expires — without the handler ever throwing (simulating a
+- [x] A queue item that is reclaimed after its lock lease expires — without the handler ever throwing (simulating a
       crashed or hung consumer) — counts each reclaim that is granted a new attempt, and the first reclaim after
       `MaxRetries + 1` attempts have already been granted transitions the item directly to the terminal state
       without granting that reclaim a lock or incrementing `AttemptCount` further, covered by a new test.
-- [ ] A queue item whose stored payload can never deserialize into `TPayload` reaches `IsTerminal: true` after
+- [x] A queue item whose stored payload can never deserialize into `TPayload` reaches `IsTerminal: true` after
       `MaxRetries + 1` acquire attempts, covered by a new integration test that inserts a document whose payload
       shape doesn't match `TPayload`, lets the subscription run, and asserts the final state through a
       `BsonDocument`-typed query (the typed collection can't deserialize the poisoned document even after it turns
       terminal).
-- [ ] A queue item whose `IMongoQueuePayloadHandler<TPayload>` resolution fails (a DI failure) on every attempt
+- [x] A queue item whose `IMongoQueuePayloadHandler<TPayload>` resolution fails (a DI failure) on every attempt
       reaches the terminal state after exactly `MaxRetries + 1` attempts, covered by a new test using a handler
       factory that persistently throws for at least that many calls (an exhausted-budget fixture, not one that
       eventually succeeds). A handler factory that fails only transiently and then resolves successfully before
       `MaxRetries + 1` attempts are exhausted must not be required to reach the terminal state; cover that as a
       separate scenario if desired.
-- [ ] `MongoQueueItem.RetryCount` and `OutboxMessage.RetryCount` are renamed to `AttemptCount` and widened from
+- [x] `MongoQueueItem.RetryCount` and `OutboxMessage.RetryCount` are renamed to `AttemptCount` and widened from
       `Int32` to `Int64`, with XML docs describing an attempt as "the item/message was acquired/claimed for
       processing," not "processing failed" — an item that succeeds on its first acquisition has `AttemptCount == 1`.
       `MaxRetries` itself stays `Int32` with its existing builder validation unchanged. Both packages'
       `PublicAPI.Shipped.txt`/`PublicAPI.Unshipped.txt` reflect the rename and the type change, and the persisted
       element name pinned by [#243](https://github.com/chA0s-Chris/Chaos.Mongo/issues/243)
       (`SetElementName(nameof(...))`) follows the rename.
-- [ ] A queue item and an outbox message each reach `AttemptCount == Int32.MaxValue + 1` (`2_147_483_648`) without a
+- [x] A queue item and an outbox message each reach `AttemptCount == Int32.MaxValue + 1` (`2_147_483_648`) without a
       numeric-overflow exception or truncation when `MaxRetries` is configured to `Int32.MaxValue` and a prior
       `AttemptCount` of `Int32.MaxValue` is already recorded: the next acquire/claim grants that attempt and records
       the correct 64-bit count, a resolved failure at that count terminalizes immediately, and an abandoned
       (crashed) attempt at that count terminalizes on the next reclaim without granting a further attempt or
       incrementing `AttemptCount` again — covered by a new seeded-boundary test for both the queue and the outbox.
-- [ ] `docs/queues.md` and `docs/transactional-outbox.md` state that every lock acquisition/claim counts as a
+- [x] `docs/queues.md` and `docs/transactional-outbox.md` state that every lock acquisition/claim counts as a
       delivery attempt — not only a thrown handler/publisher exception — and that `MaxRetries` means the same thing
       on both.
-- [ ] `docs/migrating-from-0.x.md` gets a new entry documenting the `RetryCount` → `AttemptCount` rename, the
+- [x] `docs/migrating-from-0.x.md` gets a new entry documenting the `RetryCount` → `AttemptCount` rename, the
       changed `MaxRetries` meaning on the outbox (an unconfigured outbox now allows 6 attempts, not 5), and that an
       item/message already in flight when upgrading has no `AttemptCount` field yet, so its next acquisition is
       counted as attempt 1 — any attempts it made before the upgrade are not carried over.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the complete test
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the complete test
       suite passes while maintaining the repository's required merged line coverage.
 
 ## Technical Details

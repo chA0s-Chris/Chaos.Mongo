@@ -43,8 +43,10 @@ internal sealed class OutboxOptions
     public TimeSpan LockLeaseTime { get; init; } = DefaultLockLeaseTime;
 
     /// <summary>
-    /// Gets or sets the maximum number of retry attempts before a message is permanently marked as failed.
-    /// Defaults to <c>5</c>.
+    /// Gets or sets the number of retries allowed after the first delivery attempt before a message is
+    /// permanently marked as failed. A configured value of <c>N</c> allows <c>N + 1</c> total delivery
+    /// attempts; every lock claim counts as a delivery attempt, not only a failed <see cref="IOutboxPublisher"/>
+    /// call. This is the same meaning as a queue's <c>MongoQueueDefinition.MaxRetries</c>. Defaults to <c>5</c>.
     /// </summary>
     public Int32 MaxRetries { get; init; } = DefaultMaxRetries;
 

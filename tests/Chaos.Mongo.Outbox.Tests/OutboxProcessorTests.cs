@@ -311,6 +311,44 @@ public class OutboxProcessorTests
     }
 
     [Test]
+    public async Task ProcessMessage_ClaimTerminalizesDirectly_SkipsPublishingWithoutFurtherWrite()
+    {
+        // A claimed message already in the Failed state means the claim's own terminal branch fired atomically
+        // — the message crashed between an earlier granted claim and HandleFailureAsync/MarkProcessedAsync, and
+        // this claim's own pre-update AttemptCount already exceeded MaxRetries — so it must skip publishing
+        // entirely and must not perform any further write.
+        var claimedTerminalMessage = new OutboxMessage
+        {
+            Id = ObjectId.GenerateNewId(),
+            State = OutboxMessageState.Failed,
+            Type = "TestPayload",
+            Payload = new BsonDocument("Name", "Test"),
+            AttemptCount = _options.MaxRetries + 1,
+            IsLocked = false
+        };
+        var claimAttempted = CreateSignal();
+        SetupFindReturns(CreatePendingMessage());
+        SetupClaimReturns(claimedTerminalMessage, () => claimAttempted.TrySetResult(true));
+
+        var sut = CreateSut();
+        await sut.StartAsync();
+        await WaitForSignalAsync(claimAttempted);
+        await sut.StopAsync();
+
+        _publisherMock.Verify(
+            p => p.PublishAsync(It.IsAny<OutboxMessage>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _collectionMock.Verify(
+            c => c.UpdateOneAsync(
+                It.IsAny<FilterDefinition<OutboxMessage>>(),
+                It.IsAny<UpdateDefinition<OutboxMessage>>(),
+                It.IsAny<UpdateOptions>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        VerifyLoggedWarning("permanently failed");
+    }
+
+    [Test]
     public async Task ProcessMessage_FinalizationTimesOut_ReleasesLockWithoutCountingFailure()
     {
         var message = CreatePendingMessage();
@@ -378,7 +416,10 @@ public class OutboxProcessorTests
     [Test]
     public async Task ProcessMessage_PublishFails_MarksAsPermanentlyFailedWhenRetriesExhausted()
     {
-        var message = CreatePendingMessage(_options.MaxRetries - 1);
+        // The claim already incremented AttemptCount atomically before HandleFailureAsync ever runs, so the
+        // seeded message must represent the already-claimed attempt count (MaxRetries + 1) that exceeds the
+        // budget, not a pre-increment count HandleFailureAsync used to bump itself.
+        var message = CreatePendingMessage(_options.MaxRetries + 1);
         var failureRecorded = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
@@ -613,7 +654,7 @@ public class OutboxProcessorTests
 
     private static IAsyncCursor<OutboxMessage> CreateEmptyCursor() => CreateEmptyAsyncCursor();
 
-    private static OutboxMessage CreatePendingMessage(Int32 retryCount = 0)
+    private static OutboxMessage CreatePendingMessage(Int64 attemptCount = 0)
     {
         return new OutboxMessage
         {
@@ -621,7 +662,7 @@ public class OutboxProcessorTests
             State = OutboxMessageState.Pending,
             Type = "TestPayload",
             Payload = new BsonDocument("Name", "Test"),
-            RetryCount = retryCount,
+            AttemptCount = attemptCount,
             IsLocked = false
         };
     }

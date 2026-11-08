@@ -11,8 +11,9 @@ namespace Chaos.Mongo.Outbox;
 ///     etc.).
 ///     </para>
 ///     <para>
-///     Throwing an exception signals a failed attempt; the processor will increment <see cref="OutboxMessage.RetryCount"/>
-///     and retry later according to the configured retry schedule.
+///     Throwing an exception signals a failed attempt; the processor will retry later according to the
+///     configured retry schedule until <see cref="OutboxMessage.AttemptCount"/> exceeds the configured
+///     maximum number of retries.
 ///     </para>
 ///     <para>
 ///     The publisher receives the full <see cref="OutboxMessage"/> including <see cref="OutboxMessage.Type"/>,

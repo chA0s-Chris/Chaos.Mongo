@@ -95,6 +95,94 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     public Boolean IsActive => _isActive && !_isDisposed;
 
     /// <summary>
+    /// Builds the acquire/claim aggregation-pipeline update that atomically decides, from the document's own
+    /// pre-update <see cref="MongoQueueItem.AttemptCount"/> compared against <see cref="MongoQueueDefinition.MaxRetries"/>,
+    /// whether this acquisition is <b>granted</b> a new attempt or the item transitions directly to
+    /// <b>terminal</b> without granting a lock. This is the only place <see cref="MongoQueueItem.AttemptCount"/>
+    /// is incremented, and it runs on every acquisition regardless of why a previous attempt stopped (a resolved
+    /// failure, a crash, or a lease-expiry reclaim), which is what makes every acquisition count as a delivery
+    /// attempt. The field paths below rely on <see cref="MongoQueueItem"/>'s class map pinning each element name
+    /// to its member name (see <see cref="MongoSerializationSetup"/>).
+    /// </summary>
+    private static UpdateDefinition<MongoQueueItem<TPayload>> CreateAcquireUpdate(DateTime acquiredLockUtc, Int32? maxRetries)
+    {
+        BsonValue existingAttemptCount = new BsonDocument("$ifNull", new BsonArray
+        {
+            $"${nameof(MongoQueueItem.AttemptCount)}",
+            0L
+        });
+        BsonValue grant = maxRetries.HasValue
+            ? new BsonDocument("$lte", new BsonArray
+            {
+                existingAttemptCount,
+                maxRetries.Value
+            })
+            : BsonBoolean.True;
+        BsonValue nowLiteral = new BsonDateTime(acquiredLockUtc);
+
+        var setStage = new BsonDocument("$set", new BsonDocument
+        {
+            {
+                nameof(MongoQueueItem.AttemptCount), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    new BsonDocument("$add", new BsonArray
+                    {
+                        existingAttemptCount,
+                        1L
+                    }),
+                    $"${nameof(MongoQueueItem.AttemptCount)}"
+                })
+            },
+            {
+                nameof(MongoQueueItem.IsClosed), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    $"${nameof(MongoQueueItem.IsClosed)}",
+                    true
+                })
+            },
+            {
+                nameof(MongoQueueItem.IsTerminal), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    $"${nameof(MongoQueueItem.IsTerminal)}",
+                    true
+                })
+            },
+            {
+                nameof(MongoQueueItem.ClosedUtc), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    "$$REMOVE",
+                    nowLiteral
+                })
+            },
+            {
+                nameof(MongoQueueItem.IsLocked), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    true,
+                    false
+                })
+            },
+            {
+                nameof(MongoQueueItem.LockedUtc), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    nowLiteral,
+                    "$$REMOVE"
+                })
+            }
+        });
+
+        var pipeline = new EmptyPipelineDefinition<MongoQueueItem<TPayload>>()
+            .AppendStage<MongoQueueItem<TPayload>, MongoQueueItem<TPayload>, MongoQueueItem<TPayload>>(setStage);
+
+        return Builders<MongoQueueItem<TPayload>>.Update.Pipeline(pipeline);
+    }
+
+    /// <summary>
     /// Builds the closed-item TTL index's partial filter from the element names the registered class map of the
     /// non-generic <see cref="MongoQueueItem"/> base type actually uses, instead of raw <c>nameof(...)</c> string
     /// literals, so the filter keeps matching even if a member is ever pinned to a different element name.
@@ -262,37 +350,29 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         }
     }
 
+    /// <summary>
+    /// Handles a resolved failure (a handler exception, a DI resolution failure, or a poison-payload secondary
+    /// read failure) for the attempt the caller already knows was just granted. Unlike acquisition, a resolved
+    /// failure never needs to increment <see cref="MongoQueueItem.AttemptCount"/> itself — that already happened
+    /// atomically when this attempt was granted — so this method only decides, from the already-known
+    /// <paramref name="attemptCount"/>, whether to retry (no database write; the item simply stays available
+    /// once its lock lease expires) or to terminalize immediately via an ownership-checked write.
+    /// </summary>
     private async Task HandleFailedQueueItemAsync(IMongoCollection<MongoQueueItem<TPayload>> collection,
                                                   ObjectId queueItemId,
                                                   DateTime acquiredLockUtc,
+                                                  Int64 attemptCount,
                                                   Exception exception,
                                                   CancellationToken cancellationToken)
     {
-        var failedItem = await collection.FindOneAndUpdateAsync(
-            CreateLockOwnershipFilter(queueItemId, acquiredLockUtc),
-            Builders<MongoQueueItem<TPayload>>.Update.Inc(x => x.RetryCount, 1),
-            new FindOneAndUpdateOptions<MongoQueueItem<TPayload>>
-            {
-                ReturnDocument = ReturnDocument.After
-            },
-            cancellationToken);
-
-        if (failedItem is null)
-        {
-            _logger.LogWarning("Skipping failure handling for queue item {QueueItemId} with payload {PayloadType} because lock ownership changed",
-                               queueItemId,
-                               typeof(TPayload).FullName);
-            return;
-        }
-
-        if (!_queueDefinition.MaxRetries.HasValue || failedItem.RetryCount <= _queueDefinition.MaxRetries.Value)
+        if (!_queueDefinition.MaxRetries.HasValue || attemptCount <= _queueDefinition.MaxRetries.Value)
         {
             MongoQueueDiagnostics.RecordProcessingFailed(_queueDefinition, "retry");
             _logger.LogError(exception,
-                             "Processing queue item {QueueItemId} with payload {PayloadType} failed on attempt {RetryCount}. The item will be retried after the lock lease expires",
+                             "Processing queue item {QueueItemId} with payload {PayloadType} failed on attempt {AttemptCount}. The item will be retried after the lock lease expires",
                              queueItemId,
                              typeof(TPayload).FullName,
-                             failedItem.RetryCount);
+                             attemptCount);
             return;
         }
 
@@ -316,11 +396,11 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
 
         MongoQueueDiagnostics.RecordProcessingFailed(_queueDefinition, "terminal");
         _logger.LogError(exception,
-                         "Marking queue item {QueueItemId} with payload {PayloadType} as terminal after {RetryCount} failed attempts (max retries: {MaxRetries})",
+                         "Marking queue item {QueueItemId} with payload {PayloadType} as terminal after {AttemptCount} failed attempts (max retries: {MaxRetries})",
                          queueItemId,
                          typeof(TPayload).FullName,
-                         failedItem.RetryCount,
-                         _queueDefinition.MaxRetries.Value);
+                         attemptCount,
+                         _queueDefinition.MaxRetries!.Value);
     }
 
     /// <summary>
@@ -389,47 +469,102 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             var acquiredLockUtc = _timeProvider.GetUtcNow().UtcDateTime;
             var lockExpiryUtc = acquiredLockUtc - _queueDefinition.LockLeaseTime;
             var processingStartedTimestamp = Stopwatch.GetTimestamp();
-            var queueItem = await collection.FindOneAndUpdateAsync(
+
+            // The acquire/claim itself decides, from the document's own pre-update AttemptCount, whether to
+            // grant this acquisition a new attempt or to terminalize the item directly. The projection reads
+            // back only the non-generic MongoQueueItem base type, so a payload that can never deserialize into
+            // TPayload cannot fail this call: the outcome is decided and written without ever reading Payload.
+            var projectedResult = await collection.FindOneAndUpdateAsync(
                 CreateAvailableQueueItemFilter(queueItemId),
-                Builders<MongoQueueItem<TPayload>>.Update
-                                                  .Set(x => x.IsLocked, true)
-                                                  .Set(x => x.LockedUtc, acquiredLockUtc),
-                new FindOneAndUpdateOptions<MongoQueueItem<TPayload>, MongoQueueItem<TPayload>>
+                CreateAcquireUpdate(acquiredLockUtc, _queueDefinition.MaxRetries),
+                new FindOneAndUpdateOptions<MongoQueueItem<TPayload>, MongoQueueItem>
                 {
-                    ReturnDocument = ReturnDocument.Before
+                    ReturnDocument = ReturnDocument.Before,
+                    Projection = Builders<MongoQueueItem<TPayload>>.Projection.As<MongoQueueItem>()
                 },
                 cancellationToken);
 
-            if (queueItem is null)
+            if (projectedResult is null)
             {
                 // skip item
                 return;
             }
 
-            var queueAge = acquiredLockUtc - queueItem.CreatedUtc;
+            // The filter above already requires a non-terminal, available document, so this re-derives exactly
+            // the predicate the acquire pipeline itself evaluated from the same pre-update AttemptCount.
+            var priorAttemptCount = projectedResult.AttemptCount;
+            var grant = !_queueDefinition.MaxRetries.HasValue || priorAttemptCount <= _queueDefinition.MaxRetries.Value;
+            var queueAge = acquiredLockUtc - projectedResult.CreatedUtc;
+
+            if (!grant)
+            {
+                // This acquisition's own terminal branch already fired atomically (lock cleared, IsTerminal/
+                // IsClosed set): no DI scope, no handler invocation, no payload read of any kind.
+                MongoQueueDiagnostics.RecordProcessingFailed(_queueDefinition, "terminal");
+                _logger.LogError(
+                    "Marking queue item {QueueItemId} with payload {PayloadType} as terminal after {AttemptCount} attempts (max retries: {MaxRetries}) without granting a further attempt",
+                    queueItemId,
+                    typeof(TPayload).FullName,
+                    priorAttemptCount,
+                    _queueDefinition.MaxRetries);
+                return;
+            }
+
+            var attemptCount = priorAttemptCount + 1;
+
             _logger.LogDebug(
-                "Acquired queue item lock {QueueItemId} with payload {PayloadType} (recovered: {RecoveredLock}, retry count: {RetryCount}, queue age: {QueueAgeMs} ms)",
+                "Acquired queue item lock {QueueItemId} with payload {PayloadType} (recovered: {RecoveredLock}, attempt: {AttemptCount}, queue age: {QueueAgeMs} ms)",
                 queueItemId,
                 typeof(TPayload).FullName,
-                queueItem.IsLocked,
-                queueItem.RetryCount,
+                projectedResult.IsLocked,
+                attemptCount,
                 queueAge.TotalMilliseconds);
 
-            if (queueItem.IsLocked)
+            if (projectedResult.IsLocked)
             {
-                var recoveredLockAge = acquiredLockUtc - (queueItem.LockedUtc ?? queueItem.CreatedUtc);
+                var recoveredLockAge = acquiredLockUtc - (projectedResult.LockedUtc ?? projectedResult.CreatedUtc);
                 MongoQueueDiagnostics.RecordLockRecovered(_queueDefinition, recoveredLockAge);
                 _logger.LogWarning(
                     "Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, expiry threshold: {ExpiryThreshold}) with payload {PayloadType}",
                     queueItemId,
-                    queueItem.LockedUtc?.ToString("O") ?? "null",
+                    projectedResult.LockedUtc?.ToString("O") ?? "null",
                     lockExpiryUtc.ToString("O"),
                     typeof(TPayload).FullName);
             }
 
+            MongoQueueItem<TPayload> queueItem;
+            try
+            {
+                // A second, separate, typed read: the only place Payload is deserialized, so a permanently
+                // undeserializable payload fails here (handled exactly like a handler exception) instead of
+                // ever failing the acquire itself.
+                queueItem = await collection.Find(Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.Id, queueItemId))
+                                            .FirstAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await ReleaseLockForShutdownAsync(collection, queueItemId, acquiredLockUtc);
+                return;
+            }
+            catch (Exception e)
+            {
+                await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, attemptCount, e, cancellationToken);
+                return;
+            }
+
             await using (var scope = _serviceScopeFactory.CreateAsyncScope())
             {
-                var payloadHandler = _payloadHandlerFactory.CreateHandler<TPayload>(scope.ServiceProvider);
+                IMongoQueuePayloadHandler<TPayload> payloadHandler;
+                try
+                {
+                    payloadHandler = _payloadHandlerFactory.CreateHandler<TPayload>(scope.ServiceProvider);
+                }
+                catch (Exception e)
+                {
+                    await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, attemptCount, e, cancellationToken);
+                    return;
+                }
+
                 try
                 {
                     _logger.LogDebug("Handling payload {PayloadType} with handler {PayloadHandlerType}", typeof(TPayload).FullName,
@@ -443,7 +578,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                 }
                 catch (Exception e)
                 {
-                    await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, e, cancellationToken);
+                    await HandleFailedQueueItemAsync(collection, queueItemId, acquiredLockUtc, attemptCount, e, cancellationToken);
                     return;
                 }
             }
@@ -485,11 +620,11 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             var processingDuration = Stopwatch.GetElapsedTime(processingStartedTimestamp);
             MongoQueueDiagnostics.RecordProcessingSucceeded(_queueDefinition, processingDuration, queueAge, cleanupMode);
             _logger.LogInformation(
-                "Processed queue item {QueueItemId} with payload {PayloadType} in {ProcessingDurationMs} ms (retry count: {RetryCount}, queue age: {QueueAgeMs} ms, cleanup mode: {CleanupMode})",
+                "Processed queue item {QueueItemId} with payload {PayloadType} in {ProcessingDurationMs} ms (attempt: {AttemptCount}, queue age: {QueueAgeMs} ms, cleanup mode: {CleanupMode})",
                 queueItemId,
                 typeof(TPayload).FullName,
                 processingDuration.TotalMilliseconds,
-                queueItem.RetryCount,
+                attemptCount,
                 queueAge.TotalMilliseconds,
                 cleanupMode);
         }

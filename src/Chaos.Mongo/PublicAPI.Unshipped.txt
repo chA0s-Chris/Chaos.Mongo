@@ -146,3 +146,6 @@ Chaos.Mongo.Migrations.MongoMigrationResult.Skipped.init -> void
 Chaos.Mongo.MongoOptions.MigrationLockWaitTimeout.get -> System.TimeSpan?
 Chaos.Mongo.MongoOptions.MigrationLockWaitTimeout.set -> void
 static Chaos.Mongo.MongoDefaults.MigrationLockWaitTimeout.get -> System.TimeSpan
+*REMOVED*Chaos.Mongo.Queues.MongoQueueItem.RetryCount.get -> int
+*REMOVED*Chaos.Mongo.Queues.MongoQueueItem.RetryCount.set -> void
+Chaos.Mongo.Queues.MongoQueueItem.AttemptCount.get -> long

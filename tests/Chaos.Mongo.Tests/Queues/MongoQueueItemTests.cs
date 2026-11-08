@@ -32,6 +32,8 @@ public class MongoQueueItemTests
     {
         // Arrange: the exact field names/types written by every shipped version of this type, omitting the
         // optional ClosedUtc/LockedUtc elements exactly as a 0.x writer for a never-locked, never-closed item would.
+        // The field is still named "RetryCount" here: this is the pre-rename, pre-upgrade on-disk shape, which has
+        // no "AttemptCount" element at all.
         var createdUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc);
         var id = ObjectId.GenerateNewId();
         var document = new BsonDocument
@@ -55,16 +57,18 @@ public class MongoQueueItemTests
         result.IsClosed.Should().BeFalse();
         result.IsLocked.Should().BeFalse();
         result.IsTerminal.Should().BeFalse();
-        result.RetryCount.Should().Be(0);
+        result.AttemptCount.Should().Be(0);
         result.ClosedUtc.Should().BeNull();
         result.LockedUtc.Should().BeNull();
         result.Payload.Name.Should().Be("payload-value");
     }
 
     [Test]
-    public void Deserialize_ReleasedShapeBsonDocument_RestoresValues()
+    public void Deserialize_ReleasedShapeBsonDocument_RestoresValuesAndDoesNotCarryOverTheLegacyRetryCount()
     {
-        // Arrange
+        // Arrange: a pre-rename, pre-upgrade document still has a "RetryCount" element, not "AttemptCount". Per
+        // the migration decision, any attempts made before the upgrade are not carried over: the legacy element
+        // becomes an ignored extra element, and AttemptCount starts fresh at its default of 0.
         var document = CreateReleasedShapeDocument();
 
         // Act
@@ -78,7 +82,7 @@ public class MongoQueueItemTests
         result.IsLocked.Should().BeTrue();
         result.IsTerminal.Should().BeTrue();
         result.LockedUtc.Should().Be(document["LockedUtc"].ToUniversalTime());
-        result.RetryCount.Should().Be(3);
+        result.AttemptCount.Should().Be(0, "the legacy RetryCount element must not be carried over as AttemptCount");
         result.Payload.Name.Should().Be("payload-value");
         result.PayloadType.Should().Be(typeof(TestPayload).FullName);
     }
@@ -126,7 +130,7 @@ public class MongoQueueItemTests
             nameof(MongoQueueItem.IsLocked),
             nameof(MongoQueueItem.IsTerminal),
             nameof(MongoQueueItem.LockedUtc),
-            nameof(MongoQueueItem.RetryCount),
+            nameof(MongoQueueItem.AttemptCount),
             nameof(MongoQueueItem<TestPayload>.Payload),
             nameof(MongoQueueItem<TestPayload>.PayloadType)
         ]);
@@ -182,7 +186,7 @@ public class MongoQueueItemTests
             nameof(MongoQueueItem.IsLocked),
             nameof(MongoQueueItem.IsTerminal),
             nameof(MongoQueueItem.LockedUtc),
-            nameof(MongoQueueItem.RetryCount),
+            nameof(MongoQueueItem.AttemptCount),
             nameof(MongoQueueItem<TestPayload>.Payload),
             nameof(MongoQueueItem<TestPayload>.PayloadType)
         ]);

@@ -29,8 +29,10 @@ public sealed record MongoQueueDefinition
     public required TimeSpan LockLeaseTime { get; init; }
 
     /// <summary>
-    /// Maximum number of retries for failed queue items before they become terminal.
-    /// <c>null</c> means failed items keep retrying after lease expiry.
+    /// Number of retries allowed after the first delivery attempt, so a configured value of <c>N</c> allows
+    /// <c>N + 1</c> total delivery attempts before a queue item becomes terminal. Every lock acquisition counts
+    /// as a delivery attempt, not only a thrown handler exception. <c>null</c> means failed items keep retrying
+    /// after lease expiry. This is the same meaning as the transactional outbox's <c>OutboxOptions.MaxRetries</c>.
     /// </summary>
     public Int32? MaxRetries { get; init; } = MongoDefaults.QueueMaxRetries;
 
