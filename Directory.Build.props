@@ -1,18 +1,10 @@
 <Project>
+  <Import Project="$(MSBuildThisFileDirectory).repo-baseline/Common.props" />
+
   <PropertyGroup>
     <LatestTarget>net10.0</LatestTarget>
     <MainTargets>$(LatestTarget)</MainTargets>
     <TargetFrameworks>$(MainTargets)</TargetFrameworks>
-
-    <LangVersion>latest</LangVersion>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <EmbedUntrackedSources>true</EmbedUntrackedSources>
-
-    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
-
-    <NoWarn>1591</NoWarn>
-    <PreferredUILang>en</PreferredUILang>
   </PropertyGroup>
 
   <!-- Strong naming: ordinary builds are public-signed with the committed public key, so every

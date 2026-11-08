@@ -1,6 +1,8 @@
+<!-- Managed by repo-baseline (https://github.com/chA0s-Chris/repo-baseline). Do not edit; change it there. -->
+
 ## Code Style Guidelines
 
-The code style rules are described in the `.editorconfig` file.
+The code style is configured in `.editorconfig` and `.repo-baseline/ReSharper.DotSettings`. This file describes it for people and agents.
 
 ### General
 - Follow the [.NET Coding Conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions)
@@ -13,7 +15,7 @@ The code style rules are described in the `.editorconfig` file.
 - Keep methods small and focused (ideally < 30 lines)
 
 ### Types and Constructors
-- Do not use primary constructors on classes. When a class needs a constructor, declare an explicit constructor.
+- Do not use primary constructors on classes. When a class needs a constructor, declare an explicit one; do not add an empty constructor only to satisfy this rule
 - Assign constructor dependencies to `private readonly` fields (or to properties where the type exposes them)
 - Positional records and positional record structs remain fine - the rule covers classes only
 
@@ -25,6 +27,7 @@ The code style rules are described in the `.editorconfig` file.
 - Use string interpolation (`$"Hello {name}"`) over string concatenation
 - Use `nameof()` when referencing parameters, properties, or methods
 - Always use parentheses for clarity in expressions
+- Name an argument at the call site when the value alone does not convey its meaning, as a boolean literal rarely does (`Apply(migration, commit: false)`). The `Zorn` cleanup profile keeps `ArrangeArgumentsStyle` off, so cleanup preserves these names instead of rewriting them to positional form
 
 ### Documentation
 - Add XML documentation for public APIs in reusable library projects. Application and executable projects do not require XML documentation merely because a type is public; document externally consumed contracts and non-obvious behavior where useful.
@@ -69,13 +72,16 @@ The code style rules are described in the `.editorconfig` file.
 
 ### Nullability
 
-- Nullable reference types are enabled project-wide - keep them enabled and do not suppress nullable warnings
+- Nullable reference types are enabled for every project, and nullable warnings are errors in every build configuration
+- Never suppress nullable warnings - no `#nullable` directive, and no nullable diagnostic in a `NoWarn` list. A repository that vendors third-party sources may exempt exactly those directories in its local build files
 - Prefer guard clauses, validated locals, pattern matching, and nullable-flow attributes over the null-forgiving operator (`!`)
 - Have validation return the proven values instead of forgiving them afterwards - `[MemberNotNull]` only covers members of the containing type, so it cannot carry a post-condition about a parameter's members
 - Do not repeat `!` after a value has been validated - carry the proven value in one non-nullable local
 - In tests, `!` is unnecessary after a FluentAssertions `Should().NotBeNull()` on the same expression, and fixture members assigned in `[SetUp]`/`[OneTimeSetUp]` need no `= null!` initializer because NUnit.Analyzers suppresses the warning
 - Use `!` only for invariants nullable flow analysis cannot establish - framework-injected members and deliberately invalid `null!` inputs in argument-validation tests - and make such uses obvious from the surrounding code or add a short comment
 - `dotnet jb inspectcode` reports redundant uses as `RedundantSuppressNullableWarningExpression`
+- ReSharper's nullable-contract inspections (`ConditionalAccessQualifierIsNonNullableAccordingToAPIContract`, `NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract`, `ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract`) are not compiler warnings, so the rule against suppressing nullable warnings does not cover them. Remove the reported guard when something enforces the annotation at runtime, and keep it when nothing does, for example for inbound request members, persisted values that can be null, members declared with `= null!`, extension method receivers, or values that a third-party library forwards
+- Mark a kept guard with `// ReSharper disable once <InspectionId>` directly above it, followed by one comment line that says what can make the value null at runtime. Do not use file-level `ReSharper disable` comments for these inspections
 
 ### Async/Await
 - Use `async`/`await` instead of `.Result` or `.Wait()`

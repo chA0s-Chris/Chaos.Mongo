@@ -11,9 +11,14 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoQueueIntegrationTests
 {
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer()
+        => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task AutoStartQueue_WithHostedService_ProcessesPublishedMessages()
@@ -81,10 +86,6 @@ public class MongoQueueIntegrationTests
             await hostedService.StopAsync(CancellationToken.None);
         }
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-        => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task HostedService_OnStop_GracefullyStopsAllAutoStartQueues()

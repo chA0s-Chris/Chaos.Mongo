@@ -10,6 +10,7 @@ using NUnit.Framework;
 using System.Security.Cryptography;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class AnchorEvidenceStoreTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];
@@ -17,6 +18,17 @@ public class AnchorEvidenceStoreTests
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
 
     [Test]
     [TestCase(1_000_000)]
@@ -189,17 +201,6 @@ public class AnchorEvidenceStoreTests
         (await store.Evidence.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(1);
         (await store.Chunks.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty)).Should().Be(0);
         (await store.ReadAsync(first, CancellationToken.None)).Should().Equal(data);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     private static Task InsertChunkAsync(AnchorEvidenceStore store, Byte[] data, Byte[] hash, Int32 index)

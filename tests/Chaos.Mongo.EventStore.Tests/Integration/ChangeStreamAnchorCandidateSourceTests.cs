@@ -11,10 +11,25 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class ChangeStreamAnchorCandidateSourceTests
 {
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
 
     [Test]
     public async Task AcknowledgeAsync_StateChangedByAnotherConsumer_ThrowsAndKeepsTheirProgress()
@@ -154,9 +169,6 @@ public class ChangeStreamAnchorCandidateSourceTests
         state.Should().NotBeNull();
         state.Contains("Recovery").Should().BeFalse();
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task ReadBatchAsync_ConsecutiveMalformedAggregateIdsDuringRecoveryScan_SkipsBothAndFindsTheNextStream()
@@ -603,17 +615,6 @@ public class ChangeStreamAnchorCandidateSourceTests
         // Six streams take three full batches; a fourth finds that no stream is left and hands over to the stream.
         batches.Should().HaveCount(4).And.OnlyContain(batch => batch.Candidates.Count <= 2 && batch.HasMore);
         batches.SelectMany(batch => batch.Candidates).Select(candidate => candidate.AggregateId).Should().BeEquivalentTo(sealedStreams);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     private static Task AcknowledgeInTransactionAsync(IMongoHelper mongoHelper, IAnchorCandidateSource source, AnchorCandidateBatch batch)

@@ -11,6 +11,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class IntegrityChainIntegrationTests
 {
     private static readonly DateTime FixedCreatedUtc = new DateTime(2026, 10, 7, 12, 30, 45, DateTimeKind.Utc).AddTicks(1234);
@@ -25,6 +26,20 @@ public class IntegrityChainIntegrationTests
 
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
 
     [Test]
     public async Task AppendEventsAsync_BatchWithIntegrityProtection_SealsEventsIntoChainFromGenesis()
@@ -219,20 +234,6 @@ public class IntegrityChainIntegrationTests
         var storedBytes = await context.ReadRawEventAsync(entry.AggregateId, 1);
         storedBytes.Should().Equal(typedDocument.ToBson());
         BsonSerializer.Deserialize<BsonDocument>(storedBytes).Contains(EventIntegrityChain.ElementName).Should().BeFalse();
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     [Test]

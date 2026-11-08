@@ -14,12 +14,33 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class AnchoringRunTests
 {
     private static readonly Comparer<Byte[]> LeafComparer = Comparer<Byte[]>.Create((x, y) => x.AsSpan().SequenceCompareTo(y));
     private readonly List<LedgerStoreContext> _contexts = [];
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
 
     [Test]
     public async Task Constructor_InvalidConfiguration_ThrowsArgumentException()
@@ -42,9 +63,6 @@ public class AnchoringRunTests
         options.CandidateReadBatchSize = 0;
         FluentActions.Invoking(() => CreateRun(context, authority)).Should().Throw<ArgumentException>();
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task ResolveAsync_AnchorAwaitingTimestamps_ThrowsArgumentException()
@@ -706,23 +724,6 @@ public class AnchoringRunTests
 
         concurrent.Should().NotBeNull();
         concurrent!.Outcome.Should().Be(AnchoringRunOutcome.LockUnavailable);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
     }
 
     private static async Task AssertVerifiableAsync(LedgerStoreContext context, AnchorRecord anchor)

@@ -13,6 +13,7 @@ using Testcontainers.MongoDb;
 /// Uses the feature through its public services, as a consumer would. Only the sealing pass and the anchoring run are
 /// driven through internal services, so the test does not wait for their background loops.
 /// </summary>
+[Category("Integration")]
 public class PublicIntegrityApiIntegrationTests
 {
     private MongoDbContainer _container;

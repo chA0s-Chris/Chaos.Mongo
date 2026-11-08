@@ -1,24 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
+    "github>chA0s-Chris/repo-baseline//renovate/default",
     "helpers:pinGitHubActionDigests"
-  ],
-  "addLabels": [
-    "renovate",
-    "skip-changelog"
-  ],
-  "major": {
-    "dependencyDashboardApproval": true
-  },
-  "ignorePaths": [
-    "**/node_modules/**",
-    "**/bower_components/**",
-    "**/vendor/**",
-    "**/examples/**",
-    "**/__tests__/**",
-    "**/test/**",
-    "**/__fixtures__/**"
   ],
   "customManagers": [
     {
@@ -48,13 +32,6 @@
       "allowedVersions": "/^8\\.0\\./"
     },
     {
-      "description": "Restore old NuGet update behavior for bare versions",
-      "matchManagers": [
-        "nuget"
-      ],
-      "rangeStrategy": "bump"
-    },
-    {
       "description": "Hold the dependency minimums of the src/ packages (see Directory.Packages.props) for Dependency Dashboard approval. Vulnerability fixes still open pull requests.",
       "matchManagers": [
         "nuget"
@@ -73,28 +50,6 @@
       ],
       "groupName": "src dependency minimums",
       "dependencyDashboardApproval": true
-    },
-    {
-      "description": "Allow FluentAssertions updates within v7 only",
-      "matchPackageNames": [
-        "FluentAssertions"
-      ],
-      "allowedVersions": "<8"
-    },
-    {
-      "groupName": "NUnit packages",
-      "matchPackageNames": [
-        "NUnit",
-        "NUnit.Analyzers",
-        "NUnit3TestAdapter"
-      ]
-    },
-    {
-      "groupName": "Test SDK",
-      "matchPackageNames": [
-        "Microsoft.NET.Test.Sdk",
-        "Microsoft.TestPlatform.TestHost"
-      ]
     }
   ]
 }

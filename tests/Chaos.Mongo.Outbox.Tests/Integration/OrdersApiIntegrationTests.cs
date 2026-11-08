@@ -10,13 +10,31 @@ using System.Net;
 using System.Net.Http.Json;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class OrdersApiIntegrationTests
 {
     private HttpClient? _client;
     private MongoDbContainer _container;
     private OrdersApiFactory? _factory;
 
-    private HttpClient Client => _client ?? throw new InvalidOperationException("HTTP client is not initialized.");
+    [SetUp]
+    public void Setup()
+    {
+        Environment.SetEnvironmentVariable(OrdersApiFactory.ContentRootEnvironmentVariable, OrdersApiFactory.GetRepositoryRootPath());
+        _factory = new OrdersApiFactory(_container.GetConnectionString());
+        _client = _factory.CreateClient();
+    }
+
+    [OneTimeSetUp]
+    public async Task StartContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public void TearDown()
+    {
+        _client?.Dispose();
+        _factory?.Dispose();
+        Environment.SetEnvironmentVariable(OrdersApiFactory.ContentRootEnvironmentVariable, null);
+    }
 
     [Test]
     public async Task CancelAfterShip_ReturnsConflict()
@@ -26,7 +44,7 @@ public class OrdersApiIntegrationTests
             CustomerName = "Carol",
             Items =
             [
-                new()
+                new OrderItemRequest
                 {
                     ProductName = "The Pragmatic Programmer",
                     Quantity = 1,
@@ -57,7 +75,7 @@ public class OrdersApiIntegrationTests
             CustomerName = "Eve",
             Items =
             [
-                new()
+                new OrderItemRequest
                 {
                     ProductName = "Designing Data-Intensive Applications",
                     Quantity = 1,
@@ -92,7 +110,7 @@ public class OrdersApiIntegrationTests
             CustomerName = "Bob",
             Items =
             [
-                new()
+                new OrderItemRequest
                 {
                     ProductName = "Refactoring",
                     Quantity = 1,
@@ -133,13 +151,13 @@ public class OrdersApiIntegrationTests
             CustomerName = "Alice",
             Items =
             [
-                new()
+                new OrderItemRequest
                 {
                     ProductName = "Domain-Driven Design",
                     Quantity = 1,
                     Price = 45.00m
                 },
-                new()
+                new OrderItemRequest
                 {
                     ProductName = "Clean Architecture",
                     Quantity = 2,
@@ -185,14 +203,6 @@ public class OrdersApiIntegrationTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    [SetUp]
-    public void Setup()
-    {
-        Environment.SetEnvironmentVariable(OrdersApiFactory.ContentRootEnvironmentVariable, OrdersApiFactory.GetRepositoryRootPath());
-        _factory = new(_container.GetConnectionString());
-        _client = _factory.CreateClient();
-    }
-
     [Test]
     public async Task ShipAfterCancel_ReturnsConflict()
     {
@@ -201,7 +211,7 @@ public class OrdersApiIntegrationTests
             CustomerName = "Dave",
             Items =
             [
-                new()
+                new OrderItemRequest
                 {
                     ProductName = "Patterns of Enterprise Application Architecture",
                     Quantity = 1,
@@ -223,16 +233,7 @@ public class OrdersApiIntegrationTests
         shipResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
-    [OneTimeSetUp]
-    public async Task StartContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public void TearDown()
-    {
-        _client?.Dispose();
-        _factory?.Dispose();
-        Environment.SetEnvironmentVariable(OrdersApiFactory.ContentRootEnvironmentVariable, null);
-    }
+    private HttpClient Client => _client ?? throw new InvalidOperationException("HTTP client is not initialized.");
 
     private async Task WaitForNotificationsAsync(Int32 expectedCount, TimeSpan? timeout = null)
     {

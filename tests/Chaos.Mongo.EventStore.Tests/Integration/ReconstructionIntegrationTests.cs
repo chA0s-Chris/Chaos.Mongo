@@ -16,6 +16,7 @@ using Testcontainers.MongoDb;
 /// </summary>
 [TestFixture(0)]
 [TestFixture(2)]
+[Category("Integration")]
 public class ReconstructionIntegrationTests
 {
     private readonly Int32 _checkpointInterval;
@@ -25,6 +26,11 @@ public class ReconstructionIntegrationTests
     private IMongoHelper _mongoHelper;
     private MongoEventStoreOptions<OrderAggregate> _options;
     private ServiceProvider _serviceProvider;
+
+    public ReconstructionIntegrationTests(Int32 checkpointInterval)
+    {
+        _checkpointInterval = checkpointInterval;
+    }
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
@@ -68,11 +74,6 @@ public class ReconstructionIntegrationTests
 
     [TearDown]
     public async Task TearDown() => await _serviceProvider.DisposeAsync();
-
-    public ReconstructionIntegrationTests(Int32 checkpointInterval)
-    {
-        _checkpointInterval = checkpointInterval;
-    }
 
     [Test]
     public async Task GetAtRevisionAsync_InterleavedObservationalEvents_ReconstructsEachRevision()

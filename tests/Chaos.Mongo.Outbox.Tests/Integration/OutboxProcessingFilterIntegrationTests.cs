@@ -9,6 +9,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using System.Collections.Concurrent;
 
+[Category("Integration")]
 public class OutboxProcessingFilterIntegrationTests
 {
     [Test]

@@ -10,9 +10,13 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoHelperExtensionsIntegrationTests
 {
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task AcquireLockAsync_WhenLockBecomesAvailable_ShouldRetryAndAcquire()
@@ -361,9 +365,6 @@ public class MongoHelperExtensionsIntegrationTests
 
         currentCounter.Should().Be(42);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     private class Counter
     {

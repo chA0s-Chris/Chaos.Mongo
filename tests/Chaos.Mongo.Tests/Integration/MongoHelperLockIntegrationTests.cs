@@ -10,9 +10,13 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoHelperLockIntegrationTests
 {
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task DisposeAsync_WhenSameHolderReacquiredExpiredLock_ShouldNotDeleteSuccessor()
@@ -96,9 +100,6 @@ public class MongoHelperLockIntegrationTests
         lockDocument.Holder.Should().Be("holder-1");
         lockDocument.LeaseUntilUtc.Should().Be(lockInstance.ValidUntilUtc);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task ReleaseLockAsync_WhenCalledDirectly_ShouldDeleteLockForMatchingHolder()

@@ -16,6 +16,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class IntegrityVerificationIntegrationTests
 {
     private const String AuthorityName = "test-tsa";
@@ -26,6 +27,23 @@ public class IntegrityVerificationIntegrationTests
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
 
     [Test]
     public async Task RunAsync_RegisteredTrustOfAnotherRoot_RecordsAFailedRequest()
@@ -50,23 +68,6 @@ public class IntegrityVerificationIntegrationTests
         result.Outcome.Should().Be(AnchoringRunOutcome.AwaitingTimestamps);
         anchor.Timestamps.Should().BeEmpty();
         anchor.AuthorityFailures.Should().ContainSingle().Which.LastFailure.Should().Contain("not trusted");
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
     }
 
     [Test]

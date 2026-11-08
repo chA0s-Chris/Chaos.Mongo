@@ -11,6 +11,7 @@ using NUnit.Framework;
 using System.Linq.Expressions;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoQueueRetryIntegrationTests
 {
     private MongoDbContainer _container;

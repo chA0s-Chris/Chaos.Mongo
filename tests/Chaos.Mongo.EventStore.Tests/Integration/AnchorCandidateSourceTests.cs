@@ -12,12 +12,27 @@ using Testcontainers.MongoDb;
 /// Correctness tests of the anchor candidate source: no gaps with late commits, at-least-once delivery
 /// across restarts, and coverage of every protected aggregate type.
 /// </summary>
+[Category("Integration")]
 public class AnchorCandidateSourceTests
 {
     private const Int32 BatchSize = 100;
 
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
 
     [Test]
     public async Task AcknowledgeAsync_EarlierBatch_ThrowsArgumentException()
@@ -187,9 +202,6 @@ public class AnchorCandidateSourceTests
         await acknowledgeDiscarded.Should().ThrowAsync<ArgumentException>();
     }
 
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
     [Test]
     public async Task ReadBatchAsync_AfterRestart_ReturnsOnlyUnacknowledgedCandidates()
     {
@@ -281,17 +293,6 @@ public class AnchorCandidateSourceTests
 
         var batch = await context.CandidateSource.ReadBatchAsync(BatchSize, CancellationToken.None);
         batch.Candidates.Should().NotContain(candidate => candidate.AggregateId == aggregateId);
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     private static async Task<List<AnchorCandidate>> ConsumeUntilAsync(AnchorCandidateConsumer consumer,

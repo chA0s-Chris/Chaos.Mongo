@@ -13,6 +13,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class BatchMetadataIntegrationTests
 {
     private readonly Boolean _bulkWrite;
@@ -20,6 +21,11 @@ public class BatchMetadataIntegrationTests
     private MongoDbContainer _container;
     private IEventStore<BatchMetadataAggregate> _eventStore;
     private ServiceProvider? _serviceProvider;
+
+    public BatchMetadataIntegrationTests(Boolean bulkWrite)
+    {
+        _bulkWrite = bulkWrite;
+    }
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
@@ -72,11 +78,6 @@ public class BatchMetadataIntegrationTests
         {
             await _serviceProvider.DisposeAsync();
         }
-    }
-
-    public BatchMetadataIntegrationTests(Boolean bulkWrite)
-    {
-        _bulkWrite = bulkWrite;
     }
 
     [Test]

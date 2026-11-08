@@ -15,9 +15,13 @@ using Testcontainers.MongoDb;
 /// Both append paths are exercised because the bulk-write path serializes events itself and therefore
 /// does not go through the driver's id generation.
 /// </summary>
+[Category("Integration")]
 public class EventStoreGeneratedIdTests
 {
     private MongoDbContainer _container = null!;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [TestCase(true)]
     [TestCase(false)]
@@ -87,9 +91,6 @@ public class EventStoreGeneratedIdTests
         var persistedEvents = await ReadEventStreamAsync(eventStore, aggregateId);
         persistedEvents.Select(e => e.Id).Should().Equal(generatedIds);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     private static async Task<List<Event<OrderAggregate>>> ReadEventStreamAsync(
         IEventStore<OrderAggregate> eventStore,

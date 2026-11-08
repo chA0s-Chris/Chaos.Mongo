@@ -34,6 +34,10 @@ public class EventIntegrityChainTests
         Case("PersonalData.0.Salt", new BsonString("salt"))
     ];
 
+    [OneTimeSetUp]
+    public void RegisterClassMaps()
+        => new MongoBuilder(new ServiceCollection()).WithEventStore<ChainFormatAggregate>(es => es.WithEvent<ChainFormatEvent>());
+
     [Test]
     public void ComputeGenesis_DifferentAggregateIds_ReturnsDifferentValues()
     {
@@ -165,10 +169,6 @@ public class EventIntegrityChainTests
 
         act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("sealMode");
     }
-
-    [OneTimeSetUp]
-    public void RegisterClassMaps()
-        => new MongoBuilder(new ServiceCollection()).WithEventStore<ChainFormatAggregate>(es => es.WithEvent<ChainFormatEvent>());
 
     [Test]
     public void Seal_DottedSiblingName_HashCoversTheSiblingValue()

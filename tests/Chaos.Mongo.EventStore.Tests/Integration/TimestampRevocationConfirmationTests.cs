@@ -12,12 +12,33 @@ using NUnit.Framework;
 using System.Security.Cryptography;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class TimestampRevocationConfirmationTests
 {
     private static readonly TimeSpan GracePeriod = TimeSpan.FromHours(24);
     private readonly List<LedgerStoreContext> _contexts = [];
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
 
     [TestCase(false)]
     [TestCase(true)]
@@ -76,9 +97,6 @@ public class TimestampRevocationConfirmationTests
 
         oldest.Should().BeCloseTo(earlier, TimeSpan.FromMilliseconds(1));
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task RunAsync_AnchoringPhasesThrow_ConfirmsAndRethrows()
@@ -484,23 +502,6 @@ public class TimestampRevocationConfirmationTests
         failed.ConfirmationFailure.LastFailure.Should().Contain("differs from the chain built");
         fixture.TestAuthority.CrlRequests.Should().Be(1, "only stamping downloaded a CRL; the untrusted stored chain's extra certificate's CRL location " +
                                                          "must never be fetched for confirmation");
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
     }
 
     private static Byte[] BreakSignature(Byte[] crl)

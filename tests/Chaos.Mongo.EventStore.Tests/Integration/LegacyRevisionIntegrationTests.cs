@@ -16,6 +16,7 @@ using Testcontainers.MongoDb;
 /// </summary>
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class LegacyRevisionIntegrationTests
 {
     private const String RevisionElement = nameof(Event<OrderAggregate>.Revision);
@@ -27,6 +28,11 @@ public class LegacyRevisionIntegrationTests
     private IMongoHelper _mongoHelper;
     private MongoEventStoreOptions<OrderAggregate> _options;
     private ServiceProvider? _serviceProvider;
+
+    public LegacyRevisionIntegrationTests(Boolean bulkWrite)
+    {
+        _bulkWrite = bulkWrite;
+    }
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
@@ -84,11 +90,6 @@ public class LegacyRevisionIntegrationTests
         {
             await _serviceProvider.DisposeAsync();
         }
-    }
-
-    public LegacyRevisionIntegrationTests(Boolean bulkWrite)
-    {
-        _bulkWrite = bulkWrite;
     }
 
     [Test]

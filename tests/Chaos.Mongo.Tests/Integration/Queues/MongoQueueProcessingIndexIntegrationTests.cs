@@ -14,6 +14,7 @@ using Testcontainers.MongoDb;
 /// Verifies that the queue's processing index has an explicit, frozen name, and that an existing collection
 /// whose processing index was created under the old server-generated name is transparently migrated to it.
 /// </summary>
+[Category("Integration")]
 public class MongoQueueProcessingIndexIntegrationTests
 {
     private const String ProcessingIndexName = "IX_Queue_Processing";

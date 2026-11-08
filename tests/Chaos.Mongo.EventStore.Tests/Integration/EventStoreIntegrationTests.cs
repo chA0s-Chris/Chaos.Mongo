@@ -10,12 +10,44 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class EventStoreIntegrationTests
 {
     private IAggregateRepository<OrderAggregate> _aggregateRepository;
     private MongoDbContainer _container;
     private IEventStore<OrderAggregate> _eventStore;
     private IMongoHelper _mongoHelper;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [SetUp]
+    public void Setup()
+    {
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var sp = new ServiceCollection()
+                 .AddMongo(url, configure: options =>
+                 {
+                     options.DefaultDatabase = $"EventStoreTestDb_{Guid.NewGuid():N}";
+                     options.RunConfiguratorsOnStartup = false;
+                 })
+                 .WithEventStore<OrderAggregate>(es => es
+                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
+                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
+                                                       .WithEvent<OrderCompletedEvent>("OrderCompleted")
+                                                       .WithEvent<OrderCancelledEvent>("OrderCancelled")
+                                                       .WithCollectionPrefix("Orders"))
+                 .Services
+                 .BuildServiceProvider();
+
+        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
+        _aggregateRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
+        _mongoHelper = sp.GetRequiredService<IMongoHelper>();
+
+        // Manually run configurators to create indexes
+        foreach (var configurator in sp.GetServices<IMongoConfigurator>())
+            configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
+    }
 
     [Test]
     public async Task AppendEventsAsync_DuplicateEventId_ThrowsMongoDuplicateEventException()
@@ -816,9 +848,6 @@ public class EventStoreIntegrationTests
         version.Should().Be(1);
     }
 
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
     [Test]
     public async Task MultipleAggregates_IndependentEventStreams()
     {
@@ -924,33 +953,5 @@ public class EventStoreIntegrationTests
         atV2.Should().NotBeNull();
         atV2.Version.Should().Be(2);
         atV2.Status.Should().Be("Shipped");
-    }
-
-    [SetUp]
-    public void Setup()
-    {
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        var sp = new ServiceCollection()
-                 .AddMongo(url, configure: options =>
-                 {
-                     options.DefaultDatabase = $"EventStoreTestDb_{Guid.NewGuid():N}";
-                     options.RunConfiguratorsOnStartup = false;
-                 })
-                 .WithEventStore<OrderAggregate>(es => es
-                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
-                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
-                                                       .WithEvent<OrderCompletedEvent>("OrderCompleted")
-                                                       .WithEvent<OrderCancelledEvent>("OrderCancelled")
-                                                       .WithCollectionPrefix("Orders"))
-                 .Services
-                 .BuildServiceProvider();
-
-        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
-        _aggregateRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
-        _mongoHelper = sp.GetRequiredService<IMongoHelper>();
-
-        // Manually run configurators to create indexes
-        foreach (var configurator in sp.GetServices<IMongoConfigurator>())
-            configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
     }
 }

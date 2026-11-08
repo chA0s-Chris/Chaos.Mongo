@@ -12,6 +12,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class DollarDiscriminatorReconstructionIntegrationTests
 {
     private readonly Boolean _variableDiscriminator;
@@ -21,6 +22,11 @@ public class DollarDiscriminatorReconstructionIntegrationTests
     private IMongoHelper _mongoHelper;
     private MongoEventStoreOptions<DollarDiscriminatorAggregate> _options;
     private ServiceProvider _serviceProvider;
+
+    public DollarDiscriminatorReconstructionIntegrationTests(Boolean variableDiscriminator)
+    {
+        _variableDiscriminator = variableDiscriminator;
+    }
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
@@ -63,11 +69,6 @@ public class DollarDiscriminatorReconstructionIntegrationTests
 
     [TearDown]
     public async Task TearDown() => await _serviceProvider.DisposeAsync();
-
-    public DollarDiscriminatorReconstructionIntegrationTests(Boolean variableDiscriminator)
-    {
-        _variableDiscriminator = variableDiscriminator;
-    }
 
     [Test]
     public async Task GetAtRevisionAsync_DollarPrefixedObservationalDiscriminator_ExcludesUnreadableObservation(

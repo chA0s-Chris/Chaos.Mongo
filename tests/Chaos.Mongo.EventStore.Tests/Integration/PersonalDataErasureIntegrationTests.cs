@@ -15,6 +15,7 @@ using Testcontainers.MongoDb;
 /// <summary>
 /// Transactional erasure of personal data values, the rebuild it performs and how verification reports erasures.
 /// </summary>
+[Category("Integration")]
 public class PersonalDataErasureIntegrationTests
 {
     private const String AccountPath = "Counterparty.Account";
@@ -24,6 +25,26 @@ public class PersonalDataErasureIntegrationTests
     private readonly List<LedgerStoreContext> _contexts = [];
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+    }
 
     [Test]
     public async Task AppendEventsAsync_ErasureEventNotCreatedByTheEraser_ThrowsArgumentExceptionAndPersistsNothing()
@@ -613,26 +634,6 @@ public class PersonalDataErasureIntegrationTests
         await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 7)]);
         Proven(await context.Repository.GetAsync(aggregateId)).Memos.Should().Equal(DefaultMemo, DefaultMemo, null, DefaultMemo, DefaultMemo, DefaultMemo);
         (await context.CreateVerifier().VerifyStreamAsync(aggregateId)).Should().Be(StreamVerificationResult.Intact);
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
     }
 
     [Test]

@@ -16,6 +16,17 @@ public class Rfc3161TimestampAuthorityTests
 {
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
 
+    [TearDown]
+    public void TearDown()
+    {
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _testAuthorities.Clear();
+    }
+
     [Test]
     public void Constructor_DefaultHttpClientFactory_CreatesAuthority()
     {
@@ -156,17 +167,6 @@ public class Rfc3161TimestampAuthorityTests
         var act = () => new Rfc3161TimestampAuthority(options, new ServiceCollection().BuildServiceProvider());
 
         act.Should().Throw<ArgumentException>().WithMessage("*absolute HTTP or HTTPS*");
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _testAuthorities.Clear();
     }
 
     [Test]

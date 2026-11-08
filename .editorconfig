@@ -1,3 +1,4 @@
+# BEGIN repo-baseline: editorconfig
 root = true
 
 [*]
@@ -8,7 +9,7 @@ indent_style = space
 tab_width = 4
 trim_trailing_whitespace = true
 
-[*.{json,yml,md}]
+[*.{json,yml,yaml,md}]
 charset = utf-8
 indent_size = 2
 tab_width = 2
@@ -18,10 +19,9 @@ charset = utf-8
 indent_size = 2
 tab_width = 2
 
-[*.cs]
+[*.{cs,razor}]
 charset = utf-8
-
-file_header_template = Copyright (c) 2025 Christian Flessa. All rights reserved.\nThis file is licensed under the MIT license. See LICENSE in the project root for more information.
+max_line_length = 180
 
 dotnet_style_operator_placement_when_wrapping = end_of_line
 dotnet_style_coalesce_expression = true:suggestion
@@ -30,7 +30,8 @@ dotnet_style_prefer_is_null_check_over_reference_equality_method = true:suggesti
 dotnet_style_prefer_auto_properties = true:warning
 dotnet_style_object_initializer = true:suggestion
 dotnet_style_collection_initializer = true:suggestion
-dotnet_style_prefer_simplified_boolean_expressions = true:warning # IDE0075
+# IDE0075
+dotnet_style_prefer_simplified_boolean_expressions = true:warning
 dotnet_style_prefer_conditional_expression_over_assignment = true:suggestion
 dotnet_style_prefer_conditional_expression_over_return = true:suggestion
 dotnet_style_explicit_tuple_names = true:warning
@@ -38,7 +39,8 @@ dotnet_style_prefer_inferred_tuple_names = true:suggestion
 dotnet_style_prefer_inferred_anonymous_type_member_names = true:suggestion
 dotnet_style_prefer_compound_assignment = true:suggestion
 dotnet_style_prefer_simplified_interpolation = true:suggestion
-dotnet_style_namespace_match_folder = true:warning # IDE0130
+# IDE0130
+dotnet_style_namespace_match_folder = true:warning
 dotnet_style_readonly_field = true:warning
 dotnet_style_predefined_type_for_locals_parameters_members = false:warning
 dotnet_style_predefined_type_for_member_access = false:warning
@@ -55,7 +57,8 @@ dotnet_style_qualification_for_event = false:warning
 
 dotnet_separate_import_directive_groups = false
 dotnet_sort_system_directives_first = false
-dotnet_remove_unnecessary_suppression_exclusions = none # IDE0079
+# IDE0079
+dotnet_remove_unnecessary_suppression_exclusions = none
 
 csharp_style_var_elsewhere = true:suggestion
 csharp_style_var_for_built_in_types = true:suggestion
@@ -170,12 +173,15 @@ resharper_csharp_stick_comment = false
 resharper_instance_members_qualify_declared_in = base_class
 resharper_braces_for_ifelse = required_for_multiline
 
+resharper_prefer_qualified_reference = false
+resharper_qualified_using_at_nested_scope = true
 
 ###
 ### analyzers
 ###
 
-[*.cs]
+# Classes declare explicit constructors (CODESTYLE.md)
+resharper_convert_to_primary_constructor_highlighting = none
 
 # Solution-wide and framework-sensitive usage analysis
 resharper_unused_auto_property_accessor_global_highlighting = suggestion
@@ -193,3 +199,7 @@ resharper_redundant_argument_default_value_highlighting = suggestion
 resharper_redundant_anonymous_type_property_name_highlighting = suggestion
 resharper_redundant_type_arguments_of_method_highlighting = suggestion
 resharper_arrange_redundant_parentheses_highlighting = suggestion
+# END repo-baseline: editorconfig
+
+[*.cs]
+file_header_template = Copyright (c) 2025 Christian Flessa. All rights reserved.\nThis file is licensed under the MIT license. See LICENSE in the project root for more information.

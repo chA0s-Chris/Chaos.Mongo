@@ -1,3 +1,4 @@
+<!-- BEGIN repo-baseline: code-review-ignore -->
 # Copilot Instructions
 
 ## Code Reviews
@@ -8,3 +9,4 @@ When performing a code review, always ignore files in these directories:
 - ./.idea
 - ./.nuke
 - ./.windsurf
+<!-- END repo-baseline: code-review-ignore -->

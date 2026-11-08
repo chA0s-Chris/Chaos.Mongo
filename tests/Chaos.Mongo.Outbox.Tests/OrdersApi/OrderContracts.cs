@@ -30,7 +30,7 @@ public sealed class OrderResponse
 
     public static OrderResponse FromOrder(Order order)
     {
-        return new()
+        return new OrderResponse
         {
             Id = order.Id.ToString(),
             CustomerName = order.CustomerName,

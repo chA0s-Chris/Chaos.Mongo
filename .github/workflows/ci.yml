@@ -89,13 +89,41 @@ jobs:
       - name: Test the release scripts
         run: bash .github/scripts/release/tests/run.sh
 
+  repo-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Clones the pinned release outside the workspace, so the workspace's global.json and MSBuild files do not
+      # apply to the tool, and fails when synced content differs from that release.
+      - name: Check the repo-baseline content
+        run: |
+          version="$(jq -r .version .repo-baseline.json)"
+          git clone --quiet --depth 1 --branch "v${version}" https://github.com/chA0s-Chris/repo-baseline.git "${RUNNER_TEMP}/repo-baseline"
+          cd "${RUNNER_TEMP}/repo-baseline"
+          dotnet run tool/sync.cs -- check "${GITHUB_WORKSPACE}"
+
   result:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [ ci, pack-check, release-scripts ]
+    needs: [ ci, pack-check, release-scripts, repo-baseline ]
     if: always()
     permissions: {}
     steps:
       - name: Check required jobs
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+
+      - name: Check the repo-baseline job
+        if: needs.repo-baseline.result != 'success'
         run: exit 1

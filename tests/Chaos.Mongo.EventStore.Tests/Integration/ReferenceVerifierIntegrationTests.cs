@@ -26,6 +26,7 @@ using Testcontainers.MongoDb;
 /// and against data produced by the library. On CI a missing <c>python3</c> or <c>openssl</c> fails these tests;
 /// locally they are ignored.
 /// </summary>
+[Category("Integration")]
 public class ReferenceVerifierIntegrationTests
 {
     private const String CertificateIssuerOid = "2.5.29.29";
@@ -36,6 +37,39 @@ public class ReferenceVerifierIntegrationTests
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
     private String _directory;
+
+    [SetUp]
+    public void CreateDirectory()
+    {
+        _directory = Path.Combine(Path.GetTempPath(), $"reference-verifier-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_directory);
+    }
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer()
+    {
+        RequireTool("python3", "--version");
+        RequireTool("openssl", "version");
+        _container = await MongoDbTestContainer.StartContainerAsync();
+    }
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _contexts.Clear();
+        _testAuthorities.Clear();
+        Directory.Delete(_directory, true);
+    }
 
     [Test]
     public async Task Check_AnchorDateOutsideTheReadableYears_MakesTheAnchorMalformedLikeTheLibrary()
@@ -1127,39 +1161,6 @@ public class ReferenceVerifierIntegrationTests
 
             JsonNode.DeepEquals(report["stream"], library).Should().BeTrue($"{stream?["name"]}: {report["stream"]?.ToJsonString()} vs {library.ToJsonString()}");
         }
-    }
-
-    [SetUp]
-    public void CreateDirectory()
-    {
-        _directory = Path.Combine(Path.GetTempPath(), $"reference-verifier-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_directory);
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-    {
-        RequireTool("python3", "--version");
-        RequireTool("openssl", "version");
-        _container = await MongoDbTestContainer.StartContainerAsync();
-    }
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _contexts.Clear();
-        _testAuthorities.Clear();
-        Directory.Delete(_directory, true);
     }
 
     [Test]

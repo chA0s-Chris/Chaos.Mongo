@@ -9,13 +9,31 @@ using System.Net;
 using System.Net.Http.Json;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class BooksApiIntegrationTests
 {
     private HttpClient? _client;
     private MongoDbContainer _container = null!;
     private BooksApiFactory? _factory;
 
-    private HttpClient Client => _client ?? throw new InvalidOperationException("HTTP client is not initialized.");
+    [SetUp]
+    public void Setup()
+    {
+        Environment.SetEnvironmentVariable(BooksApiFactory.ContentRootEnvironmentVariable, BooksApiFactory.GetRepositoryRootPath());
+        _factory = new BooksApiFactory(_container.GetConnectionString());
+        _client = _factory.CreateClient();
+    }
+
+    [OneTimeSetUp]
+    public async Task StartContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public void TearDown()
+    {
+        _client?.Dispose();
+        _factory?.Dispose();
+        Environment.SetEnvironmentVariable(BooksApiFactory.ContentRootEnvironmentVariable, null);
+    }
 
     [Test]
     public async Task BookLifecycle_UsesAllEndpoints_AndVerifiesResults()
@@ -29,7 +47,7 @@ public class BooksApiIntegrationTests
             Name = "Weaveworld",
             Author = "Clive Barker",
             ReleaseYear = 1987,
-            Metadata = new()
+            Metadata = new Dictionary<String, String>
             {
                 ["genre"] = "Dark Fantasy"
             }
@@ -50,7 +68,7 @@ public class BooksApiIntegrationTests
             $"/books/{bookId}",
             new SetMetadataRequest
             {
-                Metadata = new()
+                Metadata = new Dictionary<String, String>
                 {
                     ["genre"] = "Epic Fantasy",
                     ["language"] = "English"
@@ -159,25 +177,6 @@ public class BooksApiIntegrationTests
         secondCreateResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
-    [SetUp]
-    public void Setup()
-    {
-        Environment.SetEnvironmentVariable(BooksApiFactory.ContentRootEnvironmentVariable, BooksApiFactory.GetRepositoryRootPath());
-        _factory = new(_container.GetConnectionString());
-        _client = _factory.CreateClient();
-    }
-
-    [OneTimeSetUp]
-    public async Task StartContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public void TearDown()
-    {
-        _client?.Dispose();
-        _factory?.Dispose();
-        Environment.SetEnvironmentVariable(BooksApiFactory.ContentRootEnvironmentVariable, null);
-    }
-
     [Test]
     public async Task UpdateBook_ConcurrentRequests_RetrySucceeds()
     {
@@ -190,7 +189,7 @@ public class BooksApiIntegrationTests
             $"/books/{bookId}",
             new SetMetadataRequest
             {
-                Metadata = new()
+                Metadata = new Dictionary<String, String>
                 {
                     ["genre"] = "Epic Fantasy"
                 }
@@ -224,15 +223,17 @@ public class BooksApiIntegrationTests
         retryResponse.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+    private HttpClient Client => _client ?? throw new InvalidOperationException("HTTP client is not initialized.");
+
     private static CreateBookRequest BuildCreateBookRequest(Guid bookId, String author)
     {
-        return new()
+        return new CreateBookRequest
         {
             Id = bookId,
             Name = "Weaveworld",
             Author = author,
             ReleaseYear = 1987,
-            Metadata = new()
+            Metadata = new Dictionary<String, String>
             {
                 ["genre"] = "Dark Fantasy"
             }

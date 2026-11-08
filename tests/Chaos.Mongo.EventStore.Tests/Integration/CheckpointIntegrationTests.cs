@@ -8,12 +8,45 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class CheckpointIntegrationTests
 {
     private MongoDbContainer _container;
     private IAggregateRepository<OrderAggregate> _eventRepository;
     private IEventStore<OrderAggregate> _eventStore;
     private IMongoHelper _mongoHelper;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [SetUp]
+    public void Setup()
+    {
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var sp = new ServiceCollection()
+                 .AddMongo(url, configure: options =>
+                 {
+                     options.DefaultDatabase = $"CheckpointTestDb_{Guid.NewGuid():N}";
+                     options.RunConfiguratorsOnStartup = false;
+                 })
+                 .WithEventStore<OrderAggregate>(es => es
+                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
+                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
+                                                       .WithEvent<OrderCompletedEvent>("OrderCompleted")
+                                                       .WithEvent<OrderViewedEvent>("OrderViewed")
+                                                       .WithCollectionPrefix("Orders")
+                                                       .WithCheckpoints(3))
+                 .Services
+                 .BuildServiceProvider();
+
+        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
+        _eventRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
+        _mongoHelper = sp.GetRequiredService<IMongoHelper>();
+
+        // Manually run configurators to create indexes
+        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
+            configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
+    }
 
     [Test]
     public async Task AppendEventsAsync_BatchSkippingIntervalMultiple_CreatesCheckpoint()
@@ -183,9 +216,6 @@ public class CheckpointIntegrationTests
         atCheckpoint.Status.Should().Be("Shipped");
     }
 
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
     [Test]
     public async Task Repository_GetAtVersion_UsesCheckpoint()
     {
@@ -218,35 +248,6 @@ public class CheckpointIntegrationTests
         aggregate.Should().NotBeNull();
         aggregate.Version.Should().Be(5);
         aggregate.CustomerName.Should().Be("Charlie");
-    }
-
-    [SetUp]
-    public void Setup()
-    {
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        var sp = new ServiceCollection()
-                 .AddMongo(url, configure: options =>
-                 {
-                     options.DefaultDatabase = $"CheckpointTestDb_{Guid.NewGuid():N}";
-                     options.RunConfiguratorsOnStartup = false;
-                 })
-                 .WithEventStore<OrderAggregate>(es => es
-                                                       .WithEvent<OrderCreatedEvent>("OrderCreated")
-                                                       .WithEvent<OrderShippedEvent>("OrderShipped")
-                                                       .WithEvent<OrderCompletedEvent>("OrderCompleted")
-                                                       .WithEvent<OrderViewedEvent>("OrderViewed")
-                                                       .WithCollectionPrefix("Orders")
-                                                       .WithCheckpoints(3))
-                 .Services
-                 .BuildServiceProvider();
-
-        _eventStore = sp.GetRequiredService<IEventStore<OrderAggregate>>();
-        _eventRepository = sp.GetRequiredService<IAggregateRepository<OrderAggregate>>();
-        _mongoHelper = sp.GetRequiredService<IMongoHelper>();
-
-        // Manually run configurators to create indexes
-        foreach (var configurator in sp.GetServices<Configuration.IMongoConfigurator>())
-            configurator.ConfigureAsync(_mongoHelper).GetAwaiter().GetResult();
     }
 
     private static OrderCompletedEvent Completed(Guid aggregateId, Int64 version)

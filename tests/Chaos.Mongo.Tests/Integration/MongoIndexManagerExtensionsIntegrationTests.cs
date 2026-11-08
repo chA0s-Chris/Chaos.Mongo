@@ -10,9 +10,13 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoIndexManagerExtensionsIntegrationTests
 {
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task CreateOneOrUpdateAsync_WhenCalledConcurrentlyForSameRename_ShouldAllSucceedWithSingleResultingIndex()
@@ -3211,9 +3215,6 @@ public class MongoIndexManagerExtensionsIntegrationTests
         indexes.Should().Contain(idx => idx["name"].AsString == newName);
         indexes.Should().Contain(idx => idx["name"].AsString == siblingName);
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     private class TestDocument
     {

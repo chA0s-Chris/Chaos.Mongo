@@ -1,10 +1,12 @@
+<!-- Managed by repo-baseline (https://github.com/chA0s-Chris/repo-baseline). Do not edit; change it there. -->
+
 # AGENTS.md for AI plans
 
 *Version 1.1*
 
 This directory contains Markdown plans and plan deviation records, plus this instruction file. These documents follow the [Guided Coding](https://kenny-codes.net/docs/guided-coding/) approach.
 
-File names begin with the four-digit GitHub issue number and a short kebab-case description. When an issue has multiple documents, insert a zero-based sequence after the issue number, for example `0015-0-feature.md`, `0015-1-optimization.md`, and `0015-2-plan-deviations.md`. Do not rename or restructure completed historical plans solely to conform to the current rules.
+File names begin with the four-digit issue number and a short kebab-case description. When an issue has multiple documents, insert a zero-based sequence after the issue number, for example `0015-0-feature.md`, `0015-1-optimization.md`, and `0015-2-plan-deviations.md`. Do not rename or restructure completed historical plans solely to conform to the current rules.
 
 ## How to Write Plans
 

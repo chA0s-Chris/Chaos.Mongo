@@ -12,6 +12,7 @@ using NUnit.Framework;
 using System.Linq.Expressions;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoQueueLockExpiryIntegrationTests
 {
     private MongoDbContainer _container;

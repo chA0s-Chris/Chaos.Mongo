@@ -11,6 +11,17 @@ public class Rfc3161TimestampAuthorityRevocationListsTests
 {
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
 
+    [TearDown]
+    public void TearDown()
+    {
+        foreach (var testAuthority in _testAuthorities)
+        {
+            testAuthority.Dispose();
+        }
+
+        _testAuthorities.Clear();
+    }
+
     [Test]
     public async Task GetRevocationListsAsync_ChainWithoutDistributionPoints_ReturnsNoCrls()
     {
@@ -157,17 +168,6 @@ public class Rfc3161TimestampAuthorityRevocationListsTests
         var lists = await GetRevocationListsAsync(testAuthority, DateTime.UtcNow.AddHours(-1));
 
         lists.Lists.Should().ContainSingle().Which.Should().Equal(later);
-    }
-
-    [TearDown]
-    public void TearDown()
-    {
-        foreach (var testAuthority in _testAuthorities)
-        {
-            testAuthority.Dispose();
-        }
-
-        _testAuthorities.Clear();
     }
 
     /// <summary>

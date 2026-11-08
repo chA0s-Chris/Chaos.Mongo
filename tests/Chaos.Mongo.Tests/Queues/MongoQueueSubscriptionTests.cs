@@ -309,6 +309,8 @@ public class MongoQueueSubscriptionTests
             // The ambient token is cancelled only after the handler was actually invoked with
             // an acquired lock, matching how the real driver cancels in-flight operations
             // rather than refusing to acquire the lock in the first place.
+            // The handler runs within the awaited ProcessQueueItemAsync call, before the source is disposed.
+            // ReSharper disable once AccessToDisposedClosure
             await cancellationTokenSource.CancelAsync();
             throw new OperationCanceledException();
         });
@@ -343,6 +345,8 @@ public class MongoQueueSubscriptionTests
             // The ambient token is cancelled only after the handler was actually invoked with
             // an acquired lock, matching how the real driver cancels in-flight operations
             // rather than refusing to acquire the lock in the first place.
+            // The handler runs within the awaited ProcessQueueItemAsync call, before the source is disposed.
+            // ReSharper disable once AccessToDisposedClosure
             await cancellationTokenSource.CancelAsync();
             throw new OperationCanceledException();
         });

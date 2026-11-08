@@ -1,0 +1,13 @@
+<!-- Managed by repo-baseline (https://github.com/chA0s-Chris/repo-baseline). Do not edit; change it there. -->
+<Project>
+  <PropertyGroup>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Authors>Christian Flessa</Authors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Source Link comes from the .NET SDK. -->
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+</Project>

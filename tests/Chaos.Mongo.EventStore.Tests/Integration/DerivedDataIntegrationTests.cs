@@ -10,11 +10,26 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class DerivedDataIntegrationTests
 {
     private const String MemoPath = "Memo";
     private readonly List<LedgerStoreContext> _contexts = [];
     private MongoDbContainer _container;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        foreach (var context in _contexts)
+        {
+            await context.DisposeAsync();
+        }
+
+        _contexts.Clear();
+    }
 
     [Test]
     public async Task AppendEventsAsync_Checkpoints_RecordChainHashOnlyWhenProtected()
@@ -53,20 +68,6 @@ public class DerivedDataIntegrationTests
         after.Select(c => c[CheckpointDocument<LedgerAggregate>.ChainHashElementName])
              .Should().Equal(before.Select(c => c[CheckpointDocument<LedgerAggregate>.ChainHashElementName]));
         result.IsConsistent.Should().BeTrue();
-    }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [TearDown]
-    public async Task TearDown()
-    {
-        foreach (var context in _contexts)
-        {
-            await context.DisposeAsync();
-        }
-
-        _contexts.Clear();
     }
 
     [Test]

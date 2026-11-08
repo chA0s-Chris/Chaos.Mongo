@@ -17,6 +17,7 @@ using Testcontainers.MongoDb;
 /// </summary>
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class ConcurrencyRaceIntegrationTests
 {
     private const Int32 ConcurrencyPerRound = 8;
@@ -24,13 +25,13 @@ public class ConcurrencyRaceIntegrationTests
     private readonly Boolean _runConfiguratorsOnStartup;
     private MongoDbContainer _container;
 
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
     public ConcurrencyRaceIntegrationTests(Boolean runConfiguratorsOnStartup)
     {
         _runConfiguratorsOnStartup = runConfiguratorsOnStartup;
     }
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
     public async Task AppendEventsAsync_ConcurrentAppendsAtSameVersion_ExactlyOneSucceedsPerRound()

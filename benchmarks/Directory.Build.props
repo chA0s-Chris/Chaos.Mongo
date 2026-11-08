@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)../tests/MongoDbTestImages.cs'))" Link="MongoDbTestImages.cs" />
+    <Compile Include="$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)../tests/MongoDbTestImages.cs'))"
+             Link="MongoDbTestImages.cs" />
   </ItemGroup>
 </Project>

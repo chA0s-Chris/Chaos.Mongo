@@ -163,15 +163,9 @@ public class TypedOutboxRegistrationTests
     }
 }
 
-internal sealed class FirstDestination
-{
-    private FirstDestination() => throw new InvalidOperationException("Marker types must not be instantiated.");
-}
+internal abstract class FirstDestination;
 
-internal sealed class SecondDestination
-{
-    private SecondDestination() => throw new InvalidOperationException("Marker types must not be instantiated.");
-}
+internal abstract class SecondDestination;
 
 internal sealed class RejectedDuplicatePayload;
 

@@ -14,6 +14,7 @@ using Testcontainers.MongoDb;
 
 [TestFixture(false)]
 [TestFixture(true)]
+[Category("Integration")]
 public class ObservationalEventIntegrationTests
 {
     private readonly Boolean _bulkWrite;
@@ -23,6 +24,11 @@ public class ObservationalEventIntegrationTests
     private IMongoHelper _mongoHelper;
     private MongoEventStoreOptions<OrderAggregate> _options;
     private ServiceProvider? _serviceProvider;
+
+    public ObservationalEventIntegrationTests(Boolean bulkWrite)
+    {
+        _bulkWrite = bulkWrite;
+    }
 
     [OneTimeSetUp]
     public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
@@ -81,11 +87,6 @@ public class ObservationalEventIntegrationTests
         {
             await _serviceProvider.DisposeAsync();
         }
-    }
-
-    public ObservationalEventIntegrationTests(Boolean bulkWrite)
-    {
-        _bulkWrite = bulkWrite;
     }
 
     [Test]

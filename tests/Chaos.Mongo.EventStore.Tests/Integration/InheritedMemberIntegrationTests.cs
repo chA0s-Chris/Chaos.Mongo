@@ -13,6 +13,7 @@ using Testcontainers.MongoDb;
 /// <summary>
 /// Covers members that aggregates and events inherit from intermediate base classes.
 /// </summary>
+[Category("Integration")]
 public class InheritedMemberIntegrationTests
 {
     private IAggregateRepository<InheritedLedgerAggregate> _aggregateRepository;
@@ -21,6 +22,40 @@ public class InheritedMemberIntegrationTests
     private IMongoHelper _mongoHelper;
     private MongoEventStoreOptions<InheritedLedgerAggregate> _options;
     private ServiceProvider _serviceProvider;
+
+    [OneTimeSetUp]
+    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
+
+    [SetUp]
+    public async Task Setup()
+    {
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        _serviceProvider = new ServiceCollection()
+                           .AddMongo(url, configure: options =>
+                           {
+                               options.DefaultDatabase = $"InheritedMemberTestDb_{Guid.NewGuid():N}";
+                               options.RunConfiguratorsOnStartup = false;
+                           })
+                           .WithEventStore<InheritedLedgerAggregate>(es => es.WithEvent<InheritedOwnerAssignedEvent>("OwnerAssigned")
+                                                                             .WithEvent<InheritedLedgerInspectedEvent>("LedgerInspected")
+                                                                             .WithCollectionPrefix("InheritedLedgers")
+                                                                             .WithCheckpoints(2))
+                           .Services
+                           .BuildServiceProvider();
+
+        _eventStore = _serviceProvider.GetRequiredService<IEventStore<InheritedLedgerAggregate>>();
+        _aggregateRepository = _serviceProvider.GetRequiredService<IAggregateRepository<InheritedLedgerAggregate>>();
+        _mongoHelper = _serviceProvider.GetRequiredService<IMongoHelper>();
+        _options = _serviceProvider.GetRequiredService<MongoEventStoreOptions<InheritedLedgerAggregate>>();
+
+        foreach (var configurator in _serviceProvider.GetServices<IMongoConfigurator>())
+        {
+            await configurator.ConfigureAsync(_mongoHelper);
+        }
+    }
+
+    [TearDown]
+    public async Task TearDown() => await _serviceProvider.DisposeAsync();
 
     [Test]
     public async Task AppendEventsAsync_InheritedAggregateMember_IsStoredInReadModelAndCheckpoint()
@@ -87,40 +122,6 @@ public class InheritedMemberIntegrationTests
         replayed.Should().NotBeNull();
         replayed.Owner.Should().Be("alice");
     }
-
-    [OneTimeSetUp]
-    public async Task GetMongoDbContainer() => _container = await MongoDbTestContainer.StartContainerAsync();
-
-    [SetUp]
-    public async Task Setup()
-    {
-        var url = MongoUrl.Create(_container.GetConnectionString());
-        _serviceProvider = new ServiceCollection()
-                           .AddMongo(url, configure: options =>
-                           {
-                               options.DefaultDatabase = $"InheritedMemberTestDb_{Guid.NewGuid():N}";
-                               options.RunConfiguratorsOnStartup = false;
-                           })
-                           .WithEventStore<InheritedLedgerAggregate>(es => es.WithEvent<InheritedOwnerAssignedEvent>("OwnerAssigned")
-                                                                             .WithEvent<InheritedLedgerInspectedEvent>("LedgerInspected")
-                                                                             .WithCollectionPrefix("InheritedLedgers")
-                                                                             .WithCheckpoints(2))
-                           .Services
-                           .BuildServiceProvider();
-
-        _eventStore = _serviceProvider.GetRequiredService<IEventStore<InheritedLedgerAggregate>>();
-        _aggregateRepository = _serviceProvider.GetRequiredService<IAggregateRepository<InheritedLedgerAggregate>>();
-        _mongoHelper = _serviceProvider.GetRequiredService<IMongoHelper>();
-        _options = _serviceProvider.GetRequiredService<MongoEventStoreOptions<InheritedLedgerAggregate>>();
-
-        foreach (var configurator in _serviceProvider.GetServices<IMongoConfigurator>())
-        {
-            await configurator.ConfigureAsync(_mongoHelper);
-        }
-    }
-
-    [TearDown]
-    public async Task TearDown() => await _serviceProvider.DisposeAsync();
 
     private static InheritedOwnerAssignedEvent Assigned(Guid aggregateId, Int64 version, String owner)
         => new()
