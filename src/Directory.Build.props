@@ -1,12 +1,10 @@
 <Project>
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+  <Import Project="$(MSBuildThisFileDirectory)../.repo-baseline/Packaging.props" />
 
   <PropertyGroup>
     <TargetFrameworks>$(MainTargets)</TargetFrameworks>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageIcon>mongo.png</PackageIcon>
-    <Authors>Christian Flessa</Authors>
     <Copyright>Copyright © 2025-$([System.DateTime]::UtcNow.Year) Christian Flessa</Copyright>
     <PackageProjectUrl>https://github.com/chA0s-Chris/Chaos.Mongo</PackageProjectUrl>
     <!-- Set explicitly so that the nuspec does not depend on the remote of the clone. The SDK's built-in SourceLink adds the commit. -->

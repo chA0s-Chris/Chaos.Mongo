@@ -1,0 +1,16 @@
+<!-- Managed by repo-baseline (https://github.com/chA0s-Chris/repo-baseline). Do not edit; change it there. -->
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PreferredUILang>en</PreferredUILang>
+
+    <!-- Nullable warnings are errors in every configuration; other warnings in Release builds and in CI. -->
+    <WarningsAsErrors>$(WarningsAsErrors);nullable</WarningsAsErrors>
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release' Or '$(CI)' == 'true'">true</TreatWarningsAsErrors>
+
+    <!-- Missing XML documentation (CS1591) does not fail the build. -->
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+</Project>
