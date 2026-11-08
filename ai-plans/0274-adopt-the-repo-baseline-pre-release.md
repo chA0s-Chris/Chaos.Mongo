@@ -10,21 +10,21 @@ Adopting the pinned pre-release replaces the local copies with synced content, r
 
 ## Acceptance Criteria
 
-- [ ] `.repo-baseline.json` pins `0.1.0` with the profiles `common`, `dotnet`, `dotnet-nuget` and `github`, and `check` against `v0.1.0` reports no findings.
+- [x] `.repo-baseline.json` pins `0.1.0` with the profiles `common`, `dotnet`, `dotnet-nuget` and `github`, and `check` against `v0.1.0` reports no findings.
 - [ ] A CI job in `.github/workflows/ci.yml` runs `check` with the snippet from the repo-baseline README, and `result` fails unless that job succeeds.
-- [ ] The root, `src/` and `tests/` `Directory.Build.props` import `.repo-baseline/Common.props`, `.repo-baseline/Packaging.props` and `.repo-baseline/Tests.props` respectively, and keep only settings that are local or override the shared ones.
-- [ ] `Chaos.Mongo.slnx.DotSettings` contains only the injection of `.repo-baseline/ReSharper.DotSettings` and local settings; `.editorconfig`, `.gitignore`, `AGENTS.md` and `.github/copilot-instructions.md` contain only local content beside their managed blocks.
-- [ ] The local tool manifest is the root `dotnet-tools.json` (BLD-5); `.config/dotnet-tools.json` is deleted, and no instruction, script, build or workflow file refers to it.
-- [ ] Every test class in an `.Integration` namespace carries `[Category("Integration")]` (TST-3), the fast-test command in `AGENTS.md` uses `TestCategory!=Integration&TestCategory!=E2E`, and that filter selects the same tests as the previous `FullyQualifiedName!~.Integration.` filter.
-- [ ] `tests/AGENTS.md` states that integration tests live in an `.Integration` namespace and carry `[Category("Integration")]`.
-- [ ] There is no direct `PackageReference` or central `PackageVersion` for `Microsoft.TestPlatform.TestHost`. Moq remains a local reference in `tests/Directory.Build.props` with a comment explaining why (TST-1).
-- [ ] `renovate.json` extends `github>chA0s-Chris/repo-baseline//renovate/default` and otherwise contains only local rules.
-- [ ] The reformatting caused by the shared rules is a commit of its own and passes the Release build and full test suite on its own. `.git-blame-ignore-revs` lists that commit.
-- [ ] `./inspect_code.sh --all` reports no findings at warning severity; each former finding is fixed or suppressed with a reason (CS-11).
-- [ ] The Release build has no warnings, the full test suite passes, and `bash ./build.sh PackCheck` passes.
-- [ ] Before and after adoption, `bash ./build.sh Pack` produces a `.nupkg` and `.snupkg` for each library. License, authors, repository metadata and Source Link mappings are preserved, allowing for expected version and commit changes.
-- [ ] The Rider settings-layer results are recorded in this plan and reported on chA0s-Chris/repo-baseline#4.
-- [ ] Problems found in repo-baseline's profile content or tool are reported as issues in chA0s-Chris/repo-baseline after the maintainer approved their text.
+- [x] The root, `src/` and `tests/` `Directory.Build.props` import `.repo-baseline/Common.props`, `.repo-baseline/Packaging.props` and `.repo-baseline/Tests.props` respectively, and keep only settings that are local or override the shared ones.
+- [x] `Chaos.Mongo.slnx.DotSettings` contains only the injection of `.repo-baseline/ReSharper.DotSettings` and local settings; `.editorconfig`, `.gitignore`, `AGENTS.md` and `.github/copilot-instructions.md` contain only local content beside their managed blocks.
+- [x] The local tool manifest is the root `dotnet-tools.json` (BLD-5); `.config/dotnet-tools.json` is deleted, and no instruction, script, build or workflow file refers to it.
+- [x] Every test class in an `.Integration` namespace carries `[Category("Integration")]` (TST-3), the fast-test command in `AGENTS.md` uses `TestCategory!=Integration&TestCategory!=E2E`, and that filter selects the same tests as the previous `FullyQualifiedName!~.Integration.` filter.
+- [x] `tests/AGENTS.md` states that integration tests live in an `.Integration` namespace and carry `[Category("Integration")]`.
+- [x] There is no direct `PackageReference` or central `PackageVersion` for `Microsoft.TestPlatform.TestHost`. Moq remains a local reference in `tests/Directory.Build.props` with a comment explaining why (TST-1).
+- [x] `renovate.json` extends `github>chA0s-Chris/repo-baseline//renovate/default` and otherwise contains only local rules.
+- [x] The reformatting caused by the shared rules is a commit of its own and passes the Release build and full test suite on its own. `.git-blame-ignore-revs` lists that commit.
+- [x] `./inspect_code.sh --all` reports no findings at warning severity; each former finding is fixed or suppressed with a reason (CS-11).
+- [x] The Release build has no warnings, the full test suite passes, and `bash ./build.sh PackCheck` passes.
+- [x] Before and after adoption, `bash ./build.sh Pack` produces a `.nupkg` and `.snupkg` for each library. License, authors, repository metadata and Source Link mappings are preserved, allowing for expected version and commit changes.
+- [x] The Rider settings-layer results are recorded in this plan and reported on chA0s-Chris/repo-baseline#4.
+- [x] Problems found in repo-baseline's profile content or tool are reported as issues in chA0s-Chris/repo-baseline after the maintainer approved their text.
 
 ## Technical Details
 
@@ -107,8 +107,17 @@ The maintainer runs these steps by hand and reports the results, which are recor
 4. Copy one shared key into `Chaos.Mongo.slnx.DotSettings` and confirm that `check` reports it as redefined.
 5. Revert all changes.
 
-Results: pending.
+Results, from the maintainer's run with Rider 2026.2.4.1 on Linux:
+
+1. Rider loads the `repo-baseline` layer from `.repo-baseline/ReSharper.DotSettings` as a child of the team-shared solution layer. The `RelativePath` form with backslashes works on Linux.
+2. Rider saves both changes to `Chaos.Mongo.slnx.DotSettings`, never to the injected file. A changed editor option (`UseCamelHumps`, not a shared key) adds its key and an empty `/Default/CustomTools/CustomToolsData/@EntryValue`. An edit of the `Zorn` profile copies the whole profile, which is a single key, into the local file, with the per-language entries of its Rider part reordered. The save also adds a UTF-8 BOM to the local file.
+3. Neither opening nor saving writes `Environment/SettingsMigration/IsMigratorApplied` keys.
+4. `check` reports the copied profile as `key /Default/CodeStyle/CodeCleanup/Profiles/=Zorn/@EntryIndexedValue: redefines a shared key`, and does not report the two keys that are not shared.
+5. All changes were reverted.
+
+Shared settings therefore have to be changed in repo-baseline, not in the IDE: an IDE edit of the cleanup profile forks it into the local file, and `check` fails until the local copy is removed.
 
 ### repo-baseline findings
 
-Candidate issue, to be shown to the maintainer before it is opened: `check` reports no finding when the synced `.props` files are not imported by the repository's `Directory.Build.props` files, so shared build settings can be silently inactive. Verified on a scratch copy of this repository after `init` and `sync`.
+- chA0s-Chris/repo-baseline#17: `check` reports no finding when the synced `.props` files are not imported by the repository's `Directory.Build.props` files, so shared build settings can be silently inactive. Verified on a scratch copy of this repository after `init` and `sync`.
+- chA0s-Chris/repo-baseline#18: the shared settings leave the formatting of MSBuild and config files to ReSharper's defaults, so the first full cleanup wraps their attributes at 120 characters and inserts a blank line after the XML declaration.
