@@ -198,6 +198,7 @@ public class MongoQueueCollectionNameGeneratorTests
     // ReSharper disable once UnusedTypeParameter
     private static class GenericContainer<T>
     {
+        // Only the type name and its generic arity matter for the collection names under test.
         // ReSharper disable once UnusedTypeParameter
         public sealed class NestedGenericPayload<TValue>;
     }
