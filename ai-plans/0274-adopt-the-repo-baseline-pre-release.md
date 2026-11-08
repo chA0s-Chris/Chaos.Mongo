@@ -11,7 +11,7 @@ Adopting the pinned pre-release replaces the local copies with synced content, r
 ## Acceptance Criteria
 
 - [x] `.repo-baseline.json` pins `0.1.0` with the profiles `common`, `dotnet`, `dotnet-nuget` and `github`, and `check` against `v0.1.0` reports no findings.
-- [ ] A CI job in `.github/workflows/ci.yml` runs `check` with the snippet from the repo-baseline README, and `result` fails unless that job succeeds.
+- [x] A CI job in `.github/workflows/ci.yml` runs `check` with the snippet from the repo-baseline README, and `result` fails unless that job succeeds.
 - [x] The root, `src/` and `tests/` `Directory.Build.props` import `.repo-baseline/Common.props`, `.repo-baseline/Packaging.props` and `.repo-baseline/Tests.props` respectively, and keep only settings that are local or override the shared ones.
 - [x] `Chaos.Mongo.slnx.DotSettings` contains only the injection of `.repo-baseline/ReSharper.DotSettings` and local settings; `.editorconfig`, `.gitignore`, `AGENTS.md` and `.github/copilot-instructions.md` contain only local content beside their managed blocks.
 - [x] The local tool manifest is the root `dotnet-tools.json` (BLD-5); `.config/dotnet-tools.json` is deleted, and no instruction, script, build or workflow file refers to it.
