@@ -561,75 +561,6 @@ public class MongoQueueSubscriptionTests
     }
 
     [Test]
-    public async Task ProcessQueueItemAsync_WhenLockAcquired_ReadsPayloadFromPrimary()
-    {
-        // Arrange: the acquire runs on the primary, but the collection inherits the client's read preference.
-        // The follow-up payload read must not go to a secondary that may not have replicated the item yet,
-        // or replication lag would be counted as a failed attempt.
-        var queueItemId = ObjectId.GenerateNewId();
-        var collection = new RecordingQueueItemCollection(queueItemId, DateTime.UtcNow.AddMinutes(-1));
-        var handlerInvoked = false;
-        var payloadHandlerFactory = new StubPayloadHandlerFactory(() =>
-        {
-            handlerInvoked = true;
-            return Task.CompletedTask;
-        });
-
-        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactory);
-        var method = GetPrivateMethod("ProcessQueueItemAsync",
-        [
-            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
-        ]);
-
-        // Act
-        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
-
-        // Assert
-        collection.FindReadPreference.Should().Be(ReadPreference.Primary);
-        handlerInvoked.Should().BeTrue();
-    }
-
-    [Test]
-    public async Task ProcessQueueItemAsync_WhenPayloadHandlerFactoryPersistentlyThrows_IncrementsAttemptCountAndRespectsMaxRetries()
-    {
-        // Arrange: a DI resolution failure happens outside the handler's own try/catch (closing the gap where a
-        // misconfigured handler dependency used to skip counting entirely), so it must be funneled through the
-        // same HandleFailedQueueItemAsync path and respect the same MaxRetries budget as a handler exception.
-        var queueItemId = ObjectId.GenerateNewId();
-        var logger = new CapturingLogger();
-        var collection = new FailureTrackingQueueItemCollection(queueItemId, DateTime.UtcNow);
-        var payloadHandlerFactory = new ThrowingPayloadHandlerFactory();
-
-        var sut = CreateSubscription(new MongoQueueDefinition
-                                     {
-                                         AutoStartSubscription = false,
-                                         CollectionName = "test-queue",
-                                         LockLeaseTime = TimeSpan.FromMinutes(1),
-                                         MaxRetries = 1,
-                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
-                                         PayloadType = typeof(TestPayload),
-                                         BatchSize = 10
-                                     },
-                                     payloadHandlerFactory: payloadHandlerFactory,
-                                     logger: logger);
-        var method = GetPrivateMethod("ProcessQueueItemAsync",
-        [
-            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
-        ]);
-
-        // Act - attempt 1 and attempt 2 (MaxRetries + 1 total), both failing DI resolution.
-        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
-        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
-
-        // Assert - exactly MaxRetries + 1 attempts were counted, and the item reached terminal on the attempt
-        // that exceeded the budget, without ever invoking a handler.
-        collection.AttemptCount.Should().Be(2);
-        collection.TerminalTransitionCount.Should().Be(1);
-        logger.Count(LogLevel.Error, "failed on attempt 1").Should().Be(1);
-        logger.Count(LogLevel.Error, "Marking queue item").Should().Be(1);
-    }
-
-    [Test]
     public async Task ProcessQueueItemAsync_WithPayloadHandlerFactoryRegistration_ResolvesScopedDependencyAndDisposesHandler()
     {
         // Arrange
@@ -782,6 +713,45 @@ public class MongoQueueSubscriptionTests
                                                   .Subject;
         queueAgeMeasurement.Unit.Should().Be("s");
         queueAgeMeasurement.Value.Should().Be(300.0);
+    }
+
+    [Test]
+    public async Task StartAsync_WhenItemIsAcquired_ReadsPayloadFromPrimary()
+    {
+        // Arrange: polling finds the item and the acquire (which always runs on the primary) grants it, but the
+        // collection inherits the client's read preference. The follow-up payload read must not go to a secondary
+        // that may not have replicated the item yet, or replication lag would be counted as a failed attempt.
+        var queueItemId = ObjectId.GenerateNewId();
+        var collection = new PollingQueueItemCollection(queueItemId);
+        var instance = DispatchProxy.Create(typeof(IMongoDatabase), typeof(SingleCollectionDatabase));
+        ((SingleCollectionDatabase)instance).Collection = collection;
+        var database = (IMongoDatabase)instance;
+        var handlerInvoked = false;
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(() =>
+        {
+            handlerInvoked = true;
+            return Task.CompletedTask;
+        });
+
+        var sut = CreateSubscription(mongoHelper: new SingleDatabaseMongoHelper(database),
+                                     payloadHandlerFactory: payloadHandlerFactory,
+                                     payloadPrioritizer: new MongoQueuePayloadPrioritizer());
+
+        // Act
+        try
+        {
+            await sut.StartAsync();
+            await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            // StopAsync awaits the processing loop, so everything the processed item did is recorded by now.
+            await sut.StopAsync();
+        }
+
+        // Assert
+        collection.PayloadReadPreference.Should().Be(ReadPreference.Primary);
+        handlerInvoked.Should().BeTrue();
     }
 
     private static Boolean BranchHasLockedRecoveryClause(BsonDocument document)
@@ -1093,8 +1063,139 @@ public class MongoQueueSubscriptionTests
     }
 
     /// <summary>
+    /// Index manager double that accepts every index creation and drop and lists no indexes, so a subscription's
+    /// startup index setup succeeds without a server.
+    /// </summary>
+    private sealed class AcceptingIndexManager : MongoIndexManagerBase<MongoQueueItem<TestPayload>>
+    {
+        public override CollectionNamespace CollectionNamespace => throw new NotSupportedException();
+        public override IBsonSerializer<MongoQueueItem<TestPayload>> DocumentSerializer => throw new NotSupportedException();
+        public override MongoCollectionSettings Settings => throw new NotSupportedException();
+
+        public override Task<String?> CreateOneAsync(CreateIndexModel<MongoQueueItem<TestPayload>> model, CreateOneIndexOptions? options = null,
+                                                     CancellationToken cancellationToken = default)
+            => Task.FromResult(model.Options?.Name);
+
+        public override Task DropAllAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public override Task DropOneAsync(String name, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public override Task<IAsyncCursor<BsonDocument>> ListAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IAsyncCursor<BsonDocument>>(new EmptyAsyncCursor<BsonDocument>());
+    }
+
+    private sealed class EmptyAsyncCursor<TItem> : IAsyncCursor<TItem>
+    {
+        public IEnumerable<TItem> Current => [];
+
+        public Boolean MoveNext(CancellationToken cancellationToken = default) => false;
+
+        public Task<Boolean> MoveNextAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// Change stream cursor that never yields a batch and waits until the subscription shuts down, so polling is
+    /// the only way a test item is discovered.
+    /// </summary>
+    private sealed class IdleChangeStreamCursor<TDocument> : IChangeStreamCursor<TDocument>
+    {
+        public IEnumerable<TDocument> Current => [];
+
+        public Boolean MoveNext(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async Task<Boolean> MoveNextAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return false;
+        }
+
+        public BsonDocument GetResumeToken() => throw new NotSupportedException();
+
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// Collection double for driving a subscription through <c>StartAsync</c>: index setup succeeds, the change
+    /// stream idles until shutdown, polling reports the given queue item once, the acquire grants its first attempt,
+    /// and the completion write signals <see cref="Completed"/>. Records the read preference in effect when the
+    /// typed payload is read.
+    /// </summary>
+    private sealed class PollingQueueItemCollection : QueueItemCollectionTestDoubleBase
+    {
+        private readonly ObjectId _queueItemId;
+        private Int32 _pollCount;
+
+        public PollingQueueItemCollection(ObjectId queueItemId) => _queueItemId = queueItemId;
+
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override IBsonSerializer<MongoQueueItem<TestPayload>> DocumentSerializer
+            => BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>();
+
+        public override IMongoIndexManager<MongoQueueItem<TestPayload>> Indexes { get; } = new AcceptingIndexManager();
+
+        public ReadPreference? PayloadReadPreference { get; private set; }
+
+        public override MongoCollectionSettings Settings { get; } = new();
+
+        public override Task<Int64> CountDocumentsAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options,
+                                                        CancellationToken cancellationToken)
+            => Task.FromResult(0L);
+
+        public override Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                               FindOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                               CancellationToken cancellationToken)
+        {
+            if (typeof(TProjection) == typeof(ObjectId))
+            {
+                // The polling query projects to IDs: report the item once, then an empty queue.
+                return Task.FromResult<IAsyncCursor<TProjection>>(Interlocked.Increment(ref _pollCount) == 1
+                                                                      ? new SingleItemAsyncCursor<TProjection>((TProjection)(Object)_queueItemId)
+                                                                      : new EmptyAsyncCursor<TProjection>());
+            }
+
+            PayloadReadPreference = RequestedReadPreference;
+            var queueItem = new MongoQueueItem<TestPayload>
+            {
+                Id = _queueItemId,
+                CreatedUtc = DateTime.UtcNow,
+                Payload = new TestPayload()
+            };
+            return Task.FromResult<IAsyncCursor<TProjection>>(new SingleItemAsyncCursor<TProjection>((TProjection)(Object)queueItem));
+        }
+
+        public override Task<TProjection> FindOneAndUpdateAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                             UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                                                             FindOneAndUpdateOptions<MongoQueueItem<TestPayload>, TProjection> options,
+                                                                             CancellationToken cancellationToken)
+        {
+            var projected = new MongoQueueItem
+            {
+                Id = _queueItemId,
+                CreatedUtc = DateTime.UtcNow
+            };
+            return Task.FromResult((TProjection)(Object)projected);
+        }
+
+        public override Task<UpdateResult> UpdateOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, UpdateDefinition<MongoQueueItem<TestPayload>> update,
+                                                          UpdateOptions options,
+                                                          CancellationToken cancellationToken)
+        {
+            Completed.TrySetResult();
+            return Task.FromResult<UpdateResult>(new UpdateResult.Acknowledged(1, 1, null));
+        }
+
+        public override Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(
+            PipelineDefinition<ChangeStreamDocument<MongoQueueItem<TestPayload>>, TResult> pipeline,
+            ChangeStreamOptions options, CancellationToken cancellationToken)
+            => Task.FromResult<IChangeStreamCursor<TResult>>(new IdleChangeStreamCursor<TResult>());
+    }
+
+    /// <summary>
     /// Base type for hand-crafted <see cref="IMongoCollection{TDocument}"/> test doubles used by
-    /// <c>ProcessQueueItemAsync</c>/<c>HandleFailedQueueItemAsync</c> tests. Every member throws
+    /// <c>StartAsync</c>, <c>ProcessQueueItemAsync</c> and <c>HandleFailedQueueItemAsync</c> tests. Every member throws
     /// <see cref="NotSupportedException"/> by default; derived doubles override only the members their
     /// scenario actually reaches. The one exception is <see cref="WithReadPreference"/>, which every acquired
     /// item reaches through its payload read: it records the requested preference and returns the same double.
@@ -1461,7 +1562,6 @@ public class MongoQueueSubscriptionTests
 
         public Int32 DeleteOneCallCount { get; private set; }
         public Int64 DeletedCount { get; set; } = 1;
-        public ReadPreference? FindReadPreference { get; private set; }
         public CancellationToken LastDeleteCancellationToken { get; private set; }
         public BsonDocument? LastDeleteFilter { get; private set; }
         public CancellationToken LastUpdateCancellationToken { get; private set; }
@@ -1482,7 +1582,6 @@ public class MongoQueueSubscriptionTests
                                                                                FindOptions<MongoQueueItem<TestPayload>, TProjection> options,
                                                                                CancellationToken cancellationToken)
         {
-            FindReadPreference = RequestedReadPreference;
             var queueItem = new MongoQueueItem<TestPayload>
             {
                 Id = _queueItemId,
@@ -1564,6 +1663,30 @@ public class MongoQueueSubscriptionTests
     /// Minimal <see cref="IAsyncCursor{TDocument}"/> double yielding exactly one item, for stubbing the typed
     /// secondary read <c>ProcessQueueItemAsync</c> performs after a successful acquire.
     /// </summary>
+    /// <summary>
+    /// <see cref="IMongoDatabase"/> double that hands out its one <see cref="Collection"/> and throws for anything
+    /// else.
+    /// </summary>
+    private class SingleCollectionDatabase : DispatchProxy
+    {
+        public Object? Collection { get; set; }
+
+        protected override Object? Invoke(MethodInfo? targetMethod, Object?[]? args)
+            => targetMethod?.Name == nameof(IMongoDatabase.GetCollection) ? Collection : throw new NotSupportedException(targetMethod?.Name);
+    }
+
+    private sealed class SingleDatabaseMongoHelper : IMongoHelper
+    {
+        public SingleDatabaseMongoHelper(IMongoDatabase database) => Database = database;
+
+        public IMongoClient Client => throw new NotSupportedException();
+        public IMongoDatabase Database { get; }
+        public IMongoCollection<TDocument> GetCollection<TDocument>(MongoCollectionSettings? settings = null) => throw new NotSupportedException();
+
+        public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
     private sealed class SingleItemAsyncCursor<TItem> : IAsyncCursor<TItem>
     {
         private readonly TItem _item;
@@ -1615,17 +1738,6 @@ public class MongoQueueSubscriptionTests
     }
 
     /// <summary>
-    /// Payload handler factory double whose <see cref="CreateHandler{TPayload}"/> always throws, simulating a
-    /// persistent DI resolution failure (for example an unregistered or misconfigured handler dependency) that
-    /// happens before any payload is ever read or handled.
-    /// </summary>
-    private sealed class ThrowingPayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
-    {
-        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
-            => throw new InvalidOperationException("Simulated DI resolution failure");
-    }
-
-    /// <summary>
     /// Default <see cref="IMongoHelper"/> for <c>CreateSubscription</c>. Tests that call the subscription's private
     /// methods pass their collection directly, so the helper is never reached; every member throws.
     /// </summary>
@@ -1650,8 +1762,8 @@ public class MongoQueueSubscriptionTests
     }
 
     /// <summary>
-    /// Default <see cref="IMongoQueuePayloadPrioritizer"/> for <c>CreateSubscription</c>. Only the polling query
-    /// sorts, and no test here reaches it.
+    /// Default <see cref="IMongoQueuePayloadPrioritizer"/> for <c>CreateSubscription</c>. Only the polling loop
+    /// sorts, and tests that start the subscription pass the production prioritizer.
     /// </summary>
     private sealed class UnusedPayloadPrioritizer : IMongoQueuePayloadPrioritizer
     {

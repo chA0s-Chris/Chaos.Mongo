@@ -251,6 +251,58 @@ public class MongoQueueRetryIntegrationTests
         }
     }
 
+    [Test]
+    public async Task QueueHandlerResolutionFailure_WithNoRetry_MarksItemTerminalWithoutWaitingForLeaseExpiry()
+    {
+        // Arrange: the handler needs a service that was never registered, so the attempt fails DI resolution before
+        // any handler runs. That failure happens outside the handler's own try/catch, yet it must still be handled
+        // like a handler exception: with no retries left, it terminalizes the item at once. The lease is far longer
+        // than the wait below, so a failure that was not handled would leave the item locked instead of reaching
+        // the terminal state through a later lease-expiry reclaim.
+        var leaseTime = TimeSpan.FromMinutes(5);
+        var services = new ServiceCollection();
+        services.AddNUnitTestLogging();
+
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = $"QueueResolutionFailureTest_{Guid.NewGuid():N}";
+        services.AddMongo(url, uniqueDbName)
+                .WithQueue<RetryPayload>(queue => queue
+                                                  .WithPayloadHandler<UnresolvablePayloadHandler>()
+                                                  .WithCollectionName("retry-queue")
+                                                  .WithLockLeaseTime(leaseTime)
+                                                  .WithNoRetry()
+                                                  .WithoutAutoStartSubscription());
+
+        await using var serviceProvider = services.BuildServiceProvider();
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var collection = helper.Database.GetCollection<MongoQueueItem<RetryPayload>>("retry-queue");
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<RetryPayload>>();
+        await queue.StartSubscriptionAsync();
+
+        try
+        {
+            // Act
+            await queue.PublishAsync(new RetryPayload
+            {
+                Value = "unresolvable-handler"
+            });
+
+            var terminalItem = await WaitForQueueItemAsync(collection,
+                                                           x => x.Payload.Value == "unresolvable-handler" && x.IsClosed && x.IsTerminal,
+                                                           TimeSpan.FromSeconds(10));
+
+            // Assert
+            terminalItem.AttemptCount.Should().Be(1, "the failed resolution counts as the one attempt WithNoRetry allows");
+            terminalItem.IsClosed.Should().BeTrue();
+            terminalItem.IsTerminal.Should().BeTrue();
+            terminalItem.IsLocked.Should().BeFalse();
+        }
+        finally
+        {
+            await queue.StopSubscriptionAsync();
+        }
+    }
+
     private static async Task<MongoQueueItem<RetryPayload>> WaitForQueueItemAsync(
         IMongoCollection<MongoQueueItem<RetryPayload>> collection,
         Expression<Func<MongoQueueItem<RetryPayload>, Boolean>> filter,
@@ -351,8 +403,21 @@ public class MongoQueueRetryIntegrationTests
         }
     }
 
+    private interface IUnregisteredDependency;
+
     private sealed class RetryPayload
     {
         public String Value { get; init; } = String.Empty;
+    }
+
+    /// <summary>
+    /// Payload handler whose constructor dependency is never registered, so resolving it always fails.
+    /// </summary>
+    private sealed class UnresolvablePayloadHandler : IMongoQueuePayloadHandler<RetryPayload>
+    {
+        public UnresolvablePayloadHandler(IUnregisteredDependency dependency) => ArgumentNullException.ThrowIfNull(dependency);
+
+        public Task HandlePayloadAsync(RetryPayload payload, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("The handler must never be resolved.");
     }
 }
