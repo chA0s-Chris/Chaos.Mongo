@@ -6,6 +6,7 @@ using Chaos.Mongo.Queues;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -827,12 +828,12 @@ public class MongoQueueSubscriptionTests
                    PayloadType = typeof(TestPayload),
                    BatchSize = 10
                },
-               mongoHelper ?? Mock.Of<IMongoHelper>(),
-               payloadHandlerFactory ?? Mock.Of<IMongoQueuePayloadHandlerFactory>(),
-               payloadPrioritizer ?? Mock.Of<IMongoQueuePayloadPrioritizer>(),
+               mongoHelper ?? new UnusedMongoHelper(),
+               payloadHandlerFactory ?? new UnusedPayloadHandlerFactory(),
+               payloadPrioritizer ?? new UnusedPayloadPrioritizer(),
                serviceScopeFactory ?? CreateDefaultServiceScopeFactory(),
                timeProvider ?? TimeProvider.System,
-               logger ?? Mock.Of<ILogger<MongoQueueSubscription<TestPayload>>>());
+               logger ?? NullLogger<MongoQueueSubscription<TestPayload>>.Instance);
 
     private static IMongoCollection<MongoQueueItem<TestPayload>> CreateSuccessfulCompletionCollection(ObjectId queueItemId)
         => new CompletingQueueItemCollection(queueItemId);
@@ -1622,5 +1623,39 @@ public class MongoQueueSubscriptionTests
     {
         public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
             => throw new InvalidOperationException("Simulated DI resolution failure");
+    }
+
+    /// <summary>
+    /// Default <see cref="IMongoHelper"/> for <c>CreateSubscription</c>. Tests that call the subscription's private
+    /// methods pass their collection directly, so the helper is never reached; every member throws.
+    /// </summary>
+    private sealed class UnusedMongoHelper : IMongoHelper
+    {
+        public IMongoClient Client => throw new NotSupportedException();
+        public IMongoDatabase Database => throw new NotSupportedException();
+        public IMongoCollection<TDocument> GetCollection<TDocument>(MongoCollectionSettings? settings = null) => throw new NotSupportedException();
+
+        public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Default <see cref="IMongoQueuePayloadHandlerFactory"/> for <c>CreateSubscription</c>, used by tests that never
+    /// reach handler creation.
+    /// </summary>
+    private sealed class UnusedPayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
+    {
+        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
+            => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Default <see cref="IMongoQueuePayloadPrioritizer"/> for <c>CreateSubscription</c>. Only the polling query
+    /// sorts, and no test here reaches it.
+    /// </summary>
+    private sealed class UnusedPayloadPrioritizer : IMongoQueuePayloadPrioritizer
+    {
+        public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class, new()
+            => throw new NotSupportedException();
     }
 }
