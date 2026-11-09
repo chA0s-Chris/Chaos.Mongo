@@ -1,5 +1,8 @@
 #nullable enable
 Chaos.Mongo.Outbox.OutboxBuilder.WithLockLeaseTime(System.TimeSpan leaseTime) -> Chaos.Mongo.Outbox.OutboxBuilder!
+*REMOVED*Chaos.Mongo.Outbox.OutboxMessage.RetryCount.get -> int
+*REMOVED*Chaos.Mongo.Outbox.OutboxMessage.RetryCount.set -> void
+Chaos.Mongo.Outbox.OutboxMessage.AttemptCount.get -> long
 *REMOVED*Chaos.Mongo.Outbox.MongoOutbox
 *REMOVED*Chaos.Mongo.Outbox.MongoOutbox.AddMessageAsync<TPayload>(MongoDB.Driver.IClientSessionHandle! session, TPayload! payload, string? correlationId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 *REMOVED*Chaos.Mongo.Outbox.MongoOutbox.MongoOutbox(Chaos.Mongo.IMongoHelper! mongoHelper, Chaos.Mongo.Outbox.OutboxOptions! options, System.TimeProvider! timeProvider) -> void

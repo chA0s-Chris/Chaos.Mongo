@@ -34,6 +34,8 @@ public class OutboxSerializationSetupTests
             ["CreatedUtc"] = createdUtc,
             ["State"] = (Int32)OutboxMessageState.Pending,
             ["IsLocked"] = false,
+            // "RetryCount" is the pre-rename, pre-upgrade field name: it is now an ignored extra element, not
+            // carried over into AttemptCount.
             ["RetryCount"] = 0,
             ["UnrecognizedField"] = "a field no version of OutboxMessage declares"
         };
@@ -44,6 +46,7 @@ public class OutboxSerializationSetupTests
         message.Type.Should().Be("TestPayload");
         message.CreatedUtc.Should().Be(createdUtc);
         message.State.Should().Be(OutboxMessageState.Pending);
+        message.AttemptCount.Should().Be(0, "the legacy RetryCount element must not be carried over as AttemptCount");
         message.DeserializePayload<TestPayload>().Name.Should().Be("Order");
     }
 
@@ -170,6 +173,7 @@ public class OutboxSerializationSetupTests
 
     private static void AssertPinnedElementNames(BsonDocument bsonDocument)
         => bsonDocument.Names.Should().Contain([
+            nameof(OutboxMessage.AttemptCount),
             nameof(OutboxMessage.CorrelationId),
             nameof(OutboxMessage.CreatedUtc),
             nameof(OutboxMessage.Error),
@@ -180,7 +184,6 @@ public class OutboxSerializationSetupTests
             nameof(OutboxMessage.NextAttemptUtc),
             nameof(OutboxMessage.Payload),
             nameof(OutboxMessage.ProcessedUtc),
-            nameof(OutboxMessage.RetryCount),
             nameof(OutboxMessage.State),
             nameof(OutboxMessage.Type)
         ]);
@@ -201,6 +204,6 @@ public class OutboxSerializationSetupTests
             LockId = "lock-id",
             NextAttemptUtc = new DateTime(2025, 1, 1, 2, 0, 0, DateTimeKind.Utc),
             ProcessedUtc = new DateTime(2025, 1, 1, 0, 45, 0, DateTimeKind.Utc),
-            RetryCount = 2
+            AttemptCount = 2
         };
 }

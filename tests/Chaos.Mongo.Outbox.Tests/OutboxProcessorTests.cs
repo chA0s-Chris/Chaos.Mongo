@@ -378,7 +378,10 @@ public class OutboxProcessorTests
     [Test]
     public async Task ProcessMessage_PublishFails_MarksAsPermanentlyFailedWhenRetriesExhausted()
     {
-        var message = CreatePendingMessage(_options.MaxRetries - 1);
+        // The claim already incremented AttemptCount atomically before HandleFailureAsync ever runs, so the
+        // seeded message must represent the already-claimed attempt count (MaxRetries + 1) that exceeds the
+        // budget, not a pre-increment count HandleFailureAsync used to bump itself.
+        var message = CreatePendingMessage(_options.MaxRetries + 1);
         var failureRecorded = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);
@@ -613,7 +616,7 @@ public class OutboxProcessorTests
 
     private static IAsyncCursor<OutboxMessage> CreateEmptyCursor() => CreateEmptyAsyncCursor();
 
-    private static OutboxMessage CreatePendingMessage(Int32 retryCount = 0)
+    private static OutboxMessage CreatePendingMessage(Int64 attemptCount = 0)
     {
         return new OutboxMessage
         {
@@ -621,7 +624,7 @@ public class OutboxProcessorTests
             State = OutboxMessageState.Pending,
             Type = "TestPayload",
             Payload = new BsonDocument("Name", "Test"),
-            RetryCount = retryCount,
+            AttemptCount = attemptCount,
             IsLocked = false
         };
     }

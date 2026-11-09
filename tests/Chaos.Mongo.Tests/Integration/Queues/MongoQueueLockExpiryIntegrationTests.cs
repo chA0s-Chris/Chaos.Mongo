@@ -22,6 +22,79 @@ public class MongoQueueLockExpiryIntegrationTests
         => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
+    public async Task QueueHandlerCrashes_AcrossRepeatedLeaseExpiry_TerminalizesOnReclaimWithoutGrantingFurtherAttempt()
+    {
+        // Arrange: a handler that never throws and never completes, simulating a crashed or permanently hung
+        // consumer. A single subscription instance processes items sequentially, so a handler invocation that
+        // never returns would stall that subscription's own polling loop forever; a separate subscription
+        // instance is needed for each "crashed" attempt, exactly like a real crashed process being replaced by a
+        // fresh one. With MaxRetries = 1 (two total attempts allowed), the first two acquisitions each hang
+        // until their own subscription is stopped; the third subscription's acquisition sees a pre-update
+        // AttemptCount (2) that already exceeds MaxRetries (1), so it must terminalize atomically without
+        // granting a lock or ever invoking its handler.
+        var leaseTime = TimeSpan.FromMilliseconds(750);
+        var uniqueDbName = $"QueueLeaseExhaustionTest_{Guid.NewGuid():N}";
+        const String collectionName = "lease-queue";
+
+        var firstHandler = new HangingPayloadHandler();
+        var secondHandler = new HangingPayloadHandler();
+        var thirdHandler = new HangingPayloadHandler();
+
+        await using var firstServiceProvider = CreateServiceProvider(uniqueDbName, collectionName, leaseTime, firstHandler, 1);
+        var helper = firstServiceProvider.GetRequiredService<IMongoHelper>();
+        var collection = helper.Database.GetCollection<MongoQueueItem<LeasePayload>>(collectionName);
+        var firstQueue = firstServiceProvider.GetRequiredService<IMongoQueue<LeasePayload>>();
+        await firstQueue.StartSubscriptionAsync();
+
+        await using var secondServiceProvider = CreateServiceProvider(uniqueDbName, collectionName, leaseTime, secondHandler, 1);
+        var secondQueue = secondServiceProvider.GetRequiredService<IMongoQueue<LeasePayload>>();
+
+        await using var thirdServiceProvider = CreateServiceProvider(uniqueDbName, collectionName, leaseTime, thirdHandler, 1);
+        var thirdQueue = thirdServiceProvider.GetRequiredService<IMongoQueue<LeasePayload>>();
+
+        try
+        {
+            // Act
+            await firstQueue.PublishAsync(new LeasePayload
+            {
+                Value = "crash-me"
+            });
+
+            // Attempt 1: the first subscription acquires the item and then hangs forever, simulating a crash.
+            await firstHandler.WaitForAttempts(1, TimeSpan.FromSeconds(10));
+
+            // Attempt 2: once the first subscription's lease expires, the second subscription reclaims it and
+            // also hangs forever.
+            await secondQueue.StartSubscriptionAsync();
+            await secondHandler.WaitForAttempts(1, TimeSpan.FromSeconds(10));
+
+            // Attempt 3 (the third subscription's own acquisition): its pre-update AttemptCount (2) already
+            // exceeds MaxRetries (1), so it must terminalize the item directly, without ever invoking its handler.
+            await thirdQueue.StartSubscriptionAsync();
+            var terminalItem = await WaitForQueueItemAsync(collection,
+                                                           x => x.Payload.Value == "crash-me" && x.IsClosed && x.IsTerminal,
+                                                           TimeSpan.FromSeconds(10));
+
+            // Assert
+            firstHandler.Attempts.Should().Be(1);
+            secondHandler.Attempts.Should().Be(1);
+            thirdHandler.Attempts.Should().Be(0, "the third acquisition must terminalize directly, without ever granting a lock or invoking its handler");
+            terminalItem.AttemptCount.Should().Be(2);
+            terminalItem.IsClosed.Should().BeTrue();
+            terminalItem.IsTerminal.Should().BeTrue();
+            terminalItem.IsLocked.Should().BeFalse();
+            terminalItem.LockedUtc.Should().BeNull();
+            terminalItem.ClosedUtc.Should().NotBeNull();
+        }
+        finally
+        {
+            await thirdQueue.StopSubscriptionAsync();
+            await secondQueue.StopSubscriptionAsync();
+            await firstQueue.StopSubscriptionAsync();
+        }
+    }
+
+    [Test]
     public async Task QueueHandlerFailure_ReprocessesMessageAfterLockLeaseExpires()
     {
         // Arrange
@@ -72,7 +145,9 @@ public class MongoQueueLockExpiryIntegrationTests
         recoveredItem.IsLocked.Should().BeFalse();
         recoveredItem.ClosedUtc.Should().NotBeNull();
         recoveredItem.LockedUtc.Should().BeNull();
-        recoveredItem.RetryCount.Should().Be(1);
+        // Both the first (failed) attempt and the lease-expiry reclaim that succeeded count as attempts: every
+        // lock acquisition increments AttemptCount, not only a resolved handler failure.
+        recoveredItem.AttemptCount.Should().Be(2);
         recoveredItem.IsTerminal.Should().BeFalse();
 
         // Cleanup
@@ -228,18 +303,23 @@ public class MongoQueueLockExpiryIntegrationTests
         String databaseName,
         String collectionName,
         TimeSpan lockLeaseTime,
-        IMongoQueuePayloadHandler<LeasePayload> handler)
+        IMongoQueuePayloadHandler<LeasePayload> handler,
+        Int32? maxRetries = null)
     {
         var services = new ServiceCollection();
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
         services.AddMongo(url, databaseName)
-                .WithQueue<LeasePayload>(queue => queue
-                                                  .WithPayloadHandler(_ => handler)
-                                                  .WithCollectionName(collectionName)
-                                                  .WithLockLeaseTime(lockLeaseTime)
-                                                  .WithoutAutoStartSubscription());
+                .WithQueue<LeasePayload>(queue =>
+                {
+                    queue.WithPayloadHandler(_ => handler)
+                         .WithCollectionName(collectionName)
+                         .WithLockLeaseTime(lockLeaseTime)
+                         .WithoutAutoStartSubscription();
+                    if (maxRetries.HasValue)
+                        queue.WithMaxRetries(maxRetries.Value);
+                });
 
         return services.BuildServiceProvider();
     }
@@ -270,6 +350,34 @@ public class MongoQueueLockExpiryIntegrationTests
             _startSemaphore.Release();
             await _releaseSemaphore.WaitAsync(cancellationToken);
             _completionSemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// Payload handler that never throws and never completes on its own, simulating a crashed or permanently
+    /// hung consumer. Each invocation blocks until the ambient token is cancelled (by subscription shutdown),
+    /// so it never writes a resolved success or failure for the attempt that invoked it.
+    /// </summary>
+    private sealed class HangingPayloadHandler : IMongoQueuePayloadHandler<LeasePayload>
+    {
+        private readonly SemaphoreSlim _attemptSemaphore = new(0);
+
+        public Int32 Attempts { get; private set; }
+
+        public async Task WaitForAttempts(Int32 count, TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            for (var i = 0; i < count; i++)
+            {
+                await _attemptSemaphore.WaitAsync(cts.Token);
+            }
+        }
+
+        public async Task HandlePayloadAsync(LeasePayload payload, CancellationToken cancellationToken = default)
+        {
+            Attempts++;
+            _attemptSemaphore.Release();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
         }
     }
 

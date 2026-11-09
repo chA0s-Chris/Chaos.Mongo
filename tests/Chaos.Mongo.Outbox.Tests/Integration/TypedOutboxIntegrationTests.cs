@@ -244,7 +244,7 @@ public class TypedOutboxIntegrationTests
             {
                 await WaitUntilAsync(async () => await StateAsync(provider, "First") == OutboxMessageState.Failed);
                 var message = await Collection(provider, "First").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
-                message.RetryCount.Should().Be(1);
+                message.AttemptCount.Should().Be(1);
                 message.Error.Should().Be("First destination unavailable");
             }
             else
@@ -276,8 +276,24 @@ public class TypedOutboxIntegrationTests
         try
         {
             await Task.WhenAll(first.StartAsync(), second.StartAsync(), original.StartAsync());
-            await WaitUntilAsync(async () => await StateAsync(provider, "First") == OutboxMessageState.Failed &&
-                                             (await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync()).RetryCount == 1);
+            await WaitUntilAsync(async () =>
+            {
+                if (await StateAsync(provider, "First") != OutboxMessageState.Failed)
+                {
+                    return false;
+                }
+
+                // AttemptCount is granted atomically at claim time, before PublishAsync runs, so waiting on it
+                // alone could observe the Outbox claim before its own resolved failure is actually recorded. Wait
+                // for the failure's own writes too: the error message set, the lock released, and the next
+                // attempt scheduled.
+                var outboxMessage = await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
+
+                return outboxMessage.AttemptCount == 1 &&
+                       outboxMessage.Error is not null &&
+                       !outboxMessage.IsLocked &&
+                       outboxMessage.NextAttemptUtc is not null;
+            });
             (await StateAsync(provider, "Second")).Should().Be(OutboxMessageState.Pending);
             var retry = await Collection(provider, "Outbox").Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
             retry.State.Should().Be(OutboxMessageState.Pending);
@@ -467,8 +483,11 @@ public class TypedOutboxIntegrationTests
                 .WithOutbox<FirstDestination>(o =>
                 {
                     Configure(o, "First", autoStart);
+                    // MaxRetries = 0 means one total attempt under the unified meaning, so the single failure
+                    // exercised by StartAsync_BlockedOrFailingDestination_OtherOutboxesProgressIndependently
+                    // exhausts it immediately, matching this test's expectations.
                     o.WithMessage<AnotherTestPayload>().WithPublisher<TrackedTypedPublisher>(lifetime)
-                     .WithRetentionPeriod(TimeSpan.FromDays(1)).WithBatchSize(1).WithMaxRetries(1)
+                     .WithRetentionPeriod(TimeSpan.FromDays(1)).WithBatchSize(1).WithMaxRetries(0)
                      .WithLockLeaseTime(TimeSpan.FromSeconds(20));
                 })
                 .WithOutbox<SecondDestination>(o =>

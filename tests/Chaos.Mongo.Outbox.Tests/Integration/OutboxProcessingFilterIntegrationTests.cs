@@ -41,7 +41,15 @@ public class OutboxProcessingFilterIntegrationTests
         try
         {
             await processor.StartAsync(cancellation.Token);
-            await WaitUntilAsync(async () => await collection.CountDocumentsAsync(message => message.Id == messages[0].Id && message.RetryCount == 1) == 1);
+            // AttemptCount alone is set atomically at claim time, before the publisher is ever called, so
+            // waiting on it alone would race ahead of the actual publish attempt below. IsLocked only clears
+            // once the claim is resolved — by the retry write after a failed publish, here — so waiting for
+            // both ensures the publish attempt (and the test's own cancellation inside it) has already happened.
+            await WaitUntilAsync(async () =>
+            {
+                var current = await collection.Find(message => message.Id == messages[0].Id).SingleAsync();
+                return !current.IsLocked && current.AttemptCount == 1;
+            });
         }
         finally
         {
@@ -77,8 +85,10 @@ public class OutboxProcessingFilterIntegrationTests
             }
         };
         var filter = Builders<OutboxMessage>.Filter.Eq(message => message.IsLocked, false);
+        // "Failure" uses MaxRetries = 0 (one total attempt allowed under the unified meaning), so the single
+        // failure below immediately exhausts it; a MaxRetries of 1 would allow a second attempt first.
         await using var services = await CreateServicesAsync($"OutboxFilter_{Guid.NewGuid():N}", filter, publisher,
-                                                             builder => builder.WithMaxRetries(outcome == "Failure" ? 1 : 3)
+                                                             builder => builder.WithMaxRetries(outcome == "Failure" ? 0 : 3)
                                                                                .WithRetryBackoff(TimeSpan.FromHours(1), TimeSpan.FromHours(1)));
         var collection = Collection(services);
         var message = new OutboxMessage
@@ -96,7 +106,7 @@ public class OutboxProcessingFilterIntegrationTests
                 await WaitUntilAsync(async () =>
                 {
                     var current = await collection.Find(item => item.Id == message.Id).SingleAsync();
-                    return !current.IsLocked && (current.State != OutboxMessageState.Pending || current.RetryCount == 1);
+                    return !current.IsLocked && (current.State != OutboxMessageState.Pending || current.AttemptCount == 1);
                 });
             }
         }
@@ -115,7 +125,9 @@ public class OutboxProcessingFilterIntegrationTests
             "Failure" => OutboxMessageState.Failed,
             _ => OutboxMessageState.Pending
         });
-        actual.RetryCount.Should().Be(outcome is "Retry" or "Failure" ? 1 : 0);
+        // The single claim this message ever gets counts as one attempt regardless of outcome: every lock
+        // claim increments AttemptCount, not only a resolved publish failure.
+        actual.AttemptCount.Should().Be(1);
         if (outcome == "Retry")
             actual.NextAttemptUtc.Should().BeAfter(DateTime.UtcNow);
         else
@@ -127,7 +139,7 @@ public class OutboxProcessingFilterIntegrationTests
     {
         var filters = Builders<OutboxMessage>.Filter;
         var filter = TypeFilter("Allowed") &
-                     (filters.Eq(message => message.CorrelationId, "Selected") | filters.Eq(message => message.RetryCount, 2));
+                     (filters.Eq(message => message.CorrelationId, "Selected") | filters.Eq(message => message.AttemptCount, 2));
         var publisher = new ProcessingFilterPublisher();
         await using var services = await CreateServicesAsync($"OutboxFilter_{Guid.NewGuid():N}", filter, publisher);
         var collection = Collection(services);
@@ -138,13 +150,13 @@ public class OutboxProcessingFilterIntegrationTests
             {
                 Type = "Excluded",
                 CorrelationId = "Selected",
-                RetryCount = 2
+                AttemptCount = 2
             },
             new OutboxMessage
             {
                 Type = "Allowed",
                 CorrelationId = "Other",
-                RetryCount = 1
+                AttemptCount = 1
             },
             new OutboxMessage
             {
@@ -185,7 +197,7 @@ public class OutboxProcessingFilterIntegrationTests
             {
                 Type = "Allowed",
                 CorrelationId = "Other",
-                RetryCount = 2,
+                AttemptCount = 2,
                 IsLocked = true,
                 LockedUtc = now.AddHours(-1)
             }
@@ -282,7 +294,7 @@ public class OutboxProcessingFilterIntegrationTests
         var excluded = Enumerable.Range(0, 5).Select(index => new OutboxMessage
         {
             Type = "Excluded",
-            RetryCount = index,
+            AttemptCount = index,
             NextAttemptUtc = DateTime.UtcNow.AddHours(-2),
             IsLocked = index % 2 == 0,
             LockedUtc = DateTime.UtcNow.AddHours(-3),

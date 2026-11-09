@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 using NUnit.Framework;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Testcontainers.MongoDb;
 
@@ -205,11 +206,12 @@ public class OutboxIntegrationTests
         });
         await session.CommitTransactionAsync();
 
-        // Set retry count to MaxRetries - 1 so next failure triggers permanent failure
+        // Set AttemptCount to MaxRetries so the next claim becomes the last allowed attempt (MaxRetries + 1
+        // total attempts), and its failure triggers permanent failure.
         var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
         var updateResult = await collection.UpdateOneAsync(
             FilterDefinition<OutboxMessage>.Empty,
-            Builders<OutboxMessage>.Update.Set(m => m.RetryCount, _options.MaxRetries - 1));
+            Builders<OutboxMessage>.Update.Set(m => m.AttemptCount, _options.MaxRetries));
 
         updateResult.ModifiedCount.Should().Be(1);
 
@@ -233,7 +235,7 @@ public class OutboxIntegrationTests
         var message = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
         message.State.Should().Be(OutboxMessageState.Failed);
         message.FailedUtc.Should().NotBeNull();
-        message.RetryCount.Should().Be(_options.MaxRetries);
+        message.AttemptCount.Should().Be(_options.MaxRetries + 1);
     }
 
     [Test]
@@ -261,18 +263,99 @@ public class OutboxIntegrationTests
 
         await WaitUntilAsync(async () =>
         {
+            // AttemptCount is granted atomically at claim time, before the publisher ever runs, so waiting on
+            // it alone could observe the claim before the resolved failure below is actually recorded. Wait for
+            // the failure's own writes instead: the error message set, the lock released, and the next attempt
+            // scheduled.
             var msg = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
-            return msg.RetryCount > 0;
+            return msg.Error is not null && !msg.IsLocked && msg.NextAttemptUtc is not null;
         });
 
         await processor.StopAsync();
 
-        // Verify the message has retry count incremented and next attempt scheduled
+        // Verify the message has its attempt count incremented and next attempt scheduled
         var message = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
-        message.RetryCount.Should().BeGreaterThan(0);
+        message.AttemptCount.Should().BeGreaterThan(0);
         message.Error.Should().Be("Broker unavailable");
         message.State.Should().Be(OutboxMessageState.Pending);
         message.IsLocked.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task Processor_MaxRetriesOneWithTwoResolvedFailures_TerminalizesAfterExactlyTwoInvocations()
+    {
+        // Arrange: a fresh message (AttemptCount starts at 0, not seeded) processed under a dedicated
+        // MaxRetries=1 budget with a short bounded backoff, through a publisher that records every invocation
+        // and always throws. This is the real, non-seeded equivalent of the equal-budget boundary: the message
+        // must be granted exactly two attempts (MaxRetries + 1) — observing AttemptCount 1, then 2 — before the
+        // second resolved failure terminalizes it, and no third claim must ever occur.
+        var publisher = new RecordingThrowingOutboxPublisher();
+        var services = new ServiceCollection()
+                       .AddLogging()
+                       .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
+                       {
+                           options.DefaultDatabase = $"OutboxMaxRetriesOneTestDb_{Guid.NewGuid():N}";
+                           options.RunConfiguratorsOnStartup = false;
+                       })
+                       .WithOutbox(o => o
+                                        .WithPublisher<RecordingThrowingOutboxPublisher>(ServiceLifetime.Singleton)
+                                        .WithMessage<TestPayload>("TestPayload")
+                                        .WithMaxRetries(1)
+                                        .WithRetryBackoff(TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(100))
+                                        .WithPollingInterval(TimeSpan.FromMilliseconds(50))
+                                        .WithLockLeaseTime(TimeSpan.FromSeconds(10))
+                                        .WithBatchSize(10))
+                       .Services
+                       .AddSingleton<IOutboxPublisher>(publisher)
+                       .BuildServiceProvider();
+
+        await using var serviceProvider = services;
+        var mongoHelper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var options = serviceProvider.GetRequiredService<OutboxOptions>();
+        var collection = mongoHelper.Database.GetCollection<OutboxMessage>(options.CollectionName);
+
+        using var session = await mongoHelper.Client.StartSessionAsync();
+        session.StartTransaction();
+        await serviceProvider.GetRequiredService<IOutbox>().AddMessageAsync(session, new TestPayload
+        {
+            Name = "Two-attempt exhaustion"
+        });
+        await session.CommitTransactionAsync();
+
+        var processor = serviceProvider.GetRequiredService<IOutboxProcessor>();
+        await processor.StartAsync();
+
+        try
+        {
+            await WaitUntilAsync(async () =>
+            {
+                var msg = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
+                return msg.State == OutboxMessageState.Failed;
+            });
+
+            // Give an erroneous third claim a chance to happen before asserting the final invocation count.
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+        }
+        finally
+        {
+            await processor.StopAsync();
+        }
+
+        // Assert
+        var message = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
+        message.State.Should().Be(OutboxMessageState.Failed);
+        message.FailedUtc.Should().NotBeNull();
+        message.AttemptCount.Should().Be(2, "MaxRetries=1 allows exactly two attempts before the message terminalizes");
+        message.IsLocked.Should().BeFalse();
+        message.LockedUtc.Should().BeNull();
+        message.LockId.Should().BeNull();
+
+        publisher.ObservedAttemptCounts.Should().Equal(new[]
+                                                       {
+                                                           1L,
+                                                           2L
+                                                       },
+                                                       "the publisher must observe exactly the two granted attempts, in order, and never a third");
     }
 
     [Test]
@@ -378,6 +461,24 @@ public class OutboxIntegrationTests
         }
 
         throw new TimeoutException($"Condition was not met within {timeout}.");
+    }
+
+    /// <summary>
+    /// Publisher that records the claimed message's already-granted <see cref="OutboxMessage.AttemptCount"/> on
+    /// every invocation, in order, and always throws — used to prove the exact number and sequence of real
+    /// claim/publish cycles a low <c>MaxRetries</c> budget allows, rather than seeding the count directly.
+    /// </summary>
+    private sealed class RecordingThrowingOutboxPublisher : IOutboxPublisher
+    {
+        private readonly ConcurrentQueue<Int64> _observedAttemptCounts = new();
+
+        public IReadOnlyCollection<Int64> ObservedAttemptCounts => _observedAttemptCounts.ToArray();
+
+        public Task PublishAsync(OutboxMessage message, CancellationToken cancellationToken = default)
+        {
+            _observedAttemptCounts.Enqueue(message.AttemptCount);
+            throw new InvalidOperationException("Simulated permanent publish failure");
+        }
     }
 
     private class UnregisteredPayload { }

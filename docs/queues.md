@@ -70,7 +70,11 @@ diagnostics or health checks.
 - `WithAutoStartSubscription()` starts processing with the hosted application; manual startup is the default.
 - `WithBatchSize(...)` controls the maximum items fetched in each query.
 - `WithLockLeaseTime(...)` determines when work abandoned by another subscriber becomes eligible for recovery.
-- `WithMaxRetries(...)` limits retries after the initial attempt; `WithNoRetry()` makes the first failure terminal.
+- `WithMaxRetries(...)` sets the number of retries allowed after the first delivery attempt, so a configured
+  value of `N` allows `N + 1` total delivery attempts before an item becomes terminal. A granted lock acquisition
+  — not only a thrown handler exception — counts as a delivery attempt. `WithNoRetry()` allows exactly one
+  attempt: the item becomes terminal only if that attempt fails or is abandoned, not merely by being acquired.
+  This is the same meaning as the transactional outbox's `WithMaxRetries`.
 - `WithRetentionPeriod(...)` retains successful items for MongoDB TTL cleanup.
 - `WithImmediateDelete()` removes successful items immediately.
 
@@ -157,8 +161,23 @@ The prioritizer is shared by registered queues, so provide a deterministic fallb
 
 ## Recovery and retention
 
-- A handler failure increments the retry count and makes the item eligible for another attempt.
-- A process crash leaves a lock that becomes recoverable after the configured lease expires.
+- Every granted lock acquisition counts as a delivery attempt — including a lease-expiry reclaim after a crash, a
+  DI resolution failure, or a payload that can never deserialize — not only a thrown handler exception. The
+  `AttemptCount` on `MongoQueueItem` reflects this: an item that succeeds on its very first acquisition has
+  `AttemptCount == 1`.
+- The acquisition itself atomically decides, from the item's own pre-update attempt count, whether to grant a new
+  attempt or terminalize the item directly: a new attempt is granted, and counted, whenever the existing attempt
+  count is still `<= MaxRetries`. A process crash leaves a lock that becomes recoverable after the configured
+  lease expires; that reclaim is granted and counted the same way, as long as the existing count still allows it.
+  Once the existing attempt count already exceeds `MaxRetries`, the next acquisition — whether a fresh attempt or
+  a lease-expiry reclaim — transitions the item directly to terminal instead, without granting it a lock or
+  incrementing the count further. For example, with `WithMaxRetries(1)`: the first acquisition grants attempt 1
+  (existing count `0 <= 1`); if the handler fails and the failure is resolved — a thrown exception, a DI
+  resolution failure, or a poison-payload read failure — a second acquisition grants attempt 2 (existing count
+  `1 <= 1`). If that second attempt's failure is also resolved, the item terminalizes immediately at that point
+  (`AttemptCount == 2`); no further acquisition is needed or possible. Only an attempt that is abandoned instead
+  of resolved — the process crashes or the handler hangs past the lease — leaves the item locked until the lease
+  expires; the next reclaim then finds the existing count `2 > 1` and transitions the item straight to terminal.
 - Successful items are retained for one hour by default and removed by a TTL index on `ClosedUtc`.
 - Terminal items remain queryable for inspection and dead-letter workflows.
 

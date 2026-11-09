@@ -111,10 +111,12 @@ public sealed class OutboxBuilder
     }
 
     /// <summary>
-    /// Sets the maximum number of retry attempts before a message is permanently marked as failed.
-    /// Defaults to <c>5</c>.
+    /// Sets the number of retries allowed after the first delivery attempt before a message is permanently
+    /// marked as failed. A configured value of <c>N</c> allows <c>N + 1</c> total delivery attempts; every lock
+    /// claim counts as a delivery attempt, not only a failed <see cref="IOutboxPublisher"/> call. This is the
+    /// same meaning as a queue's <c>MongoQueueBuilder{TPayload}.WithMaxRetries</c>. Defaults to <c>5</c>.
     /// </summary>
-    /// <param name="maxRetries">The maximum retry count.</param>
+    /// <param name="maxRetries">The number of retries allowed after the first delivery attempt.</param>
     /// <returns>This builder instance for method chaining.</returns>
     public OutboxBuilder WithMaxRetries(Int32 maxRetries)
     {

@@ -45,7 +45,7 @@ dotnet add package Chaos.Mongo.Outbox
 - **Atomic persistence**: outbox messages are inserted in the same MongoDB transaction as the business write
 - **At-least-once delivery**: a background processor publishes pending messages to an external system
 - **Typed payloads**: payloads are stored as `BsonDocument` but written and read as typed .NET classes
-- **Durable retries**: retry count and next-attempt scheduling are stored in MongoDB
+- **Durable retries**: the attempt count and next-attempt scheduling are stored in MongoDB
 - **Crash recovery**: stale message locks can be reclaimed by another processor instance
 - **Optional cleanup**: processed and failed messages can be removed automatically via TTL indexes
 
@@ -182,7 +182,7 @@ public interface IOutboxPublisher
 ```
 
 - Throw an exception to signal a failed publish attempt
-- The processor will persist the failure, increment `RetryCount`, and schedule the next retry
+- The processor will persist the failure and schedule the next retry until `AttemptCount` exceeds `MaxRetries`
 - The publisher receives the full `OutboxMessage`, including `Type`, `CorrelationId`, and raw `Payload`
 
 ### OutboxMessage
@@ -199,7 +199,7 @@ public interface IOutboxPublisher
 | `State` | `Pending`, `Processed`, or `Failed` |
 | `ProcessedUtc` | When the message was successfully published |
 | `FailedUtc` | When the message permanently failed |
-| `RetryCount` | Number of failed publish attempts |
+| `AttemptCount` | Number of times this message has been claimed for processing, not the number of failures. Every lock claim increments this, including a lease-expiry reclaim after a crash, so a message that succeeds on its very first claim has `AttemptCount == 1` |
 | `NextAttemptUtc` | When the message becomes eligible for retry |
 | `Error` | Last failure message |
 | `IsLocked` | Indicates whether a processor currently owns the message |
@@ -402,7 +402,7 @@ destination's processor.
 | `WithPublisher(Func<IServiceProvider, IOutboxPublisher>, ServiceLifetime)` | Required¹ | Registers a publisher factory; lifetime defaults to transient (see [Publisher Factories](#publisher-factories)) |
 | `WithMessage<TPayload>(string? discriminator = null)` | Required | Registers a payload type; discriminator defaults to the class name |
 | `WithCollectionName(string)` | `"Outbox"` | Sets the outbox collection name |
-| `WithMaxRetries(int)` | `5` | Maximum failed attempts before a message becomes `Failed` |
+| `WithMaxRetries(int)` | `5` | Retries allowed after the first delivery attempt (`N` allows `N + 1` total attempts) before a message becomes `Failed`; every lock claim counts as an attempt, not only a failed publish |
 | `WithRetryBackoff(TimeSpan initialDelay, TimeSpan maxDelay)` | `5s`, `5m` | Configures exponential retry backoff |
 | `WithBatchSize(int)` | `100` | Maximum eligible messages fetched per polling batch |
 | `WithPollingInterval(TimeSpan)` | `5s` | Delay between polls when the batch is not full |
@@ -473,8 +473,9 @@ shutdown or a manual `StopAsync` call:
   cancellation token while the processor is still running; once a stop is requested, that write gets a short grace
   period (3 seconds) to finish. If it does not finish in time, the lock is released for redelivery instead, the same
   as for an in-flight publish, rather than leaving the message stuck locked.
-- Failure bookkeeping (`RetryCount`, `Error`, the retry backoff) is written without a cancellation token at all, so a
-  publish that fails during shutdown still records its retry or final failure instead of being silently dropped.
+- Failure bookkeeping (`Error`, the retry backoff) is written without a cancellation token at all, so a publish that
+  fails during shutdown still records its retry or final failure instead of being silently dropped. `AttemptCount`
+  itself was already incremented atomically at claim time, before the publish ever ran.
 
 With auto-start disabled, you can manage the processor manually:
 
@@ -569,26 +570,42 @@ A duplicate publish can happen if a processor publishes successfully but crashes
 
 ### Retries and Backoff
 
-When `PublishAsync` throws:
+`MaxRetries` is the number of retries allowed after the first delivery attempt: a configured value of `N` allows
+`N + 1` total delivery attempts before a message becomes permanently failed. Every lock claim counts as a
+delivery attempt, not only a failed `PublishAsync` call — the same meaning as a queue's `MaxRetries`.
 
-- `RetryCount` is incremented
+The claim itself atomically decides, from the message's own `AttemptCount` before the update, whether to grant
+this claim a new attempt or to terminalize the message directly:
+
+- **Granted**: `AttemptCount` increments and the lock fields are set, exactly like any other claim. This happens
+  whenever the existing `AttemptCount` is still `<= MaxRetries`, including for a message reclaimed after a crash —
+  this is what makes a crash between claim and `PublishAsync` still count toward the budget instead of letting a
+  poison message cycle forever.
+- **Terminal, without granting a lock**: when the existing `AttemptCount` already exceeds `MaxRetries`, the
+  message transitions straight to `Failed` without ever calling `PublishAsync`. This is only reached for a message
+  whose last granted attempt was never resolved by `PublishAsync` throwing or succeeding — for example a crash.
+
+When `PublishAsync` throws for a granted attempt:
+
 - `Error` is updated with the last exception message
-- `NextAttemptUtc` is set using exponential backoff
-- the message remains `Pending` until retries are exhausted
-
-Once the retry count reaches `MaxRetries`, the message is marked as `Failed` and `FailedUtc` is set.
+- if the already-known `AttemptCount` still allows a retry, `NextAttemptUtc` is set using exponential backoff and
+  the message remains `Pending`
+- otherwise the message is marked `Failed` immediately and `FailedUtc` is set
 
 ### Locking and Stale Lock Recovery
 
-Before publishing, the processor claims a message by setting:
+Claiming a message sets:
 
+- `AttemptCount` incremented (the grant branch above)
 - `IsLocked = true`
 - `LockedUtc = now`
 - `LockId = <new token>`
 
 Completion and failure updates match on `LockId`. This prevents an older processor from overwriting the state after another processor has reclaimed the same message.
 
-If a processor crashes while holding a lock, another processor can reclaim the message once `LockedUtc` is older than the configured `LockLeaseTime`.
+If a processor crashes while holding a lock, another processor can reclaim the message once `LockedUtc` is older
+than the configured `LockLeaseTime`. That reclaim is itself a claim and counts toward `MaxRetries` the same way,
+whether it is granted another attempt or terminalizes the message directly.
 
 ### Ordering
 

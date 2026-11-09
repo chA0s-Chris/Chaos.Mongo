@@ -45,13 +45,16 @@ public class MongoQueueShutdownIntegrationTests
         // invoked with an acquired lock, this is a shutdown-caused cancellation, not a handler failure.
         await firstQueue.StopSubscriptionAsync().WaitAsync(TimeSpan.FromSeconds(15));
 
-        // Assert: the lock was released immediately, not left closed/terminal, and not counted as a retry.
+        // Assert: the lock was released immediately, not left closed/terminal. The acquire that granted this
+        // attempt already incremented AttemptCount atomically, before the handler ever ran, so it still counts
+        // as one attempt even though the handler itself never resolved it with a success or failure — exactly
+        // like a crash would. The release write itself does not increment AttemptCount a second time.
         var releasedItem = await collection.Find(x => x.Payload.Value == "shutdown-me").SingleAsync();
         releasedItem.IsLocked.Should().BeFalse();
         releasedItem.LockedUtc.Should().BeNull();
         releasedItem.IsClosed.Should().BeFalse();
         releasedItem.IsTerminal.Should().BeFalse();
-        releasedItem.RetryCount.Should().Be(0, "a shutdown-caused cancellation must not be counted as a retry");
+        releasedItem.AttemptCount.Should().Be(1, "the acquire already counted this attempt before the handler ran and was cancelled by shutdown");
 
         // Assert: the item is actually selectable again right away. A fresh subscription against the same
         // collection picks it up well inside the 30-second lease, proving the release did not require waiting

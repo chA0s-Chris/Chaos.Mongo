@@ -17,6 +17,13 @@ public class MongoQueueItem
     internal MongoQueueItem() { }
 
     /// <summary>
+    /// Number of times this item has been acquired/claimed for processing, not the number of failures. Every
+    /// lock acquisition increments this, including a lease-expiry reclaim after a crash, so an item that
+    /// succeeds on its very first acquisition has <c>AttemptCount == 1</c>.
+    /// </summary>
+    public Int64 AttemptCount { get; internal set; }
+
+    /// <summary>
     /// Timestamp the queue item was closed.
     /// </summary>
     [BsonIgnoreIfNull]
@@ -46,7 +53,11 @@ public class MongoQueueItem
     public Boolean IsLocked { get; internal set; }
 
     /// <summary>
-    /// <c>true</c> if queue item exhausted its retry policy and is now terminal.
+    /// <c>true</c> if the queue item exhausted its retry policy and is now terminal. Reached either when the last
+    /// attempt <see cref="MongoQueueDefinition.MaxRetries"/> allows is resolved by a handler failure, a
+    /// deserialization failure, or a DI failure, or when a lease-expiry reclaim finds that the existing
+    /// <see cref="AttemptCount"/> already exceeds <see cref="MongoQueueDefinition.MaxRetries"/> — in which case
+    /// the reclaim transitions the item directly to terminal without granting it a further lock.
     /// </summary>
     public Boolean IsTerminal { get; internal set; }
 
@@ -55,11 +66,6 @@ public class MongoQueueItem
     /// </summary>
     [BsonIgnoreIfNull]
     public DateTime? LockedUtc { get; internal set; }
-
-    /// <summary>
-    /// Number of failed processing attempts for this queue item.
-    /// </summary>
-    public Int32 RetryCount { get; internal set; }
 }
 
 /// <summary>

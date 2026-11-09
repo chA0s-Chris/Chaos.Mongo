@@ -291,7 +291,7 @@ public class MongoQueuePublisherTests
         capturedItem!.Payload.Should().BeSameAs(payload);
         capturedItem.CreatedUtc.Should().Be(testTime);
         capturedItem.Id.Should().NotBe(ObjectId.Empty);
-        capturedItem.RetryCount.Should().Be(0);
+        capturedItem.AttemptCount.Should().Be(0);
         capturedItem.IsTerminal.Should().BeFalse();
     }
 

@@ -190,6 +190,45 @@ The queue keeps `WithImmediateDelete`, which the outbox does not have. `MongoDef
 `MongoDefaults.QueueRetentionPeriod`. Stored document shapes are unchanged; rename call sites to the new builder
 methods, properties and defaults.
 
+## Queue and outbox: `RetryCount` renamed to `AttemptCount`, and `MaxRetries` now means the same thing on both
+
+Both mechanisms previously counted only resolved failures, and disagreed on how many total delivery attempts a
+configured `MaxRetries` allowed:
+
+- **The queue's `RetryCount` only increased inside a thrown handler exception.** A process crash, a lock lease
+  that expired while a handler was hung, a payload that failed to deserialize, or a DI failure resolving the
+  handler never incremented it, so a poison item in any of those situations could cycle through acquire →
+  crash/fail-before-handler forever without ever reaching the terminal state `MaxRetries` exists to enforce.
+- **The outbox's `RetryCount` had the same gap for a crash between claim and `PublishAsync`/finalization**, and
+  `MaxRetries` meant something different: `WithMaxRetries(5)` allowed 6 total delivery attempts on a queue but
+  only 5 on the outbox.
+
+Both mechanisms now atomically increment an attempt counter in the same acquire/claim operation that locks the
+item for processing, so every attempt is counted the same way regardless of why a previous attempt stopped — a
+resolved failure, a crash, a lease-expiry reclaim, a DI failure, or an undeserializable payload. The counter is
+renamed from `RetryCount` to `AttemptCount` on both `MongoQueueItem` and `OutboxMessage`, widened from `Int32` to
+`Int64`, and now means "the item/message was acquired/claimed for processing," not "processing failed": an item
+or message that succeeds on its very first acquisition has `AttemptCount == 1`, where it previously had
+`RetryCount == 0`.
+
+`MaxRetries` now means the same thing on both: the number of retries allowed after the first attempt, so a
+configured value of `N` allows `N + 1` total delivery attempts before the item/message becomes terminal — the
+queue's existing behavior. **The outbox's effective attempt budget for every configured `MaxRetries` increases by
+one** (an unconfigured outbox, `WithMaxRetries(5)`, now allows 6 attempts instead of 5); the queue's behavior is
+unchanged. If outbox alerting or capacity planning assumed the old, one-attempt-shorter budget, account for the
+extra attempt.
+
+**Upgrading with items/messages already in flight:** an item or message that was locked before the upgrade has no
+`AttemptCount` field yet. Its next acquisition/claim is counted as attempt 1 regardless of how many attempts it
+made before the upgrade — those earlier attempts are not carried over, because they were never recorded under the
+old field. The legacy `RetryCount` element, if still present on an old document, is ignored and never read back
+into `AttemptCount`.
+
+Rename `RetryCount` references to `AttemptCount` at call sites (`MongoQueueItem.RetryCount`,
+`OutboxMessage.RetryCount`), including any `FilterDefinition`/`SortDefinition`/`UpdateDefinition` built against the
+old member name. Both packages' `PublicAPI.Shipped.txt`/`PublicAPI.Unshipped.txt` reflect the rename and the
+`Int32` → `Int64` widening.
+
 ## Queue metrics: duration histograms now record seconds
 
 `MongoQueueMetrics.Instruments.ProcessingDuration`, `ProcessingQueueAge` and `LockRecoveryAge` now register unit
