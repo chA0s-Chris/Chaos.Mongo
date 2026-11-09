@@ -182,7 +182,8 @@ public interface IOutboxPublisher
 ```
 
 - Throw an exception to signal a failed publish attempt
-- The processor will persist the failure and schedule the next retry until `AttemptCount` exceeds `MaxRetries`
+- The processor will persist the failure and schedule the next retry; with the default unlimited `MaxRetries` this
+  continues indefinitely, or until `AttemptCount` exceeds a finite `MaxRetries` if one is configured
 - The publisher receives the full `OutboxMessage`, including `Type`, `CorrelationId`, and raw `Payload`
 
 ### OutboxMessage
@@ -402,13 +403,14 @@ destination's processor.
 | `WithPublisher(Func<IServiceProvider, IOutboxPublisher>, ServiceLifetime)` | Required¹ | Registers a publisher factory; lifetime defaults to transient (see [Publisher Factories](#publisher-factories)) |
 | `WithMessage<TPayload>(string? discriminator = null)` | Required | Registers a payload type; discriminator defaults to the class name |
 | `WithCollectionName(string)` | `"Outbox"` | Sets the outbox collection name |
-| `WithMaxRetries(int)` | `5` | Retries allowed after the first delivery attempt (`N` allows `N + 1` total attempts) before a message becomes `Failed`; every lock claim counts as an attempt, not only a failed publish |
+| `WithMaxRetries(int)` | Unlimited | Retries allowed after the first delivery attempt (`N` allows `N + 1` total attempts) before a message becomes `Failed`; every lock claim counts as an attempt, not only a failed publish. Omit to allow unlimited attempts, bounded only by the backoff cap |
 | `WithRetryBackoff(TimeSpan initialDelay, TimeSpan maxDelay)` | `5s`, `5m` | Configures exponential retry backoff |
 | `WithBatchSize(int)` | `100` | Maximum eligible messages fetched per polling batch |
 | `WithPollingInterval(TimeSpan)` | `5s` | Delay between polls when the batch is not full |
 | `WithProcessingFilter(FilterDefinition<OutboxMessage>)` | None | Adds a MongoDB constraint to message selection and atomic claiming |
 | `WithLockLeaseTime(TimeSpan)` | `5m` | When a locked message becomes reclaimable |
-| `WithRetentionPeriod(TimeSpan)` | Disabled | Creates TTL indexes for processed and failed messages |
+| `WithRetentionPeriod(TimeSpan)` | Disabled | Creates a TTL index for processed messages, and for failed messages too if `WithExpireFailedMessages()` is also configured |
+| `WithExpireFailedMessages()` | Disabled | Includes `Failed` messages in the TTL cleanup configured by `WithRetentionPeriod(...)`; without it, `Failed` messages are retained indefinitely |
 | `WithAutoStartProcessor()` | Disabled | Starts the processor automatically via hosted service |
 
 ¹ One of the two `WithPublisher` forms is required. Calling either one replaces any earlier publisher configuration.
@@ -572,18 +574,22 @@ A duplicate publish can happen if a processor publishes successfully but crashes
 
 `MaxRetries` is the number of retries allowed after the first delivery attempt: a configured value of `N` allows
 `N + 1` total delivery attempts before a message becomes permanently failed. Every lock claim counts as a
-delivery attempt, not only a failed `PublishAsync` call — the same meaning as a queue's `MaxRetries`.
+delivery attempt, not only a failed `PublishAsync` call — the same meaning as a queue's `MaxRetries`. By default
+`MaxRetries` is unlimited: a message is retried indefinitely, with the exponential backoff below capped at
+`RetryBackoffMaxDelay`, and it is never marked `Failed` purely for exhausting an attempt budget. Call
+`WithMaxRetries(N)` to restore a finite budget.
 
 The claim itself atomically decides, from the message's own `AttemptCount` before the update, whether to grant
 this claim a new attempt or to terminalize the message directly:
 
-- **Granted**: `AttemptCount` increments and the lock fields are set, exactly like any other claim. This happens
-  whenever the existing `AttemptCount` is still `<= MaxRetries`, including for a message reclaimed after a crash —
-  this is what makes a crash between claim and `PublishAsync` still count toward the budget instead of letting a
-  poison message cycle forever.
-- **Terminal, without granting a lock**: when the existing `AttemptCount` already exceeds `MaxRetries`, the
-  message transitions straight to `Failed` without ever calling `PublishAsync`. This is only reached for a message
-  whose last granted attempt was never resolved by `PublishAsync` throwing or succeeding — for example a crash.
+- **Granted**: `AttemptCount` increments and the lock fields are set, exactly like any other claim. With a finite
+  `MaxRetries`, this happens whenever the existing `AttemptCount` is still `<= MaxRetries`, including for a message
+  reclaimed after a crash — this is what makes a crash between claim and `PublishAsync` still count toward the
+  budget instead of letting a poison message cycle forever. With the unlimited default, every claim is granted.
+- **Terminal, without granting a lock**: only possible with a finite `MaxRetries`; when the existing `AttemptCount`
+  already exceeds it, the message transitions straight to `Failed` without ever calling `PublishAsync`. This is
+  only reached for a message whose last granted attempt was never resolved by `PublishAsync` throwing or
+  succeeding — for example a crash.
 
 When `PublishAsync` throws for a granted attempt:
 
@@ -623,14 +629,17 @@ If downstream systems require strict ordering, enforce it outside the outbox.
 
 ### Retention and Cleanup
 
-When `WithRetentionPeriod(...)` is configured, the outbox creates TTL indexes for:
+When `WithRetentionPeriod(...)` is configured, the outbox creates a TTL index on `ProcessedUtc`, allowing MongoDB
+to delete processed messages automatically after the configured retention period.
 
-- `ProcessedUtc`
-- `FailedUtc`
+`Failed` messages are **not** expired by default: a short broker outage should not cost you the only record of a
+permanently failed message. Call `WithExpireFailedMessages()` alongside `WithRetentionPeriod(...)` to also create a
+TTL index on `FailedUtc`, restoring the previous behavior of expiring failed messages after the same retention
+period.
 
-This allows MongoDB to delete processed and permanently failed messages automatically after the configured retention period.
-
-If retention is not configured, messages are kept indefinitely and managed TTL indexes are removed.
+If retention is not configured, messages are kept indefinitely and managed TTL indexes are removed. If retention
+is configured without `WithExpireFailedMessages()`, any existing `FailedUtc` TTL index is removed and `Failed`
+messages are kept indefinitely while `Processed` messages continue to expire normally.
 
 ## Event Store Integration
 

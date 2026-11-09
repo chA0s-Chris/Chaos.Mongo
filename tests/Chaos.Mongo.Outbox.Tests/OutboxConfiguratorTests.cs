@@ -10,7 +10,7 @@ using NUnit.Framework;
 public class OutboxConfiguratorTests
 {
     [Test]
-    public async Task ConfigureAsync_WithRetentionPeriod_CreatesPollingAndTtlIndexes()
+    public async Task ConfigureAsync_WithRetentionPeriod_CreatesPollingAndProcessedTtlIndexesAndDropsFailedTtlIndex()
     {
         var options = new OutboxOptions
         {
@@ -33,13 +33,17 @@ public class OutboxConfiguratorTests
 
         await sut.ConfigureAsync(mongoHelperMock.Object);
 
-        // 1 polling index + 2 TTL indexes (ProcessedUtc + FailedUtc)
+        // 1 polling index + 1 TTL index (ProcessedUtc); FailedUtc stays excluded by default (ExpireFailedMessages == false)
         indexManagerMock.Verify(
             m => m.CreateOneAsync(
                 It.IsAny<CreateIndexModel<OutboxMessage>>(),
                 It.IsAny<CreateOneIndexOptions>(),
                 It.IsAny<CancellationToken>()),
-            Times.Exactly(3));
+            Times.Exactly(2));
+
+        indexManagerMock.Verify(
+            m => m.DropOneAsync("IX_Outbox_FailedUtc_TTL", It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

@@ -62,6 +62,29 @@ public class OutboxIndexContractIntegrationTests
             }
         });
 
+        // ExpireFailedMessages defaults to false, so Failed messages are retained indefinitely and the
+        // FailedUtc TTL index must not exist on the collection.
+        indexes.Should().NotContain(x => x["name"] == "IX_Outbox_FailedUtc_TTL");
+    }
+
+    [Test]
+    public async Task ConfigureAsync_WithExpireFailedMessages_CreatesFailedTtlIndexWithExpectedContract()
+    {
+        // Arrange
+        var databaseName = $"OutboxIndexExpireFailed_{Guid.NewGuid():N}";
+        var retentionPeriod = TimeSpan.FromMinutes(20);
+
+        await using var serviceProvider = CreateServiceProvider(databaseName,
+                                                                builder => builder.WithRetentionPeriod(retentionPeriod)
+                                                                                  .WithExpireFailedMessages());
+        var helper = serviceProvider.GetRequiredService<IMongoHelper>();
+        var collection = helper.Database.GetCollection<BsonDocument>(OutboxOptions.DefaultCollectionName);
+
+        // Act
+        await ConfigureAsync(serviceProvider, helper);
+        var indexes = await (await collection.Indexes.ListAsync()).ToListAsync();
+
+        // Assert
         var failedTtlIndex = indexes.Single(x => x["name"] == "IX_Outbox_FailedUtc_TTL");
         failedTtlIndex["key"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument(nameof(OutboxMessage.FailedUtc), 1));
         failedTtlIndex["expireAfterSeconds"].ToDouble().Should().Be(retentionPeriod.TotalSeconds);
@@ -83,7 +106,9 @@ public class OutboxIndexContractIntegrationTests
     {
         // Arrange
         var databaseName = $"OutboxTtlFilterSelection_{Guid.NewGuid():N}";
-        await using var serviceProvider = CreateServiceProvider(databaseName, builder => builder.WithRetentionPeriod(TimeSpan.FromMinutes(20)));
+        await using var serviceProvider = CreateServiceProvider(databaseName,
+                                                                builder => builder.WithRetentionPeriod(TimeSpan.FromMinutes(20))
+                                                                                  .WithExpireFailedMessages());
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
         await ConfigureAsync(serviceProvider, helper);
 

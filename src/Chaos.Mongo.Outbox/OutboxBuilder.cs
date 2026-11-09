@@ -14,8 +14,9 @@ public sealed class OutboxBuilder
     private Boolean _autoStartProcessor;
     private Int32 _batchSize = OutboxOptions.DefaultBatchSize;
     private String _collectionName = OutboxOptions.DefaultCollectionName;
+    private Boolean _expireFailedMessages = OutboxOptions.DefaultExpireFailedMessages;
     private TimeSpan _lockLeaseTime = OutboxOptions.DefaultLockLeaseTime;
-    private Int32 _maxRetries = OutboxOptions.DefaultMaxRetries;
+    private Int32? _maxRetries = OutboxOptions.DefaultMaxRetries;
     private TimeSpan _pollingInterval = OutboxOptions.DefaultPollingInterval;
     private FilterDefinition<OutboxMessage>? _processingFilter;
     private TimeSpan? _retentionPeriod;
@@ -96,6 +97,18 @@ public sealed class OutboxBuilder
     }
 
     /// <summary>
+    /// Includes <c>Failed</c> messages in the TTL index created when <see cref="WithRetentionPeriod"/> is
+    /// configured, so they are automatically removed after the configured retention period like <c>Processed</c>
+    /// messages already are. Omit this call to retain <c>Failed</c> messages indefinitely; defaults to disabled.
+    /// </summary>
+    /// <returns>This builder instance for method chaining.</returns>
+    public OutboxBuilder WithExpireFailedMessages()
+    {
+        _expireFailedMessages = true;
+        return this;
+    }
+
+    /// <summary>
     /// Sets the lock lease time for stale lock recovery.
     /// Defaults to <c>5 minutes</c>.
     /// </summary>
@@ -114,7 +127,8 @@ public sealed class OutboxBuilder
     /// Sets the number of retries allowed after the first delivery attempt before a message is permanently
     /// marked as failed. A configured value of <c>N</c> allows <c>N + 1</c> total delivery attempts; every lock
     /// claim counts as a delivery attempt, not only a failed <see cref="IOutboxPublisher"/> call. This is the
-    /// same meaning as a queue's <c>MongoQueueBuilder{TPayload}.WithMaxRetries</c>. Defaults to <c>5</c>.
+    /// same meaning as a queue's <c>MongoQueueBuilder{TPayload}.WithMaxRetries</c>. Omit this call to allow
+    /// unlimited attempts, bounded only by <see cref="WithRetryBackoff"/>'s maximum delay; this is the default.
     /// </summary>
     /// <param name="maxRetries">The number of retries allowed after the first delivery attempt.</param>
     /// <returns>This builder instance for method chaining.</returns>
@@ -232,8 +246,8 @@ public sealed class OutboxBuilder
     }
 
     /// <summary>
-    /// Configures TTL-based cleanup of processed and failed messages.
-    /// Omit to retain messages indefinitely.
+    /// Configures TTL-based cleanup of processed messages, and of failed messages too when
+    /// <see cref="WithExpireFailedMessages"/> is also configured. Omit to retain messages indefinitely.
     /// </summary>
     /// <param name="retentionPeriod">The retention period after which messages are automatically removed.</param>
     /// <returns>This builder instance for method chaining.</returns>
@@ -279,6 +293,7 @@ public sealed class OutboxBuilder
             AutoStartProcessor = _autoStartProcessor,
             BatchSize = _batchSize,
             CollectionName = _collectionName,
+            ExpireFailedMessages = _expireFailedMessages,
             LockLeaseTime = _lockLeaseTime,
             MaxRetries = _maxRetries,
             MessageTypeLookup = MessageTypes.ToImmutableDictionary(),

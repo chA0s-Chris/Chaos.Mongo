@@ -229,6 +229,39 @@ Rename `RetryCount` references to `AttemptCount` at call sites (`MongoQueueItem.
 old member name. Both packages' `PublicAPI.Shipped.txt`/`PublicAPI.Unshipped.txt` reflect the rename and the
 `Int32` → `Int64` widening.
 
+## Outbox: unlimited retries by default, and `Failed` messages excluded from TTL cleanup by default
+
+An unconfigured outbox (no `WithMaxRetries(...)` call) previously gave up on a message permanently after 6 total
+delivery attempts (`MaxRetries` defaulted to `5`), which the default exponential backoff reaches after roughly
+75 to 95 seconds. A broker outage that outlasted that short window silently lost the message to `Failed`, with no
+API to requeue it — in conflict with the outbox's at-least-once delivery purpose. `MaxRetries` is now nullable and
+defaults to `null`, meaning unlimited attempts: a message keeps retrying indefinitely, with the existing
+exponential backoff still capped at `RetryBackoffMaxDelay`, and it is never marked `Failed` purely for exhausting
+an attempt budget.
+
+Separately, if `WithRetentionPeriod(...)` was configured, the outbox also created a TTL index on `FailedUtc`
+unconditionally, so a message that did reach `Failed` was deleted after the retention period, leaving only a log
+line as a trace. `WithRetentionPeriod(...)` alone no longer does this: the `FailedUtc` TTL index is now only
+created when `WithExpireFailedMessages()` is also configured. The `ProcessedUtc` TTL index is unaffected and still
+expires `Processed` messages as before.
+
+**Consequence for an outbox already running in production:** without any code change, it no longer gives up on a
+message after a short broker outage, and no longer deletes messages that do reach `Failed`. If
+`WithRetentionPeriod(...)` was configured, the first startup after upgrading drops the existing
+`IX_Outbox_FailedUtc_TTL` index (the same reconciliation `CreateOneOrUpdateAsync`/`DropOneIfExistsAsync` mechanism
+already used for every other managed index), unless `WithExpireFailedMessages()` is also configured before
+upgrading. No manual migration step is needed, but messages already deleted by that index before upgrading are
+not recoverable.
+
+To restore the previous behavior explicitly, configure both:
+
+```csharp
+.WithOutbox(o => o
+    .WithMaxRetries(5)
+    .WithRetentionPeriod(TimeSpan.FromDays(7))
+    .WithExpireFailedMessages())
+```
+
 ## Queue metrics: duration histograms now record seconds
 
 `MongoQueueMetrics.Instruments.ProcessingDuration`, `ProcessingQueueAge` and `LockRecoveryAge` now register unit

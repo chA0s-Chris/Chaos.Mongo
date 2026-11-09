@@ -31,6 +31,7 @@ public class OutboxProcessorTerminalClaimTests
         services.AddSingleton<TimeProvider>(new FakeTimeProvider(new DateTimeOffset(2026, 11, 9, 12, 0, 0, TimeSpan.Zero)));
         new MongoBuilder(services).WithOutbox(builder => builder.WithPublisher<TestOutboxPublisher>(ServiceLifetime.Singleton)
                                                                 .WithMessage<TestPayload>()
+                                                                .WithMaxRetries(5)
                                                                 .WithBatchSize(3)
                                                                 .WithPollingInterval(TimeSpan.FromHours(1)));
         await using var provider = services.BuildServiceProvider();
@@ -91,7 +92,7 @@ internal class TerminalClaimCollection : DispatchProxy
                 return Task.FromResult<IAsyncCursor<OutboxMessage>>(new ProcessingFilterCursor(CreateMessage(OutboxMessageState.Pending, 5)));
             case "FindOneAndUpdateAsync":
                 ClaimAttempted.TrySetResult();
-                // MaxRetries defaults to 5, so an AttemptCount of 6 is the claim's own terminal branch.
+                // WithMaxRetries(5) is configured, so an AttemptCount of 6 is the claim's own terminal branch.
                 return Task.FromResult<OutboxMessage?>(CreateMessage(OutboxMessageState.Failed, 6));
             default:
                 throw new NotSupportedException(targetMethod.Name);

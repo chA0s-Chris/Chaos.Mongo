@@ -381,7 +381,7 @@ public class OutboxProcessorTests
         // The claim already incremented AttemptCount atomically before HandleFailureAsync ever runs, so the
         // seeded message must represent the already-claimed attempt count (MaxRetries + 1) that exceeds the
         // budget, not a pre-increment count HandleFailureAsync used to bump itself.
-        var message = CreatePendingMessage(_options.MaxRetries + 1);
+        var message = CreatePendingMessage(_options.MaxRetries!.Value + 1);
         var failureRecorded = CreateSignal();
         SetupFindReturns(message);
         SetupClaimReturns(message);

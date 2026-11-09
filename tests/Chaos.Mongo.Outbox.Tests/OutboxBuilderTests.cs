@@ -17,6 +17,7 @@ public class OutboxBuilderTests
 
         options.CollectionName.Should().Be(OutboxOptions.DefaultCollectionName);
         options.MaxRetries.Should().Be(OutboxOptions.DefaultMaxRetries);
+        options.ExpireFailedMessages.Should().Be(OutboxOptions.DefaultExpireFailedMessages);
         options.RetryBackoffInitialDelay.Should().Be(OutboxOptions.DefaultRetryBackoffInitialDelay);
         options.RetryBackoffMaxDelay.Should().Be(OutboxOptions.DefaultRetryBackoffMaxDelay);
         options.RetentionPeriod.Should().BeNull();
@@ -40,6 +41,7 @@ public class OutboxBuilderTests
                      .WithMaxRetries(3)
                      .WithRetryBackoff(TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1))
                      .WithRetentionPeriod(TimeSpan.FromDays(7))
+                     .WithExpireFailedMessages()
                      .WithBatchSize(50)
                      .WithPollingInterval(TimeSpan.FromSeconds(2))
                      .WithLockLeaseTime(TimeSpan.FromMinutes(10))
@@ -147,6 +149,16 @@ public class OutboxBuilderTests
         builder.WithCollectionName("MyOutbox");
 
         builder.Build().CollectionName.Should().Be("MyOutbox");
+    }
+
+    [Test]
+    public void WithExpireFailedMessages_SetsOption()
+    {
+        var builder = new OutboxBuilder();
+
+        builder.WithExpireFailedMessages();
+
+        builder.Build().ExpireFailedMessages.Should().BeTrue();
     }
 
     [Test]

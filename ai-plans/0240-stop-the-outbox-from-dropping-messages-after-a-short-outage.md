@@ -22,27 +22,27 @@ relied on the old eager-expiry behavior.
 
 ## Acceptance Criteria
 
-- [ ] With default options (no `WithMaxRetries(...)` call), an outbox message whose publisher keeps throwing
+- [x] With default options (no `WithMaxRetries(...)` call), an outbox message whose publisher keeps throwing
       survives well past today's ~75-95 second/6-attempt budget — remaining `Pending` and continuing to be
       retried with the existing exponential backoff capped at `RetryBackoffMaxDelay` — and reaches `Processed`
       once the publisher starts succeeding; it never becomes `Failed` purely from exhausting an attempt budget.
       Covered by a new test using `FakeTimeProvider` to advance well past the old exhaustion point.
-- [ ] With `WithMaxRetries(N)` explicitly configured to a finite value, a message whose publisher always throws
+- [x] With `WithMaxRetries(N)` explicitly configured to a finite value, a message whose publisher always throws
       still reaches `State == Failed` after exactly `N + 1` attempts, preserving the existing finite-budget
       behavior from [plan 0239](0239-count-queue-delivery-attempts-maxretries.md).
-- [ ] With `WithRetentionPeriod(...)` configured and default options, a message that reaches `State == Failed` is
+- [x] With `WithRetentionPeriod(...)` configured and default options, a message that reaches `State == Failed` is
       not removed and is not matched by any TTL index: the `IX_Outbox_FailedUtc_TTL` index does not exist on the
       collection, while the `ProcessedUtc` TTL index is created and still expires `Processed` messages normally.
       Covered by a test asserting the actual index contract (index absence/presence), not only the processor's
       in-memory behavior.
-- [ ] With `WithRetentionPeriod(...)` and the new opt-in configured, `Failed` messages are still expired via a
+- [x] With `WithRetentionPeriod(...)` and the new opt-in configured, `Failed` messages are still expired via a
       `FailedUtc` TTL index with the same contract as today, preserving that behavior for anyone who opts in.
-- [ ] `docs/transactional-outbox.md` describes the new defaults (unlimited retries bounded by the backoff cap;
+- [x] `docs/transactional-outbox.md` describes the new defaults (unlimited retries bounded by the backoff cap;
       `Failed` messages excluded from TTL cleanup) and how to restore the previous finite-retry and eager-expiry
       behavior.
-- [ ] `docs/migrating-from-0.x.md` gets a new entry describing both default changes, their consequence for an
+- [x] `docs/migrating-from-0.x.md` gets a new entry describing both default changes, their consequence for an
       unconfigured outbox already in production, and how to restore each previous behavior explicitly.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the complete test
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) produces no warnings, and the complete test
       suite passes while maintaining the repository's required merged line coverage.
 
 ## Technical Details
