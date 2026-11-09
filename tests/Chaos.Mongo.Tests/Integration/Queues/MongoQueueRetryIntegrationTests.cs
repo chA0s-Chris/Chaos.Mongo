@@ -22,7 +22,7 @@ public class MongoQueueRetryIntegrationTests
         => _container = await MongoDbTestContainer.StartContainerAsync();
 
     [Test]
-    public async Task QueueHandlerCrashesWithAttemptCountAtInt32MaxValueBoundary_ReclaimTerminalizesWithoutGrantingOrIncrementingFurther()
+    public async Task QueueHandlerCrashes_WithAttemptCountAtInt32MaxValueBoundary_ReclaimTerminalizesWithoutGrantingOrIncrementingFurther()
     {
         // Arrange: a queue item that has already recorded Int32.MaxValue attempts, with MaxRetries also
         // configured to Int32.MaxValue. The first acquire below still grants the last allowed attempt

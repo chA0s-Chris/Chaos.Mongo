@@ -8,6 +8,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class OutboxAttemptCountBoundaryIntegrationTests
 {
     private MongoDbContainer _container;

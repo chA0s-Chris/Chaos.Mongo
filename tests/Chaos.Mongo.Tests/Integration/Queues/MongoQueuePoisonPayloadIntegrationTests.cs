@@ -11,6 +11,7 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+[Category("Integration")]
 public class MongoQueuePoisonPayloadIntegrationTests
 {
     private MongoDbContainer _container;
@@ -69,8 +70,9 @@ public class MongoQueuePoisonPayloadIntegrationTests
             var terminalDocument = await WaitForTerminalDocumentAsync(bsonCollection, queueItemId, TimeSpan.FromSeconds(10));
 
             // Assert: exactly MaxRetries + 1 (2) acquire attempts occurred, the handler was never invoked (the
-            // undeserializable payload never reaches it), and the item still reaches the terminal state through
-            // the typed collection's own class couldn't deserialize it even after it turned terminal.
+            // undeserializable payload never reaches it), and the item still reached the terminal state, asserted
+            // through a BsonDocument query because the typed collection cannot deserialize it even after it turned
+            // terminal.
             handler.Invocations.Should().Be(0, "a permanently undeserializable payload must never reach the handler");
             terminalDocument["AttemptCount"].ToInt64().Should().Be(2);
             terminalDocument["IsClosed"].AsBoolean.Should().BeTrue();
