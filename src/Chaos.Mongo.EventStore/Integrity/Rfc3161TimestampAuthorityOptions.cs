@@ -78,9 +78,10 @@ public sealed class Rfc3161TimestampAuthorityOptions
     public X509RevocationMode RevocationMode { get; set; } = X509RevocationMode.Online;
 
     /// <summary>
-    /// Gets the roots the token's chain must end in. When empty, the operating system's trust store is used;
-    /// qualified authorities often chain to roots outside it. Explicit roots also keep stored tokens verifiable, because
-    /// a chain built later from a changed trust store may take another path than the stored one.
+    /// Gets the roots the token's chain must end in. <see cref="IntegrityAnchoringBuilder.WithRfc3161TimestampAuthority"/>
+    /// requires at least one; qualified authorities often chain to roots outside the operating system's trust store,
+    /// and leaving this empty throws instead of silently falling back to it. Explicit roots also keep stored tokens
+    /// verifiable, because a chain built later from a changed trust store may take another path than the stored one.
     /// </summary>
     public X509Certificate2Collection TrustedRoots { get; } = [];
 

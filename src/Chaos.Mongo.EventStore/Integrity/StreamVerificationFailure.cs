@@ -67,5 +67,19 @@ public enum StreamVerificationFailure
     /// A leaf of the stream in a completed anchor does not prove its inclusion in the anchor's Merkle root, so the
     /// leaf was changed, or a leaf of the stream, or the committed anchor it belongs to, cannot be read.
     /// </summary>
-    AnchoredLeafInvalid
+    AnchoredLeafInvalid,
+
+    /// <summary>
+    /// The stream has no events, so the library cannot tell "this aggregate never existed" apart from "every event of
+    /// this stream, and its anchored leaves, were deleted."
+    /// </summary>
+    EmptyStream,
+
+    /// <summary>
+    /// The stream has events, but no completed anchor's leaf was found for the configured aggregate type name, while
+    /// a leaf exists for the same aggregate identifier under a different aggregate type name, so the stream was
+    /// anchored under a name that no longer matches the verifier's configured type and coverage could not be
+    /// established.
+    /// </summary>
+    AggregateTypeMismatch
 }

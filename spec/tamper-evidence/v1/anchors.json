@@ -1,18 +1,80 @@
 {
-  "trustedRoots": [
-    "tsa-root.pem"
-  ],
+  "trustedRoots": {
+    "test-tsa": [
+      "tsa-root.pem"
+    ],
+    "no-revocation-source-tsa": [
+      "no-revocation-source-tsa.pem"
+    ],
+    "partial-source-tsa": [
+      "partial-source-tsa.pem"
+    ],
+    "revoked-with-missing-coverage-tsa": [
+      "revoked-with-missing-coverage-tsa.pem"
+    ],
+    "trust-bridging-path-accepted": [
+      "trust-bridging-path-accepted.pem"
+    ],
+    "trust-substituted-root-rejected": [
+      "trust-substituted-root-rejected.pem"
+    ],
+    "trust-inserted-certificate-rejected": [
+      "trust-inserted-certificate-rejected.pem"
+    ],
+    "trust-valid-only-at-token-time-accepted": [
+      "trust-valid-only-at-token-time-accepted.pem"
+    ],
+    "trust-chain-expired-at-token-time-rejected": [
+      "trust-chain-expired-at-token-time-rejected.pem"
+    ],
+    "trust-path-length-constraint-rejected": [
+      "trust-path-length-constraint-rejected.pem"
+    ],
+    "trust-name-constraint-rejected": [
+      "trust-name-constraint-rejected.pem"
+    ],
+    "trust-extended-key-usage-constraint-rejected": [
+      "trust-extended-key-usage-constraint-rejected.pem"
+    ],
+    "trust-reordered-multiset-rejected": [
+      "trust-reordered-multiset-rejected.pem"
+    ],
+    "trust-shared-key-sibling-non-unique-rejected": [
+      "trust-shared-key-sibling-non-unique-rejected.pem"
+    ],
+    "trust-shared-key-sibling-ineligible-alternate-accepted": [
+      "trust-shared-key-sibling-ineligible-alternate-accepted.pem"
+    ],
+    "trust-non-final-self-issued-intermediate-accepted": [
+      "trust-non-final-self-issued-intermediate-accepted.pem"
+    ],
+    "trust-path-length-cross-certificate-variant-rejected": [
+      "trust-path-length-cross-certificate-variant-rejected.pem"
+    ],
+    "trust-two-intermediate-sibling-rejected": [
+      "trust-two-intermediate-sibling-rejected.pem"
+    ],
+    "trust-both-siblings-embedded-non-unique-rejected": [
+      "trust-both-siblings-embedded-non-unique-rejected.pem"
+    ],
+    "trust-three-shared-key-siblings-each-constraint-ineligible-accepted": [
+      "trust-three-shared-key-siblings-each-constraint-ineligible-accepted.pem"
+    ],
+    "trust-shared-key-sibling-non-unique-rejected-same-root": [
+      "trust-shared-key-sibling-non-unique-rejected-same-root.pem"
+    ]
+  },
   "graceHours": 24,
   "chain": {
     "intact": true,
     "firstBrokenSequence": null,
     "failure": null,
-    "anchorCount": 2
+    "anchorCount": 25
   },
   "anchors": [
     {
       "sequence": 1,
-      "digest": "8d30d89d334c4abc7607a2edaef6b0078f9c65e594214ce79dbd3ba5e50fb835",
+      "digest": "e19c081b9383e570e43149f8da5074c70794d281409c4b46b48f18d2099f965f",
       "timestamps": [
         [
           true,
@@ -22,13 +84,250 @@
     },
     {
       "sequence": 2,
-      "digest": "41c83fc4f8ef31b590e3da469405be26ff5af229dfd01002588cb3843cd45d6b",
+      "digest": "0ff15d30663d6f4665add39bc679b5c03f47eb6eab5b0b1ed7042db528964ec8",
       "timestamps": [
         [
           true,
           "Unconfirmed"
         ]
       ]
+    },
+    {
+      "sequence": 3,
+      "digest": "9fba3bfeb1f482865cce2337fa793ec86afc40ec4c3eb1bb9e22246505d18627",
+      "timestamps": [
+        [
+          true,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 4,
+      "digest": "5b4d2e00eced558bbd10c8260d6ce163c0b7672b0aa58a98b1ffb9b8a0113769",
+      "timestamps": [
+        [
+          false,
+          "Revoked"
+        ]
+      ]
+    },
+    {
+      "sequence": 5,
+      "digest": "49b585d070286b5a664f7464b84fa0a164daf74eca57b705123b08f7ba476c75",
+      "timestamps": [
+        [
+          true,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 6,
+      "digest": "ff8d3c9649b0aec7cd1bcf240c07b615f541232dc4c8ac03a05c886caa72deca",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 7,
+      "digest": "fea2e0b7b7ba79dfc89f26baa3102daa13ea53d6fd6ce8dd4c865dccc6e6ef4d",
+      "timestamps": [
+        [
+          true,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 8,
+      "digest": "10d4849e1f506e67ecaa7dd75b1a7ef27081d07015810e188b62a089eecd4522",
+      "timestamps": [
+        [
+          false,
+          "Revoked"
+        ]
+      ]
+    },
+    {
+      "sequence": 9,
+      "digest": "7c84e4b8ac9ca361119268b373e560715c96e10df2a12f4515a4b6e7952aeb52",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 10,
+      "digest": "c8cb3d02ebeb3541bc63fe864cd6f414c548e7cea286a99b6a90f2f9f9afb6d4",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 11,
+      "digest": "0039ad815e75e43b6c1618d7b97a78f70e84c14033655ef9af446c226bc04b4e",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 12,
+      "digest": "d977b49405979db7f85edb27d0fb0141ca761dc23803e5b4529e5c59a66e9d18",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 13,
+      "digest": "61ab3284d0648cb4919207448a5984e1ff6cb1bb6b02d263f68c8835973f57cd",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 14,
+      "digest": "84a2dddf62ac6f5eedfdf0a3f8527d0422bd710490c203f46ff71bf4cce92992",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 15,
+      "digest": "67e15fa8d4acef09c706686c5f816d665d7ba5dd2289ebc7d272f30c677db354",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 16,
+      "digest": "45151940a565cd968acaff5431e89d988bc3942854fa7eed9df10018bce44534",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 17,
+      "digest": "329090a651d23ef8396729c32b7f2640e33e157724e913a592d185bd141b1e90",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 18,
+      "digest": "a583c3b7e2264b72d365c813245c05e7facc07687dee5a85cd4473210bb5e328",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 19,
+      "digest": "f322b83a3ca4e277bd6459ceacb551e55b85b2d3ac284fe7c4aa7916f4314e1c",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 20,
+      "digest": "887476303ae1b5a01ac822bc8b8807b89f3662dca26f46cf127c75320449805a",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 21,
+      "digest": "79b01326f441f1fc22ba62a77fed582a524e228fddf09cf73ac77e0cc01031a5",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 22,
+      "digest": "82848abc37f55d0a13610ce1ef88c024b089181e565b19dc5b04c29f9b1a587f",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 23,
+      "digest": "54ac0a01561d450bdcfa40555966dc2bf9bdcfbf5c178157d073f1959c66681f",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 24,
+      "digest": "bd46402eeb56f8ebe09496b8da9fe7d334144f973c2eea412a591aa1fd811c85",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 25,
+      "digest": "5f2bf8f73136e51d60ad724ad0b007d1e90738f55cf00e56b67112228c7f781c",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
     }
-  ]
+  ],
+  "eventAnchors": {
+    "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e08",
+    "version": 1,
+    "status": "Anchored",
+    "anchorSequence": 5,
+    "degradedFromSequence": 4
+  }
 }

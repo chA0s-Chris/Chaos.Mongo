@@ -67,3 +67,6 @@ nunit-*.xml
 
 # Signing key
 Chaos.Mongo.snk
+
+# Python bytecode caches of the tamper-evidence verifier tooling
+__pycache__/

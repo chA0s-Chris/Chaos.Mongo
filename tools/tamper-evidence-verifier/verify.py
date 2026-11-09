@@ -56,7 +56,7 @@ DATE_RANGE = (-62135596800000, 253402300800000)
 T_BOOLEAN, T_DATETIME, T_NULL, T_INT32, T_INT64, T_DECIMAL128 = 0x08, 0x09, 0x0A, 0x10, 0x12, 0x13
 SUBTYPE_GENERIC, SUBTYPE_UUID = 0x00, 0x04
 ANCHOR_STATUSES = ("Preparing", "AwaitingTimestamp", "Completed", "Discarded")
-REVOCATION_STATUSES = ("Unconfirmed", "Confirmed", "Revoked")
+REVOCATION_STATUSES = ("Unconfirmed", "Confirmed", "Revoked", "NoRevocationSource")
 OPENSSL_TIMEOUT_SECONDS = 60
 
 # Errors that malformed BSON or DER input raises while it is parsed; UnicodeDecodeError is a ValueError. RecursionError
@@ -65,6 +65,10 @@ PARSE_ERRORS = (ValueError, struct.error, IndexError, RecursionError)
 # The deepest nesting accepted: MongoDB's limit for documents, and a bound far above real tokens for DER.
 MAX_BSON_DEPTH = 100
 MAX_DER_DEPTH = 64
+# The bounds of Check A's path searches, far above real tokens: the most candidate paths one search examines, and the
+# most direct issuer adjacency tests its walk makes, before it fails closed.
+MAX_CANDIDATE_PATHS = 64
+MAX_SEARCH_STEPS = 4096
 
 
 def sha256(*parts):
@@ -622,13 +626,15 @@ def has_readable_names(document):
 def compare_with_leaves(events, leaves, first_unreadable, broken_version):
     """Compares the verified events with the stream's leaves below a break, if any: the lowest version at which a leaf
     cannot be read, does not prove its inclusion, names a missing version or a different hash, the first leaf's on a
-    tie, or None."""
-    lowest = None
+    tie, or None. Also returns the number of leaves actually compared, after leaves at or beyond the break are
+    excluded, so it reports zero when a break precedes every anchored leaf even if some were otherwise readable."""
+    lowest, compared = None, 0
     if first_unreadable is not None and (broken_version is None or first_unreadable < broken_version):
         lowest = (first_unreadable, "AnchoredLeafInvalid")
     for leaf_version, leaf_hash, proves_inclusion in leaves:
         if broken_version is not None and leaf_version >= broken_version:
             continue
+        compared += 1
         if not proves_inclusion:
             finding = (leaf_version, "AnchoredLeafInvalid")
         elif leaf_version > len(events):
@@ -639,19 +645,25 @@ def compare_with_leaves(events, leaves, first_unreadable, broken_version):
             continue
         if lowest is None or finding[0] < lowest[0]:
             lowest = finding
-    return lowest
+    return compared, lowest
 
 
-def verify_stream(documents, aggregate_id, leaves=None, first_unreadable=None):
+def verify_stream(documents, aggregate_id, leaves=None, first_unreadable=None, other_type_leaf_exists=False):
     """Verifies the chain of one stream; documents are its events in any order, verified in MongoDB's order of their
     versions. Leaves are (version, hash, proves inclusion) triples of completed anchors in anchor sequence order, and
     first_unreadable is the lowest version of a stream leaf that cannot be read; both judge the verified events. A
-    broken stream reports the events verified before the break, with their seal-mode transitions and personal data."""
+    broken stream reports the events verified before the break, with their seal-mode transitions and personal data.
+    A stream with no events is always reported as EmptyStream, because neither this function nor an operator can
+    tell "this aggregate never existed" apart from "every event of this stream, and its anchored leaves, were
+    deleted." When the stream has events but no completed leaf could be compared against it (comparedLeafCount is
+    zero) and other_type_leaf_exists is set by the caller's own presence query, it is reported as
+    AggregateTypeMismatch instead of an intact, fully covered stream."""
     ordered = sorted(documents, key=version_sort_key)
-    report = {"intact": True, "firstBrokenVersion": None, "failure": None, "events": [], "sealModeTransitions": [], "unrecordedErasures": []}
+    report = {"intact": True, "firstBrokenVersion": None, "failure": None, "comparedLeafCount": 0, "events": [], "sealModeTransitions": [], "unrecordedErasures": []}
     previous_hash, recorded, erased = None, set(), []
 
     def finish(version=None, failure=None):
+        already_broken = failure is not None
         events = report["events"]
         for index in range(1, len(events)):
             if events[index - 1]["sealMode"] == "Append" and events[index]["sealMode"] == "Retroactive":
@@ -660,9 +672,14 @@ def verify_stream(documents, aggregate_id, leaves=None, first_unreadable=None):
             for entry in event["personalData"]:
                 entry["status"] = "Present" if not entry["erased"] else ("ErasedWithRecord" if (event["version"], entry["path"]) in recorded else "ErasedWithoutRecord")
                 del entry["erased"]
-        earlier = compare_with_leaves(events, leaves or [], first_unreadable, version)
+        compared, earlier = compare_with_leaves(events, leaves or [], first_unreadable, version)
+        report["comparedLeafCount"] = compared
         if earlier is not None:
             version, failure = earlier
+        elif not already_broken and not events:
+            version, failure = 1, "EmptyStream"
+        elif not already_broken and compared == 0 and other_type_leaf_exists:
+            version, failure = 1, "AggregateTypeMismatch"
         if failure is not None:
             report.update(intact=False, firstBrokenVersion=version, failure=failure)
         else:
@@ -1443,18 +1460,21 @@ def distribution_points(fields):
     return points, True
 
 
-def crl_sources(chain):
+def crl_source_coverage(chain):
     """The CRL sources of a chain's non-root certificates in chain and extension order, each listed once:
     {locations, issuer (None for an indirect CRL issuer), fromCa, fromEndEntity}, the last two telling whether a CA or
-    an end-entity certificate names it. Raises InvalidSources when a certificate names
+    an end-entity certificate names it; together with whether any, and whether every, non-root certificate names at
+    least one source. A chain where some certificates name a source and others do not can never reach full
+    confirmation, because the silent ones are never checked. Raises InvalidSources when a certificate names
     distribution points, but none with an HTTP location covers all reasons, and ValueError for malformed ones."""
-    sources, keys = [], {}
+    sources, keys, has_source = [], {}, []
     for certificate in chain[:-1]:
         fields = certificate_fields(certificate)
         points, names_points = distribution_points(fields)
         if names_points and not any(all_reasons for _, _, all_reasons in points):
             raise InvalidSources("a certificate names CRL distribution points, but none with an HTTP or HTTPS location covers all revocation reasons")
         from_ca = is_ca(fields)
+        has_source.append(bool(points))
         for locations, crl_issuer, _ in points:
             issuer = None if crl_issuer else fields["issuer"]
             key = (" ".join(locations), (issuer or b"").hex())
@@ -1464,7 +1484,12 @@ def crl_sources(chain):
             else:
                 keys[key] = len(sources)
                 sources.append({"locations": locations, "issuer": issuer, "fromCa": from_ca, "fromEndEntity": not from_ca})
-    return sources
+    return sources, any(has_source), bool(has_source) and all(has_source)
+
+
+def crl_sources(chain):
+    """The CRL sources of a chain's non-root certificates; see crl_source_coverage."""
+    return crl_source_coverage(chain)[0]
 
 
 def read_extension(data, extension):
@@ -1695,6 +1720,14 @@ def token_info(token):
     _, start, end = der_single(token)
     content_info = der_children(token, start, end)
     signed_data = der_children(token, *der_children(token, content_info[1][1], content_info[1][2])[0][1:3])
+    # SignedData ::= SEQUENCE { version, digestAlgorithms, encapContentInfo, certificates [0] IMPLICIT SET OF
+    # Certificate OPTIONAL, crls [1] IMPLICIT ... OPTIONAL, signerInfos }; the token's own embedded certificates
+    # travel with it, so a bridging or cross-signing certificate the authority supplied is available for chain
+    # validation without being part of the stored chain.
+    embedded_certificates = []
+    for part in signed_data[3:-1]:
+        if part[0] == 0xA0:
+            embedded_certificates = [token[cert[3]:cert[4]] for cert in der_children(token, part[1], part[2])]
     encapsulated = der_children(token, signed_data[2][1], signed_data[2][2])
     if der_oid(token, encapsulated[0]) != OID_ID_CT_TSTINFO:
         raise ValueError("the signed content is not a TSTInfo")
@@ -1734,6 +1767,7 @@ def token_info(token):
         "signer": sid,
         "digestAlgorithm": digest_algorithm,
         "signatureAlgorithm": signature_algorithm,
+        "embeddedCertificates": embedded_certificates,
         "countersigned": countersigned,
     }
 
@@ -1793,10 +1827,12 @@ def name_key(name):
     return key
 
 
-def chain_failure(chain_fields, chain, signer, trusted_roots):
+def chain_failure(chain_fields, chain, signer):
     """Checks the stored chain's structure: it starts with the token's signer, each certificate names the next one's
-    subject as its issuer, and it ends with a self-issued trusted root. Issuer and subject names are compared in the form
-    name_key gives them."""
+    subject as its issuer, and it ends with a self-issued root. Issuer and subject names are compared in the form
+    name_key gives them. Whether that root is currently configured as trusted is no longer checked here: Check A and
+    Check B (matches_trusted_chain) decide trust, since a genuine chain may now reach a different, still-trusted root
+    than the one recorded, for example through a cross-signed bridging certificate."""
     first_fields = chain_fields[0]
     if signer[0] == "issuerAndSerialNumber":
         is_signer = signer[1] == first_fields["issuer"] and signer[2] == first_fields["serial"]
@@ -1807,9 +1843,316 @@ def chain_failure(chain_fields, chain, signer, trusted_roots):
         return "the stored chain does not start with the token's signing certificate"
     if any(name_key(chain_fields[index]["issuer"]) != name_key(chain_fields[index + 1]["subject"]) for index in range(len(chain) - 1)):
         return "the stored chain does not link each certificate to its issuer"
-    if name_key(chain_fields[-1]["issuer"]) != name_key(chain_fields[-1]["subject"]) or chain[-1] not in trusted_roots:
-        return "the stored chain does not end with a trusted root"
+    if name_key(chain_fields[-1]["issuer"]) != name_key(chain_fields[-1]["subject"]):
+        return "the stored chain does not end with a self-issued root"
     return None
+
+
+# The object identifier of anyExtendedKeyUsage (RFC 5280, 4.2.1.12), accepted alongside id-kp-timeStamping.
+OID_ANY_EXTENDED_KEY_USAGE = "2.5.29.37.0"
+
+# Signature algorithm OIDs naming RSA with PKCS #1 v1.5 padding, by digest.
+_RSA_PKCS1_DIGESTS = {"1.2.840.113549.1.1.11": "sha256", "1.2.840.113549.1.1.12": "sha384", "1.2.840.113549.1.1.13": "sha512"}
+
+# Signature algorithm OIDs naming ECDSA, by digest.
+_ECDSA_DIGESTS = {"1.2.840.10045.4.3.2": "sha256", "1.2.840.10045.4.3.3": "sha384", "1.2.840.10045.4.3.4": "sha512"}
+
+# RSASSA-PSS hash OIDs, by OpenSSL digest name.
+_PSS_DIGEST_NAMES = {OID_SHA256: "sha256", "2.16.840.1.101.3.4.2.2": "sha384", "2.16.840.1.101.3.4.2.3": "sha512"}
+
+# hashlib constructors, by OpenSSL digest name, for prehashing before a pkeyutl verification.
+_HASHLIB_DIGESTS = {"sha256": hashlib.sha256, "sha384": hashlib.sha384, "sha512": hashlib.sha512}
+
+
+def certificate_parts(certificate):
+    """Returns a certificate's TBSCertificate bytes, its encoded outer signature algorithm (AlgorithmIdentifier) and
+    its signature value, for direct signature verification without chain validation."""
+    _, start, end = der_single(certificate)
+    outer = der_children(certificate, start, end)
+    if len(outer) != 3 or outer[0][0] != 0x30 or outer[1][0] != 0x30 or outer[2][0] != 0x03:
+        raise ValueError("a certificate has three parts")
+    tbs_certificate = certificate[outer[0][3]:outer[0][4]]
+    signature_algorithm = certificate[outer[1][3]:outer[1][4]]
+    signature = certificate[outer[2][1]:outer[2][2]]
+    if not signature or signature[0] != 0:
+        raise ValueError("a certificate's signature is not a whole number of bytes")
+    return tbs_certificate, signature_algorithm, signature[1:]
+
+
+def verify_raw_signature(signed_data, signature_algorithm, signature, public_key, directory):
+    """Verifies a signature over signed_data under a SubjectPublicKeyInfo-encoded public key, dispatching RSA PKCS
+    #1 v1.5, RSASSA-PSS or ECDSA by the signature algorithm, with a single `openssl pkeyutl -verify` call: a raw
+    signature check against one specific key, never a chain-validation call, so it carries none of a full
+    validation's constraint propagation or final-target-dependent semantics. Hashes signed_data itself and passes
+    the bare digest, rather than pkeyutl's own -rawin/-digest convenience, which this tool's advertised minimum of
+    OpenSSL 1.1.1 does not have. RSA PKCS #1 v1.5 additionally needs `-pkeyopt digest:<name>` so pkeyutl knows which
+    DigestInfo to wrap the bare digest in before verifying: manually pre-wrapping it instead (and omitting that
+    option) makes pkeyutl guess the digest from the input's length, which only coincidentally matches SHA-256's
+    32-byte digest and rejects SHA-384/512 as an oversized hash. RSASSA-PSS and ECDSA sign the bare digest directly."""
+    _, alg_start, alg_end = der_single(signature_algorithm)
+    algorithm = der_children(signature_algorithm, alg_start, alg_end)
+    oid = der_oid(signature_algorithm, algorithm[0])
+    if oid in _RSA_PKCS1_DIGESTS:
+        digest = _RSA_PKCS1_DIGESTS[oid]
+        padding = ["-pkeyopt", "rsa_padding_mode:pkcs1", "-pkeyopt", f"digest:{digest}"]
+    elif oid in _ECDSA_DIGESTS:
+        digest, padding = _ECDSA_DIGESTS[oid], []
+    elif oid == OID_RSASSA_PSS and len(algorithm) == 2:
+        hash_oid = pss_hash(signature_algorithm, algorithm[1])
+        if hash_oid is None or hash_oid not in _PSS_DIGEST_NAMES:
+            return False
+        digest = _PSS_DIGEST_NAMES[hash_oid]
+        padding = ["-pkeyopt", "rsa_padding_mode:pss", "-pkeyopt", f"rsa_pss_saltlen:{SHA2_DIGESTS[hash_oid]}",
+                  "-pkeyopt", f"digest:{digest}"]
+    else:
+        return False
+    algorithm_name, size = key_size(public_key)
+    if algorithm_name not in MINIMUM_KEY_SIZES or size is None or size < MINIMUM_KEY_SIZES[algorithm_name]:
+        return False
+    hash_value = _HASHLIB_DIGESTS[digest](signed_data).digest()
+    key_path, sig_path, data_path = (os.path.join(directory, name) for name in ("rawkey.der", "rawsig.der", "rawdata.bin"))
+    with open(key_path, "wb") as stream:
+        stream.write(public_key)
+    with open(sig_path, "wb") as stream:
+        stream.write(signature)
+    with open(data_path, "wb") as stream:
+        stream.write(hash_value)
+    code, output = openssl("pkeyutl", "-verify", "-pubin", "-keyform", "DER", "-inkey", key_path,
+                           *padding, "-sigfile", sig_path, "-in", data_path)
+    return code == 0 and "Signature Verified Successfully" in output
+
+
+def issuer_signature_ok(fields, parts, candidate_fields, directory):
+    """Whether a certificate (its fields and parts from certificate_parts) is directly, cryptographically issued by
+    a candidate: the candidate's subject matches the certificate's issuer name, and the certificate's signature
+    verifies under the candidate's public key. A single signature check, never a chain-validation call."""
+    try:
+        if name_key(fields["issuer"]) != name_key(candidate_fields["subject"]):
+            return False
+        tbs_certificate, signature_algorithm, signature = parts
+        return verify_raw_signature(tbs_certificate, signature_algorithm, signature, candidate_fields["publicKey"], directory)
+    except PARSE_ERRORS:
+        return False
+
+
+def application_policy_failure(chain_fields):
+    """Whether a certificate's extended key usage extension, if present, excludes both id-kp-timeStamping and
+    anyExtendedKeyUsage, naming that certificate's position; None when every certificate is eligible. Neither a bare
+    nor a -purpose-qualified `openssl verify` call reproduces this, since the library requires it of every built
+    chain."""
+    for index, fields in enumerate(chain_fields):
+        purposes = extension_values(fields, OID_EXTENDED_KEY_USAGE)
+        if not purposes:
+            continue
+        value = purposes[0][1]
+        _, start, end = der_single(value)
+        try:
+            names = [der_oid(value, purpose) for purpose in der_children(value, start, end)]
+        except PARSE_ERRORS:
+            return f"certificate at position {index} has a malformed extended key usage"
+        if OID_TIME_STAMPING not in names and OID_ANY_EXTENDED_KEY_USAGE not in names:
+            return f"certificate at position {index} is not eligible for timestamping"
+    return None
+
+
+def whole_chain_validates(path, token_time, directory):
+    """Validates a complete candidate path (DER certificates, signer first, trusted root last) as a whole: every
+    recorded link's direct cryptographic issuer adjacency (so a chain listing the same certificates in a different
+    order is rejected even though a path of the same length exists), a single `openssl verify -show_chain` call
+    requiring exactly as many `depth=` lines as the path's own certificate count (ruling out a *shorter* path through
+    the same fixed candidates silently replacing the one under test), and the application-policy requirement every
+    built chain must already satisfy."""
+    try:
+        fields = [certificate_fields(der) for der in path]
+        parts = [certificate_parts(der) for der in path]
+    except PARSE_ERRORS:
+        return False
+    if application_policy_failure(fields) is not None:
+        return False
+    for index in range(len(path) - 1):
+        if not issuer_signature_ok(fields[index], parts[index], fields[index + 1], directory):
+            return False
+    leaf_path, root_path = os.path.join(directory, "wcv_leaf.pem"), os.path.join(directory, "wcv_root.pem")
+    with open(leaf_path, "w") as stream:
+        stream.write(pem(path[0]))
+    with open(root_path, "w") as stream:
+        stream.write(pem(path[-1]))
+    untrusted_arguments = []
+    if len(path) > 2:
+        # A directly-rooted signer has no intermediates; openssl verify rejects an -untrusted file with none in it.
+        untrusted_path = os.path.join(directory, "wcv_untrusted.pem")
+        with open(untrusted_path, "w") as stream:
+            stream.write("".join(pem(der) for der in path[1:-1]))
+        untrusted_arguments = ["-untrusted", untrusted_path]
+    code, output = openssl("verify", "-show_chain", "-attime", str(int(token_time.timestamp())), "-trusted", root_path, *untrusted_arguments, leaf_path)
+    return code == 0 and output.count("depth=") == len(path)
+
+
+class PathSearchBudget:
+    """The shared step count of one enumerate_simple_paths search, and whether it ran out."""
+
+    def __init__(self):
+        self.steps = 0
+        self.exhausted = False
+
+
+def enumerate_simple_paths(signer_der, signer_fields, signer_parts, pool, trusted_hex, directory, budget):
+    """Yields every simple (non-repeating) path from the signer to a member of trusted_hex, following only edges of
+    direct cryptographic issuer adjacency through pool (a list of (der, fields, parts) triples). A trusted root is
+    never recursed into further, so it is always a path's terminus.
+
+    The token's embedded certificates are not covered by its signature, so the pool can carry any number of
+    counterfeit certificates, for example a group of same-name, same-key certificates that all issue one another,
+    whose simple paths grow factorially. Only certificates that can reach a trusted root at all are therefore searched:
+    a backward search from the trusted roots finds them, and the counterfeits never join it, since issuing into a
+    genuine chain takes a key their author does not hold. Each adjacency test is computed once, and the search stops,
+    marking budget exhausted, after MAX_SEARCH_STEPS tests."""
+    nodes = [(signer_der, signer_fields, signer_parts)] + [entry for entry in pool if entry[0] != signer_der]
+    is_trusted = [index > 0 and der.hex() in trusted_hex for index, (der, _, _) in enumerate(nodes)]
+    adjacency = {}
+
+    def is_issuer(certificate, issuer):
+        if (certificate, issuer) not in adjacency:
+            adjacency[(certificate, issuer)] = issuer_signature_ok(nodes[certificate][1], nodes[certificate][2], nodes[issuer][1], directory)
+        return adjacency[(certificate, issuer)]
+
+    reaches_trust = list(is_trusted)
+    pending = [index for index in range(1, len(nodes)) if is_trusted[index]]
+    while pending:
+        issuer = pending.pop(0)
+        for index in range(1, len(nodes)):
+            if not reaches_trust[index] and is_issuer(index, issuer):
+                reaches_trust[index] = True
+                pending.append(index)
+
+    visited = [False] * len(nodes)
+    visited[0] = True
+
+    def walk(current):
+        for candidate in range(1, len(nodes)):
+            if budget.exhausted:
+                return
+            if visited[candidate] or not reaches_trust[candidate]:
+                continue
+            budget.steps += 1
+            if budget.steps > MAX_SEARCH_STEPS:
+                budget.exhausted = True
+                return
+            if not is_issuer(current, candidate):
+                continue
+            der = nodes[candidate][0]
+            if is_trusted[candidate]:
+                yield [der]
+            else:
+                visited[candidate] = True
+                for tail in walk(candidate):
+                    yield [der] + tail
+                visited[candidate] = False
+
+    yield from walk(0)
+
+
+def has_alternate_path(signer_der, signer_fields, signer_parts, pool, trusted_hex, token_time, directory,
+                       max_candidate_paths=MAX_CANDIDATE_PATHS):
+    """Searches for an alternate path to trust that excludes a recorded position, proving by direct cryptographic
+    issuer adjacency alone (never a chain-validation call, so no constraint propagated along a complete path is
+    missed) that the position was not the only way the chain could reach trust. Any single path that also fully
+    validates as a whole proves non-uniqueness; a merely graph-connected path that fails whole-chain validation does
+    not, and the search continues. The search fails closed: once it has examined more than max_candidate_paths
+    candidate paths, or its walk exhausted its budget, the position counts as not unique."""
+    budget = PathSearchBudget()
+    for examined, alternate in enumerate(enumerate_simple_paths(signer_der, signer_fields, signer_parts, pool, trusted_hex, directory, budget), 1):
+        if examined > max_candidate_paths:
+            return True
+        if whole_chain_validates([signer_der, *alternate], token_time, directory):
+            return True
+    return budget.exhausted
+
+
+def build_candidate_pool(embedded, chain, trusted_der, directory, excluded=None):
+    """The deduplicated (der, fields, parts) triples available to the path search: the token's own embedded
+    certificates, the stored chain's own certificates, and every configured trusted root, optionally excluding one
+    certificate (by identity, for the per-position uniqueness search)."""
+    seen, pool = set(), []
+    for der in embedded + chain + trusted_der:
+        if excluded is not None and der == excluded:
+            continue
+        key = der.hex()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            pool.append((der, certificate_fields(der), certificate_parts(der)))
+        except PARSE_ERRORS:
+            continue
+    return pool
+
+
+def reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, directory, max_candidate_paths=MAX_CANDIDATE_PATHS):
+    """Check A's primary validation: the stored chain's signer and every intermediate must begin, in order, a
+    complete path that terminates at a certificate genuinely, currently a member of trusted_der — the one structural
+    requirement chain_failure no longer enforces on trusted_der, since Check A and Check B alone decide trust. The
+    terminating path may be longer than the stored chain, continuing through further certificates (for example a
+    bridging/cross-signed root carried in the token's own embedded certificates) rather than requiring the stored
+    chain's own final certificate to itself be the trusted one; it may also simply be the stored chain itself, when
+    that chain's own final certificate is already trusted — today's common, unaffected case. A path that is merely
+    graph-connected to a trusted root is not enough: it must also fully validate as a whole (whole_chain_validates),
+    exactly as the per-position uniqueness search already requires of an alternate. The search fails closed: once it
+    has examined more than max_candidate_paths candidate paths, or its walk exhausted its budget, the chain does not
+    reach trust."""
+    n = len(chain)
+    trusted_hex = {der.hex() for der in trusted_der}
+    pool = build_candidate_pool(embedded, chain, trusted_der, directory)
+    prefix = chain[:n - 1]
+    budget = PathSearchBudget()
+    for examined, alternate in enumerate(enumerate_simple_paths(chain[0], chain_fields[0], certificate_parts(chain[0]), pool, trusted_hex, directory, budget), 1):
+        if examined > max_candidate_paths:
+            return False
+        candidate = [chain[0], *alternate]
+        if candidate[:n - 1] != prefix:
+            continue
+        if whole_chain_validates(candidate, token_time, directory):
+            return True
+    return False
+
+
+def is_genuine_root(root, root_fields, trusted_der, directory):
+    """Whether a stored chain's final certificate is a genuine root in its own right: byte-identical to a configured
+    trusted root, or carrying a self-signature that verifies under its own key. `openssl verify` never verifies its
+    trust anchor's own signature, so without this a root whose signature alone was corrupted, keeping its subject and
+    key, would still anchor Check B. A configured root is accepted as configured, so a trusted root whose
+    self-signature uses a digest the direct signature check rejects, such as SHA-1, keeps working."""
+    if root in trusted_der:
+        return True
+    try:
+        return issuer_signature_ok(root_fields, certificate_parts(root), root_fields, directory)
+    except PARSE_ERRORS:
+        return False
+
+
+def matches_trusted_chain(chain, chain_fields, embedded, trusted_der, token_time, directory, max_candidate_paths=MAX_CANDIDATE_PATHS):
+    """Requires the stored chain's signer and every intermediate to reach a genuinely, currently configured trusted
+    root today (Check A's primary validation), to do so uniquely (Check A's per-position search), and for the stored
+    chain's own recorded root to be independently genuine, not merely configured (Check B). Check A's per-position
+    search range is empty for a directly-rooted signer (a two-certificate chain), so it adds nothing there."""
+    n = len(chain)
+    if n < 2:
+        return False
+    trusted_hex = {der.hex() for der in trusted_der}
+    if not reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, directory, max_candidate_paths):
+        return False
+    for position in range(1, n - 1):
+        pool = build_candidate_pool(embedded, chain, trusted_der, directory, excluded=chain[position])
+        if has_alternate_path(chain[0], chain_fields[0], certificate_parts(chain[0]), pool, trusted_hex, token_time, directory,
+                              max_candidate_paths):
+            return False
+
+    # Check B: the stored chain's own final certificate must be a genuine root in its own right, and the stored
+    # chain's own certificates alone, trusting only that root, must reproduce the stored chain exactly; no other
+    # certificate is available to substitute for a corrupted or substituted root.
+    if not is_genuine_root(chain[-1], chain_fields[-1], trusted_der, directory):
+        return False
+    return whole_chain_validates(chain, token_time, directory)
 
 
 def pem(der, label="CERTIFICATE"):
@@ -1848,8 +2191,9 @@ class Revocation:
     issued at or after a time, it is complete for the source, and its signature verifies against the issuer's
     certificate in the chain, which permits cRLSign. CRLs are matched with sources by content, in any order."""
 
-    def __init__(self, chain, sources, lists, directory):
+    def __init__(self, chain, sources, any_has_source, every_has_source, lists, directory):
         self.chain, self.sources, self.directory = chain, sources, directory
+        self.any_has_source, self.every_has_source = any_has_source, every_has_source
         self.chain_fields = [certificate_fields(certificate) for certificate in chain]
         self.stored_lists = len(lists)
         self.lists, self.signatures = [], {}
@@ -1894,21 +2238,32 @@ class Revocation:
 
     def status(self, token_time, grace):
         """Revoked when a CRL issued after the token's time revokes a certificate of the chain at or before it, whatever
-        the grace period: it only guards the conclusion that nothing is revoked. Confirmed when CRLs issued at least the
-        grace period after the token's time count for every source, or there are no sources and no stored CRL."""
+        the grace period: it only guards the conclusion that nothing is revoked. Otherwise: NoRevocationSource when no
+        non-root certificate names a source, so there is nothing to confirm; Unconfirmed unconditionally when some
+        certificates name a source and others do not, because the silent ones are never checked; otherwise Confirmed
+        only when CRLs issued at least the grace period after the token's time count for every source."""
         _, entries = self.evaluate(token_time + datetime.timedelta(microseconds=1))
         if self.revoked(entries, token_time):
             return "Revoked"
+        if not self.any_has_source:
+            return "NoRevocationSource"
+        if not self.every_has_source:
+            return "Unconfirmed"
         covered, _ = self.evaluate(later(token_time, grace))
-        confirmed = all(covered) if self.sources else self.stored_lists == 0
-        return "Confirmed" if confirmed else "Unconfirmed"
+        return "Confirmed" if all(covered) else "Unconfirmed"
 
     def inconsistency(self, stored_status, token_time):
-        """Why a stored status of Confirmed or Revoked lacks the CRLs it was recorded from, or None. It applies to a
-        token whose status is not Revoked: a stored Revoked then lacks its revoking CRL, and a stored Confirmed lacks
-        a CRL issued after the token's time for a source that names its issuer. The grace period plays no role."""
+        """Why a stored status of Confirmed, NoRevocationSource or Revoked lacks the evidence it was recorded from, or
+        None. It applies to a token whose status is not Revoked: a stored Revoked then lacks its revoking CRL, a
+        stored Confirmed lacks a CRL issued after the token's time for a source that names its issuer, and a stored
+        NoRevocationSource now has a certificate naming one. The grace period plays no role. A stored Confirmed is
+        never flagged inconsistent merely because the rebuilt chain now has zero sources: that was legitimately
+        produced under the rule in effect before this status existed, and the stored string alone cannot distinguish
+        that from a status computed differently today."""
         if stored_status == "Revoked":
             return "the stored status is revoked, but no stored CRL issued after the token's time revokes a certificate of its chain"
+        if stored_status == "NoRevocationSource":
+            return "the stored status is 'no revocation source', but a certificate of the rebuilt chain names a CRL distribution point" if self.any_has_source else None
         if stored_status != "Confirmed":
             return None
         covered, _ = self.evaluate(token_time + datetime.timedelta(microseconds=1))
@@ -1971,17 +2326,18 @@ def verify_timestamp(entry, evidence, digest, trust, grace):
         minimum = MINIMUM_KEY_SIZES.get(algorithm, 0)
         if failure is None and ((size is None and minimum > 0) or (size is not None and size < minimum)):
             failure = "the signing key is not of the required size"
-        failure = failure or chain_failure(chain_fields, chain, info["signer"], [der for text in trusted_roots for der in pem_certificates(text)])
+        failure = failure or chain_failure(chain_fields, chain, info["signer"])
     except PARSE_ERRORS:
         failure = "a certificate of the stored chain is malformed"
     if failure:
         return invalid(failure)
     try:
-        sources = crl_sources(chain)
+        sources, any_has_source, every_has_source = crl_source_coverage(chain)
     except InvalidSources as error:
         return invalid(str(error))
     except PARSE_ERRORS:
         return invalid("a certificate of the stored chain has a malformed CRL distribution point")
+    trusted_der = [der for text in trusted_roots for der in pem_certificates(text)]
     with tempfile.TemporaryDirectory() as directory:
         token_path, chain_path, roots_path = (os.path.join(directory, name) for name in ("token.der", "chain.pem", "roots.pem"))
         with open(token_path, "wb") as stream:
@@ -1989,18 +2345,22 @@ def verify_timestamp(entry, evidence, digest, trust, grace):
         with open(chain_path, "w") as stream:
             stream.write("".join(pem(certificate) for certificate in chain))
         with open(roots_path, "w") as stream:
-            stream.write("".join(trusted_roots))
+            # The stored chain's own final certificate is trusted for this call only, so OpenSSL's imprint,
+            # signature and signing-certificate-attribute check can run independently of today's trust decision,
+            # which Check A and Check B (matches_trusted_chain) make afterward.
+            stream.write("".join(text if text.endswith("\n") else text + "\n" for text in trusted_roots) + pem(chain[-1]))
         code, output = openssl("ts", "-verify", "-digest", digest.hex(), "-in", token_path, "-token_in",
                                "-CAfile", roots_path, "-untrusted", chain_path, "-attime", str(int(token_time.timestamp())))
         if code != 0 or "Verification: OK" not in output:
             return invalid("openssl ts -verify failed: " + output.strip().splitlines()[-1] if output.strip() else "openssl ts -verify failed")
-        revocation = Revocation(chain, sources, confirming, directory)
+        if not matches_trusted_chain(chain, chain_fields, info["embeddedCertificates"], trusted_der, token_time, directory):
+            return invalid("the stored certificate chain differs from the chain built to a trusted root")
+        revocation = Revocation(chain, sources, any_has_source, every_has_source, confirming, directory)
         report["revocationStatus"] = revocation.status(token_time, grace)
         if report["revocationStatus"] == "Revoked":
             return invalid("a certificate of the token's chain is revoked at or before the token's time")
         inconsistency = revocation.inconsistency(entry["RevocationStatus"], token_time)
         if inconsistency is not None:
-            report["revocationStatus"] = "Unconfirmed"
             return invalid(f"the stored revocation evidence is inconsistent: {inconsistency}")
     report["valid"] = True
     return report
@@ -2042,6 +2402,22 @@ def stream_leaf_version(document, aggregate_type, aggregate_id):
         return max(1, decode(*found)) if found[0] in (T_INT32, T_INT64) else 1
     except PARSE_ERRORS:
         return None
+
+
+def has_leaf_for_other_aggregate_type(leaf_documents, aggregate_type, aggregate_id):
+    """Whether a leaf document names the same aggregate identifier under some aggregate type other than the given
+    one. Used solely to decide whether to report that a stream's coverage could not be established under the
+    current name, never to compare hashes or accept inclusion across types."""
+    for document in leaf_documents:
+        try:
+            if not selects_uuid(document, "AggregateId", aggregate_id):
+                continue
+            name = get(document, "AggregateType", T_STRING)
+            if name is not None and name != aggregate_type:
+                return True
+        except PARSE_ERRORS:
+            continue
+    return False
 
 
 def parse_trust(trusted_roots, policies):
@@ -2115,14 +2491,30 @@ def check(arguments):
             leaves.append((anchor, leaf))
     leaves.sort(key=lambda item: item[0]["Sequence"])
     report["anchorChain"] = verify_anchor_chain(anchor_documents, leaf_documents, trusted_head)
+    other_type_leaf_exists = has_leaf_for_other_aggregate_type(leaf_documents, arguments.aggregate_type, aggregate_id)
     report["stream"] = verify_stream(events, aggregate_id, [(leaf["Version"], leaf["Hash"], proves_inclusion(leaf, anchor)) for anchor, leaf in leaves],
-                                     first_unreadable)
+                                     first_unreadable, other_type_leaf_exists)
     ok = report["stream"]["intact"] and report["anchorChain"]["intact"]
+    reports = []
     for anchor, leaf in leaves:
         anchor_report = verify_anchor(anchor, evidence, trust, arguments.grace)
         anchor_report["inclusionValid"] = proves_inclusion(leaf, anchor)
         anchor_report["leafVersion"] = leaf["Version"]
-        ok = ok and anchor_report["verified"] and anchor_report["inclusionValid"]
+        reports.append((leaf, anchor_report))
+
+    # A pair whose only failure is that every one of its timestamps is invalid (never an inclusion-proof or digest
+    # mismatch, which must still fail ok) no longer fails ok when a later leaf of the same stream, with a version at
+    # least as high, is itself verified: the evidence degraded to that later anchor's time rather than being lost.
+    for index, (leaf, anchor_report) in enumerate(reports):
+        accepted = anchor_report["verified"] and anchor_report["inclusionValid"]
+        if (not accepted and anchor_report["digestValid"] and anchor_report["inclusionValid"] and
+                not any(timestamp["valid"] for timestamp in anchor_report["timestamps"])):
+            later = next((later_report for later_leaf, later_report in reports[index + 1:]
+                         if later_leaf["Version"] >= leaf["Version"] and later_report["verified"] and later_report["inclusionValid"]), None)
+            if later is not None:
+                later.setdefault("degradedFrom", anchor_report["sequence"])
+                accepted = True
+        ok = ok and accepted
         report["anchors"].append(anchor_report)
     return report, ok
 
@@ -2137,13 +2529,34 @@ def vectors(directory):
 
     with open(os.path.join(directory, "streams.json")) as stream:
         expected_streams = json.load(stream)
-    documents = read_documents(os.path.join(directory, "streams.bson"))
+    documents_by_file = {"streams.bson": read_documents(os.path.join(directory, "streams.bson"))}
+    shipment_events_path = os.path.join(directory, "shipment-events.bson")
+    if os.path.exists(shipment_events_path):
+        documents_by_file["shipment-events.bson"] = read_documents(shipment_events_path)
+    leaf_documents = read_documents(os.path.join(directory, "leaves.bson"))
+    anchor_documents = read_documents(os.path.join(directory, "anchors.bson"))
+    anchors_by_id = {anchor["Id"]: anchor for anchor in (read_anchor(document) for document in anchor_documents) if anchor is not None}
     for expected in expected_streams["streams"]:
+        aggregate_type = expected.get("aggregateType", "LedgerAggregate")
+        events_file = "shipment-events.bson" if aggregate_type == "ShipmentAggregate" else "streams.bson"
         aggregate_id = guid_bytes(expected["aggregateId"])
-        events = stream_documents(documents, aggregate_id)
+        events = stream_documents(documents_by_file[events_file], aggregate_id)
         if events:
             expect(f"genesis {expected['name']}", genesis(get(events[0], "AggregateType", T_STRING) or "", aggregate_id).hex(), expected["genesis"])
-        expect(f"stream {expected['name']}", verify_stream(events, aggregate_id), expected["result"])
+        leaves = []
+        for document in leaf_documents:
+            leaf = read_leaf(document)
+            claimed = stream_leaf_version(document, aggregate_type, aggregate_id)
+            if leaf is None or claimed is None:
+                continue
+            anchor = anchors_by_id.get(leaf["AnchorId"])
+            if anchor is not None and anchor["Status"] == "Completed" and anchor["Sequence"] == leaf["AnchorSequence"]:
+                leaves.append((anchor, leaf))
+        leaves.sort(key=lambda item: item[0]["Sequence"])
+        other_type_leaf_exists = has_leaf_for_other_aggregate_type(leaf_documents, aggregate_type, aggregate_id)
+        result = verify_stream(events, aggregate_id, [(leaf["Version"], leaf["Hash"], proves_inclusion(leaf, anchor)) for anchor, leaf in leaves],
+                               None, other_type_leaf_exists)
+        expect(f"stream {expected['name']}", result, expected["result"])
 
     with open(os.path.join(directory, "merkle.json")) as stream:
         for tree in json.load(stream)["trees"]:
@@ -2165,7 +2578,11 @@ def vectors(directory):
     leaf_documents = read_documents(os.path.join(directory, "leaves.bson"))
     expect("anchor chain", verify_anchor_chain(anchor_documents, leaf_documents), expected_anchors["chain"])
     evidence = Evidence(read_documents(os.path.join(directory, "evidence.bson")), [])
-    trust = Trust({None: [os.path.join(directory, name) for name in expected_anchors["trustedRoots"]]})
+    # Each authority keeps its own trusted roots, never merged with another authority's: OpenSSL and the chain
+    # search resolve an ambiguous candidate (for example two certificates sharing a subject name or key) by what
+    # else is offered as trusted, so pooling every authority's roots into one shared trust could change which
+    # genuine path a scenario's own chain resolves to.
+    trust = Trust({name: [os.path.join(directory, file_name) for file_name in file_names] for name, file_names in expected_anchors["trustedRoots"].items()})
     grace = datetime.timedelta(hours=expected_anchors["graceHours"])
     for document, expected in zip(sorted(anchor_documents, key=lambda d: get(d, "Sequence", T_INT32, T_INT64)), expected_anchors["anchors"]):
         anchor = read_anchor(document)
@@ -2177,6 +2594,42 @@ def vectors(directory):
     for document in leaf_documents:
         leaf = read_leaf(document)
         expect("anchored leaf inclusion", proves_inclusion(leaf, anchors[leaf["AnchorId"]]), True)
+
+    if "eventAnchors" in expected_anchors:
+        event_vector = expected_anchors["eventAnchors"]
+        event_aggregate_type = event_vector.get("aggregateType", "LedgerAggregate")
+        event_aggregate_id = guid_bytes(event_vector["aggregateId"])
+        event_version = event_vector["version"]
+        covering = []
+        for document in leaf_documents:
+            leaf = read_leaf(document)
+            claimed = stream_leaf_version(document, event_aggregate_type, event_aggregate_id)
+            if leaf is None or claimed is None or leaf["Version"] < event_version:
+                continue
+            anchor = anchors.get(leaf["AnchorId"])
+            if anchor is not None and anchor["Status"] == "Completed" and anchor["Sequence"] == leaf["AnchorSequence"]:
+                covering.append((anchor, leaf))
+        covering.sort(key=lambda item: item[0]["Sequence"])
+        # Mirrors EventStreamVerifier.VerifyEventAnchorAsync: walk the covering anchors in order, skip any whose
+        # only failure is that every one of its timestamps is invalid, and name the first such anchor skipped as
+        # the one the accepted (or, failing that, the first skipped) anchor's evidence degraded from.
+        status, result_anchor, degraded_from, first_without_valid_token = "NotAnchored", None, None, None
+        for anchor, leaf in covering:
+            anchor_report = verify_anchor(anchor, evidence, trust, grace)
+            inclusion_valid = proves_inclusion(leaf, anchor)
+            if anchor_report["digestValid"] and inclusion_valid and not any(timestamp["valid"] for timestamp in anchor_report["timestamps"]):
+                first_without_valid_token = first_without_valid_token if first_without_valid_token is not None else anchor["Sequence"]
+                continue
+            status = "Anchored" if anchor_report["verified"] and inclusion_valid else "Failed"
+            result_anchor = anchor["Sequence"]
+            degraded_from = first_without_valid_token
+            break
+        else:
+            if first_without_valid_token is not None:
+                status, result_anchor, degraded_from = "Failed", first_without_valid_token, None
+        expect("eventAnchors status", status, event_vector["status"])
+        expect("eventAnchors anchorSequence", result_anchor, event_vector.get("anchorSequence"))
+        expect("eventAnchors degradedFromSequence", degraded_from, event_vector.get("degradedFromSequence"))
 
     with open(os.path.join(directory, "evidence-chunked.json")) as stream:
         chunked = json.load(stream)
@@ -2252,12 +2705,11 @@ def main():
                     parser.error(f"--element-name expects NAME=STORED with NAME one of {', '.join(EVENT_ELEMENTS)}")
                 EVENT_ELEMENTS[name] = stored
             report, ok = check(arguments)
-            # Without any event of the stream, a wrong identifier or element name would look like an intact empty
-            # stream, so the check does not pass.
+            # verify_stream() itself already reports an empty stream as broken (EmptyStream), so a wrong identifier
+            # or element name does not look like an intact empty stream; this only adds the operator-facing hint.
             if report["eventCount"] == 0:
                 report["warnings"] = ["no event of the stream was found; check --aggregate-id and, for a store whose class maps rename "
                                       "event elements, --element-name"]
-                ok = False
     except (OSError, *PARSE_ERRORS) as error:
         json.dump({"error": str(error)}, sys.stdout, indent=2)
         sys.stdout.write("\n")

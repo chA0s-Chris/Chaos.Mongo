@@ -22,13 +22,16 @@ public sealed class TimestampAuthorityTrust
     public String? PolicyId { get; set; }
 
     /// <summary>
-    /// Gets the roots the authority's certificate chains must lead to. When empty, the system trust store is used, as
-    /// when tokens are received.
+    /// Gets the roots the authority's certificate chains must lead to.
+    /// <see cref="IntegrityVerificationBuilder.WithTimestampAuthorityTrust"/> requires at least one; leaving this
+    /// empty throws, so a deployment that forgot to configure roots can never silently trust the system trust store.
     /// </summary>
     /// <remarks>
-    /// Configure the authority's roots explicitly. Verification compares the chain it builds with the chain stored when
-    /// the token was received, and the system trust store changes over the years: a chain built later may take another
-    /// path, for example through a cross-signed root, so a genuine token would no longer verify.
+    /// Configure the authority's roots explicitly. Verification no longer requires the chain it builds to equal the
+    /// chain stored when the token was received element for element: the built chain may continue past the signer and
+    /// every stored intermediate to a different, still-trusted root, for example through a cross-signed bridging
+    /// certificate, while the stored chain's own recorded root is independently validated to truly terminate it. See
+    /// <c>TimestampTokenValidation.BuildIsolatedChain</c> for the two checks this enables.
     /// </remarks>
     public X509Certificate2Collection TrustedRoots { get; } = [];
 }

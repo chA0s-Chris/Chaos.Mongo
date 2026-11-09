@@ -192,16 +192,19 @@ internal sealed class TimestampRevocationConfirmer
     }
 
     /// <summary>
-    /// Confirms every entry whose required issue time the CRLs meet, as revoked when an entry of a CRL that counts revokes
-    /// a certificate of the chain at or before the token's time. CRLs count by the rule verification applies
-    /// (<see cref="RevocationEvidence"/>), matched with the chain's distribution points by content, so a recorded status
-    /// can always be recomputed; points of indirect CRL issuers, whose CRLs cannot be verified, do not block
-    /// confirmation. The CRLs are stored in the evidence store before the entries reference them.
+    /// Records the status of every entry whose required issue time the CRLs meet: revoked when an entry of a CRL that
+    /// counts revokes a certificate of the chain at or before the token's time; otherwise, when no non-root certificate
+    /// of the chain names a CRL distribution point, <see cref="TimestampRevocationStatus.NoRevocationSource"/>; when
+    /// some do and some do not, <see cref="TimestampRevocationStatus.Unconfirmed"/> unconditionally, because the
+    /// silent ones are never checked; otherwise confirmed only when every named source counts. CRLs count by the rule
+    /// verification applies (<see cref="RevocationEvidence"/>), matched with the chain's distribution points by
+    /// content, so a recorded status can always be recomputed; points of indirect CRL issuers, whose CRLs cannot be
+    /// verified, do not block confirmation. The CRLs are stored in the evidence store before a confirmed or revoked
+    /// entry references them. An entry that stays <see cref="TimestampRevocationStatus.Unconfirmed"/> is deferred by
+    /// <see cref="MaximumRetryDelay"/>, the same delay a failed or too-early attempt already uses, so it is retried on
+    /// that schedule rather than read on every run, exactly as a chain whose CRLs are issued too early already is.
     /// </summary>
-    /// <exception cref="InvalidDataException">
-    /// Thrown when a returned CRL was issued too early or is malformed, or when no returned CRL counts for a distribution
-    /// point and no counting CRL revokes a certificate of the chain.
-    /// </exception>
+    /// <exception cref="InvalidDataException">Thrown when a returned CRL was issued too early or is malformed.</exception>
     private async Task RecordStatusesAsync(ITimestampAuthority authority,
                                            IReadOnlyList<UnconfirmedTimestamp> timestamps,
                                            IReadOnlyList<Byte[]> certificateChain,
@@ -242,7 +245,7 @@ internal sealed class TimestampRevocationConfirmer
         }
 
         var chain = new X509Certificate2Collection();
-        List<(UnconfirmedTimestamp Timestamp, String? Revoked)> statuses;
+        List<(UnconfirmedTimestamp Timestamp, TimestampRevocationStatus Status, String? Revoked)> statuses;
         try
         {
             foreach (var certificate in certificateChain)
@@ -250,19 +253,24 @@ internal sealed class TimestampRevocationConfirmer
                 chain.Add(X509CertificateLoader.LoadCertificate(certificate));
             }
 
-            var sources = TimestampTokenValidation.GetCrlSources(certificateChain);
-            var evaluation = RevocationEvidence.Evaluate(sources, lists, chain, new DateTimeOffset(issuedNotBeforeUtc, TimeSpan.Zero));
+            var coverage = TimestampTokenValidation.GetCrlSourceCoverage(certificateChain);
+            var evaluation = RevocationEvidence.Evaluate(coverage.Sources, lists, chain, new DateTimeOffset(issuedNotBeforeUtc, TimeSpan.Zero));
             statuses = timestamps.Where(timestamp => timestamp.TimestampUtc + _options.RevocationGracePeriod <= issuedAt)
-                                 .Select(timestamp => (Timestamp: timestamp,
-                                                       Revoked: RevocationEvidence.FindRevoked(chain, evaluation.Entries, new DateTimeOffset(timestamp.TimestampUtc, TimeSpan.Zero))
-                                                                                  ?.Subject))
+                                 .Select(timestamp =>
+                                 {
+                                     var revoked = RevocationEvidence.FindRevoked(chain, evaluation.Entries, new DateTimeOffset(timestamp.TimestampUtc, TimeSpan.Zero));
+                                     var status = revoked is not null
+                                         ? TimestampRevocationStatus.Revoked
+                                         : !coverage.AnyCertificateHasSource
+                                             ? TimestampRevocationStatus.NoRevocationSource
+                                             : !coverage.EveryCertificateHasSource
+                                                 ? TimestampRevocationStatus.Unconfirmed
+                                                 : evaluation.Covered.All(covered => covered)
+                                                     ? TimestampRevocationStatus.Confirmed
+                                                     : TimestampRevocationStatus.Unconfirmed;
+                                     return (Timestamp: timestamp, Status: status, Revoked: revoked?.Subject);
+                                 })
                                  .ToList();
-            var unconfirmed = sources.Where((source, index) => source.Issuer is not null && !evaluation.Covered[index]).ToList();
-            if (unconfirmed.Count > 0 && statuses.Any(status => status.Revoked is null))
-            {
-                throw new InvalidDataException($"Timestamp authority '{authority.Name}' returned no CRL that is complete for the distribution point at " +
-                                               $"{String.Join(", ", unconfirmed[0].Locations)} and verifies against its issuer.");
-            }
         }
         finally
         {
@@ -278,13 +286,19 @@ internal sealed class TimestampRevocationConfirmer
             listHashes.Add(await _evidence.StoreAsync(crl, cancellationToken));
         }
 
-        await _store.ConfirmTimestampsAsync(statuses.Select(status => (status.Timestamp,
-                                                                       status.Revoked is null ? TimestampRevocationStatus.Confirmed : TimestampRevocationStatus.Revoked))
-                                                    .ToList(),
-                                            listHashes,
-                                            now,
-                                            cancellationToken);
-        foreach (var (timestamp, revoked) in statuses.Where(status => status.Revoked is not null))
+        var settled = statuses.Where(status => status.Status != TimestampRevocationStatus.Unconfirmed).ToList();
+        if (settled.Count > 0)
+        {
+            await _store.ConfirmTimestampsAsync(settled.Select(status => (status.Timestamp, status.Status)).ToList(), listHashes, now, cancellationToken);
+        }
+
+        var stillUnconfirmed = statuses.Where(status => status.Status == TimestampRevocationStatus.Unconfirmed).Select(status => status.Timestamp).ToList();
+        if (stillUnconfirmed.Count > 0)
+        {
+            await _store.DeferTimestampConfirmationAsync(stillUnconfirmed, now + MaximumRetryDelay, cancellationToken);
+        }
+
+        foreach (var (timestamp, _, revoked) in statuses.Where(status => status.Revoked is not null))
         {
             IntegrityAnchoringDiagnostics.RecordRevokedTimestamp(authority.Name);
             _logger.LogError("A CRL of timestamp authority {AuthorityName} lists the certificate '{Certificate}' as revoked at or before the time " +
@@ -292,7 +306,7 @@ internal sealed class TimestampRevocationConfirmer
                              authority.Name, revoked, timestamp.TimestampUtc, timestamp.AnchorSequence);
         }
 
-        _logger.LogDebug("Confirmed the revocation status of {TimestampCount} timestamps of authority {AuthorityName}", statuses.Count, authority.Name);
+        _logger.LogDebug("Recorded the revocation status of {TimestampCount} timestamps of authority {AuthorityName}", statuses.Count, authority.Name);
     }
 
     /// <summary>
@@ -327,11 +341,9 @@ internal sealed class TimestampRevocationConfirmer
                 storedCertificates.Add(X509CertificateLoader.LoadCertificate(certificate));
             }
 
-            var built = TimestampTokenValidation.BuildChain(token,
-                                                            storedCertificates[0],
-                                                            new ChainSettings(trust.TrustedRoots, X509RevocationMode.NoCheck, TimeSpan.Zero, storedCertificates));
-            if (built.Certificates.Count != certificateChain.Count ||
-                !built.Certificates.Zip(certificateChain).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)))
+            var settings = new ChainSettings(trust.TrustedRoots, X509RevocationMode.NoCheck, TimeSpan.Zero, storedCertificates);
+            var built = TimestampTokenValidation.BuildChain(token, storedCertificates[0], settings);
+            if (!TimestampTokenValidation.MatchesTrustedChain(token, storedCertificates[0], built.Certificates, storedCertificates, settings))
             {
                 throw new TimestampTokenValidationException("the stored certificate chain differs from the chain built to a trusted root.");
             }

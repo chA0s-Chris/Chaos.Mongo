@@ -47,9 +47,10 @@ public class IntegrityVerificationRegistrationTests
     [Test]
     public void WithIntegrityAnchoring_AfterVerificationWithNamedPrefix_RequiresTheSamePrefix()
     {
+        var root = TestRootCertificate.Create();
         var builder = CreateBuilder().WithIntegrityVerification(v => v.WithCollectionPrefix("Other"));
 
-        var act = () => builder.WithIntegrityAnchoring(a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri));
+        var act = () => builder.WithIntegrityAnchoring(a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root)));
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*anchor collections*");
     }
@@ -65,8 +66,13 @@ public class IntegrityVerificationRegistrationTests
                                                                                      options.PolicyId = "1.2.3";
                                                                                      options.TrustedRoots.Add(root);
                                                                                  })
-                                                                                 .WithRfc3161TimestampAuthority("overridden", AuthorityUri))
-                                            .WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust("overridden", trust => trust.PolicyId = "4.5.6"))
+                                                                                 .WithRfc3161TimestampAuthority(
+                                                                                     "overridden", AuthorityUri, options => options.TrustedRoots.Add(root)))
+                                            .WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust("overridden", trust =>
+                                            {
+                                                trust.PolicyId = "4.5.6";
+                                                trust.TrustedRoots.Add(root);
+                                            }))
                                             .Services.BuildServiceProvider();
 
         var options = services.GetRequiredService<IntegrityVerificationOptions>();
@@ -128,10 +134,20 @@ public class IntegrityVerificationRegistrationTests
     [Test]
     public void WithIntegrityVerification_DuplicateTrust_ThrowsArgumentException()
     {
-        var act = () => CreateBuilder().WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust("tsa")
+        var root = TestRootCertificate.Create();
+
+        var act = () => CreateBuilder().WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust("tsa", trust => trust.TrustedRoots.Add(root))
                                                                                               .WithTimestampAuthorityTrust("tsa"));
 
         act.Should().Throw<ArgumentException>().WithMessage("*more than once*");
+    }
+
+    [Test]
+    public void WithIntegrityVerification_EmptyTrustedRoots_ThrowsArgumentException()
+    {
+        var act = () => CreateBuilder().WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust("tsa"));
+
+        act.Should().Throw<ArgumentException>().WithMessage("*must configure at least one trusted root*");
     }
 
     [Test]
@@ -149,9 +165,10 @@ public class IntegrityVerificationRegistrationTests
     [TestCase(true)]
     public void WithIntegrityVerification_OtherPrefixThanAnchoring_ThrowsInvalidOperationException(Boolean verificationFirst)
     {
+        var root = TestRootCertificate.Create();
         var builder = CreateBuilder();
         Action<IntegrityVerificationBuilder> verification = v => v.WithCollectionPrefix("Other");
-        Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri);
+        Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root));
         if (verificationFirst)
         {
             builder.WithIntegrityVerification(verification);
@@ -172,9 +189,10 @@ public class IntegrityVerificationRegistrationTests
     [TestCase(true)]
     public void WithIntegrityVerification_SamePrefixAsAnchoring_IsAccepted(Boolean verificationFirst)
     {
+        var root = TestRootCertificate.Create();
         var builder = CreateBuilder();
         Action<IntegrityVerificationBuilder> verification = v => v.WithCollectionPrefix("Shared");
-        Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri)
+        Action<IntegrityAnchoringBuilder> anchoring = a => a.WithRfc3161TimestampAuthority("tsa", AuthorityUri, o => o.TrustedRoots.Add(root))
                                                             .WithCollectionPrefix("Shared");
 
         var act = () => (verificationFirst

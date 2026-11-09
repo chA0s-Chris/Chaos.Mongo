@@ -2,12 +2,14 @@
   "streams": [
     {
       "name": "appended",
+      "aggregateType": "LedgerAggregate",
       "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e01",
       "genesis": "9b48b7940e512806721730931c5ca02b3295ea1c4f18264b504e0b855be260a7",
       "result": {
         "intact": true,
         "firstBrokenVersion": null,
         "failure": null,
+        "comparedLeafCount": 2,
         "events": [
           {
             "version": 1,
@@ -44,16 +46,18 @@
     },
     {
       "name": "personal-data",
+      "aggregateType": "LedgerAggregate",
       "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e02",
       "genesis": "389eaf2f6ab7796ccef45547c41cfd25ce9f0027c411390345883f6c023f5c09",
       "result": {
         "intact": true,
         "firstBrokenVersion": null,
         "failure": null,
+        "comparedLeafCount": 1,
         "events": [
           {
             "version": 1,
-            "hash": "94a86019229473203e3554b932b8a1e1866fff82a96329cf7e6ed821b722cd78",
+            "hash": "8ae9e18071aceaf94b7ded0ef6c99f2e8e6423cfac5b171bff62ea5f6b606c4c",
             "previousHash": "389eaf2f6ab7796ccef45547c41cfd25ce9f0027c411390345883f6c023f5c09",
             "sealMode": "Append",
             "personalData": [
@@ -69,8 +73,8 @@
           },
           {
             "version": 2,
-            "hash": "0c4aa56a8b841385d8dc7262dad39da59db671a19161023f68aced84b4471425",
-            "previousHash": "94a86019229473203e3554b932b8a1e1866fff82a96329cf7e6ed821b722cd78",
+            "hash": "66c7bb588e06a29367ae50a4c9c2743b5de80124e39f64f19c82d5d035d7c5c5",
+            "previousHash": "8ae9e18071aceaf94b7ded0ef6c99f2e8e6423cfac5b171bff62ea5f6b606c4c",
             "sealMode": "Append",
             "personalData": [
               {
@@ -85,8 +89,8 @@
           },
           {
             "version": 3,
-            "hash": "5572e727c76a62292944a7447228e024010cfe0ba5a8c8720c85426b8900ab85",
-            "previousHash": "0c4aa56a8b841385d8dc7262dad39da59db671a19161023f68aced84b4471425",
+            "hash": "0579e2018d59c0bc512524b1de8e79ace56b474789e187b037c931aea44b2558",
+            "previousHash": "66c7bb588e06a29367ae50a4c9c2743b5de80124e39f64f19c82d5d035d7c5c5",
             "sealMode": "Append",
             "personalData": [
               {
@@ -101,8 +105,8 @@
           },
           {
             "version": 4,
-            "hash": "ba31795ed7a09c31a3df1f9feca10dc6142c1008443865a13dee964e543dcda1",
-            "previousHash": "5572e727c76a62292944a7447228e024010cfe0ba5a8c8720c85426b8900ab85",
+            "hash": "f87651e7ee0599f77cb848638d202324671cda7a90f2ccd7f2e73c1e2a3a5302",
+            "previousHash": "0579e2018d59c0bc512524b1de8e79ace56b474789e187b037c931aea44b2558",
             "sealMode": "Append",
             "personalData": []
           }
@@ -118,12 +122,14 @@
     },
     {
       "name": "retroactive",
+      "aggregateType": "LedgerAggregate",
       "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e03",
       "genesis": "91ed05faa95a43a0637bdb786ef263cb9a718ff10e09eb8928412ffc56d41774",
       "result": {
         "intact": true,
         "firstBrokenVersion": null,
         "failure": null,
+        "comparedLeafCount": 1,
         "events": [
           {
             "version": 1,
@@ -162,12 +168,14 @@
     },
     {
       "name": "tampered",
+      "aggregateType": "LedgerAggregate",
       "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e04",
       "genesis": "d06532cc559f7dfae579c46ac95ff2a1797b778a105de60a9730aaba5e6649d9",
       "result": {
         "intact": false,
         "firstBrokenVersion": 2,
         "failure": "HashMismatch",
+        "comparedLeafCount": 0,
         "events": [
           {
             "version": 1,
@@ -183,12 +191,14 @@
     },
     {
       "name": "renamed",
+      "aggregateType": "LedgerAggregate",
       "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e05",
       "genesis": "823cf68c5b248722d13bfc92d9645f3654e16e7cb7961b01ba79a5c34af2ef12",
       "result": {
-        "intact": true,
-        "firstBrokenVersion": null,
-        "failure": null,
+        "intact": false,
+        "firstBrokenVersion": 1,
+        "failure": "AggregateTypeMismatch",
+        "comparedLeafCount": 0,
         "events": [
           {
             "version": 1,
@@ -202,6 +212,127 @@
             "hash": "cd1a5379aee097a11c513cbfc295d8e6c20b388e392746660f706d03ae0eb11c",
             "previousHash": "bbe0b7a54d315155090eecb668fda18c003c21009bd87db0ed02a708b93c2959",
             "sealMode": "Retroactive",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "renamed-other-type",
+      "aggregateType": "ShipmentAggregate",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e05",
+      "genesis": "d40119286c7b9f22d8606f75cc3472643694d1f17809c2ec06f266a96412f023",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "comparedLeafCount": 1,
+        "events": [
+          {
+            "version": 1,
+            "hash": "2d40b8eda0a6025029383d1310321ea7c0ac5d287647008c4a1a99aa8e971df1",
+            "previousHash": "d40119286c7b9f22d8606f75cc3472643694d1f17809c2ec06f266a96412f023",
+            "sealMode": "Append",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "empty",
+      "aggregateType": "LedgerAggregate",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e06",
+      "genesis": null,
+      "result": {
+        "intact": false,
+        "firstBrokenVersion": 1,
+        "failure": "EmptyStream",
+        "comparedLeafCount": 0,
+        "events": [],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "shared-ledger",
+      "aggregateType": "LedgerAggregate",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e07",
+      "genesis": "bbbacec4c0f67fccfdd9e6667b3f42ead5128690118b8932768724c255b0439c",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "comparedLeafCount": 1,
+        "events": [
+          {
+            "version": 1,
+            "hash": "5c2c47860a1f698170386905fd2772613d682426632402b6671526ab797d6078",
+            "previousHash": "bbbacec4c0f67fccfdd9e6667b3f42ead5128690118b8932768724c255b0439c",
+            "sealMode": "Retroactive",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "shared-shipment",
+      "aggregateType": "ShipmentAggregate",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e07",
+      "genesis": "24da9735dc17aa39fe857a35cbcd1aafb4c27bc41a6c6e48812a6c9c43590a21",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "comparedLeafCount": 1,
+        "events": [
+          {
+            "version": 1,
+            "hash": "7b66bad97261f393808f862ea5abca84e803fda4df7b3386c14520963d5dff80",
+            "previousHash": "24da9735dc17aa39fe857a35cbcd1aafb4c27bc41a6c6e48812a6c9c43590a21",
+            "sealMode": "Append",
+            "personalData": []
+          }
+        ],
+        "sealModeTransitions": [],
+        "unrecordedErasures": []
+      }
+    },
+    {
+      "name": "degraded-evidence",
+      "aggregateType": "LedgerAggregate",
+      "aggregateId": "0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e08",
+      "genesis": "91b568d6d5740c1afe6a1184705e71f91f23779f746a72943cec7b109c04e5fc",
+      "result": {
+        "intact": true,
+        "firstBrokenVersion": null,
+        "failure": null,
+        "comparedLeafCount": 2,
+        "events": [
+          {
+            "version": 1,
+            "hash": "7d595dea3a0663ca4c48cf75b91cf98ab1f921e5c7b98ac63e26a3ffa4892c67",
+            "previousHash": "91b568d6d5740c1afe6a1184705e71f91f23779f746a72943cec7b109c04e5fc",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 2,
+            "hash": "144c093511ee50422add067ecd917bb9866c9a6fa4df7604997437641d8db06a",
+            "previousHash": "7d595dea3a0663ca4c48cf75b91cf98ab1f921e5c7b98ac63e26a3ffa4892c67",
+            "sealMode": "Append",
+            "personalData": []
+          },
+          {
+            "version": 3,
+            "hash": "87cef1617e1d19eb538288e1e306b7cf9f9b788d3e8409dd5276b0accd046349",
+            "previousHash": "144c093511ee50422add067ecd917bb9866c9a6fa4df7604997437641d8db06a",
+            "sealMode": "Append",
             "personalData": []
           }
         ],

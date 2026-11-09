@@ -152,18 +152,27 @@ public sealed class IntegrityAnchoringBuilder
     /// <param name="uri">The URI that accepts timestamp queries.</param>
     /// <param name="configure">Configures the HTTP client factory and the trust settings.</param>
     /// <returns>The builder for method chaining.</returns>
-    /// <exception cref="ArgumentException">Thrown when the name is empty or already used.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when the name is empty or already used, or when <paramref name="configure"/> leaves
+    /// <see cref="Rfc3161TimestampAuthorityOptions.TrustedRoots"/> empty.
+    /// </exception>
     public IntegrityAnchoringBuilder WithRfc3161TimestampAuthority(String name, Uri uri, Action<Rfc3161TimestampAuthorityOptions>? configure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(uri);
-        if (!_authorityNames.Add(name))
+        if (_authorityNames.Contains(name))
         {
             throw new ArgumentException($"The timestamp authority name '{name}' is used more than once.", nameof(name));
         }
 
         var options = new Rfc3161TimestampAuthorityOptions(name, uri);
         configure?.Invoke(options);
+        if (options.TrustedRoots.Count == 0)
+        {
+            throw new ArgumentException($"The timestamp authority '{name}' must configure at least one trusted root.", nameof(configure));
+        }
+
+        _authorityNames.Add(name);
         _rfc3161Authorities.Add(options);
         _authorities.Add(serviceProvider => new Rfc3161TimestampAuthority(options, serviceProvider));
         return this;

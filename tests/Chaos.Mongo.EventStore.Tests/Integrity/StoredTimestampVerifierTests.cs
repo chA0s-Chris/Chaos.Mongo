@@ -25,8 +25,54 @@ public class StoredTimestampVerifierTests
         _authorities.Clear();
     }
 
+    /// <summary>
+    /// Covers the stored-token verification side of the structurally partial case (the signer names a CRL
+    /// distribution point and the intermediate does not), matching
+    /// <see
+    ///     cref="Chaos.Mongo.EventStore.Tests.Integration.TimestampRevocationConfirmationTests.RunAsync_ChainWithStructurallyPartialSourceCoverage_RecordsUnconfirmedUnconditionally"/>
+    /// on the anchoring-time confirmation side: both must recompute the same status for the same chain. The
+    /// signer's own distribution point is backed by a genuine, confirming CRL that covers it (not merely absent,
+    /// like the intermediate's): otherwise a regression that mis-computed "every certificate has a source" as true
+    /// would still recompute Unconfirmed here, through the pre-existing uncovered-source fallback, rather than
+    /// through the partial-coverage rule this test exists to cover. A distribution point without an explicit CRL
+    /// issuer defaults to naming the certificate's own issuer, so the signer's source names the intermediate —
+    /// exactly who <see cref="ChainedTimestampAuthority.BuildIntermediateCrl"/> signs with; naming the
+    /// intermediate's own distribution point instead would need a CRL issued by the root, not the intermediate, to
+    /// actually satisfy its source.
+    /// </summary>
     [Test]
-    public async Task Verify_ChainWithoutDistributionPoints_IsConfirmedWithoutCrls()
+    public async Task Verify_ChainWithStructurallyPartialSourceCoverage_RecomputesUnconfirmedUnconditionally()
+    {
+        using var chained = new ChainedTimestampAuthority(signerCrlLocations: [new Uri("http://chained-tsa.test/signer.crl")]);
+        var digest = SHA256.HashData(Guid.NewGuid().ToByteArray());
+        var token = await chained.TimestampAsync(digest, HashAlgorithmName.SHA256, CancellationToken.None);
+        var ticks = token.TimestampUtc.Ticks;
+        var tokenTimeUtc = new DateTime(ticks - (ticks % TimeSpan.TicksPerMillisecond), DateTimeKind.Utc);
+        var crl = chained.BuildIntermediateCrl(new DateTimeOffset(tokenTimeUtc, TimeSpan.Zero) + GracePeriod + TimeSpan.FromMinutes(1));
+        var timestamp = new AnchorTimestamp
+        {
+            Authority = chained.Name,
+            Token = token.Token,
+            CertificateChain = token.CertificateChain,
+            CertificateRevocationLists = token.CertificateRevocationLists,
+            ConfirmingRevocationLists = [crl],
+            TimestampUtc = tokenTimeUtc,
+            ObtainedUtc = DateTime.UtcNow
+        };
+        var trust = new TimestampAuthorityTrust();
+        trust.TrustedRoots.Add(chained.Root);
+
+        var result = StoredTimestampVerifier.Verify(timestamp, digest, trust, GracePeriod);
+
+        result.IsValid.Should().BeTrue();
+        result.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
+        result.RecomputedRevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed,
+                                                      "a chain where at least one certificate has no source can never be recomputed as confirmed, " +
+                                                      "even though the signer's own source is genuinely, confirmingly covered");
+    }
+
+    [Test]
+    public async Task Verify_ChainWithoutDistributionPoints_RecomputesNoRevocationSource()
     {
         var authority = CreateAuthority(new TestTimestampAuthority([]));
         var (timestamp, digest) = await StampAsync(authority);
@@ -40,7 +86,10 @@ public class StoredTimestampVerifierTests
                                                     GracePeriod);
 
         result.IsValid.Should().BeTrue();
-        result.RevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed);
+        result.RevocationStatus.Should().Be(TimestampRevocationStatus.NoRevocationSource);
+        result.RecomputedRevocationStatus.Should().Be(TimestampRevocationStatus.NoRevocationSource);
+        result.StoredRevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed,
+                                                  "a historical zero-source chain confirmed under the pre-existing rule stays cryptographically valid");
     }
 
     [Test]
@@ -109,6 +158,7 @@ public class StoredTimestampVerifierTests
             TimestampUtc = timestamp.TimestampUtc,
             IsValid = true,
             RevocationStatus = TimestampRevocationStatus.Confirmed,
+            RecomputedRevocationStatus = TimestampRevocationStatus.Confirmed,
             StoredRevocationStatus = TimestampRevocationStatus.Unconfirmed
         });
     }
@@ -201,6 +251,26 @@ public class StoredTimestampVerifierTests
         delta.IsValid.Should().BeTrue();
         delta.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
         complete.RevocationStatus.Should().Be(TimestampRevocationStatus.Confirmed);
+    }
+
+    [Test]
+    public async Task Verify_InconsistentStoredStatus_ReportsActuallyComputedRevocationStatus()
+    {
+        var authority = CreateAuthority(new TestTimestampAuthority([]));
+        var (timestamp, digest) = await StampAsync(authority);
+
+        var result = StoredTimestampVerifier.Verify(timestamp with
+                                                    {
+                                                        RevocationStatus = TimestampRevocationStatus.Revoked
+                                                    },
+                                                    digest,
+                                                    Trust(authority),
+                                                    GracePeriod);
+
+        result.IsValid.Should().BeFalse("the stored status disagrees with what is actually recomputed from the chain");
+        result.RecomputedRevocationStatus.Should().Be(TimestampRevocationStatus.NoRevocationSource,
+                                                      "the inconsistency failure must not discard the status actually computed from the chain");
+        result.RevocationStatus.Should().Be(TimestampRevocationStatus.NoRevocationSource);
     }
 
     [Test]

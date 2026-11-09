@@ -126,6 +126,8 @@ Chaos.Mongo.EventStore.Integrity.CheckpointVerification.CheckpointVerification()
 Chaos.Mongo.EventStore.Integrity.CompletedAnchor.CompletedAnchor() -> void
 Chaos.Mongo.EventStore.Integrity.CompletenessFinding.CompletenessFinding() -> void
 Chaos.Mongo.EventStore.Integrity.DerivedDataVerificationResult.DerivedDataVerificationResult() -> void
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.DegradedFromAnchor.get -> Chaos.Mongo.EventStore.Integrity.AnchorReference?
+Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.DegradedFromAnchor.init -> void
 Chaos.Mongo.EventStore.Integrity.EventAnchorVerificationResult.EventAnchorVerificationResult() -> void
 Chaos.Mongo.EventStore.Integrity.ITimestampAuthority.GetRevocationListsAsync(System.Collections.Generic.IReadOnlyList<byte[]!>! certificateChain, System.DateTime issuedNotBeforeUtc, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Chaos.Mongo.EventStore.Integrity.RevocationLists!>!
 Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder.WithCollectionPrefix(string! prefix) -> Chaos.Mongo.EventStore.Integrity.IntegrityAnchoringBuilder!
@@ -138,10 +140,17 @@ Chaos.Mongo.EventStore.Integrity.IntegritySealingStatus.IntegritySealingStatus()
 Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder.WithCollectionPrefix(string! prefix) -> Chaos.Mongo.EventStore.Integrity.IntegrityVerificationBuilder!
 Chaos.Mongo.EventStore.Integrity.PersonalDataPathStatus.PersonalDataPathStatus() -> void
 Chaos.Mongo.EventStore.Integrity.RevocationLists.NextUpdateUtc.get -> System.DateTime?
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.AggregateTypeMismatch = 13 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure.EmptyStream = 12 -> Chaos.Mongo.EventStore.Integrity.StreamVerificationFailure
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.ComparedLeafCount.get -> int
+Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.ComparedLeafCount.init -> void
 Chaos.Mongo.EventStore.Integrity.StreamVerificationResult.StreamVerificationResult() -> void
 Chaos.Mongo.EventStore.Integrity.TimestampConfirmationFailure.TimestampConfirmationFailure() -> void
+Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus.NoRevocationSource = 3 -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
 Chaos.Mongo.EventStore.Integrity.TimestampToken.TimestampToken(byte[]! token, System.Collections.Generic.IReadOnlyList<byte[]!>! certificateChain, System.Collections.Generic.IReadOnlyList<byte[]!>! certificateRevocationLists, System.DateTime timestampUtc) -> void
 Chaos.Mongo.EventStore.Integrity.TimestampToken.TimestampUtc.get -> System.DateTime
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.RecomputedRevocationStatus.get -> Chaos.Mongo.EventStore.Integrity.TimestampRevocationStatus
+Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.RecomputedRevocationStatus.init -> void
 Chaos.Mongo.EventStore.Integrity.TimestampVerificationResult.TimestampVerificationResult() -> void
 Chaos.Mongo.EventStore.Integrity.TrustedAnchorHead.TrustedAnchorHead() -> void
 Chaos.Mongo.EventStore.Integrity.UnrecordedErasure.UnrecordedErasure() -> void

@@ -284,8 +284,9 @@ public class DerivedDataIntegrationTests
         result.ReadModel.Should().Be(ReadModelStatus.Matches);
         result.Checkpoints.Should().OnlyContain(c => c.HashStatus == CheckpointHashStatus.Matches && c.StateMatches).And.HaveCount(1);
         result.IsConsistent.Should().BeTrue();
-        unknown.ReadModel.Should().Be(ReadModelStatus.Matches, "a stream without events needs no read model");
-        unknown.IsConsistent.Should().BeTrue();
+        unknown.Stream.Failure.Should().Be(StreamVerificationFailure.EmptyStream, "the library cannot tell a never-existed aggregate apart from a deleted one");
+        unknown.ReadModel.Should().Be(ReadModelStatus.NotChecked, "derived data is only compared for an intact chain");
+        unknown.IsConsistent.Should().BeFalse();
     }
 
     [Test]

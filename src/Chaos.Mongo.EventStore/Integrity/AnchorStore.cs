@@ -31,6 +31,7 @@ internal sealed class AnchorStore
     internal const String SequenceField = "Sequence";
     internal const String StatusField = "Status";
     private const String AggregateIdField = "AggregateId";
+    private const String AggregateIdWithAggregateTypeIndexName = "AggregateId_with_AggregateType";
     private const String AggregateTypeField = "AggregateType";
     private const String AuthorityFailuresField = "AuthorityFailures";
     private const String AuthorityField = "Authority";
@@ -179,8 +180,9 @@ internal sealed class AnchorStore
     /// Records the revocation status of unconfirmed timestamp entries together with the CRLs that confirm it.
     /// </summary>
     /// <param name="statuses">
-    /// The entries and their status, <see cref="TimestampRevocationStatus.Confirmed"/> or
-    /// <see cref="TimestampRevocationStatus.Revoked"/>.
+    /// The entries and their settled status: <see cref="TimestampRevocationStatus.Confirmed"/>,
+    /// <see cref="TimestampRevocationStatus.NoRevocationSource"/> or <see cref="TimestampRevocationStatus.Revoked"/>,
+    /// never <see cref="TimestampRevocationStatus.Unconfirmed"/>, which is deferred instead of recorded here.
     /// </param>
     /// <param name="revocationListHashes">The SHA-256 of each confirming CRL, already in the evidence store.</param>
     /// <param name="utcNow">The current time.</param>
@@ -296,6 +298,17 @@ internal sealed class AnchorStore
                                                {
                                                    Name = LeavesByAnchorIndexName,
                                                    Unique = true
+                                               }),
+            cancellationToken: cancellationToken);
+        await Leaves.Indexes.CreateOneOrUpdateAsync(
+            new CreateIndexModel<BsonDocument>(new BsonDocument
+                                               {
+                                                   { AggregateIdField, 1 },
+                                                   { AggregateTypeField, 1 }
+                                               },
+                                               new CreateIndexOptions
+                                               {
+                                                   Name = AggregateIdWithAggregateTypeIndexName
                                                }),
             cancellationToken: cancellationToken);
     }
@@ -527,6 +540,36 @@ internal sealed class AnchorStore
                                             authorities.Contains(timestamp.Authority) &&
                                             !(timestamp.ConfirmationNotBeforeUtc > utcNow))
                         .ToList();
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a leaf exists for the given aggregate identifier under some aggregate type
+    /// name other than the one given, used solely to report that a stream's coverage could not be established under
+    /// the current name, never to compare hashes or accept inclusion across types. Covered by
+    /// <see cref="AggregateIdWithAggregateTypeIndexName"/>, so it never scans the shared leaves collection, which
+    /// holds leaves of every aggregate type in the module.
+    /// </summary>
+    /// <param name="aggregateType">The aggregate type name to exclude.</param>
+    /// <param name="aggregateId">The aggregate identifier.</param>
+    /// <param name="session">The session to read in, for example a snapshot session, or <c>null</c>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> when a leaf for the identifier exists under a different aggregate type name.</returns>
+    public async Task<Boolean> HasLeavesForOtherAggregateTypeAsync(String aggregateType,
+                                                                   Guid aggregateId,
+                                                                   IClientSessionHandle? session,
+                                                                   CancellationToken cancellationToken)
+    {
+        var filter = new BsonDocument(AggregateIdField, ToBson(aggregateId));
+        var find = session is null ? Leaves.Find(filter) : Leaves.Find(session, filter);
+        var documents = await find.Project(new BsonDocument
+                                  {
+                                      { "_id", 0 },
+                                      { AggregateTypeField, 1 }
+                                  })
+                                  .ToListAsync(cancellationToken);
+        return documents.Any(document => document.TryGetValue(AggregateTypeField, out var type) &&
+                                         type is BsonString { Value: var typeName } &&
+                                         !String.Equals(typeName, aggregateType, StringComparison.Ordinal));
     }
 
     /// <summary>

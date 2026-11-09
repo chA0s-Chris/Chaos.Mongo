@@ -132,6 +132,24 @@ public class ReferenceVerifierIntegrationTests
         error.Should().Contain("need --anchors");
     }
 
+    /// <summary>
+    /// Covers the existing, preserved requirement that <c>check</c> rejects <c>--anchors</c> without at least one
+    /// <c>--trusted-root</c>, rather than silently falling back to the system trust store the way an empty
+    /// <see cref="TimestampAuthorityTrust.TrustedRoots"/> would (the library rejects that configuration outright;
+    /// see <see cref="IntegrityVerificationRegistrationTests"/>/<see cref="IntegrityAnchoringRegistrationTests"/>).
+    /// </summary>
+    [Test]
+    public async Task Check_AnchorsWithoutTrustedRoot_IsAUsageError()
+    {
+        var arguments = CheckArguments(Guid.NewGuid());
+        var withoutTrustedRoot = arguments.Take(arguments.Length - 2).ToArray();
+
+        var (code, _, error) = await RunProcessAsync(withoutTrustedRoot);
+
+        code.Should().Be(2);
+        error.Should().Contain("--trusted-root");
+    }
+
     [Test]
     [TestCase("selectingArray", nameof(StreamVerificationFailure.VersionGap))]
     [TestCase("personalDataArray", null)]
@@ -288,6 +306,36 @@ public class ReferenceVerifierIntegrationTests
         resolvedCode.Should().Be(0, resolved.ToJsonString());
         missingCode.Should().Be(1);
         (missing["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("chunk");
+    }
+
+    [Test]
+    public async Task Check_CommittedDegradedEvidenceVector_ReportsDegradedFromOverTheSameCommittedFixture()
+    {
+        // The committed "eventAnchors" vector (DegradedEvidenceStream) was previously replayed only by
+        // TamperEvidenceVectorTests and vectors()'s own fixture runner, never through a real `check` CLI run over
+        // the exact same committed anchors/leaves/evidence files, so a Python regression in check()'s own
+        // cross-anchor degradation loop (as opposed to vectors()'s per-anchor replay) could go undetected.
+        var expected = TamperEvidenceVectorTests.ReadJson("anchors.json")["eventAnchors"] ?? throw new InvalidDataException("The eventAnchors vector is missing.");
+        var aggregateId = Guid.Parse(expected["aggregateId"]?.GetValue<String>() ?? String.Empty);
+
+        var (code, report) = await RunVerifierAsync([
+            "check",
+            "--events", Path.Combine(TamperEvidenceVectorTests.VectorDirectory, "streams.bson"),
+            "--aggregate-type", nameof(LedgerAggregate),
+            "--aggregate-id", aggregateId.ToString(),
+            "--anchors", Path.Combine(TamperEvidenceVectorTests.VectorDirectory, "anchors.bson"),
+            "--leaves", Path.Combine(TamperEvidenceVectorTests.VectorDirectory, "leaves.bson"),
+            "--evidence", Path.Combine(TamperEvidenceVectorTests.VectorDirectory, "evidence.bson"),
+            "--trusted-root", Path.Combine(TamperEvidenceVectorTests.VectorDirectory, "tsa-root.pem")
+        ]);
+
+        code.Should().Be(0, report.ToJsonString());
+        var anchorSequence = expected["anchorSequence"]?.GetValue<Int64>();
+        var degradedFromSequence = expected["degradedFromSequence"]?.GetValue<Int64?>();
+        var anchorReport = report["anchors"]?.AsArray().SingleOrDefault(anchor => anchor?["sequence"]?.GetValue<Int64>() == anchorSequence);
+        anchorReport.Should().NotBeNull($"the committed anchor sequence {anchorSequence} must appear in the real check() report: {report.ToJsonString()}");
+        anchorReport["degradedFrom"]?.GetValue<Int64?>().Should().Be(degradedFromSequence,
+                                                                     "the production check() path, not only vectors()'s per-anchor fixture replay, must report the same committed degradation");
     }
 
     [Test]
@@ -745,6 +793,59 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    public async Task Check_FirstAnchorTokenInvalidAndLaterAnchorVerifies_ReportsDegradedFromLikeTheLibrary()
+    {
+        // Two anchoring runs cover one stream: the first (sequence 1) covers versions 1-2, the second (sequence 2)
+        // covers version 3. The first anchor's only token is genuinely revoked by a CRL issued after the grace
+        // period — the plan's own "revoked-first-token" case, not a malformed or digest-mismatched token — which
+        // makes every one of its timestamps invalid (never an inclusion-proof or digest mismatch), while the second
+        // anchor's token still verifies, so the production check() path — not only the vector fixture runner — must
+        // tolerate the degradation and name the earlier anchor, exactly as
+        // EventStreamVerifier.VerifyEventAnchorAsync's DegradedFromAnchor already does.
+        var testAuthority = new TestTimestampAuthority();
+        _testAuthorities.Add(testAuthority);
+        var context = await LedgerStoreContext.CreateAsync(
+            _container,
+            personalData: true,
+            configureMongo: mongo => mongo.WithIntegrityAnchoring(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()))
+                                          .WithIntegrityVerification(verification => verification.WithTimestampAuthorityTrust(
+                                                                         "test-tsa",
+                                                                         trust => trust.TrustedRoots.Add(testAuthority.Root))));
+        _contexts.Add(context);
+        await File.WriteAllTextAsync(Path.Combine(_directory, "root.pem"), testAuthority.Root.ExportCertificatePem());
+        var aggregateId = await context.AppendStreamAsync(2);
+        await context.RunUntilAnchoredAsync(aggregateId, 2);
+        await context.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 3)]);
+        await context.RunUntilAnchoredAsync(aggregateId, 3);
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        var firstAnchor = await GetStore(context).Anchors.Find(new BsonDocument(AnchorStore.SequenceField, 1L)).SingleAsync();
+        var firstTimestampUtc = new DateTimeOffset(firstAnchor["Timestamps"][0]["TimestampUtc"].ToUniversalTime());
+        var revokingCrl = testAuthority.BuildCrl(firstTimestampUtc + TimeSpan.FromHours(25),
+                                                 revoked: (testAuthority.SigningCertificate.SerialNumberBytes.ToArray(), firstTimestampUtc));
+        var hash = await new AnchorEvidenceStore(context.MongoHelper, options).StoreAsync(revokingCrl, CancellationToken.None);
+        await GetStore(context).Anchors.UpdateOneAsync(new BsonDocument(AnchorStore.SequenceField, 1L),
+                                                       Builders<BsonDocument>.Update
+                                                                             .Set("Timestamps.0.RevocationStatus", nameof(TimestampRevocationStatus.Revoked))
+                                                                             .Set("Timestamps.0.ConfirmingRevocationListHashes", new BsonArray
+                                                                             {
+                                                                                 new BsonBinaryData(hash)
+                                                                             }));
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var libraryAnchor = await context.CreateVerifier().VerifyEventAnchorAsync(aggregateId, 1);
+
+        code.Should().Be(0, "a single revoked-token anchor whose evidence degrades to a later, still-verified anchor must not fail the overall result");
+        libraryAnchor.Status.Should().Be(EventAnchorStatus.Anchored);
+        libraryAnchor.DegradedFromAnchor?.Sequence.Should().Be(1);
+        report["anchors"]?[0]?["sequence"]?.GetValue<Int64>().Should().Be(1);
+        report["anchors"]?[0]?["timestamps"]?[0]?["revocationStatus"]?.GetValue<String>().Should().Be(nameof(TimestampRevocationStatus.Revoked));
+        report["anchors"]?[0]?["degradedFrom"].Should().BeNull();
+        report["anchors"]?[1]?["sequence"]?.GetValue<Int64>().Should().Be(2);
+        report["anchors"]?[1]?["degradedFrom"]?.GetValue<Int64>().Should().Be(1, "the second anchor's report must name the first as the anchor its evidence degraded from");
+    }
+
+    [Test]
     public async Task Check_GarbageToken_ReportsMalformedToken()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -834,7 +935,8 @@ public class ReferenceVerifierIntegrationTests
         var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
 
         code.Should().Be(1);
-        (report["stream"]?["intact"]?.GetValue<Boolean>()).Should().BeTrue("the empty stream itself is consistent");
+        (report["stream"]?["intact"]?.GetValue<Boolean>()).Should().BeFalse("an empty stream cannot be told apart from one whose events were all deleted");
+        (report["stream"]?["failure"]?.GetValue<String>()).Should().Be(nameof(StreamVerificationFailure.EmptyStream));
         (report["anchorChain"]?["failure"]?.GetValue<String>()).Should().Be(nameof(AnchorChainFailure.LeafSetMismatch));
     }
 
@@ -880,7 +982,7 @@ public class ReferenceVerifierIntegrationTests
 
         code.Should().Be(1);
         library.IsValid.Should().BeFalse();
-        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("trusted root");
+        (report["anchors"]?[0]?["timestamps"]?[0]?["failure"]?.GetValue<String>()).Should().Contain("self-issued root");
     }
 
     [Test]
@@ -1094,7 +1196,7 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
-    public async Task Check_UnreadableConfirmingCrlWithoutSources_IsUnconfirmedLikeTheLibrary()
+    public async Task Check_UnreadableConfirmingCrlWithoutSources_IsNoRevocationSourceLikeTheLibrary()
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync(new TestTimestampAuthority([]));
         var hash = await new AnchorEvidenceStore(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>())
@@ -1111,8 +1213,8 @@ public class ReferenceVerifierIntegrationTests
         var library = await VerifyTimestampWithLibraryAsync(context);
 
         code.Should().Be(0, report.ToJsonString());
-        library.RevocationStatus.Should().Be(TimestampRevocationStatus.Unconfirmed);
-        (report["anchors"]?[0]?["timestamps"]?[0]?["revocationStatus"]?.GetValue<String>()).Should().Be(nameof(TimestampRevocationStatus.Unconfirmed));
+        library.RevocationStatus.Should().Be(TimestampRevocationStatus.NoRevocationSource, "nothing names a CRL source, so a garbage 'confirming' list is irrelevant");
+        (report["anchors"]?[0]?["timestamps"]?[0]?["revocationStatus"]?.GetValue<String>()).Should().Be(nameof(TimestampRevocationStatus.NoRevocationSource));
     }
 
     [Test]
