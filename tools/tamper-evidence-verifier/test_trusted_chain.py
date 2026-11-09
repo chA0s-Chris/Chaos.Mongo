@@ -74,11 +74,12 @@ def der(certificate):
 class MatchesTrustedChainTests(unittest.TestCase):
     """Check A (genuine, unique current trust) and Check B (the stored chain's own root is independently genuine)."""
 
-    def matches(self, chain, embedded, trusted, token_time=None):
+    def matches(self, chain, embedded, trusted, token_time=None, max_candidate_paths=verify.MAX_CANDIDATE_PATHS):
         chain_fields = [verify.certificate_fields(c) for c in chain]
         with tempfile.TemporaryDirectory() as directory:
             return verify.matches_trusted_chain(chain, chain_fields, embedded, trusted,
-                                                token_time or datetime.datetime.now(datetime.timezone.utc), directory)
+                                                token_time or datetime.datetime.now(datetime.timezone.utc), directory,
+                                                max_candidate_paths)
 
     def test_unrelated_root_with_zero_relationship_to_trust_is_rejected(self):
         """F1 regression: the stored chain's own root has no cryptographic relationship whatsoever to the
@@ -294,6 +295,89 @@ class MatchesTrustedChainTests(unittest.TestCase):
 
         self.assertTrue(self.matches(chain, [], trusted),
                         "the reissued certificate is self-issued and not the path's own final certificate, so the root's name constraint exempts it")
+
+    def test_stored_root_with_corrupted_self_signature_is_rejected(self):
+        """The corrupted root keeps the genuine root's subject and key, so the signer still links to it and to the
+        configured root alike; only its own self-signature no longer verifies."""
+        root_key = make_key()
+        root = make_certificate("Root", "Root", root_key, root_key.public_key(), True)
+        signer_key = make_key()
+        signer = make_certificate("Signer", "Root", root_key, signer_key.public_key(), False,
+                                  eku=[x509.ObjectIdentifier(TIME_STAMPING_OID)])
+        # The signature is the certificate DER's final bytes, so flipping the last byte corrupts only it.
+        corrupted = bytearray(der(root))
+        corrupted[-1] ^= 0x01
+
+        self.assertFalse(self.matches([der(signer), bytes(corrupted)], [], [der(root)]),
+                         "the stored root is neither the configured root nor validly self-signed")
+
+    def test_stored_root_byte_identical_to_configured_root_is_accepted_without_checking_its_self_signature(self):
+        """A configured root is trusted as configured, so a genuine trusted root whose self-signature the direct
+        signature check rejects (such as a SHA-1 one) keeps working; a corrupted self-signature stands in for it."""
+        root_key = make_key()
+        root = make_certificate("Root", "Root", root_key, root_key.public_key(), True)
+        signer_key = make_key()
+        signer = make_certificate("Signer", "Root", root_key, signer_key.public_key(), False,
+                                  eku=[x509.ObjectIdentifier(TIME_STAMPING_OID)])
+        configured = bytearray(der(root))
+        configured[-1] ^= 0x01
+
+        self.assertTrue(self.matches([der(signer), bytes(configured)], [], [bytes(configured)]),
+                        "the stored root is byte-identical to the configured one")
+
+    def test_counterfeit_issuer_group_embedded_in_token_is_ignored_and_accepted(self):
+        """The token's embedded certificates are not covered by its signature. A counterfeit intermediate carrying the
+        genuine intermediate's subject and key is issued by a group of same-name, same-key certificates that all issue
+        one another, so the search would walk every ordering of the group (factorial in its size) unless certificates
+        that can never reach a trusted root are pruned first."""
+        root_key = make_key()
+        root = make_certificate("Root", "Root", root_key, root_key.public_key(), True)
+        intermediate_key = make_key()
+        intermediate = make_certificate("Intermediate", "Root", root_key, intermediate_key.public_key(), True, path_length=0)
+        signer_key = make_key()
+        signer = make_certificate("Signer", "Intermediate", intermediate_key, signer_key.public_key(), False,
+                                  eku=[x509.ObjectIdentifier(TIME_STAMPING_OID)])
+        group_key = make_key()
+        counterfeit = make_certificate("Intermediate", "Group", group_key, intermediate_key.public_key(), True)
+        group = [der(make_certificate("Group", "Group", group_key, group_key.public_key(), True)) for _ in range(12)]
+        calls = []
+        original = verify.issuer_signature_ok
+
+        def counting(*arguments):
+            calls.append(arguments)
+            return original(*arguments)
+
+        verify.issuer_signature_ok = counting
+        try:
+            accepted = self.matches([der(signer), der(intermediate), der(root)], [der(counterfeit), *group], [der(root)])
+        finally:
+            verify.issuer_signature_ok = original
+
+        self.assertTrue(accepted, "the counterfeit intermediate offers no alternate path to trust")
+        self.assertLess(len(calls), 200, "the counterfeit group can never reach the trusted root, so it is pruned before the search")
+
+    def test_more_alternate_paths_than_the_search_bound_fails_closed(self):
+        root_a_key = make_key()
+        root_a = make_certificate("RootA", "RootA", root_a_key, root_a_key.public_key(), True)
+        root_b_key = make_key()
+        root_b = make_certificate("RootB", "RootB", root_b_key, root_b_key.public_key(), True)
+        intermediate_key = make_key()
+        intermediate_a = make_certificate("SharedIntermediate", "RootA", root_a_key, intermediate_key.public_key(), True, path_length=0)
+        # The sibling's only path to trust is extended-key-usage-ineligible, so it is a candidate the search must
+        # examine without it proving the recorded position non-unique.
+        intermediate_b = make_certificate("SharedIntermediate", "RootB", root_b_key, intermediate_key.public_key(), True, path_length=0,
+                                          eku=[x509.ObjectIdentifier(CLIENT_AUTH_OID)])
+        signer_key = make_key()
+        signer = make_certificate("Signer", "SharedIntermediate", intermediate_key, signer_key.public_key(), False,
+                                  eku=[x509.ObjectIdentifier(TIME_STAMPING_OID)])
+        chain = [der(signer), der(intermediate_a), der(root_a)]
+        embedded = [der(intermediate_b)]
+        trusted = [der(root_a), der(root_b)]
+
+        self.assertTrue(self.matches(chain, embedded, trusted),
+                        "within the bound, the ineligible candidate leaves the recorded position unique")
+        self.assertFalse(self.matches(chain, embedded, trusted, max_candidate_paths=0),
+                         "a search that would examine more candidates than its bound fails closed")
 
 
 class VerifyRawSignatureTests(unittest.TestCase):

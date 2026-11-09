@@ -545,6 +545,128 @@ public class TrustedChainValidationTests
                                 .BeFalse("the recorded chain inserts a certificate that was never actually part of the signer's real path");
     }
 
+    [Test]
+    public void MatchesTrustedChain_CounterfeitIssuerGroupEmbeddedInToken_IgnoresItAndAccepts()
+    {
+        // The token's embedded certificates are not covered by its signature. A counterfeit intermediate carrying
+        // the genuine intermediate's subject and key is issued by a group of same-name, same-key certificates that
+        // all issue one another, so excluding the genuine intermediate would walk every ordering of the group
+        // (factorial in its size) unless certificates that can never reach a trusted root are pruned first.
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Counterfeit Group Root");
+        var (intermediate, intermediateKey) = CreateIntermediate("CN=Chaos.Mongo Counterfeit Group Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo Counterfeit Group Signer", intermediate, intermediateKey);
+        var (groupRoot, groupKey) = CreateRoot("CN=Chaos.Mongo Counterfeit Group Member");
+        var counterfeit = CreateCrossSigned(intermediate, groupRoot, groupKey);
+        var group = Enumerable.Range(0, 12).Select(_ => CreateCrossSigned(groupRoot, groupRoot, groupKey)).Prepend(groupRoot).ToList();
+        var token = CreateToken(signer, SHA256.HashData(Guid.NewGuid().ToByteArray()), extraCertificates: [intermediate, counterfeit, .. group]);
+        var stored = new X509Certificate2Collection
+        {
+            signer,
+            intermediate,
+            root
+        };
+        var settings = new ChainSettings(new X509Certificate2Collection(root), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection());
+
+        var verification = Task.Run(() => TimestampTokenValidation.MatchesTrustedChain(token,
+                                                                                       signer,
+                                                                                       stored.Select(certificate => certificate.RawData).ToList(),
+                                                                                       stored,
+                                                                                       settings));
+
+        verification.Wait(TimeSpan.FromSeconds(60)).Should().BeTrue("the counterfeit group can never reach the trusted root, so it is pruned before the search");
+        verification.Result.Should().BeTrue("the counterfeit intermediate offers no alternate path to trust");
+    }
+
+    [Test]
+    public void MatchesTrustedChain_MoreAlternatePathsThanTheSearchBound_FailsClosed()
+    {
+        var (rootA, rootAKey) = CreateRoot("CN=Chaos.Mongo Search Bound Root A");
+        var (rootB, rootBKey) = CreateRoot("CN=Chaos.Mongo Search Bound Root B");
+        var (intermediateA, intermediateKey) = CreateIntermediate("CN=Chaos.Mongo Search Bound Intermediate", rootA, rootAKey);
+        // intermediateB's only path to trust is extended-key-usage-ineligible, so it is a candidate the search must
+        // examine without it proving the recorded position non-unique.
+        var intermediateB = CreateCrossSigned(intermediateA, rootB, rootBKey, extendedKeyUsageOids: ["1.3.6.1.5.5.7.3.2"]);
+        var signer = CreateSigner("CN=Chaos.Mongo Search Bound Signer", intermediateA, intermediateKey);
+        var token = CreateToken(signer);
+        var stored = new X509Certificate2Collection
+        {
+            signer,
+            intermediateA,
+            rootA
+        };
+        var settings = new ChainSettings(new X509Certificate2Collection
+                                         {
+                                             rootA,
+                                             rootB
+                                         },
+                                         X509RevocationMode.NoCheck,
+                                         TimeSpan.Zero,
+                                         new X509Certificate2Collection
+                                         {
+                                             intermediateA,
+                                             intermediateB,
+                                             rootB
+                                         });
+        var built = stored.Select(certificate => certificate.RawData).ToList();
+
+        TimestampTokenValidation.MatchesTrustedChain(token, signer, built, stored, settings)
+                                .Should()
+                                .BeTrue("within the bound, the ineligible candidate leaves the recorded position unique");
+        TimestampTokenValidation.MatchesTrustedChain(token, signer, built, stored, settings, maximumCandidatePaths: 0)
+                                .Should()
+                                .BeFalse("a search that would examine more candidates than its bound fails closed");
+    }
+
+    [Test]
+    public void MatchesTrustedChain_StoredRootByteIdenticalToConfiguredRoot_IsAcceptedWithoutCheckingItsSelfSignature()
+    {
+        // A configured root is trusted as configured, so a genuine trusted root whose self-signature the direct
+        // signature check rejects (such as a SHA-1 one) keeps working; a corrupted self-signature stands in for it.
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Configured Root");
+        var signer = CreateSigner("CN=Chaos.Mongo Configured Root Signer", root, rootKey);
+        var rootBytes = root.RawData.ToArray();
+        rootBytes[^1] ^= 0x01;
+        using var configured = X509CertificateLoader.LoadCertificate(rootBytes);
+        var token = CreateToken(signer);
+        var stored = new X509Certificate2Collection
+        {
+            signer,
+            configured
+        };
+        var settings = new ChainSettings(new X509Certificate2Collection(configured), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection());
+
+        var built = TimestampTokenValidation.BuildChain(token, signer, settings);
+
+        TimestampTokenValidation.MatchesTrustedChain(token, signer, built.Certificates, stored, settings)
+                                .Should()
+                                .BeTrue("the stored root is byte-identical to the configured one");
+    }
+
+    [Test]
+    public void MatchesTrustedChain_StoredRootWithCorruptedSelfSignature_IsRejected()
+    {
+        // The corrupted root keeps the genuine root's subject and key, so the signer still links to it and to the
+        // configured root alike; only its own self-signature no longer verifies.
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Corrupted Root");
+        var signer = CreateSigner("CN=Chaos.Mongo Corrupted Root Signer", root, rootKey);
+        var corruptedBytes = root.RawData.ToArray();
+        corruptedBytes[^1] ^= 0x01;
+        using var corrupted = X509CertificateLoader.LoadCertificate(corruptedBytes);
+        var token = CreateToken(signer);
+        var settings = new ChainSettings(new X509Certificate2Collection(root), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection());
+        var corruptedStored = new X509Certificate2Collection
+        {
+            signer,
+            corrupted
+        };
+
+        var built = TimestampTokenValidation.BuildChain(token, signer, settings);
+
+        TimestampTokenValidation.MatchesTrustedChain(token, signer, built.Certificates, corruptedStored, settings)
+                                .Should()
+                                .BeFalse("the stored root is neither the configured root nor validly self-signed");
+    }
+
     internal static X509Certificate2 CreateCrossSigned(X509Certificate2 original,
                                                        X509Certificate2 newIssuer,
                                                        ECDsa newIssuerKey,

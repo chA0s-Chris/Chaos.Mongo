@@ -65,6 +65,10 @@ PARSE_ERRORS = (ValueError, struct.error, IndexError, RecursionError)
 # The deepest nesting accepted: MongoDB's limit for documents, and a bound far above real tokens for DER.
 MAX_BSON_DEPTH = 100
 MAX_DER_DEPTH = 64
+# The bounds of Check A's path searches, far above real tokens: the most candidate paths one search examines, and the
+# most direct issuer adjacency tests its walk makes, before it fails closed.
+MAX_CANDIDATE_PATHS = 64
+MAX_SEARCH_STEPS = 4096
 
 
 def sha256(*parts):
@@ -1984,38 +1988,85 @@ def whole_chain_validates(path, token_time, directory):
     return code == 0 and output.count("depth=") == len(path)
 
 
-def enumerate_simple_paths(signer_fields, signer_parts, pool, trusted_hex, directory):
+class PathSearchBudget:
+    """The shared step count of one enumerate_simple_paths search, and whether it ran out."""
+
+    def __init__(self):
+        self.steps = 0
+        self.exhausted = False
+
+
+def enumerate_simple_paths(signer_der, signer_fields, signer_parts, pool, trusted_hex, directory, budget):
     """Yields every simple (non-repeating) path from the signer to a member of trusted_hex, following only edges of
     direct cryptographic issuer adjacency through pool (a list of (der, fields, parts) triples). A trusted root is
-    never recursed into further, so it is always a path's terminus."""
-    visited = set()
+    never recursed into further, so it is always a path's terminus.
 
-    def walk(fields, parts):
-        for der, candidate_fields, candidate_parts in pool:
-            key = der.hex()
-            if key in visited or not issuer_signature_ok(fields, parts, candidate_fields, directory):
+    The token's embedded certificates are not covered by its signature, so the pool can carry any number of
+    counterfeit certificates, for example a group of same-name, same-key certificates that all issue one another,
+    whose simple paths grow factorially. Only certificates that can reach a trusted root at all are therefore searched:
+    a backward search from the trusted roots finds them, and the counterfeits never join it, since issuing into a
+    genuine chain takes a key their author does not hold. Each adjacency test is computed once, and the search stops,
+    marking budget exhausted, after MAX_SEARCH_STEPS tests."""
+    nodes = [(signer_der, signer_fields, signer_parts)] + [entry for entry in pool if entry[0] != signer_der]
+    is_trusted = [index > 0 and der.hex() in trusted_hex for index, (der, _, _) in enumerate(nodes)]
+    adjacency = {}
+
+    def is_issuer(certificate, issuer):
+        if (certificate, issuer) not in adjacency:
+            adjacency[(certificate, issuer)] = issuer_signature_ok(nodes[certificate][1], nodes[certificate][2], nodes[issuer][1], directory)
+        return adjacency[(certificate, issuer)]
+
+    reaches_trust = list(is_trusted)
+    pending = [index for index in range(1, len(nodes)) if is_trusted[index]]
+    while pending:
+        issuer = pending.pop(0)
+        for index in range(1, len(nodes)):
+            if not reaches_trust[index] and is_issuer(index, issuer):
+                reaches_trust[index] = True
+                pending.append(index)
+
+    visited = [False] * len(nodes)
+    visited[0] = True
+
+    def walk(current):
+        for candidate in range(1, len(nodes)):
+            if budget.exhausted:
+                return
+            if visited[candidate] or not reaches_trust[candidate]:
                 continue
-            if key in trusted_hex:
+            budget.steps += 1
+            if budget.steps > MAX_SEARCH_STEPS:
+                budget.exhausted = True
+                return
+            if not is_issuer(current, candidate):
+                continue
+            der = nodes[candidate][0]
+            if is_trusted[candidate]:
                 yield [der]
             else:
-                visited.add(key)
-                for tail in walk(candidate_fields, candidate_parts):
+                visited[candidate] = True
+                for tail in walk(candidate):
                     yield [der] + tail
-                visited.discard(key)
+                visited[candidate] = False
 
-    yield from walk(signer_fields, signer_parts)
+    yield from walk(0)
 
 
-def has_alternate_path(signer_der, signer_fields, signer_parts, pool, trusted_hex, token_time, directory):
+def has_alternate_path(signer_der, signer_fields, signer_parts, pool, trusted_hex, token_time, directory,
+                       max_candidate_paths=MAX_CANDIDATE_PATHS):
     """Searches for an alternate path to trust that excludes a recorded position, proving by direct cryptographic
     issuer adjacency alone (never a chain-validation call, so no constraint propagated along a complete path is
     missed) that the position was not the only way the chain could reach trust. Any single path that also fully
     validates as a whole proves non-uniqueness; a merely graph-connected path that fails whole-chain validation does
-    not, and the search continues."""
-    for alternate in enumerate_simple_paths(signer_fields, signer_parts, pool, trusted_hex, directory):
+    not, and the search continues. The search fails closed: once it has examined more than max_candidate_paths
+    candidate paths, or its walk exhausted its budget, the position counts as not unique."""
+    budget = PathSearchBudget()
+    for examined, alternate in enumerate(enumerate_simple_paths(signer_der, signer_fields, signer_parts, pool, trusted_hex, directory, budget), 1):
+        if examined > max_candidate_paths:
+            return True
         if whole_chain_validates([signer_der, *alternate], token_time, directory):
             return True
-    return False
+    return budget.exhausted
 
 
 def build_candidate_pool(embedded, chain, trusted_der, directory, excluded=None):
@@ -2037,7 +2088,7 @@ def build_candidate_pool(embedded, chain, trusted_der, directory, excluded=None)
     return pool
 
 
-def reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, directory):
+def reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, directory, max_candidate_paths=MAX_CANDIDATE_PATHS):
     """Check A's primary validation: the stored chain's signer and every intermediate must begin, in order, a
     complete path that terminates at a certificate genuinely, currently a member of trusted_der — the one structural
     requirement chain_failure no longer enforces on trusted_der, since Check A and Check B alone decide trust. The
@@ -2046,12 +2097,17 @@ def reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, direct
     chain's own final certificate to itself be the trusted one; it may also simply be the stored chain itself, when
     that chain's own final certificate is already trusted — today's common, unaffected case. A path that is merely
     graph-connected to a trusted root is not enough: it must also fully validate as a whole (whole_chain_validates),
-    exactly as the per-position uniqueness search already requires of an alternate."""
+    exactly as the per-position uniqueness search already requires of an alternate. The search fails closed: once it
+    has examined more than max_candidate_paths candidate paths, or its walk exhausted its budget, the chain does not
+    reach trust."""
     n = len(chain)
     trusted_hex = {der.hex() for der in trusted_der}
     pool = build_candidate_pool(embedded, chain, trusted_der, directory)
     prefix = chain[:n - 1]
-    for alternate in enumerate_simple_paths(chain_fields[0], certificate_parts(chain[0]), pool, trusted_hex, directory):
+    budget = PathSearchBudget()
+    for examined, alternate in enumerate(enumerate_simple_paths(chain[0], chain_fields[0], certificate_parts(chain[0]), pool, trusted_hex, directory, budget), 1):
+        if examined > max_candidate_paths:
+            return False
         candidate = [chain[0], *alternate]
         if candidate[:n - 1] != prefix:
             continue
@@ -2060,7 +2116,21 @@ def reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, direct
     return False
 
 
-def matches_trusted_chain(chain, chain_fields, embedded, trusted_der, token_time, directory):
+def is_genuine_root(root, root_fields, trusted_der, directory):
+    """Whether a stored chain's final certificate is a genuine root in its own right: byte-identical to a configured
+    trusted root, or carrying a self-signature that verifies under its own key. `openssl verify` never verifies its
+    trust anchor's own signature, so without this a root whose signature alone was corrupted, keeping its subject and
+    key, would still anchor Check B. A configured root is accepted as configured, so a trusted root whose
+    self-signature uses a digest the direct signature check rejects, such as SHA-1, keeps working."""
+    if root in trusted_der:
+        return True
+    try:
+        return issuer_signature_ok(root_fields, certificate_parts(root), root_fields, directory)
+    except PARSE_ERRORS:
+        return False
+
+
+def matches_trusted_chain(chain, chain_fields, embedded, trusted_der, token_time, directory, max_candidate_paths=MAX_CANDIDATE_PATHS):
     """Requires the stored chain's signer and every intermediate to reach a genuinely, currently configured trusted
     root today (Check A's primary validation), to do so uniquely (Check A's per-position search), and for the stored
     chain's own recorded root to be independently genuine, not merely configured (Check B). Check A's per-position
@@ -2069,15 +2139,19 @@ def matches_trusted_chain(chain, chain_fields, embedded, trusted_der, token_time
     if n < 2:
         return False
     trusted_hex = {der.hex() for der in trusted_der}
-    if not reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, directory):
+    if not reaches_trust(chain, chain_fields, embedded, trusted_der, token_time, directory, max_candidate_paths):
         return False
     for position in range(1, n - 1):
         pool = build_candidate_pool(embedded, chain, trusted_der, directory, excluded=chain[position])
-        if has_alternate_path(chain[0], chain_fields[0], certificate_parts(chain[0]), pool, trusted_hex, token_time, directory):
+        if has_alternate_path(chain[0], chain_fields[0], certificate_parts(chain[0]), pool, trusted_hex, token_time, directory,
+                              max_candidate_paths):
             return False
 
-    # Check B: the stored chain's own certificates alone, trusting only its own final certificate, must reproduce
-    # the stored chain exactly; no other certificate is available to substitute for a corrupted or substituted root.
+    # Check B: the stored chain's own final certificate must be a genuine root in its own right, and the stored
+    # chain's own certificates alone, trusting only that root, must reproduce the stored chain exactly; no other
+    # certificate is available to substitute for a corrupted or substituted root.
+    if not is_genuine_root(chain[-1], chain_fields[-1], trusted_der, directory):
+        return False
     return whole_chain_validates(chain, token_time, directory)
 
 

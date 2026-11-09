@@ -30,9 +30,21 @@ internal static class TimestampTokenValidation
     private const String EcPublicKeyOid = "1.2.840.10045.2.1";
 
     /// <summary>
+    /// The most candidate paths Check A's per-position search examines before it fails closed, far beyond real
+    /// tokens; the specification states the same bound.
+    /// </summary>
+    private const Int32 MaximumCandidatePaths = 64;
+
+    /// <summary>
     /// The deepest DER nesting a token may have, far beyond real tokens; the specification states the same bound.
     /// </summary>
     private const Int32 MaximumDerDepth = 64;
+
+    /// <summary>
+    /// The most direct issuer adjacency tests Check A's per-position path walk makes before it fails closed, far beyond
+    /// real tokens; the specification states the same bound.
+    /// </summary>
+    private const Int32 MaximumSearchSteps = 4096;
 
     private const Int32 MinimumEcKeySize = 256;
     private const Int32 MinimumRsaKeySize = 2048;
@@ -292,7 +304,10 @@ internal static class TimestampTokenValidation
     ///     <para>
     ///     <b>Check B.</b> Independently of Check A, <paramref name="storedOrReceived"/>'s own final certificate must
     ///     itself be proven, in isolation, to be genuinely self-issued and the genuine cryptographic issuer of the
-    ///     certificate before it, recursively to the signer. This catches a corrupted or substituted stored root that
+    ///     certificate before it, recursively to the signer. Chain building never verifies its trust anchor's own
+    ///     signature, so the final certificate must also be byte-identical to a configured trusted root or carry a
+    ///     self-signature that verifies under its own key; otherwise a root whose signature alone was corrupted, keeping
+    ///     its subject and key, would pass. This catches a corrupted or substituted stored root that
     ///     Check A's path search alone would not: when two roots are configured and the signer is genuinely issued by
     ///     one, but the stored chain records the other as its final certificate, Check A's search simply finds the
     ///     real path through the first, while Check B fails to reproduce <paramref name="storedOrReceived"/> from its
@@ -307,12 +322,17 @@ internal static class TimestampTokenValidation
     /// </param>
     /// <param name="storedOrReceived">The stored or received chain, from the signer to its own recorded root.</param>
     /// <param name="settings">The trust settings <paramref name="built"/> was built with.</param>
+    /// <param name="maximumCandidatePaths">
+    /// The most candidate paths Check A's search examines per recorded position before it fails closed; only tests
+    /// lower it, to reach the bound with a handful of genuine alternates.
+    /// </param>
     /// <returns><c>true</c> when both checks succeed.</returns>
     public static Boolean MatchesTrustedChain(Rfc3161TimestampToken token,
                                               X509Certificate2 signer,
                                               IReadOnlyList<Byte[]> built,
                                               X509Certificate2Collection storedOrReceived,
-                                              ChainSettings settings)
+                                              ChainSettings settings,
+                                              Int32 maximumCandidatePaths = MaximumCandidatePaths)
     {
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(signer);
@@ -335,10 +355,15 @@ internal static class TimestampTokenValidation
         {
             for (var position = 1; position <= stored.Count - 2; position++)
             {
-                if (HasAlternatePath(signer, stored, position, embedded, settings, verificationTime))
+                if (HasAlternatePath(signer, stored, position, embedded, settings, verificationTime, maximumCandidatePaths))
                 {
                     return false;
                 }
+            }
+
+            if (!IsGenuineRoot(stored[^1], settings.TrustedRoots))
+            {
+                return false;
             }
 
             var ownPath = BuildIsolatedChain(signer, verificationTime, stored.Take(stored.Count - 1).ToList(), stored[^1], settings.RevocationMode,
@@ -707,50 +732,102 @@ internal static class TimestampTokenValidation
     /// (<see cref="DirectSignatureVerification.IsDirectIssuer"/>) through <paramref name="pool"/>. A trusted root is
     /// never recursed into further, so it is always a path's terminus.
     /// </summary>
+    /// <remarks>
+    /// The token's embedded certificates are not covered by its signature, so <paramref name="pool"/> can carry any
+    /// number of counterfeit certificates, for example a group of same-name, same-key certificates that all issue one
+    /// another, whose simple paths grow factorially. Only certificates that can reach a trusted root at all are
+    /// therefore searched: a backward search from the trusted roots finds them, and the counterfeits never join it,
+    /// since issuing into a genuine chain takes a key their author does not hold. Each adjacency test is computed once,
+    /// and the search stops, marking <paramref name="budget"/> exhausted, after <see cref="MaximumSearchSteps"/> tests.
+    /// </remarks>
     private static IEnumerable<List<X509Certificate2>> EnumerateSimplePaths(X509Certificate2 start,
                                                                             IReadOnlyList<X509Certificate2> pool,
-                                                                            X509Certificate2Collection trustedRoots)
+                                                                            X509Certificate2Collection trustedRoots,
+                                                                            PathSearchBudget budget)
     {
         var trusted = trustedRoots.Select(root => Convert.ToHexString(root.RawData)).ToHashSet();
+        List<X509Certificate2> nodes = [start, .. pool.Where(candidate => !candidate.RawData.AsSpan().SequenceEqual(start.RawData))];
+        var isTrusted = nodes.Select(node => trusted.Contains(Convert.ToHexString(node.RawData))).ToArray();
+        isTrusted[0] = false;
+        var adjacency = new Dictionary<(Int32 Certificate, Int32 Issuer), Boolean>();
+
+        var reachesTrust = (Boolean[])isTrusted.Clone();
+        var pending = new Queue<Int32>(Enumerable.Range(1, nodes.Count - 1).Where(index => isTrusted[index]));
+        while (pending.TryDequeue(out var issuer))
+        {
+            for (var index = 1; index < nodes.Count; index++)
+            {
+                if (!reachesTrust[index] && IsIssuer(index, issuer))
+                {
+                    reachesTrust[index] = true;
+                    pending.Enqueue(index);
+                }
+            }
+        }
+
         var path = new List<X509Certificate2>
         {
             start
         };
-        var visited = new HashSet<String>
-        {
-            Convert.ToHexString(start.RawData)
-        };
-        foreach (var result in Walk(start))
+        var visited = new Boolean[nodes.Count];
+        visited[0] = true;
+        foreach (var result in Walk(0))
         {
             yield return result;
         }
 
         yield break;
 
-        IEnumerable<List<X509Certificate2>> Walk(X509Certificate2 current)
+        Boolean IsIssuer(Int32 certificate, Int32 issuer)
         {
-            foreach (var candidate in pool)
+            if (!adjacency.TryGetValue((certificate, issuer), out var isIssuer))
             {
-                var key = Convert.ToHexString(candidate.RawData);
-                if (visited.Contains(key) || !DirectSignatureVerification.IsDirectIssuer(current, candidate))
+                isIssuer = DirectSignatureVerification.IsDirectIssuer(nodes[certificate], nodes[issuer]);
+                adjacency[(certificate, issuer)] = isIssuer;
+            }
+
+            return isIssuer;
+        }
+
+        IEnumerable<List<X509Certificate2>> Walk(Int32 current)
+        {
+            for (var candidate = 1; candidate < nodes.Count; candidate++)
+            {
+                if (budget.IsExhausted)
+                {
+                    yield break;
+                }
+
+                if (visited[candidate] || !reachesTrust[candidate])
                 {
                     continue;
                 }
 
-                path.Add(candidate);
-                if (trusted.Contains(key))
+                if (++budget.Steps > MaximumSearchSteps)
+                {
+                    budget.IsExhausted = true;
+                    yield break;
+                }
+
+                if (!IsIssuer(current, candidate))
+                {
+                    continue;
+                }
+
+                path.Add(nodes[candidate]);
+                if (isTrusted[candidate])
                 {
                     yield return [.. path];
                 }
                 else
                 {
-                    visited.Add(key);
+                    visited[candidate] = true;
                     foreach (var result in Walk(candidate))
                     {
                         yield return result;
                     }
 
-                    visited.Remove(key);
+                    visited[candidate] = false;
                 }
 
                 path.RemoveAt(path.Count - 1);
@@ -786,15 +863,20 @@ internal static class TimestampTokenValidation
     /// Searches for a simple path from the signer to a trusted root that excludes the recorded certificate at a
     /// position, proving by direct cryptographic issuer adjacency alone (never a chain-validation call, so no
     /// constraint propagated along a complete path is missed) that the position was not the only way the chain could
-    /// reach trust.
+    /// reach trust. The search fails closed: once it has examined more than <paramref name="maximumCandidatePaths"/>
+    /// candidate paths, or <see cref="EnumerateSimplePaths"/> exhausted its budget, the position counts as not unique.
     /// </summary>
-    /// <returns><c>true</c> when an alternate path exists and fully validates in isolation.</returns>
+    /// <returns>
+    /// <c>true</c> when an alternate path exists and fully validates in isolation, or when the search exceeded its
+    /// bounds.
+    /// </returns>
     private static Boolean HasAlternatePath(X509Certificate2 signer,
                                             IReadOnlyList<X509Certificate2> stored,
                                             Int32 excludedPosition,
                                             IReadOnlyList<X509Certificate2> embedded,
                                             ChainSettings settings,
-                                            DateTimeOffset verificationTime)
+                                            DateTimeOffset verificationTime,
+                                            Int32 maximumCandidatePaths)
     {
         var excluded = stored[excludedPosition].RawData;
         var pool = embedded.Concat(settings.ExtraCertificates)
@@ -803,8 +885,15 @@ internal static class TimestampTokenValidation
                            .DistinctBy(candidate => Convert.ToHexString(candidate.RawData))
                            .ToList();
 
-        foreach (var path in EnumerateSimplePaths(signer, pool, settings.TrustedRoots))
+        var budget = new PathSearchBudget();
+        var examined = 0;
+        foreach (var path in EnumerateSimplePaths(signer, pool, settings.TrustedRoots, budget))
         {
+            if (++examined > maximumCandidatePaths)
+            {
+                return true;
+            }
+
             var candidates = path.Take(path.Count - 1).ToList();
             var built = BuildIsolatedChain(signer, verificationTime, candidates, path[^1], settings.RevocationMode, settings.RevocationCheckTimeout);
             if (built is not null && SequenceEqualBytes(built, path.Select(certificate => certificate.RawData).ToList()))
@@ -813,7 +902,7 @@ internal static class TimestampTokenValidation
             }
         }
 
-        return false;
+        return budget.IsExhausted;
     }
 
     /// <summary>
@@ -842,6 +931,18 @@ internal static class TimestampTokenValidation
             return false;
         }
     }
+
+    /// <summary>
+    /// Gets a value indicating whether a stored chain's final certificate is a genuine root in its own right:
+    /// byte-identical to a configured trusted root, or carrying a self-signature that verifies under its own key.
+    /// Chain building never verifies its trust anchor's own signature, so without this a root whose signature alone was
+    /// corrupted, keeping its subject and key, would still anchor Check B. A configured root is accepted as configured,
+    /// so a trusted root whose self-signature uses a digest <see cref="DirectSignatureVerification"/> rejects, such as
+    /// SHA-1, keeps working.
+    /// </summary>
+    private static Boolean IsGenuineRoot(X509Certificate2 root, X509Certificate2Collection trustedRoots)
+        => trustedRoots.Any(trusted => trusted.RawData.AsSpan().SequenceEqual(root.RawData)) ||
+           DirectSignatureVerification.IsDirectIssuer(root, root);
 
     /// <summary>
     /// Gets the encoding a name's attribute value of a string type is decoded with, or <c>null</c> for other types.
@@ -972,5 +1073,15 @@ internal static class TimestampTokenValidation
                 certificate.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// The shared step count of one <see cref="EnumerateSimplePaths"/> search, and whether it ran out.
+    /// </summary>
+    private sealed class PathSearchBudget
+    {
+        public Boolean IsExhausted { get; set; }
+
+        public Int32 Steps { get; set; }
     }
 }
