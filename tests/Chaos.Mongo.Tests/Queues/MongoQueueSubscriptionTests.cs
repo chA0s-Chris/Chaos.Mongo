@@ -243,6 +243,9 @@ public class MongoQueueSubscriptionTests
                 AttemptCount = 1
             });
         collectionMock
+            .Setup(c => c.WithReadPreference(ReadPreference.Primary))
+            .Returns(collectionMock.Object);
+        collectionMock
             .Setup(c => c.FindAsync(
                        It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
                        It.IsAny<FindOptions<MongoQueueItem<TestPayload>, MongoQueueItem<TestPayload>>>(),
@@ -509,6 +512,9 @@ public class MongoQueueSubscriptionTests
                 AttemptCount = 1
             });
         collectionMock
+            .Setup(c => c.WithReadPreference(ReadPreference.Primary))
+            .Returns(collectionMock.Object);
+        collectionMock
             .Setup(c => c.FindAsync(
                        It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
                        It.IsAny<FindOptions<MongoQueueItem<TestPayload>, MongoQueueItem<TestPayload>>>(),
@@ -551,6 +557,35 @@ public class MongoQueueSubscriptionTests
         metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingSucceeded);
         metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingDuration);
         metricsCollector.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.ProcessingQueueAge);
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_WhenLockAcquired_ReadsPayloadFromPrimary()
+    {
+        // Arrange: the acquire runs on the primary, but the collection inherits the client's read preference.
+        // The follow-up payload read must not go to a secondary that may not have replicated the item yet,
+        // or replication lag would be counted as a failed attempt.
+        var queueItemId = ObjectId.GenerateNewId();
+        var collection = new RecordingQueueItemCollection(queueItemId, DateTime.UtcNow.AddMinutes(-1));
+        var handlerInvoked = false;
+        var payloadHandlerFactory = new StubPayloadHandlerFactory(() =>
+        {
+            handlerInvoked = true;
+            return Task.CompletedTask;
+        });
+
+        var sut = CreateSubscription(payloadHandlerFactory: payloadHandlerFactory);
+        var method = GetPrivateMethod("ProcessQueueItemAsync",
+        [
+            typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)
+        ]);
+
+        // Act
+        await (Task)method.Invoke(sut, [collection, queueItemId, CancellationToken.None])!;
+
+        // Assert
+        collection.FindReadPreference.Should().Be(ReadPreference.Primary);
+        handlerInvoked.Should().BeTrue();
     }
 
     [Test]
@@ -690,6 +725,9 @@ public class MongoQueueSubscriptionTests
                 LockedUtc = recoveredLockUtc,
                 AttemptCount = 1
             });
+        collectionMock
+            .Setup(c => c.WithReadPreference(ReadPreference.Primary))
+            .Returns(collectionMock.Object);
         collectionMock
             .Setup(c => c.FindAsync(
                        It.IsAny<FilterDefinition<MongoQueueItem<TestPayload>>>(),
@@ -1057,10 +1095,13 @@ public class MongoQueueSubscriptionTests
     /// Base type for hand-crafted <see cref="IMongoCollection{TDocument}"/> test doubles used by
     /// <c>ProcessQueueItemAsync</c>/<c>HandleFailedQueueItemAsync</c> tests. Every member throws
     /// <see cref="NotSupportedException"/> by default; derived doubles override only the members their
-    /// scenario actually reaches.
+    /// scenario actually reaches. The one exception is <see cref="WithReadPreference"/>, which every acquired
+    /// item reaches through its payload read: it records the requested preference and returns the same double.
     /// </summary>
     private abstract class QueueItemCollectionTestDoubleBase : IMongoCollection<MongoQueueItem<TestPayload>>
     {
+        public ReadPreference? RequestedReadPreference { get; private set; }
+
         public virtual CollectionNamespace CollectionNamespace => throw new NotSupportedException();
         public virtual IMongoDatabase Database => throw new NotSupportedException();
         public virtual IBsonSerializer<MongoQueueItem<TestPayload>> DocumentSerializer => throw new NotSupportedException();
@@ -1387,7 +1428,13 @@ public class MongoQueueSubscriptionTests
             throw new NotSupportedException();
 
         public virtual IMongoCollection<MongoQueueItem<TestPayload>> WithReadConcern(ReadConcern readConcern) => throw new NotSupportedException();
-        public virtual IMongoCollection<MongoQueueItem<TestPayload>> WithReadPreference(ReadPreference readPreference) => throw new NotSupportedException();
+
+        public IMongoCollection<MongoQueueItem<TestPayload>> WithReadPreference(ReadPreference readPreference)
+        {
+            RequestedReadPreference = readPreference;
+            return this;
+        }
+
         public virtual IMongoCollection<MongoQueueItem<TestPayload>> WithWriteConcern(WriteConcern writeConcern) => throw new NotSupportedException();
 
         IFilteredMongoCollection<TDerivedDocument> IMongoCollection<MongoQueueItem<TestPayload>>.OfType<TDerivedDocument>() => throw new NotSupportedException();
@@ -1413,6 +1460,7 @@ public class MongoQueueSubscriptionTests
 
         public Int32 DeleteOneCallCount { get; private set; }
         public Int64 DeletedCount { get; set; } = 1;
+        public ReadPreference? FindReadPreference { get; private set; }
         public CancellationToken LastDeleteCancellationToken { get; private set; }
         public BsonDocument? LastDeleteFilter { get; private set; }
         public CancellationToken LastUpdateCancellationToken { get; private set; }
@@ -1433,6 +1481,7 @@ public class MongoQueueSubscriptionTests
                                                                                FindOptions<MongoQueueItem<TestPayload>, TProjection> options,
                                                                                CancellationToken cancellationToken)
         {
+            FindReadPreference = RequestedReadPreference;
             var queueItem = new MongoQueueItem<TestPayload>
             {
                 Id = _queueItemId,

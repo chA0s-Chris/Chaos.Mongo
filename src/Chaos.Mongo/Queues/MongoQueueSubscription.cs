@@ -537,8 +537,11 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             {
                 // A second, separate, typed read: the only place Payload is deserialized, so a permanently
                 // undeserializable payload fails here (handled exactly like a handler exception) instead of
-                // ever failing the acquire itself.
-                queueItem = await collection.Find(Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.Id, queueItemId))
+                // ever failing the acquire itself. It always reads from the primary, which just applied the acquire:
+                // under a non-primary read preference a lagging secondary may not have the item yet, and that miss
+                // would be counted as a failed attempt.
+                queueItem = await collection.WithReadPreference(ReadPreference.Primary)
+                                            .Find(Builders<MongoQueueItem<TPayload>>.Filter.Eq(x => x.Id, queueItemId))
                                             .FirstAsync(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
