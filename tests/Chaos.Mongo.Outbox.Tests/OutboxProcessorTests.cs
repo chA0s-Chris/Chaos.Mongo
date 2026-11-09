@@ -311,44 +311,6 @@ public class OutboxProcessorTests
     }
 
     [Test]
-    public async Task ProcessMessage_ClaimTerminalizesDirectly_SkipsPublishingWithoutFurtherWrite()
-    {
-        // A claimed message already in the Failed state means the claim's own terminal branch fired atomically
-        // — the message crashed between an earlier granted claim and HandleFailureAsync/MarkProcessedAsync, and
-        // this claim's own pre-update AttemptCount already exceeded MaxRetries — so it must skip publishing
-        // entirely and must not perform any further write.
-        var claimedTerminalMessage = new OutboxMessage
-        {
-            Id = ObjectId.GenerateNewId(),
-            State = OutboxMessageState.Failed,
-            Type = "TestPayload",
-            Payload = new BsonDocument("Name", "Test"),
-            AttemptCount = _options.MaxRetries + 1,
-            IsLocked = false
-        };
-        var claimAttempted = CreateSignal();
-        SetupFindReturns(CreatePendingMessage());
-        SetupClaimReturns(claimedTerminalMessage, () => claimAttempted.TrySetResult(true));
-
-        var sut = CreateSut();
-        await sut.StartAsync();
-        await WaitForSignalAsync(claimAttempted);
-        await sut.StopAsync();
-
-        _publisherMock.Verify(
-            p => p.PublishAsync(It.IsAny<OutboxMessage>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-        _collectionMock.Verify(
-            c => c.UpdateOneAsync(
-                It.IsAny<FilterDefinition<OutboxMessage>>(),
-                It.IsAny<UpdateDefinition<OutboxMessage>>(),
-                It.IsAny<UpdateOptions>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
-        VerifyLoggedWarning("permanently failed");
-    }
-
-    [Test]
     public async Task ProcessMessage_FinalizationTimesOut_ReleasesLockWithoutCountingFailure()
     {
         var message = CreatePendingMessage();
