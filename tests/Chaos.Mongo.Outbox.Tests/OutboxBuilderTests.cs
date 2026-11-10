@@ -152,7 +152,7 @@ public class OutboxBuilderTests
     }
 
     [Test]
-    public void WithExpireFailedMessages_SetsOption()
+    public void WithExpireFailedMessages_Called_EnablesExpiry()
     {
         var builder = new OutboxBuilder();
 
