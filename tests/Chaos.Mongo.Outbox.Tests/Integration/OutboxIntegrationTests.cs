@@ -211,7 +211,7 @@ public class OutboxIntegrationTests
         var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
         var updateResult = await collection.UpdateOneAsync(
             FilterDefinition<OutboxMessage>.Empty,
-            Builders<OutboxMessage>.Update.Set(m => m.AttemptCount, _options.MaxRetries));
+            Builders<OutboxMessage>.Update.Set(m => m.AttemptCount, _options.MaxRetries!.Value));
 
         updateResult.ModifiedCount.Should().Be(1);
 
@@ -235,7 +235,7 @@ public class OutboxIntegrationTests
         var message = await collection.Find(FilterDefinition<OutboxMessage>.Empty).FirstAsync();
         message.State.Should().Be(OutboxMessageState.Failed);
         message.FailedUtc.Should().NotBeNull();
-        message.AttemptCount.Should().Be(_options.MaxRetries + 1);
+        message.AttemptCount.Should().Be(_options.MaxRetries!.Value + 1);
     }
 
     [Test]

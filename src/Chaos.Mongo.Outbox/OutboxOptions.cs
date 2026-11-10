@@ -12,8 +12,9 @@ internal sealed class OutboxOptions
 {
     public const Int32 DefaultBatchSize = 100;
     public const String DefaultCollectionName = "Outbox";
+    public const Boolean DefaultExpireFailedMessages = false;
     public static readonly TimeSpan DefaultLockLeaseTime = TimeSpan.FromMinutes(5);
-    public const Int32 DefaultMaxRetries = 5;
+    public static readonly Int32? DefaultMaxRetries = null;
     public static readonly TimeSpan DefaultPollingInterval = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan DefaultRetryBackoffInitialDelay = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan DefaultRetryBackoffMaxDelay = TimeSpan.FromMinutes(5);
@@ -37,6 +38,13 @@ internal sealed class OutboxOptions
     public String CollectionName { get; init; } = DefaultCollectionName;
 
     /// <summary>
+    /// Gets or sets whether <c>Failed</c> messages are included in the TTL index created when
+    /// <see cref="RetentionPeriod"/> is configured. Defaults to <c>false</c>, so <c>Failed</c> messages are
+    /// retained indefinitely even when a retention period is set; only <c>Processed</c> messages expire.
+    /// </summary>
+    public Boolean ExpireFailedMessages { get; init; } = DefaultExpireFailedMessages;
+
+    /// <summary>
     /// Gets or sets the lock lease time after which a locked message is considered stale and can be reclaimed.
     /// Defaults to <c>5 minutes</c>.
     /// </summary>
@@ -46,9 +54,11 @@ internal sealed class OutboxOptions
     /// Gets or sets the number of retries allowed after the first delivery attempt before a message is
     /// permanently marked as failed. A configured value of <c>N</c> allows <c>N + 1</c> total delivery
     /// attempts; every lock claim counts as a delivery attempt, not only a failed <see cref="IOutboxPublisher"/>
-    /// call. This is the same meaning as a queue's <c>MongoQueueDefinition.MaxRetries</c>. Defaults to <c>5</c>.
+    /// call. This is the same meaning as a queue's <c>MongoQueueDefinition.MaxRetries</c>. Defaults to <c>null</c>,
+    /// which grants unlimited attempts bounded only by <see cref="RetryBackoffMaxDelay"/>, so a message is never
+    /// terminalized purely for exhausting an attempt budget.
     /// </summary>
-    public Int32 MaxRetries { get; init; } = DefaultMaxRetries;
+    public Int32? MaxRetries { get; init; } = DefaultMaxRetries;
 
     /// <summary>
     /// Gets a frozen lookup from payload type to discriminator, built after configuration is complete.
@@ -72,8 +82,9 @@ internal sealed class OutboxOptions
     public FilterDefinition<OutboxMessage>? ProcessingFilter { get; init; }
 
     /// <summary>
-    /// Gets or sets the optional retention period for processed and failed messages.
-    /// When set, TTL indexes are created to automatically remove messages after this period.
+    /// Gets or sets the optional retention period for processed messages, and for failed messages when
+    /// <see cref="ExpireFailedMessages"/> is also set. When set, a TTL index is created for <c>Processed</c>
+    /// messages, and another for <c>Failed</c> messages only if <see cref="ExpireFailedMessages"/> is <c>true</c>.
     /// When <c>null</c>, messages are retained indefinitely.
     /// </summary>
     public TimeSpan? RetentionPeriod { get; init; }

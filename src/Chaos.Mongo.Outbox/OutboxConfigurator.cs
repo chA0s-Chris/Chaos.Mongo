@@ -67,18 +67,25 @@ internal sealed class OutboxConfigurator : IMongoConfigurator
 
             await collection.Indexes.CreateOneOrUpdateAsync(processedTtlIndex, cancellationToken: cancellationToken);
 
-            var failedTtlIndex = new CreateIndexModel<OutboxMessage>(
-                Builders<OutboxMessage>.IndexKeys.Ascending(m => m.FailedUtc),
-                new CreateIndexOptions<OutboxMessage>
-                {
-                    Name = FailedTtlIndexName,
-                    ExpireAfter = _options.RetentionPeriod.Value,
-                    PartialFilterExpression = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Failed) &
-                                              Builders<OutboxMessage>.Filter.Exists(m => m.FailedUtc) &
-                                              Builders<OutboxMessage>.Filter.Type(m => m.FailedUtc, BsonType.DateTime)
-                });
+            if (_options.ExpireFailedMessages)
+            {
+                var failedTtlIndex = new CreateIndexModel<OutboxMessage>(
+                    Builders<OutboxMessage>.IndexKeys.Ascending(m => m.FailedUtc),
+                    new CreateIndexOptions<OutboxMessage>
+                    {
+                        Name = FailedTtlIndexName,
+                        ExpireAfter = _options.RetentionPeriod.Value,
+                        PartialFilterExpression = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Failed) &
+                                                  Builders<OutboxMessage>.Filter.Exists(m => m.FailedUtc) &
+                                                  Builders<OutboxMessage>.Filter.Type(m => m.FailedUtc, BsonType.DateTime)
+                    });
 
-            await collection.Indexes.CreateOneOrUpdateAsync(failedTtlIndex, cancellationToken: cancellationToken);
+                await collection.Indexes.CreateOneOrUpdateAsync(failedTtlIndex, cancellationToken: cancellationToken);
+            }
+            else
+            {
+                await collection.Indexes.DropOneIfExistsAsync(FailedTtlIndexName, cancellationToken);
+            }
         }
         else
         {

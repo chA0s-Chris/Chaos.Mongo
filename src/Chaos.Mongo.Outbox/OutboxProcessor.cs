@@ -108,11 +108,13 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             $"${nameof(OutboxMessage.AttemptCount)}",
             0L
         });
-        BsonValue grant = new BsonDocument("$lte", new BsonArray
-        {
-            existingAttemptCount,
-            _options.MaxRetries
-        });
+        BsonValue grant = _options.MaxRetries.HasValue
+            ? new BsonDocument("$lte", new BsonArray
+            {
+                existingAttemptCount,
+                _options.MaxRetries.Value
+            })
+            : BsonBoolean.True;
         BsonValue nowLiteral = new BsonDateTime(now);
         var failedStateLiteral = Builders<OutboxMessage>.Filter.Eq(m => m.State, OutboxMessageState.Failed)
                                                         .Render(new RenderArgs<OutboxMessage>(BsonSerializer.LookupSerializer<OutboxMessage>(), BsonSerializer.SerializerRegistry))
@@ -211,7 +213,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
 
         UpdateDefinition<OutboxMessage> failureUpdate;
 
-        if (attemptCount > _options.MaxRetries)
+        if (_options.MaxRetries.HasValue && attemptCount > _options.MaxRetries.Value)
         {
             // Permanently failed
             failureUpdate = Builders<OutboxMessage>.Update

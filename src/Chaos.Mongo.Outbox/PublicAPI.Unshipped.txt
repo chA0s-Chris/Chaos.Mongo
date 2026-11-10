@@ -1,4 +1,5 @@
 #nullable enable
+Chaos.Mongo.Outbox.OutboxBuilder.WithExpireFailedMessages() -> Chaos.Mongo.Outbox.OutboxBuilder!
 Chaos.Mongo.Outbox.OutboxBuilder.WithLockLeaseTime(System.TimeSpan leaseTime) -> Chaos.Mongo.Outbox.OutboxBuilder!
 *REMOVED*Chaos.Mongo.Outbox.OutboxMessage.RetryCount.get -> int
 *REMOVED*Chaos.Mongo.Outbox.OutboxMessage.RetryCount.set -> void

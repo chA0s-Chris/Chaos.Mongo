@@ -64,6 +64,7 @@ public class OutboxRetentionCamelCaseIntegrationTests
                 })
                 .WithOutbox(builder => builder.WithMessage<CamelCaseRetentionPayload>("CamelCaseRetentionPayload")
                                               .WithRetentionPeriod(TimeSpan.FromSeconds(2))
+                                              .WithExpireFailedMessages()
                                               .WithPublisher<PassiveOutboxPublisher>());
 
         await using var serviceProvider = services.BuildServiceProvider();
