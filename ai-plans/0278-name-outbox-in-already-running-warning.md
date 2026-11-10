@@ -22,20 +22,20 @@ affected message belongs to, only its `MessageId`. `OutboxHostedService` has no 
 
 ## Acceptance Criteria
 
-- [ ] Starting a processor that is already running logs a warning whose message text names the outbox
+- [x] Starting a processor that is already running logs a warning whose message text names the outbox
       identity and collection name, and states that the processor is likely being started both
       automatically (via `WithAutoStartProcessor()`) and manually (via `StartAsync`).
-- [ ] An automated test covers this warning's message text for both the default outbox and a typed outbox
+- [x] An automated test covers this warning's message text for both the default outbox and a typed outbox
       registered with a distinct identity/collection.
-- [ ] Every other `LogWarning` call in `OutboxProcessor` (permanent failure after exhausting retries in
+- [x] Every other `LogWarning` call in `OutboxProcessor` (permanent failure after exhausting retries in
       `HandleFailureAsync` and in `ProcessMessageAsync`'s terminal-claim branch, the scheduled-retry
       message in `HandleFailureAsync`, the lost-ownership messages in `HandleFailureAsync` and
       `MarkProcessedAsync`, the finalize-timeout message in `MarkProcessedAsync`, and the lock-release
       failure in `TryReleaseLockAsync`) also names the outbox identity and collection, so each reads
       unambiguously without relying on rendered log scopes.
-- [ ] Existing tests that assert on a substring of these warning messages (`VerifyLoggedWarning` calls in
+- [x] Existing tests that assert on a substring of these warning messages (`VerifyLoggedWarning` calls in
       `OutboxProcessorTests`) still pass with the updated text.
-- [ ] The Release build has no warnings and the full test suite passes.
+- [x] The Release build has no warnings and the full test suite passes.
 
 ## Technical Details
 

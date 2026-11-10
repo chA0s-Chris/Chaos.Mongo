@@ -100,6 +100,37 @@ public class TypedOutboxLifecycleTests
     }
 
     [Test]
+    public async Task StartAsync_WhenAlreadyRunningForRegisteredDefaultAndTypedOutboxes_LogsWarningNamingEachOutboxIdentityAndCollection()
+    {
+        var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
+        var logs = new OutboxLogCapture();
+        using var host = CreateHost(database, false, false, logs);
+        await host.StartAsync();
+        try
+        {
+            // Both outboxes are already running via WithAutoStartProcessor(); starting them again manually
+            // reproduces the scenario from the issue and must log a warning naming each one.
+            await host.Services.GetRequiredService<IOutboxProcessor>().StartAsync();
+            await host.Services.GetRequiredService<IOutboxProcessor<FirstDestination>>().StartAsync();
+
+            foreach (var (identity, collection) in new[]
+                     {
+                         ("Default", "Outbox"),
+                         ("FirstDestination", "First")
+                     })
+            {
+                logs.Entries.Should().Contain(e => e.Level == LogLevel.Warning &&
+                                                   e.Message.Contains($"'{identity}'") &&
+                                                   e.Message.Contains($"'{collection}'"));
+            }
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+    }
+
+    [Test]
     public async Task StartAsync_DifferentPollingIntervals_PollsEachDestinationOnItsOwnSchedule()
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
@@ -354,7 +385,7 @@ internal sealed class EmptyOutboxCursor : IAsyncCursor<OutboxMessage>
 internal sealed class OutboxLogCapture : ILoggerProvider, ISupportExternalScope
 {
     private IExternalScopeProvider _scopes = new LoggerExternalScopeProvider();
-    public ConcurrentBag<(String Category, List<KeyValuePair<String, Object?>> Values)> Entries { get; } = [];
+    public ConcurrentBag<(String Category, LogLevel Level, String Message, List<KeyValuePair<String, Object?>> Values)> Entries { get; } = [];
     public void Dispose() { }
     public ILogger CreateLogger(String categoryName) => new CapturingOutboxLogger(categoryName, this, () => _scopes);
     public void SetScopeProvider(IExternalScopeProvider scopeProvider) => _scopes = scopeProvider;
@@ -386,6 +417,6 @@ internal sealed class CapturingOutboxLogger : ILogger
         }, values);
         if (state is IEnumerable<KeyValuePair<String, Object?>> pairs)
             values.AddRange(pairs);
-        _capture.Entries.Add((_category, values));
+        _capture.Entries.Add((_category, logLevel, formatter(state, exception), values));
     }
 }
