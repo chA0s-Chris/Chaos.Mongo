@@ -73,6 +73,7 @@ internal static class MongoSerializationSetup
             cm.GetMemberMap(i => i.AttemptCount).SetElementName(nameof(MongoQueueItem.AttemptCount));
             cm.GetMemberMap(i => i.ClosedUtc).SetElementName(nameof(MongoQueueItem.ClosedUtc));
             cm.GetMemberMap(i => i.CreatedUtc).SetElementName(nameof(MongoQueueItem.CreatedUtc));
+            cm.GetMemberMap(i => i.DeferredUtc).SetElementName(nameof(MongoQueueItem.DeferredUtc));
             cm.GetMemberMap(i => i.IsClosed).SetElementName(nameof(MongoQueueItem.IsClosed));
             cm.GetMemberMap(i => i.IsLocked).SetElementName(nameof(MongoQueueItem.IsLocked));
             cm.GetMemberMap(i => i.IsTerminal).SetElementName(nameof(MongoQueueItem.IsTerminal));

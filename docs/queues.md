@@ -180,6 +180,13 @@ The prioritizer is shared by registered queues, so provide a deterministic fallb
   expires; the next reclaim then finds the existing count `2 > 1` and transitions the item straight to terminal.
 - Successful items are retained for one hour by default and removed by a TTL index on `ClosedUtc`.
 - Terminal items remain queryable for inspection and dead-letter workflows.
+- `chaos.mongo.queue.lock.recovered` reflects only a lock actually abandoned by a crash, not an ordinary, already
+  retried and already-logged failure: a resolved failure records that it deferred the item's retry, so the next
+  reacquisition recognizes it and skips the recovery metric and warning for it.
+- Change-stream notifications require a replica set or sharded cluster. On a standalone server, the subscription
+  logs one clear message identifying that cause and relies on polling alone for the lifetime of that subscription,
+  bounded by `WithLockLeaseTime(...)`/the lease recovery interval; it does not get real-time notification of newly
+  published items. Any other change-stream failure retries with increasing backoff instead of failing the queue.
 
 `IMongoQueue<TPayload>.IsRunning`, `StartSubscriptionAsync` and `StopSubscriptionAsync` are backed internally by
 `IMongoQueueSubscription<TPayload>`, which manages the change-stream monitor and processing loop. It is public for

@@ -27,27 +27,27 @@ actually support.
 
 ## Acceptance Criteria
 
-- [ ] An idle queue (no available items, no change-stream activity) issues an availability query no more often
+- [x] An idle queue (no available items, no change-stream activity) issues an availability query no more often
       than once per the subscription's wake interval (`min(LockLeaseTime, MaxLeaseRecoveryWakeInterval)`), verified
       by a test that simulates an idle period across multiple wake intervals and counts queries.
-- [ ] A queue item published after `StartAsync` is called, but before the change stream has started reporting
+- [x] A queue item published after `StartAsync` is called, but before the change stream has started reporting
       inserts, is still picked up without waiting for a full `leaseRecoveryWakeInterval`, verified by a test.
-- [ ] A queue item whose handler throws and is granted a retry (attempt count still within `MaxRetries`) does not
+- [x] A queue item whose handler throws and is granted a retry (attempt count still within `MaxRetries`) does not
       record `chaos.mongo.queue.lock.recovered` or log a recovery warning on its next, successful reacquisition,
       verified by a test. A lock abandoned by a crash (no resolved failure ever recorded) still records
       `lock.recovered` on reacquisition, verified by a test.
-- [ ] When `MonitorChangeStreamAsync`'s `WatchAsync` call fails because the server is not a replica set or sharded
+- [x] When `MonitorChangeStreamAsync`'s `WatchAsync` call fails because the server is not a replica set or sharded
       cluster, the subscription logs exactly one clear message identifying that cause (no repeated error-level
       stack traces) and stops retrying the change stream for that subscription; queue processing continues through
       polling alone, verified by a test.
-- [ ] Any other `MonitorChangeStreamAsync` failure retries with increasing backoff (capped) instead of a fixed
+- [x] Any other `MonitorChangeStreamAsync` failure retries with increasing backoff (capped) instead of a fixed
       300 ms delay, verified by a test.
-- [ ] After one or more idle wake-interval timeouts, a burst of newly published items is picked up within one
+- [x] After one or more idle wake-interval timeouts, a burst of newly published items is picked up within one
       wake interval of the first item's insert, not delayed by the number of preceding idle timeouts, verified by
       a test.
-- [ ] `docs/requirements.md` and `docs/queues.md` state that queues work on a standalone server through polling
+- [x] `docs/requirements.md` and `docs/queues.md` state that queues work on a standalone server through polling
       only, without real-time change-stream notifications.
-- [ ] The Release build has no warnings and the full test suite passes.
+- [x] The Release build has no warnings and the full test suite passes.
 
 ## Technical Details
 
