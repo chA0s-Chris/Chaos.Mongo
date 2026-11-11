@@ -226,8 +226,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                                                    .Unset(m => m.LockId);
 
             _logger.LogWarning(
-                "Outbox message {MessageId} permanently failed after {AttemptCount} attempts",
-                messageId, attemptCount);
+                "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
+                "permanently failed after {AttemptCount} attempts",
+                messageId, _options.Identity, _options.CollectionName, attemptCount);
         }
         else
         {
@@ -242,8 +243,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                                                    .Unset(m => m.LockId);
 
             _logger.LogWarning(
-                "Outbox message {MessageId} failed (attempt {AttemptCount}/{MaxRetries}); next attempt at {NextAttemptUtc}",
-                messageId, attemptCount, _options.MaxRetries, nextAttemptUtc);
+                "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
+                "failed (attempt {AttemptCount}/{MaxRetries}); next attempt at {NextAttemptUtc}",
+                messageId, _options.Identity, _options.CollectionName, attemptCount, _options.MaxRetries, nextAttemptUtc);
         }
 
         var result = await collection.UpdateOneAsync(failureFilter, failureUpdate);
@@ -251,8 +253,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         if (result.ModifiedCount == 0)
         {
             _logger.LogWarning(
-                "Outbox message {MessageId} failure update skipped — ownership was lost to another processor",
-                messageId);
+                "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
+                "failure update skipped — ownership was lost to another processor",
+                messageId, _options.Identity, _options.CollectionName);
         }
     }
 
@@ -289,9 +292,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             if (successResult.ModifiedCount == 0)
             {
                 _logger.LogWarning(
-                    "Outbox message {MessageId} was published but ownership was lost before finalizing state; " +
-                    "another processor may have reclaimed it",
-                    claimed.Id);
+                    "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
+                    "was published but ownership was lost before finalizing state; another processor may have reclaimed it",
+                    claimed.Id, _options.Identity, _options.CollectionName);
             }
             else
             {
@@ -302,8 +305,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         {
             // Not a publish failure: release the lock so the message is redelivered instead of retried with an error
             _logger.LogWarning(
-                "Outbox message {MessageId} was published but finalizing its state timed out; attempting to release the lock so it can be redelivered",
-                claimed.Id);
+                "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
+                "was published but finalizing its state timed out; attempting to release the lock so it can be redelivered",
+                claimed.Id, _options.Identity, _options.CollectionName);
             await TryReleaseLockAsync(collection, claimed.Id, lockId);
         }
         catch (Exception ex)
@@ -471,8 +475,9 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             // granted attempt and this claim's own pre-update AttemptCount already exceeded MaxRetries, so it
             // terminalizes here without ever calling the publisher.
             _logger.LogWarning(
-                "Outbox message {MessageId} permanently failed after {AttemptCount} attempts without granting a further attempt",
-                claimed.Id, claimed.AttemptCount);
+                "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
+                "permanently failed after {AttemptCount} attempts without granting a further attempt",
+                claimed.Id, _options.Identity, _options.CollectionName, claimed.AttemptCount);
             return;
         }
 
@@ -515,7 +520,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to release lock on outbox message {MessageId} during shutdown", messageId);
+            _logger.LogWarning(
+                ex,
+                "Failed to release lock on outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') during shutdown",
+                messageId, _options.Identity, _options.CollectionName);
         }
     }
 
@@ -526,7 +534,10 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         {
             if (_cancellationTokenSource is not null)
             {
-                _logger.LogWarning("Outbox processor is already running");
+                _logger.LogWarning(
+                    "Outbox processor '{OutboxIdentity}' for collection '{CollectionName}' is already running; " +
+                    "it is likely being started both automatically (WithAutoStartProcessor) and manually (StartAsync)",
+                    _options.Identity, _options.CollectionName);
                 return Task.CompletedTask;
             }
 
