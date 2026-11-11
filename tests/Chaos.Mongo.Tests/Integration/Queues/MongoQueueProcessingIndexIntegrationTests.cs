@@ -206,9 +206,11 @@ public class MongoQueueProcessingIndexIntegrationTests
                 }
             }
         });
+        // The seed is closed so the started subscription's processing loop can never acquire it and rewrite its
+        // IsLocked/LockedUtc keys before the duplicate insert below; it has no ClosedUtc, so the TTL index ignores it.
         await rawCollection.InsertOneAsync(new BsonDocument
         {
-            { "IsClosed", false },
+            { "IsClosed", true },
             { "IsLocked", false },
             { "IsTerminal", false }
         });
@@ -233,7 +235,7 @@ public class MongoQueueProcessingIndexIntegrationTests
             var duplicateInsert = async () => await rawCollection.InsertOneAsync(
                 new BsonDocument
                 {
-                    { "IsClosed", false },
+                    { "IsClosed", true },
                     { "IsLocked", false },
                     { "IsTerminal", false }
                 });

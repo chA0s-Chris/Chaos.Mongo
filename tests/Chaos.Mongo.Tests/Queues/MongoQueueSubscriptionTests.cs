@@ -805,6 +805,26 @@ public class MongoQueueSubscriptionTests
     }
 
     [Test]
+    public async Task StartAsync_StartupCanceledAfterChangeStreamOpens_StartsLoopsAndDisposesCursorOnStop()
+    {
+        var time = new ObservedTimeProvider();
+        using var startup = new CancellationTokenSource();
+        var collection = new ObservedPollingCollection
+        {
+            // ReSharper disable once AccessToDisposedClosure
+            Opened = () => startup.Cancel()
+        };
+        collection.Publish();
+        await using var sut = CreatePollingSubscription(collection, time);
+        await sut.StartAsync(startup.Token);
+        await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StopAsync();
+
+        collection.WatchCount.Should().Be(1);
+        collection.DisposedCursorCount.Should().Be(1, "the monitor must take ownership of the pre-opened cursor and dispose it on stop");
+    }
+
+    [Test]
     public async Task StartAsync_InsertAfterSeveralIdleTimeouts_ProcessesBurstWithoutAnotherTimeout()
     {
         var time = new ObservedTimeProvider();
@@ -1023,22 +1043,11 @@ public class MongoQueueSubscriptionTests
         await (Task)process.Invoke(sut, [collection, collection.QueueItemId, CancellationToken.None])!;
 
         calls.Should().Be(2);
-        collection.DeferredUtc.Should().BeNull();
+        collection.DeferredUtc.Should().BeNull("the granted reacquisition's update must remove the deferred-retry marker");
         metrics.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecovered);
         logger.Count(LogLevel.Warning, "Recovering queue item lock").Should().Be(0);
         logger.Count(LogLevel.Debug, "Reacquiring deferred retry").Should().Be(1);
         logger.Count(LogLevel.Information, "Processed queue item").Should().Be(1);
-    }
-
-    [Test]
-    public void CreateAcquireUpdate_GrantedAttempt_RemovesDeferredMarker()
-    {
-        var method = typeof(MongoQueueSubscription<TestPayload>).GetMethod("CreateAcquireUpdate", BindingFlags.Static | BindingFlags.NonPublic)
-                     ?? throw new InvalidOperationException("Missing acquire update");
-        var update = (UpdateDefinition<MongoQueueItem<TestPayload>>)method.Invoke(null, [DateTime.UtcNow, null])!;
-        var rendered = update.Render(new RenderArgs<MongoQueueItem<TestPayload>>(
-                                         BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>(), BsonSerializer.SerializerRegistry));
-        rendered.AsBsonArray[0]["$set"][nameof(MongoQueueItem.DeferredUtc)]["$cond"].AsBsonArray[1].AsString.Should().Be("$$REMOVE");
     }
 
     private static MongoCommandException CreateStandaloneException()
@@ -1264,14 +1273,17 @@ public class MongoQueueSubscriptionTests
     private sealed class ObservedPollingCollection : PollingQueueItemCollection
     {
         private Int32 _available;
+        private Int32 _disposedCursorCount;
         private Int32 _queryCount;
         private Int32 _watchCount;
         public ObservedPollingCollection() : base(ObjectId.GenerateNewId()) { }
         public TaskCompletionSource AllowOpen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Int32 CompletionCount { get; private set; }
+        public Int32 DisposedCursorCount => Volatile.Read(ref _disposedCursorCount);
         public Boolean HoldOpen { get; init; }
         public Func<Int32, Exception?>? OpenFailure { get; set; }
         public TaskCompletionSource OpenStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Action? Opened { get; init; }
         public Int32 QueryCount => Volatile.Read(ref _queryCount);
         public Func<Int32, Int32, Boolean>? ReadResult { get; set; }
         public Int32 WatchCount => Volatile.Read(ref _watchCount);
@@ -1308,8 +1320,11 @@ public class MongoQueueSubscriptionTests
             OpenStarted.TrySetResult();
             if (HoldOpen) await AllowOpen.Task.WaitAsync(cancellationToken);
             if (OpenFailure?.Invoke(attempt) is { } failure) throw failure;
+            Opened?.Invoke();
             var readResult = ReadResult;
-            return readResult is null ? new IdleChangeStreamCursor<TResult>() : new ScriptedChangeStreamCursor<TResult>(read => readResult(attempt, read));
+            return readResult is null
+                ? new IdleChangeStreamCursor<TResult>(() => Interlocked.Increment(ref _disposedCursorCount))
+                : new ScriptedChangeStreamCursor<TResult>(read => readResult(attempt, read));
         }
     }
 
@@ -1466,7 +1481,15 @@ public class MongoQueueSubscriptionTests
                 IsLocked = priorAttemptCount > 0,
                 DeferredUtc = DeferredUtc
             };
-            DeferredUtc = null;
+            // Only the update production actually sends may clear the marker, so a regression in the acquire
+            // pipeline surfaces as a stale DeferredUtc instead of being masked by this double.
+            if (GrantRemovesDeferredMarker(update.Render(new RenderArgs<MongoQueueItem<TestPayload>>(
+                                                             BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>(),
+                                                             BsonSerializer.SerializerRegistry))))
+            {
+                DeferredUtc = null;
+            }
+
             return Task.FromResult((TProjection)(Object)projected);
         }
 
@@ -1490,6 +1513,12 @@ public class MongoQueueSubscriptionTests
 
             return Task.FromResult<UpdateResult>(new UpdateResult.Acknowledged(1, 1, null));
         }
+
+        private static Boolean GrantRemovesDeferredMarker(BsonValue update)
+            => update is BsonArray stages &&
+               stages.OfType<BsonDocument>().Any(stage => stage.TryGetValue("$set", out var set) &&
+                                                          set.AsBsonDocument.TryGetValue(nameof(MongoQueueItem.DeferredUtc), out var deferred) &&
+                                                          deferred["$cond"][1] is BsonString { Value: "$$REMOVE" });
 
         private static BsonDocument RenderUpdate(UpdateDefinition<MongoQueueItem<TestPayload>> update)
             => update.Render(new RenderArgs<MongoQueueItem<TestPayload>>(BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>(),
@@ -1535,6 +1564,13 @@ public class MongoQueueSubscriptionTests
     /// </summary>
     private sealed class IdleChangeStreamCursor<TDocument> : IChangeStreamCursor<TDocument>
     {
+        private readonly Action? _disposed;
+
+        public IdleChangeStreamCursor(Action? disposed = null)
+        {
+            _disposed = disposed;
+        }
+
         public IEnumerable<TDocument> Current => [];
 
         public Boolean MoveNext(CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -1547,7 +1583,7 @@ public class MongoQueueSubscriptionTests
 
         public BsonDocument GetResumeToken() => throw new NotSupportedException();
 
-        public void Dispose() { }
+        public void Dispose() => _disposed?.Invoke();
     }
 
     /// <summary>

@@ -990,6 +990,10 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         // Signal initially to start processing any existing messages
         _signalSemaphore.Release();
 
+        // From here on the subscription is started: both loops are scheduled without the startup token, so a
+        // late startup cancellation can neither skip the monitor delegate (which owns, and in its finally disposes,
+        // the pre-opened cursor) nor leave a subscription marked active without its loops. Both stop through
+        // _cancellationTokenSource instead.
         if (openResult.Outcome != ChangeStreamOpenOutcome.Unsupported)
         {
             // On a transient first-open failure, the monitor task begins its own retry loop at the initial
@@ -998,10 +1002,10 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             var initialOpenFailed = openResult.Outcome == ChangeStreamOpenOutcome.Failed;
             _monitorTask = Task.Run(
                 async () => await MonitorChangeStreamAsync(collection, openResult.Cursor, initialOpenFailed, _cancellationTokenSource.Token),
-                cancellationToken);
+                CancellationToken.None);
         }
 
-        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, _cancellationTokenSource.Token), cancellationToken);
+        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, _cancellationTokenSource.Token), CancellationToken.None);
     }
 
     /// <inheritdoc/>
