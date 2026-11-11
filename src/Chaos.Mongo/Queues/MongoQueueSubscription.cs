@@ -549,9 +549,9 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         finally
         {
             cursor?.Dispose();
+            // Logged here so the unsupported-server early return reports the stop like a cancellation does.
+            _logger.LogInformation("Stopped watching change stream for collection {CollectionName}", _queueDefinition.CollectionName);
         }
-
-        _logger.LogInformation("Stopped watching change stream for collection {CollectionName}", _queueDefinition.CollectionName);
     }
 
     /// <summary>
@@ -993,7 +993,10 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         // From here on the subscription is started: both loops are scheduled without the startup token, so a
         // late startup cancellation can neither skip the monitor delegate (which owns, and in its finally disposes,
         // the pre-opened cursor) nor leave a subscription marked active without its loops. Both stop through
-        // _cancellationTokenSource instead.
+        // _cancellationTokenSource instead, whose token is read here rather than inside the delegates: DisposeAsync
+        // may dispose the source before a delegate runs, and reading Token then would throw before the monitor's
+        // finally could dispose the cursor.
+        var stoppingToken = _cancellationTokenSource.Token;
         if (openResult.Outcome != ChangeStreamOpenOutcome.Unsupported)
         {
             // On a transient first-open failure, the monitor task begins its own retry loop at the initial
@@ -1001,11 +1004,11 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             // from starting, since the processing task below is always started regardless of this outcome.
             var initialOpenFailed = openResult.Outcome == ChangeStreamOpenOutcome.Failed;
             _monitorTask = Task.Run(
-                async () => await MonitorChangeStreamAsync(collection, openResult.Cursor, initialOpenFailed, _cancellationTokenSource.Token),
+                async () => await MonitorChangeStreamAsync(collection, openResult.Cursor, initialOpenFailed, stoppingToken),
                 CancellationToken.None);
         }
 
-        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, _cancellationTokenSource.Token), CancellationToken.None);
+        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, stoppingToken), CancellationToken.None);
     }
 
     /// <inheritdoc/>
