@@ -149,3 +149,4 @@ static Chaos.Mongo.MongoDefaults.MigrationLockWaitTimeout.get -> System.TimeSpan
 *REMOVED*Chaos.Mongo.Queues.MongoQueueItem.RetryCount.get -> int
 *REMOVED*Chaos.Mongo.Queues.MongoQueueItem.RetryCount.set -> void
 Chaos.Mongo.Queues.MongoQueueItem.AttemptCount.get -> long
+Chaos.Mongo.Queues.MongoQueueItem.DeferredUtc.get -> System.DateTime?

@@ -60,6 +60,7 @@ public class MongoQueueItemTests
         result.AttemptCount.Should().Be(0);
         result.ClosedUtc.Should().BeNull();
         result.LockedUtc.Should().BeNull();
+        result.DeferredUtc.Should().BeNull();
         result.Payload.Name.Should().Be("payload-value");
     }
 
@@ -113,6 +114,7 @@ public class MongoQueueItemTests
             CreatedUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc),
             ClosedUtc = new DateTime(2025, 6, 1, 12, 5, 0, DateTimeKind.Utc),
             LockedUtc = new DateTime(2025, 6, 1, 12, 1, 0, DateTimeKind.Utc),
+            DeferredUtc = new DateTime(2025, 6, 1, 12, 2, 0, DateTimeKind.Utc),
             Payload = new TestPayload
             {
                 Name = "payload-value"
@@ -130,6 +132,7 @@ public class MongoQueueItemTests
             nameof(MongoQueueItem.IsLocked),
             nameof(MongoQueueItem.IsTerminal),
             nameof(MongoQueueItem.LockedUtc),
+            nameof(MongoQueueItem.DeferredUtc),
             nameof(MongoQueueItem.AttemptCount),
             nameof(MongoQueueItem<TestPayload>.Payload),
             nameof(MongoQueueItem<TestPayload>.PayloadType)
@@ -169,6 +172,7 @@ public class MongoQueueItemTests
             CreatedUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc),
             ClosedUtc = new DateTime(2025, 6, 1, 12, 5, 0, DateTimeKind.Utc),
             LockedUtc = new DateTime(2025, 6, 1, 12, 1, 0, DateTimeKind.Utc),
+            DeferredUtc = new DateTime(2025, 6, 1, 12, 2, 0, DateTimeKind.Utc),
             Payload = new TestPayload
             {
                 Name = "payload-value"
@@ -186,6 +190,7 @@ public class MongoQueueItemTests
             nameof(MongoQueueItem.IsLocked),
             nameof(MongoQueueItem.IsTerminal),
             nameof(MongoQueueItem.LockedUtc),
+            nameof(MongoQueueItem.DeferredUtc),
             nameof(MongoQueueItem.AttemptCount),
             nameof(MongoQueueItem<TestPayload>.Payload),
             nameof(MongoQueueItem<TestPayload>.PayloadType)

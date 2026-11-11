@@ -155,7 +155,9 @@ public class MongoMigrationConcurrencyTests
                               .AddNUnitTestLogging()
                               .AddMongo(connectionString, databaseName, options =>
                               {
-                                  options.MigrationLockLeaseTime = TimeSpan.FromMilliseconds(500);
+                                  // Renewal waits half the remaining lease, so this tolerates a ~1 s database round
+                                  // trip; a 500 ms lease failed on loaded CI runners after one ~250 ms round trip.
+                                  options.MigrationLockLeaseTime = TimeSpan.FromSeconds(2);
                               })
                               .WithMigration<VerySlowTestMigration>()
                               .Services
@@ -166,8 +168,8 @@ public class MongoMigrationConcurrencyTests
         // Act
         var result = await runner.RunMigrationsAsync();
 
-        // Assert: the lease (500ms) is far shorter than the migration (~5s), so this only succeeds because the
-        // lease is renewed automatically while the migration runs.
+        // Assert: the migration (~6s) outlives three leases (2s each), and the runner re-checks the lock before
+        // recording history, so this only succeeds because the lease is renewed automatically while it runs.
         result.Skipped.Should().BeFalse();
         result.AppliedMigrationIds.Should().Equal("777_VerySlowTest");
     }

@@ -11,10 +11,15 @@ using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Clusters;
+using MongoDB.Driver.Core.Connections;
+using MongoDB.Driver.Core.Servers;
 using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
+using System.Net;
 using System.Reflection;
+using System.Threading.Channels;
 
 public class MongoQueueSubscriptionTests
 {
@@ -754,6 +759,330 @@ public class MongoQueueSubscriptionTests
         handlerInvoked.Should().BeTrue();
     }
 
+    [TestCase(0.4)]
+    [TestCase(5.0)]
+    public async Task StartAsync_IdleQueue_QueriesOnlyOncePerWakeInterval(Double leaseSeconds)
+    {
+        var time = new ObservedTimeProvider();
+        var collection = new ObservedPollingCollection();
+        await using var sut = CreatePollingSubscription(collection, time, TimeSpan.FromSeconds(leaseSeconds));
+        await sut.StartAsync();
+        var interval = TimeSpan.FromSeconds(Math.Min(leaseSeconds, 1));
+
+        for (var poll = 1; poll <= 4; poll++)
+        {
+            (await time.NextDelayAsync()).Should().Be(interval);
+            collection.QueryCount.Should().Be(poll, "startup has one permit and idle queries require a complete interval");
+            time.Advance(interval - TimeSpan.FromMilliseconds(1));
+            collection.QueryCount.Should().Be(poll);
+            time.Advance(TimeSpan.FromMilliseconds(1));
+        }
+
+        await time.NextDelayAsync();
+        collection.QueryCount.Should().Be(5);
+    }
+
+    [Test]
+    public async Task StartAsync_ItemPublishedWhileChangeStreamOpens_ProcessesItemWithoutAdvancingTime()
+    {
+        var time = new ObservedTimeProvider();
+        var collection = new ObservedPollingCollection
+        {
+            HoldOpen = true
+        };
+        await using var sut = CreatePollingSubscription(collection, time);
+        var starting = sut.StartAsync();
+        await collection.OpenStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        collection.QueryCount.Should().Be(0, "the startup scan must wait until the stream is established");
+        collection.Publish();
+        collection.AllowOpen.TrySetResult();
+        await starting;
+        await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StopAsync();
+
+        collection.WatchCount.Should().Be(1, "the monitor must reuse the already-open cursor");
+        collection.Completed.Task.IsCompletedSuccessfully.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task StartAsync_StartupCanceledAfterChangeStreamOpens_StartsLoopsAndDisposesCursorOnStop()
+    {
+        var time = new ObservedTimeProvider();
+        using var startup = new CancellationTokenSource();
+        var collection = new ObservedPollingCollection
+        {
+            // ReSharper disable once AccessToDisposedClosure
+            Opened = () => startup.Cancel()
+        };
+        collection.Publish();
+        await using var sut = CreatePollingSubscription(collection, time);
+        await sut.StartAsync(startup.Token);
+        await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StopAsync();
+
+        collection.WatchCount.Should().Be(1);
+        collection.DisposedCursorCount.Should().Be(1, "the monitor must take ownership of the pre-opened cursor and dispose it on stop");
+    }
+
+    [Test]
+    public async Task StartAsync_InsertAfterSeveralIdleTimeouts_ProcessesBurstWithoutAnotherTimeout()
+    {
+        var time = new ObservedTimeProvider();
+        var collection = new ObservedPollingCollection();
+        await using var sut = CreatePollingSubscription(collection, time);
+        await sut.StartAsync();
+        for (var i = 0; i < 4; i++)
+        {
+            await time.NextDelayAsync();
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        await time.NextDelayAsync();
+        collection.Publish(3);
+        GetSignal(sut).Release();
+        await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StopAsync();
+
+        collection.CompletionCount.Should().Be(3, "one signal must reach the current waiter and backlog processing must drain the burst");
+    }
+
+    [Test]
+    public async Task StartAsync_StandaloneServer_LogsOnceAndContinuesPolling()
+    {
+        var time = new ObservedTimeProvider();
+        var logger = new CapturingLogger();
+        var collection = new ObservedPollingCollection
+        {
+            OpenFailure = _ => CreateStandaloneException()
+        };
+        await using var sut = CreatePollingSubscription(collection, time, logger: logger);
+        await sut.StartAsync();
+        for (var i = 0; i < 3; i++)
+        {
+            await time.NextDelayAsync();
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        await time.NextDelayAsync();
+        collection.Publish();
+        time.Advance(TimeSpan.FromSeconds(1));
+        await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StopAsync();
+
+        collection.WatchCount.Should().Be(1);
+        logger.Count(LogLevel.Warning, "not a replica set or sharded cluster").Should().Be(1);
+        logger.Count(LogLevel.Warning, "polling only").Should().Be(1);
+        logger.Count(LogLevel.Error, "Watching change stream").Should().Be(0);
+    }
+
+    [Test]
+    public async Task StartAsync_InitialTransientOpenFailure_StartsPollingAndDelaysRetry()
+    {
+        var time = new ObservedTimeProvider();
+        var collection = new ObservedPollingCollection
+        {
+            OpenFailure = _ => new InvalidOperationException("transient")
+        };
+        collection.Publish();
+        await using var sut = CreatePollingSubscription(collection, time);
+        await sut.StartAsync();
+        await collection.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Both background loops register timers: one polling interval and one initial monitor backoff.
+        var delay = await time.NextDelayAsync();
+        if (delay != TimeSpan.FromMilliseconds(300))
+        {
+            delay.Should().Be(TimeSpan.FromSeconds(1));
+            delay = await time.NextDelayAsync();
+        }
+
+        delay.Should().Be(TimeSpan.FromMilliseconds(300));
+        await sut.StopAsync();
+
+        collection.WatchCount.Should().Be(1, "the monitor must wait before retrying the initial failed open");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task StartAsync_ConsecutiveChangeStreamOpenOrReadFailures_BacksOffToCap(Boolean failReads)
+    {
+        var time = new ObservedTimeProvider();
+        var collection = new ObservedPollingCollection();
+        if (failReads)
+            collection.ReadResult = (_, _) => throw new InvalidOperationException("read failed");
+        else
+            collection.OpenFailure = _ => new InvalidOperationException("open failed");
+        await using var sut = CreatePollingSubscription(collection, time);
+        await sut.StartAsync();
+        try
+        {
+            foreach (var milliseconds in new[]
+                     {
+                         300,
+                         600,
+                         1200,
+                         2400,
+                         4800,
+                         9600,
+                         19200,
+                         30000,
+                         30000
+                     })
+            {
+                (await NextBackoffAsync(time)).Should().Be(TimeSpan.FromMilliseconds(milliseconds));
+                var attempts = collection.WatchCount;
+                time.Advance(TimeSpan.FromMilliseconds(milliseconds - 1));
+                collection.WatchCount.Should().Be(attempts);
+                time.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            await NextBackoffAsync(time);
+            collection.WatchCount.Should().Be(10, "the startup open plus one reopen after each of the nine backoff delays");
+        }
+        finally
+        {
+            await sut.StopAsync();
+        }
+    }
+
+    [Test]
+    public async Task StartAsync_HealthyEmptyChangeStreamRead_ResetsBackoff()
+    {
+        var time = new ObservedTimeProvider();
+        var collection = new ObservedPollingCollection
+        {
+            ReadResult = (attempt, read) => attempt == 3 && read == 1
+                ? true
+                : throw new InvalidOperationException("read failed")
+        };
+        await using var sut = CreatePollingSubscription(collection, time);
+        await sut.StartAsync();
+        try
+        {
+            foreach (var milliseconds in new[]
+                     {
+                         300,
+                         600,
+                         300
+                     })
+            {
+                (await NextBackoffAsync(time)).Should().Be(TimeSpan.FromMilliseconds(milliseconds));
+                time.Advance(TimeSpan.FromMilliseconds(milliseconds));
+            }
+
+            (await NextBackoffAsync(time)).Should().Be(TimeSpan.FromMilliseconds(600));
+        }
+        finally
+        {
+            await sut.StopAsync();
+        }
+    }
+
+    [Test]
+    public async Task StartAsync_StandaloneDiscoveredOnRetry_StopsWatchingChangeStream()
+    {
+        var time = new ObservedTimeProvider();
+        var logger = new CapturingLogger();
+        var collection = new ObservedPollingCollection
+        {
+            OpenFailure = attempt => attempt == 1 ? new InvalidOperationException("transient") : CreateStandaloneException()
+        };
+        await using var sut = CreatePollingSubscription(collection, time, logger: logger);
+        await sut.StartAsync();
+        (await NextBackoffAsync(time)).Should().Be(TimeSpan.FromMilliseconds(300));
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        // The monitor logs this only when it exits, so reaching it before StopAsync proves it gave up on its own.
+        await logger.WaitForAsync(LogLevel.Information, "Stopped watching change stream");
+        await sut.StopAsync();
+
+        collection.WatchCount.Should().Be(2);
+        logger.Count(LogLevel.Warning, "polling only").Should().Be(1);
+    }
+
+    [Test]
+    public async Task WaitForSignalOrIntervalAsync_ExternalCancellation_UnregistersWaiterAndPropagatesCancellation()
+    {
+        var time = new ObservedTimeProvider();
+        await using var sut = CreateSubscription(timeProvider: time);
+        using var cancellation = new CancellationTokenSource();
+        var waiting = WaitForSignalAsync(sut, cancellation.Token);
+        await time.NextDelayAsync();
+        await cancellation.CancelAsync();
+        var act = async () => await waiting;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        GetSignal(sut).Release();
+        (await WaitForSignalAsync(sut, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+    }
+
+    [Test]
+    public async Task ProcessQueueItemAsync_ResolvedFailureThenRetry_DoesNotReportRecovery()
+    {
+        using var metrics = new QueueMetricsCollector();
+        var time = new FakeTimeProvider();
+        var logger = new CapturingLogger();
+        var collection = new FailureTrackingQueueItemCollection(ObjectId.GenerateNewId(), time.GetUtcNow().UtcDateTime);
+        var calls = 0;
+        await using var sut = CreateSubscription(timeProvider: time, logger: logger,
+                                                 payloadHandlerFactory: new StubPayloadHandlerFactory(() => ++calls == 1
+                                                                                                          ? Task.FromException(new InvalidOperationException("handler failed"))
+                                                                                                          : Task.CompletedTask));
+        var process = GetPrivateMethod("ProcessQueueItemAsync",
+                                       [typeof(IMongoCollection<MongoQueueItem<TestPayload>>), typeof(ObjectId), typeof(CancellationToken)]);
+        await (Task)process.Invoke(sut, [collection, collection.QueueItemId, CancellationToken.None])!;
+        collection.DeferredUtc.Should().Be(time.GetUtcNow().UtcDateTime);
+        collection.LastRetryFilter.Should().NotBeNull();
+        collection.LastRetryUpdate.Should().NotBeNull();
+        collection.LastRetryUpdate["$set"].AsBsonDocument.Contains(nameof(MongoQueueItem.IsLocked)).Should().BeFalse();
+        collection.LastRetryUpdate["$set"].AsBsonDocument.Contains(nameof(MongoQueueItem.LockedUtc)).Should().BeFalse();
+        ContainsEquality(collection.LastRetryFilter, "_id", collection.QueueItemId).Should().BeTrue();
+        ContainsEquality(collection.LastRetryFilter, nameof(MongoQueueItem.IsClosed), BsonBoolean.False).Should().BeTrue();
+        ContainsEquality(collection.LastRetryFilter, nameof(MongoQueueItem.IsLocked), BsonBoolean.True).Should().BeTrue();
+        ContainsEquality(collection.LastRetryFilter, nameof(MongoQueueItem.LockedUtc), new BsonDateTime(time.GetUtcNow().UtcDateTime)).Should().BeTrue();
+        time.Advance(TimeSpan.FromMinutes(2));
+        await (Task)process.Invoke(sut, [collection, collection.QueueItemId, CancellationToken.None])!;
+
+        calls.Should().Be(2);
+        collection.DeferredUtc.Should().BeNull("the granted reacquisition's update must remove the deferred-retry marker");
+        metrics.Measurements.Should().NotContain(x => x.InstrumentName == MongoQueueMetrics.Instruments.LockRecovered);
+        logger.Count(LogLevel.Warning, "Recovering queue item lock").Should().Be(0);
+        logger.Count(LogLevel.Debug, "Reacquiring deferred retry").Should().Be(1);
+        logger.Count(LogLevel.Information, "Processed queue item").Should().Be(1);
+    }
+
+    private static MongoCommandException CreateStandaloneException()
+        => new(new ConnectionId(new ServerId(new ClusterId(), new DnsEndPoint("localhost", 27017))),
+               "standalone", new BsonDocument(), new BsonDocument("code", 40573));
+
+    private static MongoQueueSubscription<TestPayload> CreatePollingSubscription(ObservedPollingCollection collection,
+                                                                                 TimeProvider time, TimeSpan? lease = null, CapturingLogger? logger = null)
+    {
+        var instance = DispatchProxy.Create(typeof(IMongoDatabase), typeof(SingleCollectionDatabase));
+        ((SingleCollectionDatabase)instance).Collection = collection;
+        var database = (IMongoDatabase)instance;
+        return CreateSubscription(new MongoQueueDefinition
+                                  {
+                                      AutoStartSubscription = false,
+                                      CollectionName = "test-queue",
+                                      LockLeaseTime = lease ?? TimeSpan.FromSeconds(1),
+                                      PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
+                                      PayloadType = typeof(TestPayload),
+                                      BatchSize = 1
+                                  }, new SingleDatabaseMongoHelper(database), new StubPayloadHandlerFactory(() => Task.CompletedTask),
+                                  new MongoQueuePayloadPrioritizer(), timeProvider: time, logger: logger);
+    }
+
+    // CreatePollingSubscription's default lease gives a 1 s polling interval, which no change-stream backoff step
+    // equals, so skipping it leaves only the monitor's retry delays.
+    private static Task<TimeSpan> NextBackoffAsync(ObservedTimeProvider time)
+        => time.NextDelayAsync(delay => delay != TimeSpan.FromSeconds(1));
+
+    private static Task<Boolean> WaitForSignalAsync(MongoQueueSubscription<TestPayload> sut, CancellationToken cancellationToken)
+        => (Task<Boolean>)GetPrivateMethod("WaitForSignalOrIntervalAsync", [typeof(TimeSpan), typeof(CancellationToken)])
+            .Invoke(sut, [TimeSpan.FromSeconds(1), cancellationToken])!;
+
+    private static SemaphoreSlim GetSignal(MongoQueueSubscription<TestPayload> sut)
+        => (SemaphoreSlim)(typeof(MongoQueueSubscription<TestPayload>).GetField("_signalSemaphore", BindingFlags.Instance | BindingFlags.NonPublic)
+                                                                      ?.GetValue(sut) ?? throw new InvalidOperationException("Missing signal semaphore"));
+
     private static Boolean BranchHasLockedRecoveryClause(BsonDocument document)
         => SubtreeContainsLockedState(document) &&
            SubtreeContainsLeaseRecoveryLockedUtcClause(document);
@@ -916,6 +1245,108 @@ public class MongoQueueSubscriptionTests
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             times);
 
+    // Observes timer registration before tests advance fake time, avoiding scheduler-dependent sleeps.
+    private sealed class ObservedTimeProvider : TimeProvider
+    {
+        private readonly Channel<TimeSpan> _delays = Channel.CreateUnbounded<TimeSpan>();
+        private readonly FakeTimeProvider _inner = new();
+        public override Int64 TimestampFrequency => _inner.TimestampFrequency;
+        public void Advance(TimeSpan amount) => _inner.Advance(amount);
+
+        public override ITimer CreateTimer(TimerCallback callback, Object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = _inner.CreateTimer(callback, state, dueTime, period);
+            _delays.Writer.TryWrite(dueTime);
+            return timer;
+        }
+
+        public override Int64 GetTimestamp() => _inner.GetTimestamp();
+        public override DateTimeOffset GetUtcNow() => _inner.GetUtcNow();
+        public Task<TimeSpan> NextDelayAsync() => _delays.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        public async Task<TimeSpan> NextDelayAsync(Func<TimeSpan, Boolean> predicate)
+        {
+            while (true)
+            {
+                var delay = await NextDelayAsync();
+                if (predicate(delay))
+                {
+                    return delay;
+                }
+            }
+        }
+    }
+
+    private sealed class ObservedPollingCollection : PollingQueueItemCollection
+    {
+        private Int32 _available;
+        private Int32 _disposedCursorCount;
+        private Int32 _queryCount;
+        private Int32 _watchCount;
+        public ObservedPollingCollection() : base(ObjectId.GenerateNewId()) { }
+        public TaskCompletionSource AllowOpen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Int32 CompletionCount { get; private set; }
+        public Int32 DisposedCursorCount => Volatile.Read(ref _disposedCursorCount);
+        public Boolean HoldOpen { get; init; }
+        public Func<Int32, Exception?>? OpenFailure { get; set; }
+        public TaskCompletionSource OpenStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Action? Opened { get; init; }
+        public Int32 QueryCount => Volatile.Read(ref _queryCount);
+        public Func<Int32, Int32, Boolean>? ReadResult { get; set; }
+        public Int32 WatchCount => Volatile.Read(ref _watchCount);
+
+        public override Task<Int64> CountDocumentsAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options,
+                                                        CancellationToken cancellationToken) => Task.FromResult((Int64)Volatile.Read(ref _available));
+
+        public override Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                                               FindOptions<MongoQueueItem<TestPayload>, TProjection> options, CancellationToken cancellationToken)
+        {
+            if (typeof(TProjection) != typeof(ObjectId))
+                return base.FindAsync(filter, options, cancellationToken);
+            Interlocked.Increment(ref _queryCount);
+            return Task.FromResult<IAsyncCursor<TProjection>>(Volatile.Read(ref _available) > 0
+                                                                  ? new SingleItemAsyncCursor<TProjection>((TProjection)(Object)QueueItemId)
+                                                                  : new EmptyAsyncCursor<TProjection>());
+        }
+
+        public void Publish(Int32 count = 1) => Interlocked.Add(ref _available, count);
+
+        public override Task<UpdateResult> UpdateOneAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter,
+                                                          UpdateDefinition<MongoQueueItem<TestPayload>> update, UpdateOptions options, CancellationToken cancellationToken)
+        {
+            CompletionCount++;
+            if (Interlocked.Decrement(ref _available) == 0) Completed.TrySetResult();
+            return Task.FromResult<UpdateResult>(new UpdateResult.Acknowledged(1, 1, null));
+        }
+
+        public override async Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(
+            PipelineDefinition<ChangeStreamDocument<MongoQueueItem<TestPayload>>, TResult> pipeline,
+            ChangeStreamOptions options, CancellationToken cancellationToken)
+        {
+            var attempt = Interlocked.Increment(ref _watchCount);
+            OpenStarted.TrySetResult();
+            if (HoldOpen) await AllowOpen.Task.WaitAsync(cancellationToken);
+            if (OpenFailure?.Invoke(attempt) is { } failure) throw failure;
+            Opened?.Invoke();
+            var readResult = ReadResult;
+            return readResult is null
+                ? new IdleChangeStreamCursor<TResult>(() => Interlocked.Increment(ref _disposedCursorCount))
+                : new ScriptedChangeStreamCursor<TResult>(read => readResult(attempt, read));
+        }
+    }
+
+    private sealed class ScriptedChangeStreamCursor<TDocument> : IChangeStreamCursor<TDocument>
+    {
+        private readonly Func<Int32, Boolean> _read;
+        private Int32 _readCount;
+        public ScriptedChangeStreamCursor(Func<Int32, Boolean> read) => _read = read;
+        public IEnumerable<TDocument> Current => [];
+        public Boolean MoveNext(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Boolean> MoveNextAsync(CancellationToken cancellationToken = default) => Task.FromResult(_read(++_readCount));
+        public BsonDocument GetResumeToken() => throw new NotSupportedException();
+        public void Dispose() { }
+    }
+
     public class TestPayload;
 
     /// <summary>
@@ -924,11 +1355,37 @@ public class MongoQueueSubscriptionTests
     private sealed class CapturingLogger : ILogger<MongoQueueSubscription<TestPayload>>
     {
         private readonly List<(LogLevel Level, String Message, Exception? Exception)> _entries = [];
+        private readonly Lock _gate = new();
+        private readonly List<(LogLevel Level, String MessageSubstring, TaskCompletionSource Logged)> _waiters = [];
 
         public Int32 Count(LogLevel level, String messageSubstring, Exception? exception = null)
-            => _entries.Count(entry => entry.Level == level &&
-                                       entry.Message.Contains(messageSubstring) &&
-                                       (exception is null || ReferenceEquals(entry.Exception, exception)));
+        {
+            lock (_gate)
+            {
+                return _entries.Count(entry => entry.Level == level &&
+                                               entry.Message.Contains(messageSubstring) &&
+                                               (exception is null || ReferenceEquals(entry.Exception, exception)));
+            }
+        }
+
+        /// <summary>
+        /// Completes once a matching entry has been logged, so a test can wait for a background loop to reach a
+        /// logged point without sleeping.
+        /// </summary>
+        public Task WaitForAsync(LogLevel level, String messageSubstring)
+        {
+            lock (_gate)
+            {
+                if (_entries.Any(entry => entry.Level == level && entry.Message.Contains(messageSubstring)))
+                {
+                    return Task.CompletedTask;
+                }
+
+                var logged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((level, messageSubstring, logged));
+                return logged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -939,7 +1396,18 @@ public class MongoQueueSubscriptionTests
                                 TState state,
                                 Exception? exception,
                                 Func<TState, Exception?, String> formatter)
-            => _entries.Add((logLevel, formatter(state, exception), exception));
+        {
+            var message = formatter(state, exception);
+            lock (_gate)
+            {
+                _entries.Add((logLevel, message, exception));
+                foreach (var waiter in _waiters.Where(waiter => waiter.Level == logLevel && message.Contains(waiter.MessageSubstring)).ToList())
+                {
+                    waiter.Logged.TrySetResult();
+                    _waiters.Remove(waiter);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -1021,6 +1489,11 @@ public class MongoQueueSubscriptionTests
         }
 
         public Int64 AttemptCount { get; private set; }
+        public DateTime? DeferredUtc { get; private set; }
+        public BsonDocument? LastRetryFilter { get; private set; }
+        public BsonDocument? LastRetryUpdate { get; private set; }
+
+        public ObjectId QueueItemId => _queueItemId;
         public Int32 TerminalTransitionCount { get; private set; }
 
         public override Task<IAsyncCursor<TProjection>> FindAsync<TProjection>(FilterDefinition<MongoQueueItem<TestPayload>> filter,
@@ -1048,8 +1521,19 @@ public class MongoQueueSubscriptionTests
             {
                 Id = _queueItemId,
                 CreatedUtc = _createdUtc,
-                AttemptCount = priorAttemptCount
+                AttemptCount = priorAttemptCount,
+                IsLocked = priorAttemptCount > 0,
+                DeferredUtc = DeferredUtc
             };
+            // Only the update production actually sends may clear the marker, so a regression in the acquire
+            // pipeline surfaces as a stale DeferredUtc instead of being masked by this double.
+            if (GrantRemovesDeferredMarker(update.Render(new RenderArgs<MongoQueueItem<TestPayload>>(
+                                                             BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>(),
+                                                             BsonSerializer.SerializerRegistry))))
+            {
+                DeferredUtc = null;
+            }
+
             return Task.FromResult((TProjection)(Object)projected);
         }
 
@@ -1057,9 +1541,32 @@ public class MongoQueueSubscriptionTests
                                                           UpdateOptions options,
                                                           CancellationToken cancellationToken)
         {
-            TerminalTransitionCount++;
+            var rendered = RenderUpdate(update);
+            if (rendered["$set"].AsBsonDocument.TryGetValue(nameof(MongoQueueItem.DeferredUtc), out var deferred))
+            {
+                DeferredUtc = deferred.ToUniversalTime();
+                LastRetryFilter = filter.Render(new RenderArgs<MongoQueueItem<TestPayload>>(
+                                                    BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>(), BsonSerializer.SerializerRegistry));
+                LastRetryUpdate = rendered;
+            }
+
+            if (rendered["$set"].AsBsonDocument.Contains(nameof(MongoQueueItem.IsTerminal)))
+            {
+                TerminalTransitionCount++;
+            }
+
             return Task.FromResult<UpdateResult>(new UpdateResult.Acknowledged(1, 1, null));
         }
+
+        private static Boolean GrantRemovesDeferredMarker(BsonValue update)
+            => update is BsonArray stages &&
+               stages.OfType<BsonDocument>().Any(stage => stage.TryGetValue("$set", out var set) &&
+                                                          set.AsBsonDocument.TryGetValue(nameof(MongoQueueItem.DeferredUtc), out var deferred) &&
+                                                          deferred["$cond"][1] is BsonString { Value: "$$REMOVE" });
+
+        private static BsonDocument RenderUpdate(UpdateDefinition<MongoQueueItem<TestPayload>> update)
+            => update.Render(new RenderArgs<MongoQueueItem<TestPayload>>(BsonSerializer.SerializerRegistry.GetSerializer<MongoQueueItem<TestPayload>>(),
+                                                                         BsonSerializer.SerializerRegistry)).AsBsonDocument;
     }
 
     /// <summary>
@@ -1101,6 +1608,13 @@ public class MongoQueueSubscriptionTests
     /// </summary>
     private sealed class IdleChangeStreamCursor<TDocument> : IChangeStreamCursor<TDocument>
     {
+        private readonly Action? _disposed;
+
+        public IdleChangeStreamCursor(Action? disposed = null)
+        {
+            _disposed = disposed;
+        }
+
         public IEnumerable<TDocument> Current => [];
 
         public Boolean MoveNext(CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -1113,7 +1627,7 @@ public class MongoQueueSubscriptionTests
 
         public BsonDocument GetResumeToken() => throw new NotSupportedException();
 
-        public void Dispose() { }
+        public void Dispose() => _disposed?.Invoke();
     }
 
     /// <summary>
@@ -1122,7 +1636,7 @@ public class MongoQueueSubscriptionTests
     /// and the completion write signals <see cref="Completed"/>. Records the read preference in effect when the
     /// typed payload is read.
     /// </summary>
-    private sealed class PollingQueueItemCollection : QueueItemCollectionTestDoubleBase
+    private class PollingQueueItemCollection : QueueItemCollectionTestDoubleBase
     {
         private readonly ObjectId _queueItemId;
         private Int32 _pollCount;
@@ -1139,6 +1653,8 @@ public class MongoQueueSubscriptionTests
         public ReadPreference? PayloadReadPreference { get; private set; }
 
         public override MongoCollectionSettings Settings { get; } = new();
+
+        protected ObjectId QueueItemId => _queueItemId;
 
         public override Task<Int64> CountDocumentsAsync(FilterDefinition<MongoQueueItem<TestPayload>> filter, CountOptions options,
                                                         CancellationToken cancellationToken)

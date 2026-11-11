@@ -259,7 +259,7 @@ internal class VerySlowTestMigration : IMongoMigration
     public async Task ApplyAsync(IMongoHelper mongoHelper, IClientSessionHandle? session = null, CancellationToken cancellationToken = default)
     {
         MigrationTestTracker.Track(nameof(VerySlowTestMigration));
-        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
     }
 }
 

@@ -12,9 +12,11 @@ see [Migrating from 0.x](migrating-from-0.x.md).
 
 The [Event Store](event-store.md) and the [Transactional Outbox](transactional-outbox.md), and any code using
 `ExecuteInTransactionAsync` or a transaction started directly, need a replica set or a sharded cluster (a
-single-node replica set suffices), because [transactions](transactions.md) require one. Other features, including
-migrations and the optional `TryStartTransactionAsync`/`TryStartSessionAsync` fallback, run against a standalone
-server too.
+single-node replica set suffices), because [transactions](transactions.md) require one. [Queues](queues.md)' real-time
+change-stream notifications also need a replica set or sharded cluster; a standalone server still
+works through polling alone, bounded by `WithLockLeaseTime(...)`/the lease recovery interval, without real-time
+notification of newly published items. Other features, including migrations and the optional
+`TryStartTransactionAsync`/`TryStartSessionAsync` fallback, run against a standalone server too.
 
 The minimum supported server line is **MongoDB 7.0**. Some features need a newer server:
 

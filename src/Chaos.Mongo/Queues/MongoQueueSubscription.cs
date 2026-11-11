@@ -50,7 +50,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     private readonly IMongoQueuePayloadPrioritizer _payloadPrioritizer;
     private readonly MongoQueueDefinition _queueDefinition;
     private readonly IServiceScopeFactory _serviceScopeFactory;
-    private readonly SemaphoreSlim _signalSemaphore = new(1, Int32.MaxValue);
+    private readonly SemaphoreSlim _signalSemaphore = new(0, Int32.MaxValue);
     private readonly TimeProvider _timeProvider;
     private Boolean _isActive;
     private Boolean _isDisposed;
@@ -93,6 +93,15 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
 
     /// <inheritdoc/>
     public Boolean IsActive => _isActive && !_isDisposed;
+
+    private static async Task AwaitIgnoringCancellationAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException) { }
+    }
 
     /// <summary>
     /// Builds the acquire/claim aggregation-pipeline update that atomically decides, from the document's own
@@ -172,6 +181,18 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                     grant,
                     nowLiteral,
                     "$$REMOVE"
+                })
+            },
+            {
+                // A granted attempt clears any DeferredUtc left by an earlier resolved retry, so a stale value
+                // never survives into the next cycle and this reacquisition is correctly treated as the deferred
+                // retry it is (see ProcessQueueItemAsync's lock.recovered classification), not as recovery of an
+                // abandoned lock. The terminal branch leaves it untouched; it is irrelevant once the item is closed.
+                nameof(MongoQueueItem.DeferredUtc), new BsonDocument("$cond", new BsonArray
+                {
+                    grant,
+                    "$$REMOVE",
+                    $"${nameof(MongoQueueItem.DeferredUtc)}"
                 })
             }
         });
@@ -277,6 +298,18 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         }
     }
 
+    /// <summary>
+    /// Doubles <paramref name="delay"/> for the change-stream retry loop's exponential backoff, capped at
+    /// <see cref="MongoQueueSubscriptionDefaults.ChangeStreamRetryMaxDelay"/>.
+    /// </summary>
+    private static TimeSpan NextChangeStreamRetryDelay(TimeSpan delay)
+    {
+        var doubled = delay + delay;
+        return doubled > MongoQueueSubscriptionDefaults.ChangeStreamRetryMaxDelay
+            ? MongoQueueSubscriptionDefaults.ChangeStreamRetryMaxDelay
+            : doubled;
+    }
+
     private FilterDefinition<MongoQueueItem<TPayload>> CreateAvailableQueueItemFilter()
     {
         var filterBuilder = Builders<MongoQueueItem<TPayload>>.Filter;
@@ -373,6 +406,23 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                              queueItemId,
                              typeof(TPayload).FullName,
                              attemptCount);
+
+            try
+            {
+                // Best-effort: marks this as a deliberate, already-logged retry so the next reacquisition does not
+                // misclassify it as recovery of an abandoned lock. If ownership already changed, skip silently
+                // like the method's other best-effort writes; a missed DeferredUtc only misclassifies that one
+                // reacquisition, which is not a correctness issue.
+                await collection.UpdateOneAsync(
+                    CreateLockOwnershipFilter(queueItemId, acquiredLockUtc),
+                    Builders<MongoQueueItem<TPayload>>.Update.Set(x => x.DeferredUtc, _timeProvider.GetUtcNow().UtcDateTime),
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception e)
+            {
+                _logger.LogDebug(e, "Could not mark queue item {QueueItemId} as a deferred retry", queueItemId);
+            }
+
             return;
         }
 
@@ -407,45 +457,101 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     /// Monitors a MongoDB change stream for insert operations and signals the processing task when new items arrive.
     /// </summary>
     /// <param name="collection">The MongoDB collection to monitor for insert operations.</param>
+    /// <param name="initialCursor">
+    /// A cursor already opened by <see cref="StartAsync"/>, reused for the first watch iteration instead of opening
+    /// a new one, so an insert that lands after that cursor opened is never missed. <c>null</c> if the initial open
+    /// instead failed transiently.
+    /// </param>
+    /// <param name="initialOpenFailed">
+    /// <c>true</c> if the initial open attempted by <see cref="StartAsync"/> failed transiently, so this loop's
+    /// first action is the initial backoff delay rather than an immediate retry.
+    /// </param>
     /// <param name="cancellationToken">The cancellation token to stop monitoring.</param>
     /// <returns>A task that completes when monitoring stops.</returns>
-    private async Task MonitorChangeStreamAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, CancellationToken cancellationToken)
+    private async Task MonitorChangeStreamAsync(IMongoCollection<MongoQueueItem<TPayload>> collection,
+                                                IChangeStreamCursor<ChangeStreamDocument<MongoQueueItem<TPayload>>>? initialCursor,
+                                                Boolean initialOpenFailed,
+                                                CancellationToken cancellationToken)
     {
-        var options = new ChangeStreamOptions
-        {
-            FullDocument = ChangeStreamFullDocumentOption.Default
-        };
-        var pipeline = new EmptyPipelineDefinition<ChangeStreamDocument<MongoQueueItem<TPayload>>>()
-            .Match(x => x.OperationType == ChangeStreamOperationType.Insert);
-
         _logger.LogInformation("Watching change stream for collection {CollectionName}", _queueDefinition.CollectionName);
 
-        while (!cancellationToken.IsCancellationRequested)
+        var cursor = initialCursor;
+        var retryDelay = MongoQueueSubscriptionDefaults.ChangeStreamRetryInitialDelay;
+        var awaitingRetryDelay = initialOpenFailed;
+
+        try
         {
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                using var cursor = await collection.WatchAsync(pipeline, options, cancellationToken);
-                while (await cursor.MoveNextAsync(cancellationToken))
+                try
                 {
-                    var batch = cursor.Current;
-                    if (batch.Any())
+                    if (cursor is null)
                     {
-                        // signal only once per batch
-                        _signalSemaphore.Release();
+                        if (awaitingRetryDelay)
+                        {
+                            await Task.Delay(retryDelay, _timeProvider, cancellationToken);
+                            retryDelay = NextChangeStreamRetryDelay(retryDelay);
+                        }
+
+                        var openResult = await TryOpenChangeStreamAsync(collection, cancellationToken);
+                        if (openResult.Outcome == ChangeStreamOpenOutcome.Unsupported)
+                        {
+                            // Retrying can never succeed for this cause on this server; rely on polling alone.
+                            return;
+                        }
+
+                        if (openResult.Outcome == ChangeStreamOpenOutcome.Failed)
+                        {
+                            awaitingRetryDelay = true;
+                            continue;
+                        }
+
+                        cursor = openResult.Cursor ?? throw new InvalidOperationException("A successful change-stream open must return a cursor.");
                     }
+
+                    while (true)
+                    {
+                        var hasBatch = await cursor.MoveNextAsync(cancellationToken);
+                        // A healthy read, even of an empty batch, is what resets the backoff: WatchAsync only
+                        // opens the stream, so a cursor that fails on its first read must still count as a
+                        // consecutive failure below.
+                        retryDelay = MongoQueueSubscriptionDefaults.ChangeStreamRetryInitialDelay;
+
+                        if (!hasBatch)
+                        {
+                            break;
+                        }
+
+                        if (cursor.Current.Any())
+                        {
+                            // signal only once per batch
+                            _signalSemaphore.Release();
+                        }
+                    }
+
+                    cursor.Dispose();
+                    cursor = null;
+                    awaitingRetryDelay = false;
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception e)
+                {
+                    cursor?.Dispose();
+                    cursor = null;
+                    awaitingRetryDelay = true;
+                    _logger.LogError(e, "Watching change stream for collection {CollectionName} failed", _queueDefinition.CollectionName);
                 }
             }
-            catch (Exception e)
-            {
-                if (e is OperationCanceledException)
-                    break;
-
-                _logger.LogError(e, "Watching change stream for collection {CollectionName} failed", _queueDefinition.CollectionName);
-                await Task.Delay(300, cancellationToken);
-            }
         }
-
-        _logger.LogInformation("Stopped watching change stream for collection {CollectionName}", _queueDefinition.CollectionName);
+        finally
+        {
+            cursor?.Dispose();
+            // Logged here so the unsupported-server early return reports the stop like a cancellation does.
+            _logger.LogInformation("Stopped watching change stream for collection {CollectionName}", _queueDefinition.CollectionName);
+        }
     }
 
     /// <summary>
@@ -516,20 +622,31 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                 "Acquired queue item lock {QueueItemId} with payload {PayloadType} (recovered: {RecoveredLock}, attempt: {AttemptCount}, queue age: {QueueAgeMs} ms)",
                 queueItemId,
                 typeof(TPayload).FullName,
-                projectedResult.IsLocked,
+                projectedResult.IsLocked && projectedResult.DeferredUtc is null,
                 attemptCount,
                 queueAge.TotalMilliseconds);
 
             if (projectedResult.IsLocked)
             {
-                var recoveredLockAge = acquiredLockUtc - (projectedResult.LockedUtc ?? projectedResult.CreatedUtc);
-                MongoQueueDiagnostics.RecordLockRecovered(_queueDefinition, recoveredLockAge);
-                _logger.LogWarning(
-                    "Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, expiry threshold: {ExpiryThreshold}) with payload {PayloadType}",
-                    queueItemId,
-                    projectedResult.LockedUtc?.ToString("O") ?? "null",
-                    lockExpiryUtc.ToString("O"),
-                    typeof(TPayload).FullName);
+                if (projectedResult.DeferredUtc is null)
+                {
+                    var recoveredLockAge = acquiredLockUtc - (projectedResult.LockedUtc ?? projectedResult.CreatedUtc);
+                    MongoQueueDiagnostics.RecordLockRecovered(_queueDefinition, recoveredLockAge);
+                    _logger.LogWarning(
+                        "Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, expiry threshold: {ExpiryThreshold}) with payload {PayloadType}",
+                        queueItemId,
+                        projectedResult.LockedUtc?.ToString("O") ?? "null",
+                        lockExpiryUtc.ToString("O"),
+                        typeof(TPayload).FullName);
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "Reacquiring deferred retry for queue item {QueueItemId} with payload {PayloadType} (deferred at: {DeferredUtc})",
+                        queueItemId,
+                        typeof(TPayload).FullName,
+                        projectedResult.DeferredUtc.Value.ToString("O"));
+                }
             }
 
             MongoQueueItem<TPayload> queueItem;
@@ -668,7 +785,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         {
             try
             {
-                _ = await _signalSemaphore.WaitAsync(leaseRecoveryWakeInterval, cancellationToken);
+                _ = await WaitForSignalOrIntervalAsync(leaseRecoveryWakeInterval, cancellationToken);
 
                 var queueItemIds = await collection.Find(CreateAvailableQueueItemFilter())
                                                    .Sort(sortDefinition)
@@ -678,10 +795,6 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
 
                 if (queueItemIds.Count == 0)
                 {
-                    // Brief delay to avoid busy-waiting, then re-signal to check again
-                    // This prevents deadlock when messages are published before change stream starts
-                    await Task.Delay(100, cancellationToken);
-                    _signalSemaphore.Release();
                     continue;
                 }
 
@@ -755,6 +868,87 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         }
     }
 
+    /// <summary>
+    /// Opens one change-stream cursor and classifies the outcome, so <see cref="StartAsync"/> and
+    /// <see cref="MonitorChangeStreamAsync"/>'s retry loop share one failure policy: a standalone/non-replica-set
+    /// server (<see cref="MongoCommandException.Code"/> <see cref="MongoQueueSubscriptionDefaults.StandaloneServerErrorCode"/>)
+    /// logs a single clear warning and is reported as <see cref="ChangeStreamOpenOutcome.Unsupported"/>, since
+    /// retrying can never succeed for this cause on this server; every other failure is logged like the existing
+    /// retry-loop failure handling and reported as <see cref="ChangeStreamOpenOutcome.Failed"/>, so the caller can
+    /// back off and retry.
+    /// </summary>
+    private async Task<ChangeStreamOpenResult> TryOpenChangeStreamAsync(IMongoCollection<MongoQueueItem<TPayload>> collection, CancellationToken cancellationToken)
+    {
+        var options = new ChangeStreamOptions
+        {
+            FullDocument = ChangeStreamFullDocumentOption.Default
+        };
+        var pipeline = new EmptyPipelineDefinition<ChangeStreamDocument<MongoQueueItem<TPayload>>>()
+            .Match(x => x.OperationType == ChangeStreamOperationType.Insert);
+
+        try
+        {
+            var cursor = await collection.WatchAsync(pipeline, options, cancellationToken);
+            return ChangeStreamOpenResult.Succeeded(cursor);
+        }
+        catch (MongoCommandException e) when (e.Code == MongoQueueSubscriptionDefaults.StandaloneServerErrorCode)
+        {
+            _logger.LogWarning(
+                "The MongoDB server for collection {CollectionName} does not support change streams because it is not a replica set or sharded cluster; "
+                + "this queue will rely on polling only",
+                _queueDefinition.CollectionName);
+            return ChangeStreamOpenResult.Unsupported;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Watching change stream for collection {CollectionName} failed", _queueDefinition.CollectionName);
+            return ChangeStreamOpenResult.Failed;
+        }
+    }
+
+    /// <summary>
+    /// Waits for either a real signal (<see cref="_signalSemaphore"/> released by a change-stream wake or the
+    /// polling loop's own backlog re-signal) or <paramref name="interval"/> to elapse against <see cref="_timeProvider"/>,
+    /// whichever happens first, and returns whether a signal was actually received.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Task.WhenAny(Task,Task)"/> does not cancel its loser, so racing an untimed
+    /// <see cref="SemaphoreSlim.WaitAsync(CancellationToken)"/> against <see cref="Task.Delay(TimeSpan,TimeProvider,CancellationToken)"/>
+    /// without unregistering the loser would leave the losing semaphore wait registered in <see cref="SemaphoreSlim"/>'s
+    /// internal (FIFO) waiter queue every time the delay wins — the normal case throughout an idle period. A later
+    /// <see cref="SemaphoreSlim.Release()"/> would then complete the oldest still-registered waiter from an earlier
+    /// idle iteration instead of the current loop's own, freshly registered wait, delaying a burst of inserts right
+    /// after an idle stretch by up to one extra wake interval per preceding idle timeout. This method avoids that by
+    /// giving the race its own linked <see cref="CancellationTokenSource"/>, canceling it as soon as either side
+    /// completes (which unregisters the loser from the semaphore without consuming a permit), and awaiting the
+    /// loser before returning. If the semaphore wait still completes successfully despite "losing" the race, that is
+    /// treated as a real signal rather than discarded; a genuine external cancellation (<paramref name="cancellationToken"/>
+    /// itself firing) is propagated instead of swallowed.
+    /// </remarks>
+    private async Task<Boolean> WaitForSignalOrIntervalAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        using var raceCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var signalTask = _signalSemaphore.WaitAsync(raceCancellation.Token);
+        if (signalTask.IsCompletedSuccessfully)
+        {
+            return true;
+        }
+
+        var delayTask = Task.Delay(interval, _timeProvider, raceCancellation.Token);
+
+        await Task.WhenAny(signalTask, delayTask);
+        await raceCancellation.CancelAsync();
+
+        await AwaitIgnoringCancellationAsync(signalTask);
+        await AwaitIgnoringCancellationAsync(delayTask);
+        cancellationToken.ThrowIfCancellationRequested();
+        return signalTask.IsCompletedSuccessfully;
+    }
+
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
@@ -787,11 +981,34 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
         var collection = _mongoHelper.Database.GetCollection<MongoQueueItem<TPayload>>(_queueDefinition.CollectionName);
         await EnsureIndexesAsync(collection, cancellationToken);
 
+        // Opening (or attempting to open) the change stream before releasing the startup signal below closes the
+        // race between that signal and the change stream becoming active: once a cursor is confirmed open, every
+        // subsequent insert is guaranteed to produce a change event, so the startup signal only needs to cover
+        // items that existed at or before this point.
+        var openResult = await TryOpenChangeStreamAsync(collection, cancellationToken);
+
         // Signal initially to start processing any existing messages
         _signalSemaphore.Release();
 
-        _monitorTask = Task.Run(async () => await MonitorChangeStreamAsync(collection, _cancellationTokenSource.Token), cancellationToken);
-        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, _cancellationTokenSource.Token), cancellationToken);
+        // From here on the subscription is started: both loops are scheduled without the startup token, so a
+        // late startup cancellation can neither skip the monitor delegate (which owns, and in its finally disposes,
+        // the pre-opened cursor) nor leave a subscription marked active without its loops. Both stop through
+        // _cancellationTokenSource instead, whose token is read here rather than inside the delegates: DisposeAsync
+        // may dispose the source before a delegate runs, and reading Token then would throw before the monitor's
+        // finally could dispose the cursor.
+        var stoppingToken = _cancellationTokenSource.Token;
+        if (openResult.Outcome != ChangeStreamOpenOutcome.Unsupported)
+        {
+            // On a transient first-open failure, the monitor task begins its own retry loop at the initial
+            // backoff delay instead of with a pre-opened cursor; a transient failure here never blocks polling
+            // from starting, since the processing task below is always started regardless of this outcome.
+            var initialOpenFailed = openResult.Outcome == ChangeStreamOpenOutcome.Failed;
+            _monitorTask = Task.Run(
+                async () => await MonitorChangeStreamAsync(collection, openResult.Cursor, initialOpenFailed, stoppingToken),
+                CancellationToken.None);
+        }
+
+        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, stoppingToken), CancellationToken.None);
     }
 
     /// <inheritdoc/>
@@ -814,5 +1031,37 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             _logger.LogWarning("Stopping queue subscription for payload {PayloadType} has been cancelled, " +
                                "background tasks may still be running", _queueDefinition.PayloadType.FullName);
         }
+    }
+
+    /// <summary>
+    /// The outcome <see cref="TryOpenChangeStreamAsync"/> classifies a change-stream open attempt into.
+    /// </summary>
+    private enum ChangeStreamOpenOutcome
+    {
+        /// <summary>The cursor opened successfully and is ready to read.</summary>
+        Succeeded,
+
+        /// <summary>
+        /// The server is not a replica set or sharded cluster; retrying can never succeed for this cause on this
+        /// server.
+        /// </summary>
+        Unsupported,
+
+        /// <summary>A transient failure; the caller should back off and retry.</summary>
+        Failed
+    }
+
+    /// <summary>
+    /// The result of one <see cref="TryOpenChangeStreamAsync"/> call: <see cref="Cursor"/> is set only when
+    /// <see cref="Outcome"/> is <see cref="ChangeStreamOpenOutcome.Succeeded"/>.
+    /// </summary>
+    private readonly record struct ChangeStreamOpenResult(ChangeStreamOpenOutcome Outcome, IChangeStreamCursor<ChangeStreamDocument<MongoQueueItem<TPayload>>>? Cursor)
+    {
+        public static ChangeStreamOpenResult Failed { get; } = new(ChangeStreamOpenOutcome.Failed, null);
+
+        public static ChangeStreamOpenResult Unsupported { get; } = new(ChangeStreamOpenOutcome.Unsupported, null);
+
+        public static ChangeStreamOpenResult Succeeded(IChangeStreamCursor<ChangeStreamDocument<MongoQueueItem<TPayload>>> cursor) =>
+            new(ChangeStreamOpenOutcome.Succeeded, cursor);
     }
 }

@@ -35,6 +35,17 @@ public class MongoQueueItem
     public required DateTime CreatedUtc { get; init; }
 
     /// <summary>
+    /// Timestamp a resolved failure (a thrown handler exception, a DI resolution failure, or a poison-payload
+    /// read failure) deferred this item's retry, left locked until its lease naturally expires. Distinguishes an
+    /// ordinary, already-logged retry from a lock actually abandoned by a crash: only the latter should record
+    /// <c>chaos.mongo.queue.lock.recovered</c> on its next reacquisition. Cleared whenever the next acquisition is
+    /// granted, so a missing value (including on documents written before this property existed) behaves like a
+    /// lock that was never deliberately deferred.
+    /// </summary>
+    [BsonIgnoreIfNull]
+    public DateTime? DeferredUtc { get; internal set; }
+
+    /// <summary>
     /// The unique identifier of the queue item.
     /// </summary>
     public required ObjectId Id { get; init; }
