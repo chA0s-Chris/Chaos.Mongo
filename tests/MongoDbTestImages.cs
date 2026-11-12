@@ -13,7 +13,7 @@ public static class MongoDbTestImages
     public const String Latest = "mongo:9.0.4";
 
     // renovate: datasource=docker depName=mongo-minimum-supported packageName=mongo versioning=docker
-    public const String MinimumSupported = "mongo:7.0.45";
+    public const String MinimumSupported = "mongo:7.0.48";
 
     // renovate: datasource=docker depName=mongo-primary packageName=mongo versioning=docker
     public const String Primary = "mongo:8.0.34";
