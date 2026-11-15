@@ -18,7 +18,7 @@ The goal is that every package ships `lib/net10.0` and `lib/net11.0`, built and 
 - [x] The library source compiled for `net10.0` under SDK 11.0.100 (C# 15, `LangVersion latest`) is checked for language features that need runtime support beyond .NET 10. The result is recorded in the implementation handoff. No such feature is used, or a used one is replaced.
 - [x] `README.md` and `docs/requirements.md` state .NET 10 and .NET 11. `docs/migrating-from-0.x.md` no longer calls the packages "`net10.0` only" while still telling 0.x users to retarget to a supported framework. A `grep` over the maintained `README.md` and `docs/` content (historical plans under `ai-plans/` and generated release history excluded) finds no remaining statement that the packages target only .NET 10.
 - [x] `./cleanup_code.sh` has been run and its diff inspected, and `./inspect_code.sh` reports no warning or error findings for the changes.
-- [ ] CI after publication: on the exact published head, the `ci` job (all three `mongo-image` legs), `pack-check` and `result` of `ci.yml` succeed. Local verification cannot establish this, because the change alters which SDKs and runtimes the hosted runners install and runs the suite on them.
+- [x] CI after publication: on the exact published head, the `ci` job (all three `mongo-image` legs), `pack-check` and `result` of `ci.yml` succeed. Local verification cannot establish this, because the change alters which SDKs and runtimes the hosted runners install and runs the suite on them.
 
 ## Technical Details
 
