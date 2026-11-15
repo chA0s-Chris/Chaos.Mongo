@@ -34,8 +34,17 @@ internal partial class BuildPipeline
               .Executes(() =>
               {
                   // A stale per-project coverage.cobertura.xml from an earlier run would otherwise be merged in
-                  // and skew the gate below.
+                  // and skew the gate below. The same goes for result files of an earlier run, including those
+                  // under the former one-file-per-project naming, which the report would count as well.
                   CoverageDirectory.CreateOrCleanDirectory();
+                  ArtifactsDirectory.GlobFiles(TestResultFiles.Pattern).ForEach(file => file.DeleteFile());
+
+                  // One run per test project and target framework. Nuke executes the combinations one after the
+                  // other, so two test hosts of a project never start their MongoDB containers at the same time.
+                  var runs = (from project in TestsDirectory.GlobFiles("**/*.Tests.csproj")
+                              from framework in GetTargetFrameworks(project)
+                              let resultFile = ArtifactsDirectory / TestResultFiles.GetFileName(Path.GetFileNameWithoutExtension(project), framework)
+                              select (Project: project, Framework: framework, ResultFile: resultFile)).ToList();
 
                   DotNetTest(s => s
                                   .SetConfiguration(TargetBuildConfiguration)
@@ -45,20 +54,32 @@ internal partial class BuildPipeline
                                   .SetSettingsFile(RootDirectory / "coverlet.xml")
                                   .SetResultsDirectory(CoverageDirectory)
                                   .CombineWith(
-                                      TestsDirectory.GlobFiles("**/*.Tests.csproj"),
-                                      (settings, path) =>
-                                      {
-                                          var testOutput = ArtifactsDirectory / (Path.GetFileNameWithoutExtension(path) + ".xml");
-                                          return settings.SetProjectFile(path)
-                                                         .SetLoggers($"junit;LogFilePath={testOutput}");
-                                      }));
+                                      runs,
+                                      (settings, run) => settings.SetProjectFile(run.Project)
+                                                                 .SetFramework(run.Framework)
+                                                                 .SetLoggers($"junit;LogFilePath={run.ResultFile}")));
 
                   DotNet($"coverage merge {CoverageDirectory}/**/coverage.cobertura.xml -f cobertura -o {MergedCoverageResultsFile}");
 
-                  ReportTestCountAndCoverage();
+                  ReportTestCountAndCoverage(runs.Select(run => run.ResultFile).ToList());
               });
 
-    private void ReportTestCountAndCoverage()
+    /// <summary>
+    /// Reads the target frameworks of a project from MSBuild, so the test runs follow the project files rather than a
+    /// second list of frameworks.
+    /// </summary>
+    private static IReadOnlyList<String> GetTargetFrameworks(AbsolutePath project)
+    {
+        var output = DotNet($"msbuild \"{project}\" -nologo -getProperty:TargetFrameworks", logOutput: false, logInvocation: false);
+        var frameworks = TestResultFiles.ParseFrameworks(String.Join(String.Empty, output.Where(o => o.Type == OutputType.Std).Select(o => o.Text)));
+
+        if (frameworks.Count == 0)
+            Assert.Fail($"{project} does not declare TargetFrameworks, so no test run can be derived from it.");
+
+        return frameworks;
+    }
+
+    private void ReportTestCountAndCoverage(IReadOnlyCollection<AbsolutePath> expectedResultFiles)
     {
         var totalTestCount = 0;
         var totalFailureCount = 0;
@@ -69,8 +90,13 @@ internal partial class BuildPipeline
             IgnoreWhitespace = true
         };
 
-        foreach (var testResult in ArtifactsDirectory.GlobFiles("*.Tests.xml"))
+        // The expected files, not a glob, decide what is counted: a run that wrote no result must fail the report
+        // instead of silently lowering the total.
+        foreach (var testResult in expectedResultFiles)
         {
+            if (!testResult.FileExists())
+                throw new FileNotFoundException($"Missing test result file: {testResult}", testResult);
+
             using var reader = XmlReader.Create(testResult, xmlReaderSettings);
             reader.Read();
             reader.Read();
@@ -104,7 +130,7 @@ internal partial class BuildPipeline
                                                p => RequireAttribute(p, "name"),
                                                p => Double.Parse(RequireAttribute(p, "line-rate"), NumberStyles.Number, CultureInfo.InvariantCulture));
 
-        var coverage = (lineRate * 100).ToString("N2");
+        var coverage = (lineRate * 100).ToString("N2", CultureInfo.InvariantCulture);
         Console.WriteLine($"CODE_COVERAGE={coverage}");
 
         ReportSummary(c =>
