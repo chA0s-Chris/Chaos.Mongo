@@ -6,7 +6,7 @@ see [Migrating from 0.x](migrating-from-0.x.md).
 
 ## .NET
 
-.NET 10.
+.NET 10 and .NET 11.
 
 ## MongoDB server
 

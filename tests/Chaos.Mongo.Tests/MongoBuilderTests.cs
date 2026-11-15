@@ -137,7 +137,12 @@ public class MongoBuilderTests
 
         // Assert
         var provider = services.BuildServiceProvider();
+        // SYSLIB0066: .NET 11 marks IStartupValidator obsolete in favor of IAsyncStartupValidator, which Microsoft.Extensions.Options
+        // does not provide for net10.0 (10.0.15 has no such type). This test verifies the synchronous startup validation that
+        // OptionsBuilder.ValidateOnStart registers, so it keeps using the interface on both frameworks.
+#pragma warning disable SYSLIB0066
         var act = () => provider.GetRequiredService<IStartupValidator>().Validate();
+#pragma warning restore SYSLIB0066
         act.Should().NotThrow();
         provider.GetRequiredService<IOptions<MongoOptions>>().Value.Url.Should().BeSameAs(url);
     }

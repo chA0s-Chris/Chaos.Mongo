@@ -21,7 +21,9 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The suite runs on net10.0 and net11.0 one after the other; a local run takes about 12 minutes, so 15 left no
+    # headroom for slower hosted runners.
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -50,7 +52,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
       - name: Run NUKE pipeline
         run: bash build.sh Test
@@ -69,7 +73,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
       # No Docker Hub login and no CHAOSMONGO_SNK: packs with the public key already committed and checks the
       # result, so this also runs for fork PRs.

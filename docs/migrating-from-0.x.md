@@ -4,10 +4,10 @@ This page lists every breaking change merged since the v0.9.0 release and what t
 1.0. Pair it with the [compatibility policy](compatibility-policy.md), which 1.0 starts honoring, and
 [requirements](requirements.md) for the platform and MongoDB server versions 1.0 needs.
 
-## Platform: .NET 10 only, lowered dependency minimums
+## Platform: .NET 10 and later, lowered dependency minimums
 
-The packages now target `net10.0` only; the `net8.0` and `net9.0` targets are gone, since both frameworks reach end
-of support on 2026-11-10. Retarget consuming projects to `net10.0`.
+The packages now target `net10.0` and `net11.0`; the `net8.0` and `net9.0` targets are gone, since both frameworks reach
+end of support on 2026-11-10. Retarget consuming projects from `net8.0` or `net9.0` to `net10.0` or later.
 
 While doing so, every `src/` dependency minimum was lowered to the lowest version with no known vulnerability that
 still provides the APIs in use, including `MongoDB.Driver`; see [requirements](requirements.md#mongodbdriver) for the
