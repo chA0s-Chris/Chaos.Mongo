@@ -44,6 +44,24 @@ API: a breaking change to a public type or member ships only in a major release.
   [Migrating from 0.x](migrating-from-0.x.md#distributed-locking-per-acquisition-token) for the rolling-upgrade
   boundary this implies.
 
+## Metrics
+
+Metric names, tags and units are part of the stored-data contract above. The outbox meter is:
+
+| Meter | Instrument | Type | Tag |
+|---|---|---|---|
+| `Chaos.Mongo.Outbox` | `chaos.mongo.outbox.published` | Counter | `outbox.destination` |
+| `Chaos.Mongo.Outbox` | `chaos.mongo.outbox.publish.failed` | Counter | `outbox.destination` |
+| `Chaos.Mongo.Outbox` | `chaos.mongo.outbox.publish.terminal_failed` | Counter | `outbox.destination` |
+| `Chaos.Mongo.Outbox` | `chaos.mongo.outbox.publish.duration` | Histogram (s) | `outbox.destination` |
+| `Chaos.Mongo.Outbox` | `chaos.mongo.outbox.message.age` | Histogram (s) | `outbox.destination` |
+
+The value of `outbox.destination` is the outbox's collection name. See
+[Metrics](transactional-outbox.md#metrics) for what each instrument measures. The queue meter
+(`Chaos.Mongo.Queues`) is listed in [Queues: Diagnostics](queues.md#diagnostics) and the anchoring meter
+(`Chaos.Mongo.EventStore.Integrity`) in [Event Store: Anchoring](event-store.md#anchoring); their names, tags and units
+are contract in the same way.
+
 ## Tamper-evidence format
 
 The tamper-evidence format (see [Tamper Evidence](event-store.md#tamper-evidence) and its

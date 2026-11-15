@@ -211,9 +211,13 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         var failureFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, messageId) &
                             Builders<OutboxMessage>.Filter.Eq(m => m.LockId, lockId);
 
-        UpdateDefinition<OutboxMessage> failureUpdate;
+        // One failed attempt counts once, whether the publisher threw or finalizing a published message failed.
+        OutboxDiagnostics.RecordPublishFailed(_options.CollectionName);
 
-        if (_options.MaxRetries.HasValue && attemptCount > _options.MaxRetries.Value)
+        UpdateDefinition<OutboxMessage> failureUpdate;
+        var permanentlyFailed = _options.MaxRetries.HasValue && attemptCount > _options.MaxRetries.Value;
+
+        if (permanentlyFailed)
         {
             // Permanently failed
             failureUpdate = Builders<OutboxMessage>.Update
@@ -257,19 +261,25 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 "failure update skipped — ownership was lost to another processor",
                 messageId, _options.Identity, _options.CollectionName);
         }
+        else if (permanentlyFailed)
+        {
+            OutboxDiagnostics.RecordPublishTerminalFailed(_options.CollectionName);
+        }
     }
 
     private async Task MarkProcessedAsync(IMongoCollection<OutboxMessage> collection,
                                           OutboxMessage claimed,
                                           String lockId,
+                                          TimeSpan publishDuration,
                                           CancellationToken cancellationToken)
     {
         var successFilter = Builders<OutboxMessage>.Filter.Eq(m => m.Id, claimed.Id) &
                             Builders<OutboxMessage>.Filter.Eq(m => m.LockId, lockId);
 
+        var processedUtc = _timeProvider.GetUtcNow().UtcDateTime;
         var successUpdate = Builders<OutboxMessage>.Update
                                                    .Set(m => m.State, OutboxMessageState.Processed)
-                                                   .Set(m => m.ProcessedUtc, _timeProvider.GetUtcNow().UtcDateTime)
+                                                   .Set(m => m.ProcessedUtc, processedUtc)
                                                    .Set(m => m.IsLocked, false)
                                                    .Unset(m => m.NextAttemptUtc)
                                                    .Unset(m => m.LockedUtc)
@@ -298,6 +308,13 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             }
             else
             {
+                // Recorded only for the transition to Processed, so a publish whose finalization failed, timed out
+                // or lost ownership is counted by the redelivery that completes it. A creation timestamp in the
+                // future (writer clock skew) would yield a negative age, so it is clamped to zero.
+                var messageAge = processedUtc - claimed.CreatedUtc;
+                OutboxDiagnostics.RecordPublished(_options.CollectionName,
+                                                  publishDuration,
+                                                  messageAge < TimeSpan.Zero ? TimeSpan.Zero : messageAge);
                 _logger.LogDebug("Outbox message {MessageId} of type '{MessageType}' processed successfully", claimed.Id, claimed.Type);
             }
         }
@@ -478,8 +495,11 @@ internal sealed class OutboxProcessor : IOutboxProcessor
                 "Outbox message {MessageId} in outbox '{OutboxIdentity}' (collection '{CollectionName}') " +
                 "permanently failed after {AttemptCount} attempts without granting a further attempt",
                 claimed.Id, _options.Identity, _options.CollectionName, claimed.AttemptCount);
+            OutboxDiagnostics.RecordPublishTerminalFailed(_options.CollectionName);
             return;
         }
+
+        var publishStartTimestamp = _timeProvider.GetTimestamp();
 
         try
         {
@@ -498,7 +518,8 @@ internal sealed class OutboxProcessor : IOutboxProcessor
             return;
         }
 
-        await MarkProcessedAsync(collection, claimed, lockId, cancellationToken);
+        var publishDuration = _timeProvider.GetElapsedTime(publishStartTimestamp);
+        await MarkProcessedAsync(collection, claimed, lockId, publishDuration, cancellationToken);
     }
 
     private async Task TryReleaseLockAsync(IMongoCollection<OutboxMessage> collection,
