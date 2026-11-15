@@ -10,7 +10,7 @@ namespace Chaos.Mongo.TestSupport;
 public static class MongoDbTestImages
 {
     // renovate: datasource=docker depName=mongo-latest packageName=mongo versioning=docker
-    public const String Latest = "mongo:9.0.4";
+    public const String Latest = "mongo:9.0.8";
 
     // renovate: datasource=docker depName=mongo-minimum-supported packageName=mongo versioning=docker
     public const String MinimumSupported = "mongo:7.0.45";
