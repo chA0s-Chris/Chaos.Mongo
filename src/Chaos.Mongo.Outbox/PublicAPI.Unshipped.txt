@@ -79,3 +79,13 @@ Chaos.Mongo.Outbox.OutboxMessage.AttemptCount.get -> long
 *REMOVED*static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultPollingInterval -> System.TimeSpan
 *REMOVED*static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultRetryBackoffInitialDelay -> System.TimeSpan
 *REMOVED*static readonly Chaos.Mongo.Outbox.OutboxOptions.DefaultRetryBackoffMaxDelay -> System.TimeSpan
+Chaos.Mongo.Outbox.OutboxMetrics
+Chaos.Mongo.Outbox.OutboxMetrics.Instruments
+Chaos.Mongo.Outbox.OutboxMetrics.Tags
+const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.MessageAge = "chaos.mongo.outbox.message.age" -> string!
+const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.PublishDuration = "chaos.mongo.outbox.publish.duration" -> string!
+const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.PublishFailed = "chaos.mongo.outbox.publish.failed" -> string!
+const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.PublishTerminalFailed = "chaos.mongo.outbox.publish.terminal_failed" -> string!
+const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.Published = "chaos.mongo.outbox.published" -> string!
+const Chaos.Mongo.Outbox.OutboxMetrics.MeterName = "Chaos.Mongo.Outbox" -> string!
+const Chaos.Mongo.Outbox.OutboxMetrics.Tags.Destination = "outbox.destination" -> string!

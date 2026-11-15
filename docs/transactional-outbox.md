@@ -29,6 +29,8 @@ Transactional outbox support for MongoDB, built on top of `Chaos.Mongo`.
   - [Locking and Stale Lock Recovery](#locking-and-stale-lock-recovery)
   - [Ordering](#ordering)
   - [Retention and Cleanup](#retention-and-cleanup)
+- [Metrics](#metrics)
+  - [Suggested Alerts](#suggested-alerts)
 - [Event Store Integration](#event-store-integration)
 - [Best Practices](#best-practices)
 
@@ -641,6 +643,60 @@ If retention is not configured, messages are kept indefinitely and managed TTL i
 is configured without `WithExpireFailedMessages()`, any existing `FailedUtc` TTL index is removed and `Failed`
 messages are kept indefinitely while `Processed` messages continue to expire normally.
 
+## Metrics
+
+The outbox processor emits runtime metrics through the `System.Diagnostics.Metrics` meter named by
+`OutboxMetrics.MeterName` (`Chaos.Mongo.Outbox`). Instrument and tag names are available through
+`OutboxMetrics.Instruments` and `OutboxMetrics.Tags`. Add the meter name to your OpenTelemetry (or other
+`MeterListener`) configuration to collect them. The instruments are:
+
+| Instrument | Type | Measures |
+|---|---|---|
+| `chaos.mongo.outbox.published` | Counter | Messages that were published and reached `Processed`. |
+| `chaos.mongo.outbox.publish.failed` | Counter | Failed publish attempts. |
+| `chaos.mongo.outbox.publish.terminal_failed` | Counter | Messages that permanently failed and reached `Failed`. |
+| `chaos.mongo.outbox.publish.duration` | Histogram (s) | Duration of the `PublishAsync` call of messages that reached `Processed`. |
+| `chaos.mongo.outbox.message.age` | Histogram (s) | Time from the creation of a message (`CreatedUtc`) to the moment it reached `Processed`, including retries and backoff. |
+
+Every instrument carries one tag, `outbox.destination`, whose value is the outbox's collection name
+(`WithCollectionName`, default `Outbox`). The collection name is unique per outbox, so a series always belongs to
+exactly one outbox, including when several typed outboxes are registered.
+
+How the instruments count:
+
+- `published`, `publish.duration` and `message.age` are recorded together, once per message, when the state update to
+  `Processed` succeeds. Their counts are therefore equal. A publish whose finalization failed, timed out or lost the
+  lock is not counted; the redelivery that completes the message records it later. `publish.duration` covers the
+  `PublishAsync` call of that delivery only, not earlier attempts. A message creation time in the future (clock skew
+  of the writer) is recorded as an age of zero.
+- `publish.failed` counts every attempt that is resolved as a failure: a `PublishAsync` call that throws, and a
+  publish whose finalization failed with an error. It does not count a processor shutdown that releases the lock, a
+  finalization that timed out, or a finalization that lost the lock to another processor.
+- `publish.terminal_failed` counts each message once, when it transitions to `Failed`. The terminal attempt counts
+  both `publish.failed` and `publish.terminal_failed`; a message terminalized by a claim without a further
+  `PublishAsync` call counts only `publish.terminal_failed`. Terminal failures need a finite `MaxRetries`; with the
+  unlimited default this instrument stays at zero.
+
+### Suggested Alerts
+
+Translate these conditions into your monitoring backend, per `outbox.destination`:
+
+- **Publish failures**: alert when the rate of `publish.failed` stays above zero for several minutes. This usually
+  means that the publisher or the broker is unavailable, or that a message is rejected repeatedly. Failed attempts
+  are retried, so they are not lost messages: a failed attempt can precede a later success of the same message,
+  and `publish.failed` also counts a finalization failure after a successful publish.
+- **Terminal failures**: alert on any increase of `publish.terminal_failed`. Those messages are parked in `Failed`,
+  are not expired by default (see [Retention and Cleanup](#retention-and-cleanup)) and need operator action.
+  Only this instrument counts messages that were given up on.
+- **Delivery lag and backlog**: alert when a high percentile (for example p95) of `message.age` exceeds the delay
+  your consumers tolerate, or when the rate of `published` drops to zero while your application still writes
+  messages. A growing backlog shows up as growing message age once those messages are delivered.
+
+`message.age` and `published` only observe messages that were delivered. A processor that is stopped, or a backlog that
+is stalled completely, emits nothing and appears as an absent or flat series rather than as a high age. Pair the lag
+alert with an alert on the absence of `published` data while messages are being written, or with an
+application-side count of pending messages. The outbox does not provide a backlog gauge.
+
 ## Event Store Integration
 
 The event store exposes an `onBeforeCommit` callback that runs inside the same transaction as the event append. That makes it a good place to enqueue outbox messages:
@@ -673,3 +729,4 @@ This keeps event persistence and outbox persistence atomic without inserting out
 - Assume duplicate delivery and make consumers idempotent.
 - Enable retention if the outbox is operational data only; disable it if you need long-term auditing.
 - Keep `RunConfiguratorsOnStartup` or `WithAutoStartProcessor()` enabled in production so indexes are not forgotten.
+- Alert on `publish.terminal_failed` and on delivery lag; see [Suggested Alerts](#suggested-alerts).

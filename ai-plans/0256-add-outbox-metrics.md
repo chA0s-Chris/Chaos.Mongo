@@ -16,31 +16,31 @@ metrics, with suggested alerts, in `docs/transactional-outbox.md` and lists them
 
 ## Acceptance Criteria
 
-- [ ] A new public `OutboxMetrics` class in `Chaos.Mongo.Outbox` exposes `MeterName`, a nested `Instruments` class
+- [x] A new public `OutboxMetrics` class in `Chaos.Mongo.Outbox` exposes `MeterName`, a nested `Instruments` class
       and a nested `Tags` class with the exact names listed under Technical Details, and its members are added to
       `src/Chaos.Mongo.Outbox/PublicAPI.Unshipped.txt`.
-- [ ] The processor emits all five instruments through a new internal `OutboxDiagnostics` class, under meter
+- [x] The processor emits all five instruments through a new internal `OutboxDiagnostics` class, under meter
       `Chaos.Mongo.Outbox`, tagged with `outbox.destination` set to the outbox's configured collection name
       (`OutboxOptions.CollectionName`), the one discriminator registration guarantees to be distinct per outbox.
-- [ ] Each of the five instruments is covered by a test asserting its instrument name, its tags (key and value) and
+- [x] Each of the five instruments is covered by a test asserting its instrument name, its tags (key and value) and
       its published `Instrument.Unit` (`"s"` for the two histograms, no unit for the counters, as for the existing
       queue and anchoring counters), together with the recorded value (exact value for histograms).
-- [ ] A registration-level test shows that outboxes stay distinguishable: two typed outboxes whose marker types share the
+- [x] A registration-level test shows that outboxes stay distinguishable: two typed outboxes whose marker types share the
       same simple `Name` (declared in different namespaces) and have distinct collections, and the untyped outbox next
       to a typed outbox whose marker is named `Default`, each emit under their own `outbox.destination` value, with
       no measurement merged into another outbox's series.
-- [ ] Processor-level tests cover the emission points: a successful publish increments `published` and records
+- [x] Processor-level tests cover the emission points: a successful publish increments `published` and records
       duration and message age once each; a throwing publisher increments `publish.failed` and no `published`; a
       permanent failure (exhausted `MaxRetries`, through a failed publish and through a claim that terminalizes
       directly) increments `publish.terminal_failed` exactly once; a shutdown cancellation, a lost-ownership
       finalization and a lock-release-after-timeout record neither `published` nor `publish.failed`.
-- [ ] `docs/transactional-outbox.md` has a Metrics section (with a table-of-contents entry) containing a table of
+- [x] `docs/transactional-outbox.md` has a Metrics section (with a table-of-contents entry) containing a table of
       the five instruments (name, type/unit, what it measures), the tag, and suggested alerts for publish failures,
       terminal failures and delivery lag/backlog, including the limit that the age histogram only observes messages
       that were delivered.
-- [ ] `docs/compatibility-policy.md` lists the outbox metrics (meter, instrument names, types/units and tag) as
+- [x] `docs/compatibility-policy.md` lists the outbox metrics (meter, instrument names, types/units and tag) as
       frozen contract and points to the queue and anchoring metric tables for the other two meters.
-- [ ] `dotnet build -c Release Chaos.Mongo.slnx` produces no warnings, and the full test suite passes with at least
+- [x] `dotnet build -c Release Chaos.Mongo.slnx` produces no warnings, and the full test suite passes with at least
       95% merged line coverage (`tests/AGENTS.md`), evidenced by a single `bash ./build.sh Test` run started from a
       clean `artifacts/test-coverage`.
 
