@@ -16,7 +16,7 @@ public static class MongoDbTestImages
     public const String MinimumSupported = "mongo:7.0.45";
 
     // renovate: datasource=docker depName=mongo-primary packageName=mongo versioning=docker
-    public const String Primary = "mongo:8.0.34";
+    public const String Primary = "mongo:8.0.38";
 
     /// <summary>
     /// The image named by <c>CHAOSMONGO_MONGODB_IMAGE</c>, defaulting to <see cref="Primary"/> when the
