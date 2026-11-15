@@ -116,8 +116,10 @@ nested classes, `Method_Scenario_ExpectedResult`, FluentAssertions, integration 
   `OutboxDiagnostics` uses one static meter and measurements arrive on the threads of parallel tests, so the collector
   must be thread-safe (a lock or `ConcurrentQueue`, not a bare `List<T>`) and every assertion filters on a unique
   `outbox.destination` value, i.e. a unique `OutboxOptions.CollectionName` per test.
-- Direct tests of the internal `OutboxDiagnostics.Record*` methods for exact name/tag/unit/value of all five
-  instruments (precedent: `MongoQueueDiagnosticsTests`).
+- A contract test pinning the public `OutboxMetrics` constants (meter name, instrument names, tag). The exact
+  name/tag/unit/value of all five instruments is asserted by the processor-level tests below, not by direct tests of
+  the internal `OutboxDiagnostics.Record*` methods, which `tests/AGENTS.md` rules out as they are reachable through
+  `IOutboxProcessor`.
 - Processor-level sociable tests for the emission semantics above, in the style of `OutboxProcessorTests` and
   `OutboxProcessorTerminalClaimTests` (existing `FakeTimeProvider` and collection fakes), covering success, failed
   attempt, both terminal paths, and the "does not record" cases. At least one Testcontainers-based integration test
