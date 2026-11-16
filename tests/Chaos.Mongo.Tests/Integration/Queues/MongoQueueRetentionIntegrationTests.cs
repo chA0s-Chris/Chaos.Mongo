@@ -75,7 +75,9 @@ public class MongoQueueRetentionIntegrationTests
         // whole point of this change, so a camelCase-registered host still writes (and must still match) exactly
         // these stored names, not renamed ones. An open, never-closed item is included as a retained control: the
         // partial filter requires IsClosed: true, so it must never be selected.
-        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        // ClosedUtc lies in the future: the filter only asks for a date, and the shared server runs its TTL monitor
+        // every second, so already expired items could be deleted before the filter is evaluated.
+        var closedUtc = DateTime.UtcNow.AddDays(1);
         var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
         await rawCollection.InsertManyAsync([
             new BsonDocument
@@ -166,7 +168,9 @@ public class MongoQueueRetentionIntegrationTests
         // Act: insert raw legacy documents (bypassing the typed model, which cannot represent a missing or
         // explicit-null IsTerminal for a non-nullable member) directly, with the subscription stopped so nothing
         // else touches this collection while the filter below is evaluated.
-        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        // ClosedUtc lies in the future: the filter only asks for a date, and the shared server runs its TTL monitor
+        // every second, so already expired items could be deleted before the filter is evaluated.
+        var closedUtc = DateTime.UtcNow.AddDays(1);
         var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
         await rawCollection.InsertManyAsync([
             new BsonDocument
