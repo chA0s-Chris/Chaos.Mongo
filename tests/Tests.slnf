@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "../Chaos.Mongo.slnx",
+    "projects": [
+      "tests/BuildPipeline.Tests/BuildPipeline.Tests.csproj",
+      "tests/Chaos.Mongo.EventStore.Tests/Chaos.Mongo.EventStore.Tests.csproj",
+      "tests/Chaos.Mongo.Outbox.Tests/Chaos.Mongo.Outbox.Tests.csproj",
+      "tests/Chaos.Mongo.Tests/Chaos.Mongo.Tests.csproj"
+    ]
+  }
+}

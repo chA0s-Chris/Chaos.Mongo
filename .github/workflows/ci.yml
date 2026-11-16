@@ -21,8 +21,7 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # The suite runs on net10.0 and net11.0 one after the other; a local run takes about 12 minutes, so 15 left no
-    # headroom for slower hosted runners.
+    # Raised for a leg that ran both target frameworks one after the other; each leg now tests one framework.
     timeout-minutes: 30
     permissions:
       contents: read
@@ -30,6 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         mongo-image: [ MinimumSupported, Primary, Latest ]
+        # Keep in sync with MainTargets in Directory.Build.props, like the setup-dotnet versions below.
+        framework: [ net10.0, net11.0 ]
     env:
       DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
       DOCKERHUB_PAT: ${{ secrets.DOCKERHUB_PAT }}
@@ -57,7 +58,9 @@ jobs:
             11.0.x
 
       - name: Run NUKE pipeline
-        run: bash build.sh Test
+        run: bash build.sh Test --test-framework "$TEST_FRAMEWORK"
+        env:
+          TEST_FRAMEWORK: ${{ matrix.framework }}
 
   pack-check:
     runs-on: ubuntu-latest

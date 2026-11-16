@@ -4,6 +4,7 @@
   <PropertyGroup>
     <!-- Only the benchmarks use LatestTarget; they stay on the LTS target, which is now the lower of the two main targets. -->
     <LatestTarget>net10.0</LatestTarget>
+    <!-- The framework matrix of the ci job in .github/workflows/ci.yml lists these by hand; keep both in sync. -->
     <MainTargets>net10.0;net11.0</MainTargets>
     <TargetFrameworks>$(MainTargets)</TargetFrameworks>
   </PropertyGroup>

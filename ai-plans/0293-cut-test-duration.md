@@ -12,12 +12,12 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 
 ### Layer 1: Pipeline
 
-- [ ] The Nuke `Test` target runs different test projects concurrently, while the target frameworks of one project still run one after another. Every run still writes its JUnit result file named by `TestResultFiles.GetFileName`, the coverage merge and the `CODE_COVERAGE` line still work, a missing result file still fails the report, and a failing test run fails the target.
-- [ ] A new Nuke parameter restricts `BuildTests` and `Test` to one target framework. Without it, both targets cover every framework the test projects declare. A framework that a test project does not declare fails the target instead of silently running fewer tests.
-- [ ] `BuildTests` builds all test projects in one `dotnet build` invocation, without building the benchmarks.
-- [ ] The `ci` job's matrix runs every MongoDB image on every target framework (six legs), each leg passing its framework to the Nuke parameter. The coverage gate is enforced on each `Primary` leg, `result` still aggregates the `ci` legs, and `release.yml`, which calls `ci.yml`, keeps working.
-- [ ] Pure logic added to the build pipeline, such as validating the requested framework, has tests in `BuildPipeline.Tests`.
-- [ ] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks without retries. Any Docker `Conflict ... container ... is not running` failure is reported with its cause.
+- [x] The Nuke `Test` target runs different test projects concurrently, while the target frameworks of one project still run one after another. Every run still writes its JUnit result file named by `TestResultFiles.GetFileName`, the coverage merge and the `CODE_COVERAGE` line still work, a missing result file still fails the report, and a failing test run fails the target.
+- [x] A new Nuke parameter restricts `BuildTests` and `Test` to one target framework. Without it, both targets cover every framework the test projects declare. A framework that a test project does not declare fails the target instead of silently running fewer tests.
+- [x] `BuildTests` builds all test projects in one `dotnet build` invocation, without building the benchmarks.
+- [x] The `ci` job's matrix runs every MongoDB image on every target framework (six legs), each leg passing its framework to the Nuke parameter. The coverage gate is enforced on each `Primary` leg, `result` still aggregates the `ci` legs, and `release.yml`, which calls `ci.yml`, keeps working.
+- [x] Pure logic added to the build pipeline, such as validating the requested framework, has tests in `BuildPipeline.Tests`.
+- [x] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks without retries. Any Docker `Conflict ... container ... is not running` failure is reported with its cause.
 - [ ] The pull request records the local `bash ./build.sh Test` wall time and the per-assembly times before and after this layer.
 
 ### Layer 2: Test Hot Spots
