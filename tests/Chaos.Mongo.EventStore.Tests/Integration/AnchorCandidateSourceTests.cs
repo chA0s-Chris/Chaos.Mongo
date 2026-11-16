@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
@@ -149,7 +150,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ConsumeBatchAsync_RetroactiveSealing_DeliversSealedHead()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(databaseName, false);
         var context = await CreateInitializedContextAsync(databaseName, options => options.SealingChunkSize = 2);
         var aggregateId = await unprotected.AppendStreamAsync(5);
@@ -205,7 +206,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_AfterRestart_ReturnsOnlyUnacknowledgedCandidates()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateInitializedContextAsync(databaseName);
         var acknowledged = await context.AppendStreamAsync(1);
         await ConsumeUntilAsync(context.CreateConsumer(), consumed => consumed.Any(c => c.AggregateId == acknowledged));
@@ -224,7 +225,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_ConsecutiveReads_ContinueAndLastAcknowledgementCoversAll()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateInitializedContextAsync(databaseName);
         var first = await context.AppendStreamAsync(2);
         var second = await context.AppendStreamAsync(1);
@@ -247,7 +248,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_RestartAfterConsecutiveUnacknowledgedReads_DeliversThemAgain()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateInitializedContextAsync(databaseName);
         var first = await context.AppendStreamAsync(1);
         var second = await context.AppendStreamAsync(1);

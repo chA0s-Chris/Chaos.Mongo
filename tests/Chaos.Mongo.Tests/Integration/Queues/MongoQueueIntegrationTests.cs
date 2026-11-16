@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,7 +30,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueAutoStartTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueAutoStartTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler)
@@ -97,7 +98,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"HostedServiceStopTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("HostedServiceStopTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler1)
@@ -157,7 +158,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueManualStartTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueManualStartTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler)
@@ -206,7 +207,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"MultipleQueuesTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("MultipleQueuesTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler1)
@@ -274,7 +275,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueuePerformanceTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueuePerformanceTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler)
@@ -320,7 +321,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueLifecycleTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLifecycleTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler)
@@ -389,7 +390,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueFaultyHandlerTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueFaultyHandlerTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler)
@@ -441,7 +442,7 @@ public class MongoQueueIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"EmptyQueueTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("EmptyQueueTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<TestPayload>(queue => queue
                                                  .WithPayloadHandler(_ => handler)

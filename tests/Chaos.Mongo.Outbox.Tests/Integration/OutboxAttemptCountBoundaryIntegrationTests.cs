@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -28,7 +29,7 @@ public class OutboxAttemptCountBoundaryIntegrationTests
         // MaxRetries (Int32.MaxValue), so it must terminalize directly, without granting itself a lock,
         // calling its own publisher, or incrementing AttemptCount beyond Int32.MaxValue + 1.
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var databaseName = $"OutboxCrashBoundaryTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxCrashBoundaryTestDb");
         var leaseTime = TimeSpan.FromMilliseconds(750);
         var firstPublisher = new HangingOutboxPublisher();
         var secondPublisher = new HangingOutboxPublisher();
@@ -103,7 +104,7 @@ public class OutboxAttemptCountBoundaryIntegrationTests
                        .AddLogging()
                        .AddMongo(url, configure: options =>
                        {
-                           options.DefaultDatabase = $"OutboxBoundaryTestDb_{Guid.NewGuid():N}";
+                           options.DefaultDatabase = TestDatabases.NewName("OutboxBoundaryTestDb");
                            options.RunConfiguratorsOnStartup = false;
                        })
                        .WithOutbox(o => o

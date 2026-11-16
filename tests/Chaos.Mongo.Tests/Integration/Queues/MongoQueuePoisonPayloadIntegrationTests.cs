@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,7 +34,7 @@ public class MongoQueuePoisonPayloadIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueuePoisonPayloadTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueuePoisonPayloadTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<PoisonPayload>(queue => queue
                                                    .WithPayloadHandler(_ => handler)

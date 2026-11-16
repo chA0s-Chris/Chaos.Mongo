@@ -46,7 +46,7 @@ public class ObservationalEventIntegrationTests
         _serviceProvider = new ServiceCollection()
                            .AddMongo(url, configure: options =>
                            {
-                               options.DefaultDatabase = $"ObservationalTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("ObservationalTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithEventStore<OrderAggregate>(es =>

@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -140,7 +141,7 @@ public class PersonalDataErasureIntegrationTests
     [Test]
     public async Task ErasePersonalDataAsync_CheckpointsDisabledWithStoredCheckpoints_RewritesAffectedCheckpoints()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var writer = await CreateContextAsync(databaseName: databaseName, configureOptions: options => options.CheckpointInterval = 2);
         var aggregateId = Guid.NewGuid();
         for (var version = 1; version <= 4; version++)
@@ -427,7 +428,7 @@ public class PersonalDataErasureIntegrationTests
     [Test]
     public async Task ErasePersonalDataAsync_UnsealedSelectedEvent_ThrowsMongoEventStoreExceptionAndPersistsNothing()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, false, databaseName);
         var context = await CreateContextAsync(databaseName: databaseName);
         var aggregateId = await unprotected.AppendStreamAsync(2);
@@ -671,7 +672,7 @@ public class PersonalDataErasureIntegrationTests
     [Test]
     public async Task VerifyStreamAsync_ErasureRecordsOfMalformedOrLaterEntries_AreIgnored()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, false, databaseName);
         var sealing = await CreateContextAsync(databaseName: databaseName);
         var aggregateId = Guid.NewGuid();

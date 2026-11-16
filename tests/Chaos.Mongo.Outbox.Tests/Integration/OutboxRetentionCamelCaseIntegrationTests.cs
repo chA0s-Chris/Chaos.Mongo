@@ -52,7 +52,7 @@ public class OutboxRetentionCamelCaseIntegrationTests
             { "ttlMonitorEnabled", false }
         });
 
-        var databaseName = $"OutboxCamelCaseRetentionTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxCamelCaseRetentionTest");
         var services = new ServiceCollection();
         var url = MongoUrl.Create(_connectionString);
         services.AddMongo(url, configure: options =>

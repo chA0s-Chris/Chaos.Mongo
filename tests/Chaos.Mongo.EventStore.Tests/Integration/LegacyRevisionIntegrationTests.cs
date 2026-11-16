@@ -50,7 +50,7 @@ public class LegacyRevisionIntegrationTests
         _serviceProvider = new ServiceCollection()
                            .AddMongo(url, configure: options =>
                            {
-                               options.DefaultDatabase = $"LegacyRevisionTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("LegacyRevisionTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithEventStore<OrderAggregate>(es =>

@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -26,7 +27,7 @@ public class MongoHelperIntegrationTests
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
-                              options.DefaultDatabase = $"BasicInsertingTestDb_{Guid.NewGuid():N}";
+                              options.DefaultDatabase = TestDatabases.NewName("BasicInsertingTestDb");
                               options.AddMapping<TestDocument>("TestDocuments");
                           })
                           .Services

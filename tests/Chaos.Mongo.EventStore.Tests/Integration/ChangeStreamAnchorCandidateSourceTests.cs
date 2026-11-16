@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -102,7 +103,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ConsumeBatchAsync_RestartDuringRecoveryAcrossTypes_ContinuesScanInsteadOfRepeatingIt()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateContextAsync(databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
         var shipments = context.ServiceProvider.GetRequiredService<IEventStore<ShipmentAggregate>>();
         var shipmentStreams = new[]
@@ -144,7 +145,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ConsumeBatchAsync_RestartDuringRecovery_ContinuesScanInsteadOfRepeatingIt()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateContextAsync(databaseName);
         var streams = new[]
         {
@@ -173,7 +174,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_ConsecutiveMalformedAggregateIdsDuringRecoveryScan_SkipsBothAndFindsTheNextStream()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
         var context = await CreateContextAsync(databaseName,
                                                configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
@@ -202,7 +203,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_ConsecutiveReadsDuringRecovery_ContinueScanAndHandOverToStream()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateContextAsync(databaseName);
         var scannedStreams = new[]
         {
@@ -396,7 +397,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_MalformedHashAtStreamHeadDuringRecoveryScan_SkipsStreamAndContinues()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
         var context = await CreateContextAsync(databaseName,
                                                configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
@@ -423,7 +424,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_MalformedVersionAtStreamHeadDuringRecoveryScan_SkipsStreamAndContinues()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var logger = new CapturingLogger<ChangeStreamAnchorCandidateSource>();
         var context = await CreateContextAsync(databaseName,
                                                configureMongo: builder => builder.Services.AddSingleton<ILogger<ChangeStreamAnchorCandidateSource>>(logger));
@@ -449,7 +450,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_ProtectedCollectionsChanged_RecoversHeadsOfTheNewType()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
 
         // A sealed shipment head exists before candidates are collected for the shipment type.
         var writer = await LedgerStoreContext.CreateAsync(_container, databaseName: databaseName, configureMongo: LedgerStoreContext.AddShipmentStore);
@@ -588,7 +589,7 @@ public class ChangeStreamAnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_UnsealedStreamHeads_ExaminesBoundedNumberOfStreamsPerBatch()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await LedgerStoreContext.CreateAsync(_container, false, databaseName: databaseName);
         _contexts.Add(unprotected);
         var context = await CreateContextAsync(databaseName);

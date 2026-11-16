@@ -87,7 +87,7 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
         }.ToMongoUrl();
         var mongoBuilder = services.AddMongo(url, configure: options =>
                                    {
-                                       options.DefaultDatabase = databaseName ?? $"IntegrityTestDb_{Guid.NewGuid():N}";
+                                       options.DefaultDatabase = databaseName ?? TestDatabases.NewName("IntegrityTestDb");
                                        options.RunConfiguratorsOnStartup = false;
                                    })
                                    .WithEventStore<LedgerAggregate>(es =>

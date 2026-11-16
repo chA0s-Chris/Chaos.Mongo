@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Migrations;
 
 using Chaos.Mongo.Migrations;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,7 +23,7 @@ public class MongoMigrationIntegrationTests
     public async Task RunMigrationsAsync_WithCancellationToken_CancelsExecution()
     {
         // Arrange
-        var databaseName = $"MigrationCancellationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("MigrationCancellationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -58,7 +59,7 @@ public class MongoMigrationIntegrationTests
     public async Task RunMigrationsAsync_WithManuallyRegisteredMigrations_AppliesInOrder()
     {
         // Arrange
-        var databaseName = $"ManualMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ManualMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -105,7 +106,7 @@ public class MongoMigrationIntegrationTests
     public async Task RunMigrationsAsync_WithMigrationAlreadyApplied_SkipsIt()
     {
         // Arrange
-        var databaseName = $"IdempotentMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IdempotentMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -131,7 +132,7 @@ public class MongoMigrationIntegrationTests
     public async Task RunMigrationsAsync_WithMigrationFailure_RollsBackTransactionAndDoesNotRecordHistory()
     {
         // Arrange
-        var databaseName = $"FailedMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("FailedMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -169,7 +170,7 @@ public class MongoMigrationIntegrationTests
     public async Task RunMigrationsAsync_WithMigrationsInWrongOrderInCode_ExecutesInSortedOrder()
     {
         // Arrange
-        var databaseName = $"MigrationOrderTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("MigrationOrderTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -199,7 +200,7 @@ public class MongoMigrationIntegrationTests
     public async Task RunMigrationsAsync_WithNoRegisteredMigrations_CompletesSuccessfully()
     {
         // Arrange
-        var databaseName = $"NoMigrationsTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("NoMigrationsTest");
         var connectionString = _container.GetConnectionString();
 
         var serviceProvider = new ServiceCollection()

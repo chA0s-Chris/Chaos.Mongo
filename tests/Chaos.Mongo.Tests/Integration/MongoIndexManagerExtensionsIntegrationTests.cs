@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -23,7 +24,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -72,7 +73,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -135,7 +136,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -184,7 +185,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -247,7 +248,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -287,7 +288,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -323,7 +324,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -373,7 +374,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -424,7 +425,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -465,7 +466,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -513,7 +514,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -557,7 +558,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -612,7 +613,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -668,7 +669,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -723,7 +724,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -770,7 +771,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -821,7 +822,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -876,7 +877,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -924,7 +925,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -970,7 +971,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1018,7 +1019,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1066,7 +1067,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1114,7 +1115,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1167,7 +1168,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1222,7 +1223,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1269,7 +1270,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1318,7 +1319,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1366,7 +1367,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1424,7 +1425,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1479,7 +1480,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1532,7 +1533,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1587,7 +1588,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1621,7 +1622,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1659,7 +1660,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1715,7 +1716,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1782,7 +1783,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1833,7 +1834,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1893,7 +1894,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1935,7 +1936,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -1973,7 +1974,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2025,7 +2026,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2078,7 +2079,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2128,7 +2129,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2174,7 +2175,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2231,7 +2232,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2288,7 +2289,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2345,7 +2346,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2394,7 +2395,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2447,7 +2448,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2502,7 +2503,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2550,7 +2551,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2598,7 +2599,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2646,7 +2647,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2694,7 +2695,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2742,7 +2743,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2795,7 +2796,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2848,7 +2849,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2896,7 +2897,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2945,7 +2946,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -2995,7 +2996,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -3052,7 +3053,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -3109,7 +3110,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -3164,7 +3165,7 @@ public class MongoIndexManagerExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"IndexTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("IndexTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {

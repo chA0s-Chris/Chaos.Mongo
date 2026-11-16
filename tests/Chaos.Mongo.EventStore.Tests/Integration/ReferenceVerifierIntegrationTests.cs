@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -572,7 +573,7 @@ public class ReferenceVerifierIntegrationTests
         services.AddMongo(new MongoUrl(_container.GetConnectionString()),
                           configure: options =>
                           {
-                              options.DefaultDatabase = $"RenamedElementsDb_{Guid.NewGuid():N}";
+                              options.DefaultDatabase = TestDatabases.NewName("RenamedElementsDb");
                               options.RunConfiguratorsOnStartup = false;
                           })
                 .WithEventStore<RenamedElementsAggregate>(es => es.WithEvent<RenamedElementsEvent>("RenamedElementsEvent").WithIntegrityProtection());
@@ -648,7 +649,7 @@ public class ReferenceVerifierIntegrationTests
         services.AddMongo(new MongoUrl(_container.GetConnectionString()),
                           configure: options =>
                           {
-                              options.DefaultDatabase = $"ElementNameOverrideDb_{Guid.NewGuid():N}";
+                              options.DefaultDatabase = TestDatabases.NewName("ElementNameOverrideDb");
                               options.RunConfiguratorsOnStartup = false;
                           })
                 .WithEventStore<ElementNameOverrideAggregate>(es => es.WithEvent<ElementNameOverrideEvent>("ElementNameOverrideEvent").WithIntegrityProtection());

@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -28,7 +29,7 @@ public class EventStoreIntegrationTests
         var sp = new ServiceCollection()
                  .AddMongo(url, configure: options =>
                  {
-                     options.DefaultDatabase = $"EventStoreTestDb_{Guid.NewGuid():N}";
+                     options.DefaultDatabase = TestDatabases.NewName("EventStoreTestDb");
                      options.RunConfiguratorsOnStartup = false;
                  })
                  .WithEventStore<OrderAggregate>(es => es

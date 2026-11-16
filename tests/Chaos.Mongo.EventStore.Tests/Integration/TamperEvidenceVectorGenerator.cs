@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integrity;
+using Chaos.Mongo.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -50,7 +51,7 @@ public class TamperEvidenceVectorGenerator
     {
         var directory = TamperEvidenceVectorTests.VectorDirectory;
         Directory.CreateDirectory(directory);
-        var databaseName = $"VectorDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("VectorDb");
         var testAuthority = _testAuthority;
         await using var unprotected = await LedgerStoreContext.CreateAsync(_container, false, databaseName: databaseName);
         await using var personalData = await LedgerStoreContext.CreateAsync(_container, databaseName: databaseName, personalData: true);

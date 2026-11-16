@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -200,7 +201,7 @@ public class IntegrityFormatIntegrationTests
     /// </summary>
     private async Task<(LedgerStoreContext Unprotected, LedgerStoreContext Protected)> CreateSharedContextsAsync()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(true, databaseName);
         return (unprotected, protectedContext);

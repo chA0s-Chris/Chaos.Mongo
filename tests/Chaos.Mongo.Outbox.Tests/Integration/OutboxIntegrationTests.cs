@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -30,7 +31,7 @@ public class OutboxIntegrationTests
                            .AddLogging(l => l.SetMinimumLevel(LogLevel.Debug))
                            .AddMongo(url, configure: options =>
                            {
-                               options.DefaultDatabase = $"OutboxTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("OutboxTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithOutbox(o => o
@@ -294,7 +295,7 @@ public class OutboxIntegrationTests
                        .AddLogging()
                        .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
                        {
-                           options.DefaultDatabase = $"OutboxMaxRetriesOneTestDb_{Guid.NewGuid():N}";
+                           options.DefaultDatabase = TestDatabases.NewName("OutboxMaxRetriesOneTestDb");
                            options.RunConfiguratorsOnStartup = false;
                        })
                        .WithOutbox(o => o

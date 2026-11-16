@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -25,7 +26,7 @@ public class ConcurrencyIndexIntegrationTests
     [Test]
     public async Task AppendEventsAsync_ConflictingIndexUnderConcurrencyIndexName_ThrowsAndLeavesExistingIndexIntact()
     {
-        var databaseName = $"ConcurrencyIndex_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ConcurrencyIndex");
         await using var serviceProvider = CreateServiceProvider(databaseName);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
         var eventsCollection = helper.Database.GetCollection<BsonDocument>("Orders_Events");
@@ -56,7 +57,7 @@ public class ConcurrencyIndexIntegrationTests
     [Test]
     public async Task AppendEventsAsync_QuickStartSetup_CreatesConcurrencyIndexAutomatically()
     {
-        var databaseName = $"ConcurrencyIndex_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ConcurrencyIndex");
         await using var serviceProvider = CreateServiceProvider(databaseName);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
         var eventsCollection = helper.Database.GetCollection<BsonDocument>("Orders_Events");
@@ -78,8 +79,8 @@ public class ConcurrencyIndexIntegrationTests
     [Test]
     public async Task AppendEventsAsync_SecondDatabaseOnSameClient_StillCreatesItsOwnConcurrencyIndex()
     {
-        var firstDatabaseName = $"ConcurrencyIndexA_{Guid.NewGuid():N}";
-        var secondDatabaseName = $"ConcurrencyIndexB_{Guid.NewGuid():N}";
+        var firstDatabaseName = TestDatabases.NewName("ConcurrencyIndexA");
+        var secondDatabaseName = TestDatabases.NewName("ConcurrencyIndexB");
         await using var serviceProvider = CreateServiceProvider(firstDatabaseName);
         var firstHelper = serviceProvider.GetRequiredService<IMongoHelper>();
         var options = serviceProvider.GetRequiredService<MongoEventStoreOptions<OrderAggregate>>();
@@ -108,7 +109,7 @@ public class ConcurrencyIndexIntegrationTests
     [Test]
     public async Task AppendEventsAsync_VerificationOptedOut_DoesNotCreateConcurrencyIndex()
     {
-        var databaseName = $"ConcurrencyIndex_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ConcurrencyIndex");
         await using var serviceProvider = CreateServiceProvider(databaseName, true);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
         var eventsCollection = helper.Database.GetCollection<BsonDocument>("Orders_Events");

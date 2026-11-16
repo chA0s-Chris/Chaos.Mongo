@@ -12,6 +12,11 @@ public static class MongoDbTestContainer
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static MongoDbContainer? Container;
 
+    /// <summary>
+    /// Whether this process started the MongoDB server it uses, rather than sharing its parent's.
+    /// </summary>
+    public static Boolean OwnsServer => Container is not null;
+
     public static async Task<MongoDbContainer> StartContainerAsync()
     {
         if (Container is { State: TestcontainersStates.Running })
@@ -31,6 +36,9 @@ public static class MongoDbTestContainer
                         // MongoDB 8.x images crash on Linux kernels newer than 6.19 unless rseq is
                         // pinned. See https://jira.mongodb.org/browse/SERVER-121912
                         .WithEnvironment("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
+                        // Keeps the data files in memory: every write on the replica set is journaled and synced to
+                        // disk, which made the EventStore suite almost three times slower on a volume.
+                        .WithTmpfsMount("/data/db")
                         .WithCreateParameterModifier(parameters =>
                         {
                             parameters.HostConfig ??= new HostConfig();

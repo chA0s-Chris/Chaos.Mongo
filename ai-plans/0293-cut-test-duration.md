@@ -30,9 +30,9 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 
 ### Layer 3: Databases
 
-- [ ] Integration tests drop every database they create, including when a test fails. After a complete run of a test project, the shared container holds no database created by tests. This is checked automatically at the end of the run, and a leftover database fails the test run (verified once by deliberately leaking a database).
-- [ ] Configuring once per fixture is evaluated for fixtures whose tests all use identical options (for example `EventStoreIntegrationTests` and `AggregateRepositoryIntegrationTests`), and adopted only if the project's wall time drops by at least 10 % across two runs each with and without the change, and no state is shared between tests. The measurement, or why no fixture qualifies, is recorded in the pull request.
-- [ ] A tmpfs mount for the MongoDB data directory is measured. It is adopted only if the `Chaos.Mongo.EventStore.Tests` wall time drops by at least 10 % across two runs each with and without tmpfs, and the replica-set and change-stream tests keep passing; the result is recorded in the pull request either way.
+- [x] Integration tests drop every database they create, including when a test fails. After a complete run of a test project, the shared container holds no database created by tests. This is checked automatically at the end of the run, and a leftover database fails the test run (verified once by deliberately leaking a database).
+- [x] Configuring once per fixture is evaluated for fixtures whose tests all use identical options (for example `EventStoreIntegrationTests` and `AggregateRepositoryIntegrationTests`), and adopted only if the project's wall time drops by at least 10 % across two runs each with and without the change, and no state is shared between tests. The measurement, or why no fixture qualifies, is recorded in the pull request.
+- [x] A tmpfs mount for the MongoDB data directory is measured. It is adopted only if the `Chaos.Mongo.EventStore.Tests` wall time drops by at least 10 % across two runs each with and without tmpfs, and the replica-set and change-stream tests keep passing; the result is recorded in the pull request either way.
 - [ ] The pull request records the per-assembly wall times before and after this layer.
 
 ### Layer 4: Parallelism

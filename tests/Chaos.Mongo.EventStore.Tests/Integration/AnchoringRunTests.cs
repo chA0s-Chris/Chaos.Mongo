@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -201,7 +202,7 @@ public class AnchoringRunTests
     public async Task RunAsync_CrashAfterPhase_NewRunnerCompletesWithoutLosingOrDuplicatingCandidates(String phaseName)
     {
         var phase = Enum.Parse<AnchoringPhase>(phaseName);
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateContextAsync(databaseName);
         var testAuthority = CreateTestAuthority();
         var streams = new[]

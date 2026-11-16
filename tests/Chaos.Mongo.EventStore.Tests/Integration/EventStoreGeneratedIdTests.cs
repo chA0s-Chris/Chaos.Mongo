@@ -117,7 +117,7 @@ public class EventStoreGeneratedIdTests
         var sp = new ServiceCollection()
                  .AddMongo(url, configure: options =>
                  {
-                     options.DefaultDatabase = $"GeneratedIdTestDb_{Guid.NewGuid():N}";
+                     options.DefaultDatabase = TestDatabases.NewName("GeneratedIdTestDb");
                      options.RunConfiguratorsOnStartup = false;
                  })
                  .WithEventStore<OrderAggregate>(es =>

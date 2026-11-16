@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Migrations;
 
 using Chaos.Mongo.Migrations;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,7 +23,7 @@ public class MongoMigrationConcurrencyTests
     public async Task RunMigrationsAsync_SecondInstanceWaitsForFirstToFinish_ReturnsNonSkippedResultAfterward()
     {
         // Arrange
-        var databaseName = $"WaitForLockTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("WaitForLockTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -65,7 +66,7 @@ public class MongoMigrationConcurrencyTests
     public async Task RunMigrationsAsync_WithConcurrentExecutions_OnlyOneExecutes()
     {
         // Arrange
-        var databaseName = $"ConcurrentMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ConcurrentMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -95,7 +96,7 @@ public class MongoMigrationConcurrencyTests
     public async Task RunMigrationsAsync_WithLockStolenWhileTransactionalMigrationInProgress_AbortsTransactionAndDoesNotRecordMigration()
     {
         // Arrange
-        var databaseName = $"LockLossTransactionTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("LockLossTransactionTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -147,7 +148,7 @@ public class MongoMigrationConcurrencyTests
     public async Task RunMigrationsAsync_WithMigrationLongerThanLease_RenewsLeaseAndCompletes()
     {
         // Arrange
-        var databaseName = $"LeaseRenewalTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("LeaseRenewalTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 

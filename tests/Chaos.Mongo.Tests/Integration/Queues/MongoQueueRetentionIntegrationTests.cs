@@ -43,7 +43,7 @@ public class MongoQueueRetentionIntegrationTests
             },
             type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
 
-        var uniqueDbName = $"QueueCamelCaseTtlFilterTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueCamelCaseTtlFilterTest");
         const String collectionName = "camelcase-retention-queue";
 
         var services = new ServiceCollection();
@@ -143,7 +143,7 @@ public class MongoQueueRetentionIntegrationTests
         // Arrange: start (and then stop) the subscription only to let production code create the real TTL
         // index, so the filter asserted below is the exact partialFilterExpression the server stored, not a
         // hand-built approximation of it.
-        var uniqueDbName = $"QueueLegacyTerminalFilterTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLegacyTerminalFilterTest");
         const String collectionName = "retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -240,7 +240,7 @@ public class MongoQueueRetentionIntegrationTests
             },
             type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
 
-        var uniqueDbName = $"QueueCamelCaseRetentionTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueCamelCaseRetentionTest");
         const String collectionName = "camelcase-retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -348,7 +348,7 @@ public class MongoQueueRetentionIntegrationTests
     {
         // Arrange
         var handler = new PassivePayloadHandler();
-        var uniqueDbName = $"QueueImmediateDeleteTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueImmediateDeleteTest");
         const String collectionName = "retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -391,7 +391,7 @@ public class MongoQueueRetentionIntegrationTests
     {
         // Arrange
         var handler = new PassivePayloadHandler();
-        var uniqueDbName = $"QueueDefaultRetentionTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueDefaultRetentionTest");
         const String collectionName = "retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -440,7 +440,7 @@ public class MongoQueueRetentionIntegrationTests
     public async Task StartSubscription_SameCollectionWithDifferentRetentionPolicies_ReconcilesTtlIndex()
     {
         // Arrange
-        var uniqueDbName = $"QueueRetentionPolicySwitchTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueRetentionPolicySwitchTest");
         const String collectionName = "retention-queue";
 
         await using var firstServiceProvider = CreateServiceProvider(uniqueDbName,

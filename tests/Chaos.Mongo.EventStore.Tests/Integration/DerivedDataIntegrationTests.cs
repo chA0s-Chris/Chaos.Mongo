@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -34,7 +35,7 @@ public class DerivedDataIntegrationTests
     [Test]
     public async Task AppendEventsAsync_Checkpoints_RecordChainHashOnlyWhenProtected()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var protectedContext = await CreateContextAsync(databaseName: databaseName);
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedStream = await AppendOneByOneAsync(protectedContext, 4);
@@ -244,7 +245,7 @@ public class DerivedDataIntegrationTests
     [Test]
     public async Task VerifyAsync_CheckpointWithoutChainHash_IsUnverifiableButConsistent()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(databaseName: databaseName);
         var aggregateId = await unprotected.AppendStreamAsync(2);
