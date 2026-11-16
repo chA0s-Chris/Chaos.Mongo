@@ -147,7 +147,7 @@ internal sealed class ChainedTimestampAuthority : ITimestampAuthority, IDisposab
     public Task<TimestampToken> TimestampAsync(ReadOnlyMemory<Byte> digest, HashAlgorithmName algorithm, CancellationToken cancellationToken)
     {
         var timestamp = DateTimeOffset.UtcNow;
-        var info = new Rfc3161TimestampTokenInfo(new Oid("1.3.6.1.4.1.99999.2"), new Oid(Sha256Oid), digest.ToArray(), RandomNumberGenerator.GetBytes(8), timestamp);
+        var info = new Rfc3161TimestampTokenInfo(new Oid("1.3.6.1.4.1.99999.2"), new Oid(Sha256Oid), digest.ToArray(), TestTimestampAuthority.CreateRandomInteger(8), timestamp);
         var signedCms = new SignedCms(new ContentInfo(new Oid(TstInfoContentTypeOid), info.Encode()));
         var cmsSigner = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, Signer)
         {

@@ -450,6 +450,17 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         return new Rfc3161TimestampAuthority(options, services.BuildServiceProvider());
     }
 
+    /// <summary>
+    /// Creates random bytes that encode as a minimal positive DER integer: the first byte is in <c>0x01..0x7F</c>,
+    /// so it is neither a redundant leading zero nor a sign bit.
+    /// </summary>
+    internal static Byte[] CreateRandomInteger(Int32 length)
+    {
+        var value = RandomNumberGenerator.GetBytes(length);
+        value[0] = (Byte)(1 + (value[0] % 0x7F));
+        return value;
+    }
+
     protected override void Dispose(Boolean disposing)
     {
         if (disposing)
@@ -475,17 +486,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
 
         return Task.FromResult(Respond(HttpStatusCode.NotFound));
-    }
-
-    /// <summary>
-    /// Creates random bytes that encode as a minimal positive DER integer: the first byte is in <c>0x01..0x7F</c>,
-    /// so it is neither a redundant leading zero nor a sign bit.
-    /// </summary>
-    private static Byte[] CreateRandomInteger(Int32 length)
-    {
-        var value = RandomNumberGenerator.GetBytes(length);
-        value[0] = (Byte)(1 + (value[0] % 0x7F));
-        return value;
     }
 
     private static X509Certificate2 CreateRoot(String subject, DateTimeOffset notBefore, DateTimeOffset notAfter, X509KeyUsageFlags keyUsage)
