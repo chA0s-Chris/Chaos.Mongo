@@ -22,6 +22,9 @@ using Testcontainers.MongoDb;
 /// The operational surface of anchoring: module-level configuration, the hosted run, the completion hook, the delay
 /// alert and the sealing-anchor lookup.
 /// </summary>
+// Not parallel: AnchoringMetricsCollector listens to the process-wide integrity meter, so measurements of fixtures
+// running at the same time would end up in this fixture's assertions.
+[NonParallelizable]
 [Category("Integration")]
 public class IntegrityAnchoringIntegrationTests
 {

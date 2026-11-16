@@ -37,13 +37,14 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 
 ### Layer 4: Parallelism
 
-- [ ] `Chaos.Mongo.EventStore.Tests` runs fixtures in parallel. Every remaining `[NonParallelizable]` has a comment naming the shared state that requires it.
+- [x] Concurrent class-map registration no longer fails: `WithEventStore`, `AddMongo`, `WithQueue` and the outbox registration serialize their check-then-register of process-global class maps, and a test per library proves it by registering from several threads at once in a fresh process.
+- [x] `Chaos.Mongo.EventStore.Tests` runs fixtures in parallel. Every remaining `[NonParallelizable]` has a comment naming the shared state that requires it.
 - [ ] Fixture parallelism is measured for `Chaos.Mongo.Tests` and `Chaos.Mongo.Outbox.Tests` and enabled in a project only if its wall time drops by at least 10 % across two runs each with and without it; the result is recorded in the pull request.
-- [ ] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks with the `Primary` image, and one run each with `CHAOSMONGO_MONGODB_IMAGE=MinimumSupported` and `Latest`, all without retries.
+- [x] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks with the `Primary` image, and one run each with `CHAOSMONGO_MONGODB_IMAGE=MinimumSupported` and `Latest`, all without retries.
 - [ ] All six `ci` legs pass on the published head.
 - [ ] The pull request records the per-assembly wall times before and after the stack, locally and of the CI `ci` job.
 - [ ] The `ci` job's `timeout-minutes` is lowered to about two to three times the measured duration of the slowest `ci` leg on the published head, with the reason in a comment.
-- [ ] `./cleanup_code.sh` has been run and its diff inspected, `./inspect_code.sh` reports no warning or error findings for the changes, the Release build has no warnings, and `bash ./build.sh Test` passes with the coverage gate met.
+- [x] `./cleanup_code.sh` has been run and its diff inspected, `./inspect_code.sh` reports no warning or error findings for the changes, the Release build has no warnings, and `bash ./build.sh Test` passes with the coverage gate met.
 
 ## Technical Details
 
@@ -91,3 +92,5 @@ Most fixtures name a database `<Prefix>_<Guid>` per test and build a service pro
 ### Parallelism
 
 Use `[assembly: Parallelizable(ParallelScope.Fixtures)]` and a `LevelOfParallelism` suited to the four vCPUs of a hosted runner, which also runs the other projects concurrently after layer 1. Audit for process-wide state: `Chaos.Mongo.EventStore.Tests` has 9 files that register `BsonClassMap`, conventions or serializers, one that sets an environment variable, and about 10 fixed database names; `Chaos.Mongo.Tests` and `Chaos.Mongo.Outbox.Tests` have fewer. Also audit state that is server-wide on the shared container, such as `setParameter` and fail points; the one fail point in `ChangeStreamAnchorCandidateSourceTests` is scoped to an application name. Prefer making a fixture isolated (unique names, no global registration) over `[NonParallelizable]` where that is reasonable. Validate with the local runs the criteria list, which cover all frameworks and all three images.
+
+The first parallel trial showed that the libraries themselves are not safe under concurrent registration: each setup checks `BsonClassMap.IsClassMapRegistered` and then registers without a lock, so two fixtures, or two hosts built at once in an application, can register the same class map and fail with `An item with the same key has already been added`. Almost every event store fixture calls `WithEventStore`, so `[NonParallelizable]` cannot work around it. The fix is a library bug fix inside this test-focused stack, decided during implementation: each setup holds one lock for its whole registration, which also covers the checkpoint ownership record that had its own lock. It is a separate `fix` commit on the parallelism layer, ahead of enabling parallelism.

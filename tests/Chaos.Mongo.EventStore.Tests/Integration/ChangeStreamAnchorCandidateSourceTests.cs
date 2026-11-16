@@ -12,6 +12,9 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+// Not parallel: AnchoringMetricsCollector listens to the process-wide integrity meter, so measurements of fixtures
+// running at the same time would end up in this fixture's assertions.
+[NonParallelizable]
 [Category("Integration")]
 public class ChangeStreamAnchorCandidateSourceTests
 {
