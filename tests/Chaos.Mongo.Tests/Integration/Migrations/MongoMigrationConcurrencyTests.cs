@@ -168,8 +168,8 @@ public class MongoMigrationConcurrencyTests
         // Act
         var result = await runner.RunMigrationsAsync();
 
-        // Assert: the migration (~6s) outlives three leases (2s each), and the runner re-checks the lock before
-        // recording history, so this only succeeds because the lease is renewed automatically while it runs.
+        // Assert: the migration (~3 s) outlives its 2 s lease, and the runner re-checks the lock before recording
+        // history, so this only succeeds because the lease is renewed automatically while it runs.
         result.Skipped.Should().BeFalse();
         result.AppliedMigrationIds.Should().Equal("777_VerySlowTest");
     }

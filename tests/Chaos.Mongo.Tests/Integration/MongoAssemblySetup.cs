@@ -8,7 +8,7 @@ using NUnit.Framework;
 public sealed class MongoAssemblySetup
 {
     [OneTimeSetUp]
-    public async Task StartContainer() => _ = await MongoDbTestContainer.StartContainerAsync();
+    public async Task StartContainer() => _ = await MongoDbTestContainer.GetConnectionStringAsync();
 
     [OneTimeTearDown]
     public async Task StopContainer() => await MongoDbTestContainer.StopContainerAsync();

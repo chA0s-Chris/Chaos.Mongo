@@ -195,7 +195,8 @@ public class MongoHelperExtensionsIntegrationTests
         // Start acquisition in background with custom delay
         var acquireTask = Task.Run(async () =>
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            // Long enough for more than two retries of 300 ms.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
             try
             {
                 await helper2.AcquireLockAsync(uniqueLockName, retryDelay: customDelay, cancellationToken: cts.Token);

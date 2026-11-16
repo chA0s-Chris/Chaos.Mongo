@@ -453,7 +453,8 @@ public class MongoQueueIntegrationTests
 
         // Act - Start queue with no messages
         await queue.StartSubscriptionAsync();
-        await Task.Delay(2000); // Wait to ensure it doesn't crash
+        // Long enough for the subscription's idle lease-recovery wake-up, which comes at least once a second.
+        await Task.Delay(1200);
 
         // Assert
         queue.IsRunning.Should().BeTrue();

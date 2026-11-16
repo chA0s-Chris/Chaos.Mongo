@@ -269,5 +269,32 @@ internal sealed class LedgerStoreContext : IAsyncDisposable
                 ArrayFilters = [new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument("entry.Path", path))]
             });
 
+    /// <summary>
+    /// Waits until the server's clock has reached the next whole second after the call and returns that second. Commit
+    /// times are cluster times with a resolution of one second, taken from the server's clock, so every write after
+    /// this returns commits at the returned second or later, strictly after every write before the call.
+    /// </summary>
+    public async Task<DateTime> WaitForNextServerSecondAsync()
+    {
+        var start = await GetServerTimeAsync();
+        var nextSecond = start.AddTicks(-(start.Ticks % TimeSpan.TicksPerSecond)).AddSeconds(1);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (await GetServerTimeAsync() < nextSecond)
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"The server clock did not reach {nextSecond:O}.");
+
+            await Task.Delay(TimeSpan.FromMilliseconds(20));
+        }
+
+        return nextSecond;
+    }
+
+    private async Task<DateTime> GetServerTimeAsync()
+    {
+        var hello = await MongoHelper.Client.GetDatabase("admin").RunCommandAsync<BsonDocument>(new BsonDocument("hello", 1));
+        return hello["localTime"].ToUniversalTime();
+    }
+
     public ValueTask DisposeAsync() => ServiceProvider.DisposeAsync();
 }

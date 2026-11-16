@@ -22,10 +22,10 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 
 ### Layer 2: Test Hot Spots
 
-- [ ] `TestTimestampAuthority` produces a CRL with 230,000 revoked certificates in under 1 s locally, and the measurement is recorded in the pull request. The produced CRL is accepted by the same production checks as before (signature by the authority's root, CRL number, issuer), and a test proves that its encoding is a valid CRL signed by the root that lists the requested entries.
-- [ ] `RunAsync_EvidenceWellBeyond16Megabytes_CompletesAnchorWithoutEmbeddingIt` and `RunAsync_EvidencePartiallyStoredBeforeAFailure_CompletesTheAnchorOnALaterRun` keep their CRL sizes and authorities and still pass.
-- [ ] Tests run through `IsolatedConventionTestProcess` start no MongoDB container of their own; the child process uses the parent's container and never stops it. The isolated tests keep running in a separate process.
-- [ ] The fixed delays listed in Technical Details no longer coordinate tests: they are replaced by explicit synchronization, bounded polling or shorter configured intervals (for example a shorter migration lease). Delays that assert that something does *not* happen within a window remain, with windows as short as the assertion allows.
+- [x] `TestTimestampAuthority` produces a CRL with 230,000 revoked certificates in under 1 s locally, and the measurement is recorded in the pull request. The produced CRL is accepted by the same production checks as before (signature by the authority's root, CRL number, issuer), and a test proves that its encoding is a valid CRL signed by the root that lists the requested entries.
+- [x] `RunAsync_EvidenceWellBeyond16Megabytes_CompletesAnchorWithoutEmbeddingIt` and `RunAsync_EvidencePartiallyStoredBeforeAFailure_CompletesTheAnchorOnALaterRun` keep their CRL sizes and authorities and still pass.
+- [x] Tests run through `IsolatedConventionTestProcess` start no MongoDB container of their own; the child process uses the parent's container and never stops it. The isolated tests keep running in a separate process.
+- [x] The fixed delays listed in Technical Details no longer coordinate tests: they are replaced by explicit synchronization, bounded polling or shorter configured intervals (for example a shorter migration lease). Delays that assert that something does *not* happen within a window remain, with windows as short as the assertion allows.
 - [ ] The pull request records the durations of the changed tests and the per-assembly wall times before and after this layer.
 
 ### Layer 3: Databases

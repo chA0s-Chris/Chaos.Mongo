@@ -397,7 +397,9 @@ public class AnchoringRunTests
         await AssertVerifiableAsync(context, anchor);
         var resolved = await CreateResolver(context).ResolveAsync(anchor);
         resolved.Timestamps.Select(timestamp => timestamp.CertificateRevocationLists.Single())
-                .Should().BeEquivalentTo(testAuthorities.Select(testAuthority => testAuthority.Crl), options => options.WithStrictOrdering());
+                // Compared as byte sequences: a structural equivalency check walks the ~19 MB element by element for
+                // tens of seconds.
+                .Should().Equal(testAuthorities.Select(testAuthority => testAuthority.Crl), (actual, expected) => actual.AsSpan().SequenceEqual(expected));
     }
 
     [TestCase(nameof(AnchoringPhase.CandidatesRead))]

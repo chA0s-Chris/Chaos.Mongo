@@ -12,18 +12,17 @@ using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Linq.Expressions;
-using Testcontainers.MongoDb;
 using MongoDefaults = MongoDefaults;
 
 [Category("Integration")]
 public class MongoQueueRetentionIntegrationTests
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
-    private MongoDbContainer _container;
+    private String _connectionString;
 
     [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-        => _container = await MongoDbTestContainer.StartContainerAsync();
+    public async Task GetConnectionString()
+        => _connectionString = await MongoDbTestContainer.GetConnectionStringAsync();
 
     [Test]
     [Explicit("Runs only via process isolation from " +
@@ -44,13 +43,12 @@ public class MongoQueueRetentionIntegrationTests
             },
             type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
 
-        var container = await MongoDbTestContainer.StartContainerAsync();
         var uniqueDbName = $"QueueCamelCaseTtlFilterTest_{Guid.NewGuid():N}";
         const String collectionName = "camelcase-retention-queue";
 
         var services = new ServiceCollection();
         services.AddNUnitTestLogging();
-        var url = MongoUrl.Create(container.GetConnectionString());
+        var url = MongoUrl.Create(_connectionString);
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<RetentionPayload>(queue => queue.WithCollectionName(collectionName)
                                                            .WithPayloadHandler(_ => new PassivePayloadHandler())
@@ -130,7 +128,8 @@ public class MongoQueueRetentionIntegrationTests
         // and irreversible, and every other test in this shared process may already have registered
         // MongoQueueItem's class map under the default convention.
         var result = IsolatedConventionTestProcess.Run(
-            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase)}");
+            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase)}",
+            _connectionString);
 
         // Assert
         result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
@@ -227,8 +226,8 @@ public class MongoQueueRetentionIntegrationTests
         // Arrange: register a global camelCase convention for the queue item types before anything in this fresh
         // process has used them, then start (and immediately stop) a subscription only to let production code
         // create the real TTL index under that convention, exactly as the filter-selection isolated case above
-        // does. The container's TTL monitor is sped up so the eventual deletion assertion below stays within a
-        // bounded wait.
+        // does. MongoDbTestContainer starts the server with a 1 s TTL monitor interval, so the eventual deletion
+        // assertion below stays within a bounded wait.
         ConventionRegistry.Register(
             nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase),
             new ConventionPack
@@ -236,15 +235,6 @@ public class MongoQueueRetentionIntegrationTests
                 new CamelCaseElementNameConvention()
             },
             type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
-
-        var container = await MongoDbTestContainer.StartContainerAsync();
-        var adminClient = new MongoClient(container.GetConnectionString());
-        await adminClient.GetDatabase("admin")
-                         .RunCommandAsync<BsonDocument>(new BsonDocument
-                         {
-                             { "setParameter", 1 },
-                             { "ttlMonitorSleepSecs", 1 }
-                         });
 
         var uniqueDbName = $"QueueCamelCaseRetentionTest_{Guid.NewGuid():N}";
         const String collectionName = "camelcase-retention-queue";
@@ -342,7 +332,8 @@ public class MongoQueueRetentionIntegrationTests
         // and irreversible, and every other test in this shared process may already have registered
         // MongoQueueItem's class map under the default convention.
         var result = IsolatedConventionTestProcess.Run(
-            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase)}");
+            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase)}",
+            _connectionString);
 
         // Assert
         result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
@@ -619,7 +610,7 @@ public class MongoQueueRetentionIntegrationTests
         var services = new ServiceCollection();
         services.AddNUnitTestLogging();
 
-        var url = MongoUrl.Create(_container.GetConnectionString());
+        var url = MongoUrl.Create(_connectionString);
         services.AddMongo(url, databaseName)
                 .WithQueue<RetentionPayload>(queue =>
                 {

@@ -39,8 +39,10 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     public const Int32 OversizedLength = 64 * 1024;
 
     public static readonly Uri TimestampUri = new("http://tsa.test/timestamp");
+    private const String AuthorityKeyIdentifierOid = "2.5.29.35";
     private const String CodeSigningPurposeOid = "1.3.6.1.5.5.7.3.3";
     private const String CrlDistributionPointsOid = "2.5.29.31";
+    private const String CrlNumberOid = "2.5.29.20";
     private const String KeyUsageOid = "2.5.29.15";
     private const String SigningCertificateV2Oid = "1.2.840.113549.1.9.16.2.47";
     private const String SubjectAlternativeNameOid = "2.5.29.17";
@@ -144,8 +146,12 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         SigningCertificate = ecdsaKey is not null ? certificate.CopyWithPrivateKey(ecdsaKey) : certificate.CopyWithPrivateKey(rsaKey!);
         // The BCL's builder refuses an issuer without cRLSign, so such a root's CRLs are encoded directly.
         var rootSignsCrls = rootKeyUsage.HasFlag(X509KeyUsageFlags.CrlSign);
+        // The builder needs seconds for the hundreds of thousands of entries some tests ask for, so CRLs with entries
+        // are encoded with a presized writer instead, to the same result.
         Crl = rootSignsCrls
-            ? BuildRevocationList(revokedCertificates, notBefore).Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256)
+            ? revokedCertificates > 0
+                ? BuildRevocationListCrl(revokedCertificates, notBefore, DateTimeOffset.UtcNow, notAfter)
+                : new CertificateRevocationListBuilder().Build(Root, BigInteger.One, notAfter, HashAlgorithmName.SHA256)
             : BuildCrlWithExtensions(DateTimeOffset.UtcNow);
         ExpiredCrl = rootSignsCrls
             ? new CertificateRevocationListBuilder().Build(Root,
@@ -286,6 +292,19 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Returns the serial number of the revoked certificate at <paramref name="index"/> in the CRLs that list
+    /// <c>revokedCertificates</c> entries: <c>0x01</c> followed by the big-endian index, a positive, minimally encoded
+    /// integer of nine bytes, about 28 bytes per CRL entry.
+    /// </summary>
+    public static Byte[] GetRevokedSerialNumber(Int64 index)
+    {
+        var serialNumber = new Byte[9];
+        serialNumber[0] = 0x01;
+        BinaryPrimitives.WriteInt64BigEndian(serialNumber.AsSpan(1), index);
+        return serialNumber;
+    }
+
+    /// <summary>
     /// Builds a CRL of the authority's CA issued at <paramref name="thisUpdate"/>, valid until
     /// <paramref name="nextUpdate"/> or for a week, that revokes the given certificates.
     /// </summary>
@@ -374,6 +393,38 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
     }
 
     /// <summary>
+    /// Builds a CRL of the authority's CA, signed by its root, issued at <paramref name="thisUpdate"/> and valid until
+    /// <paramref name="nextUpdate"/>, that revokes the first <paramref name="revokedCertificates"/> serial numbers of
+    /// <see cref="GetRevokedSerialNumber"/> at <paramref name="revokedAt"/>. It encodes what
+    /// <see cref="CertificateRevocationListBuilder"/> builds for the same input, CRL number 1 and the root's authority key
+    /// identifier included, but with a writer sized up front, because the builder needs seconds for hundreds of
+    /// thousands of entries.
+    /// </summary>
+    public Byte[] BuildRevocationListCrl(Int32 revokedCertificates, DateTimeOffset revokedAt, DateTimeOffset thisUpdate, DateTimeOffset nextUpdate)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(revokedCertificates);
+
+        var revoked = new List<(Byte[] SerialNumber, DateTimeOffset RevokedAt, (String Oid, Byte[] Value)[] Extensions)>(revokedCertificates);
+        for (var index = 0L; index < revokedCertificates; index++)
+        {
+            var serialNumber = new AsnWriter(AsnEncodingRules.DER);
+            serialNumber.WriteInteger(GetRevokedSerialNumber(index));
+            revoked.Add((serialNumber.Encode(), revokedAt, []));
+        }
+
+        var encodedNextUpdate = new AsnWriter(AsnEncodingRules.DER);
+        encodedNextUpdate.WriteUtcTime(nextUpdate);
+        var crlNumber = new AsnWriter(AsnEncodingRules.DER);
+        crlNumber.WriteInteger(1);
+        var authorityKeyIdentifier = X509AuthorityKeyIdentifierExtension.CreateFromCertificate(Root, includeKeyIdentifier: true, includeIssuerAndSerial: false);
+
+        return BuildSignedCrl(thisUpdate,
+                              revoked,
+                              [(AuthorityKeyIdentifierOid, false, authorityKeyIdentifier.RawData), (CrlNumberOid, false, crlNumber.Encode())],
+                              encodedNextUpdate.Encode());
+    }
+
+    /// <summary>
     /// Creates the production authority configured against this test authority, trusting its root unless another
     /// root is given, without revocation checks. It reads the local time from <paramref name="timeProvider"/> when
     /// given.
@@ -424,20 +475,6 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
         }
 
         return Task.FromResult(Respond(HttpStatusCode.NotFound));
-    }
-
-    private static CertificateRevocationListBuilder BuildRevocationList(Int32 revokedCertificates, DateTimeOffset revokedAt)
-    {
-        var builder = new CertificateRevocationListBuilder();
-        var serialNumber = new Byte[9];
-        serialNumber[0] = 0x01;
-        for (var index = 0L; index < revokedCertificates; index++)
-        {
-            BinaryPrimitives.WriteInt64BigEndian(serialNumber.AsSpan(1), index);
-            builder.AddEntry(serialNumber, revokedAt);
-        }
-
-        return builder;
     }
 
     /// <summary>
@@ -558,7 +595,11 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
                                   (String Oid, Boolean Critical, Byte[] Value)[] extensions,
                                   Byte[]? encodedNextUpdate = null)
     {
-        var tbs = new AsnWriter(AsnEncodingRules.DER);
+        // AsnWriter grows its buffer in small steps and copies it each time, which is quadratic for the megabytes of a
+        // large CRL; sizing it up front keeps encoding linear.
+        var capacity = 1_024 + revoked.Sum(entry => entry.SerialNumber.Length + 32 + entry.Extensions.Sum(extension => extension.Value.Length + 32))
+                             + extensions.Sum(extension => extension.Value.Length + 32);
+        var tbs = new AsnWriter(AsnEncodingRules.DER, capacity);
         using (tbs.PushSequence())
         {
             tbs.WriteInteger(1);
@@ -627,7 +668,7 @@ internal sealed class TestTimestampAuthority : HttpMessageHandler
 
         var tbsBytes = tbs.Encode();
         using var key = Root.GetECDsaPrivateKey() ?? throw new InvalidOperationException("The test root has no ECDSA private key.");
-        var writer = new AsnWriter(AsnEncodingRules.DER);
+        var writer = new AsnWriter(AsnEncodingRules.DER, tbsBytes.Length + 256);
         using (writer.PushSequence())
         {
             writer.WriteEncodedValue(tbsBytes);

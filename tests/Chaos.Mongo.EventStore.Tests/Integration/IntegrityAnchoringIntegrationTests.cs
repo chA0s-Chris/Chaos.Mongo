@@ -490,9 +490,9 @@ public class IntegrityAnchoringIntegrationTests
 
         await context.AppendStreamAsync(1);
 
-        // Cluster-time commit timestamps have a resolution of one second, so later streams need a real gap to sort
-        // as strictly newer than the oldest one, with the malformed stream committed in between.
-        await Task.Delay(TimeSpan.FromSeconds(3));
+        // Cluster-time commit timestamps have a resolution of one second, so later streams are committed in later
+        // seconds to sort as strictly newer than the oldest one, with the malformed stream committed in between.
+        var malformedSecond = await context.WaitForNextServerSecondAsync();
         var malformed = await context.AppendStreamAsync(1);
 
         // The live change stream only reports an update whose changed fields include _integrity, so the malformed
@@ -500,18 +500,20 @@ public class IntegrityAnchoringIntegrationTests
         var malformedEvent = await context.Events.Find(EventDocumentFields<LedgerAggregate>.ForAggregate<BsonDocument>(malformed)).SingleAsync();
         malformedEvent["AggregateId"] = "malformed";
         await context.Events.ReplaceOneAsync(new BsonDocument("_id", malformedEvent["_id"]), malformedEvent);
-        await Task.Delay(TimeSpan.FromSeconds(3));
-        var beforeNewer = DateTime.UtcNow;
+        var newerSecond = await context.WaitForNextServerSecondAsync();
         await context.AppendStreamAsync(1);
         using var metrics = new AnchoringMetricsCollector();
 
         var result = await service.RunOnceAsync(CancellationToken.None);
 
-        // Only the older and the newer stream are valid candidates, the malformed one between them is excluded;
-        // reporting the newer stream's commit time instead, or no delay at all, would both fail this comparison.
+        // Only the older and the newer stream are valid candidates, the malformed one between them is excluded. The
+        // malformed and the newer stream were committed at malformedSecond or later, so reporting either of their
+        // commit times instead, or no delay at all, would fail these comparisons.
         result.Should().NotBeNull();
-        result.OldestCandidateUtc.Should().NotBeNull().And.BeBefore(beforeNewer.AddSeconds(-1));
-        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelay && measurement.Value > 5);
+        result.OldestCandidateUtc.Should().NotBeNull().And.BeBefore(malformedSecond);
+        var oldest = result.OldestCandidateUtc.GetValueOrDefault();
+        metrics.Measurements.Should().Contain(measurement => measurement.Instrument == IntegrityMetrics.Instruments.AnchorDelay &&
+                                                             measurement.Value >= (newerSecond - oldest).TotalSeconds);
     }
 
     [Test]
