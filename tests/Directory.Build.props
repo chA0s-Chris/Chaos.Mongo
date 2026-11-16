@@ -10,6 +10,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)MongoDbTestImages.cs" Link="MongoDbTestImages.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)IsolatedConventionTestProcess.cs"
              Link="IsolatedConventionTestProcess.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)SimultaneousCalls.cs" Link="SimultaneousCalls.cs" />
   </ItemGroup>
 
   <!-- Container and database helpers for the test projects that run against MongoDB; the build pipeline tests have

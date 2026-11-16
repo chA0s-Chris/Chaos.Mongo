@@ -171,6 +171,35 @@ public class OutboxSerializationSetupTests
         result.ExitCode.Should().Be(0, "the isolated default-convention case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
     }
 
+    [Test]
+    [Explicit("Runs only via process isolation from " + nameof(RegisterClassMaps_ConcurrentHosts_RegisterEveryClassMapOnce) +
+              "; registers process-global class-map state.")]
+    public void RegisterClassMaps_ConcurrentHosts_IsolatedCase()
+    {
+        // Act: hosts built in parallel register the outbox class maps concurrently.
+        var act = () => SimultaneousCalls.Run(16, () => OutboxSerializationSetup.RegisterClassMaps(new Dictionary<Type, String>
+        {
+            [typeof(TestPayload)] = "TestPayload"
+        }));
+
+        // Assert
+        act.Should().NotThrow();
+        AssertPinnedElementNames(CreateFullyPopulatedMessage().ToBsonDocument());
+    }
+
+    [Test]
+    public void RegisterClassMaps_ConcurrentHosts_RegisterEveryClassMapOnce()
+    {
+        // Arrange & Act: the inner case runs in its own freshly started process (see
+        // IsolatedConventionTestProcess), because every other test in this shared process may already have
+        // registered the outbox class maps.
+        var result = IsolatedConventionTestProcess.Run(
+            $"{typeof(OutboxSerializationSetupTests).FullName}.{nameof(RegisterClassMaps_ConcurrentHosts_IsolatedCase)}");
+
+        // Assert
+        result.ExitCode.Should().Be(0, "the isolated concurrent case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
+    }
+
     private static void AssertPinnedElementNames(BsonDocument bsonDocument)
         => bsonDocument.Names.Should().Contain([
             nameof(OutboxMessage.AttemptCount),

@@ -3,7 +3,6 @@
 namespace Chaos.Mongo.Queues;
 
 using Microsoft.Extensions.DependencyInjection;
-using MongoDB.Bson.Serialization;
 
 /// <summary>
 /// Provides a fluent builder for configuring and registering MongoDB queues.
@@ -253,7 +252,7 @@ public sealed class MongoQueueBuilder<TPayload>
         // auto-register an unpinned base class map on first use. Each registration below is independently
         // guarded, so calling this is safe whether or not AddMongo's own funnel already registered it.
         MongoSerializationSetup.RegisterClassMaps();
-        RegisterQueueItemClassMap();
+        MongoSerializationSetup.RegisterQueueItemClassMap<TPayload>();
 
         // Register the payload handler
         if (_payloadHandlerType is not null)
@@ -323,25 +322,5 @@ public sealed class MongoQueueBuilder<TPayload>
         {
             throw new InvalidOperationException("Payload handler type and factory cannot be specified together.");
         }
-    }
-
-    /// <summary>
-    /// Registers the BsonClassMap for the closed generic <see cref="MongoQueueItem{TPayload}"/>, pinning its own
-    /// members (<see cref="MongoQueueItem{TPayload}.Payload"/>, <see cref="MongoQueueItem{TPayload}.PayloadType"/>)
-    /// to their member names. One class map is registered per closed generic payload type.
-    /// </summary>
-    private static void RegisterQueueItemClassMap()
-    {
-        if (BsonClassMap.IsClassMapRegistered(typeof(MongoQueueItem<TPayload>)))
-        {
-            return;
-        }
-
-        BsonClassMap.RegisterClassMap<MongoQueueItem<TPayload>>(cm =>
-        {
-            cm.AutoMap();
-            cm.GetMemberMap(i => i.Payload).SetElementName(nameof(MongoQueueItem<TPayload>.Payload));
-            cm.GetMemberMap(i => i.PayloadType).SetElementName(nameof(MongoQueueItem<TPayload>.PayloadType));
-        });
     }
 }

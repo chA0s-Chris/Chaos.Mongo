@@ -13,20 +13,22 @@ using MongoDB.Bson.Serialization.Serializers;
 /// </summary>
 internal static class MongoEventStoreSerializationSetup
 {
-    /// <summary>
-    /// Guards the ownership check and the registration of a checkpoint class map with its ownership record, so a
-    /// concurrent registration of the same aggregate sees either no class map or an owned one.
-    /// </summary>
-    private static readonly Object CheckpointClassMapLock = new();
-
     private static readonly GuidSerializer GuidStandardSerializer = new(GuidRepresentation.Standard);
 
     /// <summary>
     /// The checkpoint class maps the event store registered itself. Class maps are process-global, so later
     /// registrations, for example in a separate container, reuse them, while a class map registered by a consumer is
-    /// rejected under protection. Read and written only under <see cref="CheckpointClassMapLock"/>.
+    /// rejected under protection. Read and written only under <see cref="RegistrationLock"/>.
     /// </summary>
     private static readonly HashSet<Type> OwnCheckpointClassMaps = [];
+
+    /// <summary>
+    /// Serializes <see cref="RegisterClassMaps{TAggregate}"/>. Class maps are process-global and checked before they
+    /// are registered, so concurrent registrations, for example of hosts built in parallel, would otherwise both
+    /// register the same class map, and a concurrent registration of the same aggregate could see a checkpoint class
+    /// map without its ownership record.
+    /// </summary>
+    private static readonly Object RegistrationLock = new();
 
     /// <summary>
     /// Ensures a <see cref="GuidSerializer"/> with <see cref="GuidRepresentation.Standard"/> is registered globally.
@@ -69,168 +71,9 @@ internal static class MongoEventStoreSerializationSetup
     public static void RegisterClassMaps<TAggregate>(MongoEventStoreOptions<TAggregate> options)
         where TAggregate : class, IAggregate, new()
     {
-        // The observational base class is left out of the class map hierarchy, so it has no class map to register.
-        if (options.EventTypes.ContainsKey(typeof(ObservationalEvent<TAggregate>)))
+        lock (RegistrationLock)
         {
-            throw new ArgumentException(
-                $"The observational event base class of aggregate type {typeof(TAggregate).Name} cannot be registered " +
-                "itself. Register the concrete or intermediate observational event types instead.",
-                nameof(options));
-        }
-
-        EnsureCheckpointClassMapOwned(options);
-        EnsurePersonalDataErasedClassMapsMatch<TAggregate>();
-
-        // Register the concrete aggregate type
-        var aggregateType = typeof(TAggregate);
-        if (!BsonClassMap.IsClassMapRegistered(aggregateType))
-        {
-            if (typeof(Aggregate).IsAssignableFrom(aggregateType))
-            {
-                // TAggregate extends Aggregate — register base class first
-                if (!BsonClassMap.IsClassMapRegistered(typeof(Aggregate)))
-                {
-                    BsonClassMap.RegisterClassMap<Aggregate>(cm =>
-                    {
-                        cm.AutoMap();
-                        cm.SetIgnoreExtraElements(true);
-                        cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
-                        cm.GetMemberMap(a => a.CreatedUtc).SetElementName(nameof(Aggregate.CreatedUtc));
-                        cm.GetMemberMap(a => a.Revision).SetElementName(nameof(Aggregate.Revision));
-                        cm.GetMemberMap(a => a.Version).SetElementName(nameof(Aggregate.Version));
-                    });
-                }
-
-                var aggregateClassMaps = new List<BsonClassMap>();
-                BuildClassMapHierarchy(aggregateType, typeof(Aggregate), null, aggregateClassMaps, static _ => { });
-                RegisterBuiltClassMaps(aggregateClassMaps);
-            }
-            else
-            {
-                // TAggregate implements IAggregate directly
-                BsonClassMap.RegisterClassMap<TAggregate>(cm =>
-                {
-                    cm.AutoMap();
-                    cm.SetIgnoreExtraElements(true);
-                    cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
-                });
-            }
-        }
-
-        EnsureAggregateMapsRevision<TAggregate>();
-
-        // Register the Event<TAggregate> base class map. The integrity member is mapped regardless of
-        // whether protection is enabled: class maps are process-global and shared by every store.
-        RegisterEventIntegrityClassMap();
-        RegisterIntegritySealingStateClassMap();
-        var eventBaseType = typeof(Event<TAggregate>);
-        if (!BsonClassMap.IsClassMapRegistered(eventBaseType))
-        {
-            BsonClassMap.RegisterClassMap<Event<TAggregate>>(cm =>
-            {
-                cm.AutoMap();
-                cm.SetIgnoreExtraElements(true);
-                cm.MapIdMember(e => e.Id).SetSerializer(GuidStandardSerializer);
-                cm.MapMember(e => e.AggregateId).SetSerializer(GuidStandardSerializer).SetElementName(nameof(Event<TAggregate>.AggregateId));
-                cm.GetMemberMap(e => e.AggregateType).SetElementName(nameof(Event<TAggregate>.AggregateType));
-                cm.GetMemberMap(e => e.CreatedUtc).SetElementName(nameof(Event<TAggregate>.CreatedUtc));
-                cm.GetMemberMap(e => e.Revision).SetElementName(nameof(Event<TAggregate>.Revision));
-                cm.GetMemberMap(e => e.Version).SetElementName(nameof(Event<TAggregate>.Version));
-                cm.MapMember(e => e.Integrity)
-                  .SetElementName(EventIntegrityChain.ElementName)
-                  .SetIgnoreIfNull(true);
-                cm.SetIsRootClass(true);
-            });
-        }
-
-        EnsureEventBaseMapsIntegrity(options);
-        EnsureEventBaseMapsRevision<TAggregate>();
-        RegisterPersonalDataErasedClassMap<TAggregate>();
-
-        // Build the missing class maps of each event type along its hierarchy and register them only once every check
-        // has passed, because class maps cannot be unregistered. A built intermediate type receives its configured
-        // discriminator even when a derived event type is built first.
-        var eventClassMaps = new List<BsonClassMap>();
-        foreach (var (eventType, discriminator) in options.EventTypes)
-        {
-            if (String.Equals(discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Event type {eventType.Name} uses the discriminator '{discriminator}', which is reserved by the event store " +
-                    "for its personal data erasure event.");
-            }
-
-            if (BsonClassMap.IsClassMapRegistered(eventType))
-            {
-                var registeredClassMap = GetRegisteredClassMap(eventType);
-                if (String.Equals(registeredClassMap.Discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"The class map of event type {eventType.Name} was registered before the event store with the discriminator " +
-                        $"'{registeredClassMap.Discriminator}', which is reserved by the event store for its personal data erasure event.");
-                }
-
-                EnsureNoReservedElementCollision<TAggregate>(registeredClassMap, eventClassMaps);
-            }
-
-            BuildClassMapHierarchy(eventType, eventBaseType, typeof(ObservationalEvent<TAggregate>), eventClassMaps, classMap =>
-            {
-                if (options.EventTypes.TryGetValue(classMap.ClassType, out var configuredDiscriminator))
-                {
-                    classMap.SetDiscriminator(configuredDiscriminator);
-                }
-
-                EnsureNoReservedElementCollision<TAggregate>(classMap, eventClassMaps);
-            });
-        }
-
-        EnsureUniqueEventDiscriminators<TAggregate>(eventClassMaps);
-        RegisterBuiltClassMaps(eventClassMaps);
-
-        // Derive the replay filter from the registered class maps rather than from EventTypes, because class
-        // maps registered by consumers keep their own discriminators. The erasure event is observational too.
-        options.ObservationalEventDiscriminators = options.EventTypes.Keys
-                                                          .Where(t => typeof(ObservationalEvent<TAggregate>).IsAssignableFrom(t))
-                                                          .Select(t => GetRegisteredClassMap(t).Discriminator)
-                                                          .Append(PersonalDataErased<TAggregate>.Discriminator)
-                                                          .ToList();
-
-        // Marks are validated whether or not protection is enabled, so a misconfigured mark surfaces before the
-        // feature is switched on.
-        options.PersonalDataPaths = PersonalDataPathResolver.Resolve(options);
-
-        // Register CheckpointId
-        if (!BsonClassMap.IsClassMapRegistered(typeof(CheckpointId)))
-        {
-            BsonClassMap.RegisterClassMap<CheckpointId>(cm =>
-            {
-                cm.AutoMap();
-                cm.SetIgnoreExtraElements(true);
-                cm.MapMember(c => c.AggregateId).SetSerializer(GuidStandardSerializer).SetElementName(nameof(CheckpointId.AggregateId));
-                cm.MapMember(c => c.Version).SetElementName(nameof(CheckpointId.Version));
-            });
-        }
-
-        // Register CheckpointDocument<TAggregate>. The chain hash is mapped regardless of whether protection is enabled,
-        // so a protected store can reuse a class map registered for an unprotected one.
-        var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
-        lock (CheckpointClassMapLock)
-        {
-            if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
-            {
-                BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
-                {
-                    cm.AutoMap();
-                    cm.SetIgnoreExtraElements(true);
-                    cm.MapIdMember(c => c.Id);
-                    cm.GetMemberMap(c => c.Revision).SetElementName(nameof(CheckpointDocument<TAggregate>.Revision));
-                    cm.GetMemberMap(c => c.State).SetElementName(nameof(CheckpointDocument<TAggregate>.State));
-                    cm.MapMember(c => c.ChainHash)
-                      .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
-                      .SetIgnoreIfNull(true);
-                });
-                OwnCheckpointClassMaps.Add(checkpointDocumentType);
-            }
+            RegisterClassMapsUnderLock(options);
         }
     }
 
@@ -319,14 +162,11 @@ internal static class MongoEventStoreSerializationSetup
         where TAggregate : class, IAggregate, new()
     {
         var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
-        lock (CheckpointClassMapLock)
+        if (!options.IntegrityProtectionEnabled ||
+            !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
+            OwnCheckpointClassMaps.Contains(checkpointDocumentType))
         {
-            if (!options.IntegrityProtectionEnabled ||
-                !BsonClassMap.IsClassMapRegistered(checkpointDocumentType) ||
-                OwnCheckpointClassMaps.Contains(checkpointDocumentType))
-            {
-                return;
-            }
+            return;
         }
 
         throw new InvalidOperationException(
@@ -484,6 +324,174 @@ internal static class MongoEventStoreSerializationSetup
         foreach (var classMap in builtClassMaps)
         {
             BsonClassMap.RegisterClassMap(classMap);
+        }
+    }
+
+    /// <summary>
+    /// Does the work of <see cref="RegisterClassMaps{TAggregate}"/> while <see cref="RegistrationLock"/> is held.
+    /// </summary>
+    private static void RegisterClassMapsUnderLock<TAggregate>(MongoEventStoreOptions<TAggregate> options)
+        where TAggregate : class, IAggregate, new()
+    {
+        // The observational base class is left out of the class map hierarchy, so it has no class map to register.
+        if (options.EventTypes.ContainsKey(typeof(ObservationalEvent<TAggregate>)))
+        {
+            throw new ArgumentException(
+                $"The observational event base class of aggregate type {typeof(TAggregate).Name} cannot be registered " +
+                "itself. Register the concrete or intermediate observational event types instead.",
+                nameof(options));
+        }
+
+        EnsureCheckpointClassMapOwned(options);
+        EnsurePersonalDataErasedClassMapsMatch<TAggregate>();
+
+        // Register the concrete aggregate type
+        var aggregateType = typeof(TAggregate);
+        if (!BsonClassMap.IsClassMapRegistered(aggregateType))
+        {
+            if (typeof(Aggregate).IsAssignableFrom(aggregateType))
+            {
+                // TAggregate extends Aggregate — register base class first
+                if (!BsonClassMap.IsClassMapRegistered(typeof(Aggregate)))
+                {
+                    BsonClassMap.RegisterClassMap<Aggregate>(cm =>
+                    {
+                        cm.AutoMap();
+                        cm.SetIgnoreExtraElements(true);
+                        cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
+                        cm.GetMemberMap(a => a.CreatedUtc).SetElementName(nameof(Aggregate.CreatedUtc));
+                        cm.GetMemberMap(a => a.Revision).SetElementName(nameof(Aggregate.Revision));
+                        cm.GetMemberMap(a => a.Version).SetElementName(nameof(Aggregate.Version));
+                    });
+                }
+
+                var aggregateClassMaps = new List<BsonClassMap>();
+                BuildClassMapHierarchy(aggregateType, typeof(Aggregate), null, aggregateClassMaps, static _ => { });
+                RegisterBuiltClassMaps(aggregateClassMaps);
+            }
+            else
+            {
+                // TAggregate implements IAggregate directly
+                BsonClassMap.RegisterClassMap<TAggregate>(cm =>
+                {
+                    cm.AutoMap();
+                    cm.SetIgnoreExtraElements(true);
+                    cm.MapIdMember(a => a.Id).SetSerializer(GuidStandardSerializer);
+                });
+            }
+        }
+
+        EnsureAggregateMapsRevision<TAggregate>();
+
+        // Register the Event<TAggregate> base class map. The integrity member is mapped regardless of
+        // whether protection is enabled: class maps are process-global and shared by every store.
+        RegisterEventIntegrityClassMap();
+        RegisterIntegritySealingStateClassMap();
+        var eventBaseType = typeof(Event<TAggregate>);
+        if (!BsonClassMap.IsClassMapRegistered(eventBaseType))
+        {
+            BsonClassMap.RegisterClassMap<Event<TAggregate>>(cm =>
+            {
+                cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
+                cm.MapIdMember(e => e.Id).SetSerializer(GuidStandardSerializer);
+                cm.MapMember(e => e.AggregateId).SetSerializer(GuidStandardSerializer).SetElementName(nameof(Event<TAggregate>.AggregateId));
+                cm.GetMemberMap(e => e.AggregateType).SetElementName(nameof(Event<TAggregate>.AggregateType));
+                cm.GetMemberMap(e => e.CreatedUtc).SetElementName(nameof(Event<TAggregate>.CreatedUtc));
+                cm.GetMemberMap(e => e.Revision).SetElementName(nameof(Event<TAggregate>.Revision));
+                cm.GetMemberMap(e => e.Version).SetElementName(nameof(Event<TAggregate>.Version));
+                cm.MapMember(e => e.Integrity)
+                  .SetElementName(EventIntegrityChain.ElementName)
+                  .SetIgnoreIfNull(true);
+                cm.SetIsRootClass(true);
+            });
+        }
+
+        EnsureEventBaseMapsIntegrity(options);
+        EnsureEventBaseMapsRevision<TAggregate>();
+        RegisterPersonalDataErasedClassMap<TAggregate>();
+
+        // Build the missing class maps of each event type along its hierarchy and register them only once every check
+        // has passed, because class maps cannot be unregistered. A built intermediate type receives its configured
+        // discriminator even when a derived event type is built first.
+        var eventClassMaps = new List<BsonClassMap>();
+        foreach (var (eventType, discriminator) in options.EventTypes)
+        {
+            if (String.Equals(discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Event type {eventType.Name} uses the discriminator '{discriminator}', which is reserved by the event store " +
+                    "for its personal data erasure event.");
+            }
+
+            if (BsonClassMap.IsClassMapRegistered(eventType))
+            {
+                var registeredClassMap = GetRegisteredClassMap(eventType);
+                if (String.Equals(registeredClassMap.Discriminator, PersonalDataErased<TAggregate>.Discriminator, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"The class map of event type {eventType.Name} was registered before the event store with the discriminator " +
+                        $"'{registeredClassMap.Discriminator}', which is reserved by the event store for its personal data erasure event.");
+                }
+
+                EnsureNoReservedElementCollision<TAggregate>(registeredClassMap, eventClassMaps);
+            }
+
+            BuildClassMapHierarchy(eventType, eventBaseType, typeof(ObservationalEvent<TAggregate>), eventClassMaps, classMap =>
+            {
+                if (options.EventTypes.TryGetValue(classMap.ClassType, out var configuredDiscriminator))
+                {
+                    classMap.SetDiscriminator(configuredDiscriminator);
+                }
+
+                EnsureNoReservedElementCollision<TAggregate>(classMap, eventClassMaps);
+            });
+        }
+
+        EnsureUniqueEventDiscriminators<TAggregate>(eventClassMaps);
+        RegisterBuiltClassMaps(eventClassMaps);
+
+        // Derive the replay filter from the registered class maps rather than from EventTypes, because class
+        // maps registered by consumers keep their own discriminators. The erasure event is observational too.
+        options.ObservationalEventDiscriminators = options.EventTypes.Keys
+                                                          .Where(t => typeof(ObservationalEvent<TAggregate>).IsAssignableFrom(t))
+                                                          .Select(t => GetRegisteredClassMap(t).Discriminator)
+                                                          .Append(PersonalDataErased<TAggregate>.Discriminator)
+                                                          .ToList();
+
+        // Marks are validated whether or not protection is enabled, so a misconfigured mark surfaces before the
+        // feature is switched on.
+        options.PersonalDataPaths = PersonalDataPathResolver.Resolve(options);
+
+        // Register CheckpointId
+        if (!BsonClassMap.IsClassMapRegistered(typeof(CheckpointId)))
+        {
+            BsonClassMap.RegisterClassMap<CheckpointId>(cm =>
+            {
+                cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
+                cm.MapMember(c => c.AggregateId).SetSerializer(GuidStandardSerializer).SetElementName(nameof(CheckpointId.AggregateId));
+                cm.MapMember(c => c.Version).SetElementName(nameof(CheckpointId.Version));
+            });
+        }
+
+        // Register CheckpointDocument<TAggregate>. The chain hash is mapped regardless of whether protection is enabled,
+        // so a protected store can reuse a class map registered for an unprotected one.
+        var checkpointDocumentType = typeof(CheckpointDocument<TAggregate>);
+        if (!BsonClassMap.IsClassMapRegistered(checkpointDocumentType))
+        {
+            BsonClassMap.RegisterClassMap<CheckpointDocument<TAggregate>>(cm =>
+            {
+                cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
+                cm.MapIdMember(c => c.Id);
+                cm.GetMemberMap(c => c.Revision).SetElementName(nameof(CheckpointDocument<TAggregate>.Revision));
+                cm.GetMemberMap(c => c.State).SetElementName(nameof(CheckpointDocument<TAggregate>.State));
+                cm.MapMember(c => c.ChainHash)
+                  .SetElementName(CheckpointDocument<TAggregate>.ChainHashElementName)
+                  .SetIgnoreIfNull(true);
+            });
+            OwnCheckpointClassMaps.Add(checkpointDocumentType);
         }
     }
 

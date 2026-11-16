@@ -10,13 +10,29 @@ using MongoDB.Bson.Serialization;
 internal static class OutboxSerializationSetup
 {
     /// <summary>
-    /// Registers BsonClassMaps for <see cref="OutboxMessage"/> and all configured payload types.
+    /// Serializes <see cref="RegisterClassMaps"/>. Class maps are process-global and checked before they are
+    /// registered, so concurrent calls, for example of hosts built in parallel, would otherwise both register the
+    /// same class map.
+    /// </summary>
+    private static readonly Object RegistrationLock = new();
+
+    /// <summary>
+    /// Registers BsonClassMaps for <see cref="OutboxMessage"/> and all configured payload types. Calling it
+    /// repeatedly and from several threads at once is safe.
     /// </summary>
     /// <param name="messageTypes">The registered message types mapped to their discriminator names.</param>
     public static void RegisterClassMaps(IDictionary<Type, String> messageTypes)
     {
         ArgumentNullException.ThrowIfNull(messageTypes);
 
+        lock (RegistrationLock)
+        {
+            RegisterClassMapsUnderLock(messageTypes);
+        }
+    }
+
+    private static void RegisterClassMapsUnderLock(IDictionary<Type, String> messageTypes)
+    {
         // Register the OutboxMessage class map
         if (!BsonClassMap.IsClassMapRegistered(typeof(OutboxMessage)))
         {

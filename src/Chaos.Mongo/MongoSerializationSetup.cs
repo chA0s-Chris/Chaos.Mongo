@@ -14,16 +14,52 @@ using MongoDB.Bson.Serialization;
 internal static class MongoSerializationSetup
 {
     /// <summary>
+    /// Serializes <see cref="RegisterClassMaps"/>. Class maps are process-global and checked before they are
+    /// registered, so concurrent calls, for example of hosts built in parallel, would otherwise both register the
+    /// same class map.
+    /// </summary>
+    private static readonly Object RegistrationLock = new();
+
+    /// <summary>
     /// Registers BsonClassMaps for <see cref="MongoLockDocument"/>, <see cref="MongoMigrationHistoryItem"/>, and
     /// the non-generic <see cref="MongoQueueItem"/> base class. Each registration is independently guarded, so
-    /// calling this method repeatedly, including once per <see cref="MongoBuilder.WithQueue{TPayload}"/> call, is
-    /// safe.
+    /// calling this method repeatedly, including once per <see cref="MongoBuilder.WithQueue{TPayload}"/> call and
+    /// from several threads at once, is safe.
     /// </summary>
     public static void RegisterClassMaps()
     {
-        RegisterMongoLockDocumentClassMap();
-        RegisterMongoMigrationHistoryItemClassMap();
-        RegisterMongoQueueItemClassMap();
+        lock (RegistrationLock)
+        {
+            RegisterMongoLockDocumentClassMap();
+            RegisterMongoMigrationHistoryItemClassMap();
+            RegisterMongoQueueItemClassMap();
+        }
+    }
+
+    /// <summary>
+    /// Registers the BsonClassMap for the closed generic <see cref="MongoQueueItem{TPayload}"/>, pinning its own
+    /// members (<see cref="MongoQueueItem{TPayload}.Payload"/>, <see cref="MongoQueueItem{TPayload}.PayloadType"/>)
+    /// to their member names. One class map is registered per closed generic payload type; calling this method
+    /// repeatedly and from several threads at once is safe.
+    /// </summary>
+    /// <typeparam name="TPayload">The payload type of the queue.</typeparam>
+    public static void RegisterQueueItemClassMap<TPayload>()
+        where TPayload : class, new()
+    {
+        lock (RegistrationLock)
+        {
+            if (BsonClassMap.IsClassMapRegistered(typeof(MongoQueueItem<TPayload>)))
+            {
+                return;
+            }
+
+            BsonClassMap.RegisterClassMap<MongoQueueItem<TPayload>>(cm =>
+            {
+                cm.AutoMap();
+                cm.GetMemberMap(i => i.Payload).SetElementName(nameof(MongoQueueItem<TPayload>.Payload));
+                cm.GetMemberMap(i => i.PayloadType).SetElementName(nameof(MongoQueueItem<TPayload>.PayloadType));
+            });
+        }
     }
 
     private static void RegisterMongoLockDocumentClassMap()
