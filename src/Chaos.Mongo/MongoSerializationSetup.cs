@@ -44,7 +44,7 @@ internal static class MongoSerializationSetup
     /// </summary>
     /// <typeparam name="TPayload">The payload type of the queue.</typeparam>
     public static void RegisterQueueItemClassMap<TPayload>()
-        where TPayload : class, new()
+        where TPayload : class
     {
         lock (RegistrationLock)
         {

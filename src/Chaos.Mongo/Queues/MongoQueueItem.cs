@@ -85,7 +85,7 @@ public class MongoQueueItem
 /// <typeparam name="TPayload">The type of payload stored in the queue item.</typeparam>
 [BsonIgnoreExtraElements]
 public sealed class MongoQueueItem<TPayload> : MongoQueueItem
-    where TPayload : class, new()
+    where TPayload : class
 {
     /// <summary>
     /// The strongly-typed payload of the queue item.

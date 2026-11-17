@@ -99,7 +99,7 @@ internal sealed class OutboxHostedService : IHostedLifecycleService
         if (_outboxProcessor is not null)
         {
             var configuratorRunner = scope.ServiceProvider.GetRequiredService<IOutboxConfiguratorRunner>();
-            await configuratorRunner.RunAsync(cancellationToken);
+            await configuratorRunner.RunConfiguratorsAsync(cancellationToken);
         }
         else
         {

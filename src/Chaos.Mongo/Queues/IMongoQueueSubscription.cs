@@ -6,8 +6,8 @@ namespace Chaos.Mongo.Queues;
 /// Represents a queue subscription that monitors and processes queue items.
 /// </summary>
 /// <typeparam name="TPayload">The type of payload stored in queue items.</typeparam>
-public interface IMongoQueueSubscription<TPayload> : IAsyncDisposable
-    where TPayload : class, new()
+internal interface IMongoQueueSubscription<TPayload> : IAsyncDisposable
+    where TPayload : class
 {
     /// <summary>
     /// Gets a value indicating whether the subscription is actively running and not disposed.

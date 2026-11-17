@@ -12,3 +12,7 @@ public class AnotherTestPayload
 {
     public String Description { get; set; } = String.Empty;
 }
+
+public sealed record RecordTestPayload(String Name, Int32 Value, RecordTestPayloadDetail Detail);
+
+public sealed record RecordTestPayloadDetail(String Code);

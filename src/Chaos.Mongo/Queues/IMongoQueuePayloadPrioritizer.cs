@@ -14,5 +14,5 @@ public interface IMongoQueuePayloadPrioritizer
     /// </summary>
     /// <typeparam name="TPayload">The type of payload in the queue.</typeparam>
     /// <returns>A MongoDB sort definition for ordering queue items.</returns>
-    SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class, new();
+    SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class;
 }

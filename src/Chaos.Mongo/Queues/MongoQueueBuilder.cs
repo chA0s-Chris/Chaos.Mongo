@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// </summary>
 /// <typeparam name="TPayload">The type of payload stored in the queue.</typeparam>
 public sealed class MongoQueueBuilder<TPayload>
-    where TPayload : class, new()
+    where TPayload : class
 {
     private readonly Type _payloadType = typeof(TPayload);
     private readonly IServiceCollection _services;
@@ -277,8 +277,7 @@ public sealed class MongoQueueBuilder<TPayload>
             MaxRetries = _maxRetries,
             PayloadType = _payloadType,
             BatchSize = _batchSize ?? MongoDefaults.QueueBatchSize,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TPayload>),
-            AutoStartSubscription = _autoStartSubscription ?? MongoDefaults.AutoStartSubscription
+            AutoStartSubscription = _autoStartSubscription ?? MongoDefaults.QueueAutoStartSubscription
         };
 
         _services.AddSingleton<IMongoQueue<TPayload>>(serviceProvider =>

@@ -94,6 +94,16 @@ public sealed class MongoOptions
     public TimeSpan MigrationLockLeaseTime { get; set; } = MongoDefaults.MigrationLockLeaseTime;
 
     /// <summary>
+    /// Gets or sets the name of the distributed lock used to coordinate migration execution.
+    /// Defaults to <see cref="MongoDefaults.MigrationLockName"/>.
+    /// </summary>
+    /// <remarks>
+    /// This lock name is used in the lock collection (see <see cref="LockCollectionName"/>) to ensure
+    /// only one application instance runs migrations at a time.
+    /// </remarks>
+    public String MigrationLockName { get; set; } = MongoDefaults.MigrationLockName;
+
+    /// <summary>
     /// Gets or sets how long <see cref="Migrations.IMongoMigrationRunner.RunMigrationsAsync"/> waits to acquire the
     /// migration lock before reporting a skipped run.
     /// Defaults to <see cref="MongoDefaults.MigrationLockWaitTimeout"/>.
@@ -111,16 +121,6 @@ public sealed class MongoOptions
     ///     </para>
     /// </remarks>
     public TimeSpan? MigrationLockWaitTimeout { get; set; } = MongoDefaults.MigrationLockWaitTimeout;
-
-    /// <summary>
-    /// Gets or sets the name of the distributed lock used to coordinate migration execution.
-    /// Defaults to <see cref="MongoDefaults.MigrationsLockName"/>.
-    /// </summary>
-    /// <remarks>
-    /// This lock name is used in the lock collection (see <see cref="LockCollectionName"/>) to ensure
-    /// only one application instance runs migrations at a time.
-    /// </remarks>
-    public String MigrationsLockName { get; set; } = MongoDefaults.MigrationsLockName;
 
     /// <summary>
     /// Gets or sets a value indicating whether to automatically run registered <see cref="Configuration.IMongoConfigurator"/>

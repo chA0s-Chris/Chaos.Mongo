@@ -38,6 +38,7 @@ public class OutboxIntegrationTests
                                             .WithPublisher<TestOutboxPublisher>(ServiceLifetime.Singleton)
                                             .WithMessage<TestPayload>("TestPayload")
                                             .WithMessage<AnotherTestPayload>("AnotherPayload")
+                                            .WithMessage<RecordTestPayload>("RecordPayload")
                                             .WithMaxRetries(3)
                                             .WithPollingInterval(TimeSpan.FromMilliseconds(100))
                                             .WithLockLeaseTime(TimeSpan.FromSeconds(10))
@@ -58,6 +59,24 @@ public class OutboxIntegrationTests
     public void TearDown()
     {
         _serviceProvider.Dispose();
+    }
+
+    [Test]
+    public async Task AddMessageAsync_PositionalRecordPayload_IsStoredAndDeserializesToEqualValue()
+    {
+        var payload = new RecordTestPayload("Record", 42, new RecordTestPayloadDetail("R-7"));
+        using var session = await _mongoHelper.Client.StartSessionAsync();
+        session.StartTransaction();
+
+        await _outbox.AddMessageAsync(session, payload);
+
+        await session.CommitTransactionAsync();
+
+        var collection = _mongoHelper.Database.GetCollection<OutboxMessage>(_options.CollectionName);
+        var message = await collection.Find(FilterDefinition<OutboxMessage>.Empty).SingleAsync();
+
+        message.Type.Should().Be("RecordPayload");
+        message.DeserializePayload<RecordTestPayload>().Should().Be(payload);
     }
 
     [Test]

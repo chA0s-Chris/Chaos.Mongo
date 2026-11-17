@@ -479,7 +479,6 @@ public class MongoQueueTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
 
@@ -571,7 +570,7 @@ public class MongoQueueTests
         public MongoQueueDefinition? ReceivedQueueDefinition { get; private set; }
 
         public Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
-            where TPayload : class, new()
+            where TPayload : class
         {
             ReceivedQueueDefinition = queueDefinition;
             ReceivedCancellationToken = cancellationToken;
@@ -591,7 +590,7 @@ public class MongoQueueTests
         public SingleUseQueueSubscriptionFactory(IMongoQueueSubscription<TestPayload> subscription) => _subscription = subscription;
 
         public Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
-            where TPayload : class, new()
+            where TPayload : class
             => Task.FromResult((IMongoQueueSubscription<TPayload>)_subscription);
     }
 
@@ -601,7 +600,7 @@ public class MongoQueueTests
     private sealed class ThrowingQueuePublisher : IMongoQueuePublisher
     {
         public Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition, TPayload payload, CancellationToken cancellationToken)
-            where TPayload : class, new()
+            where TPayload : class
             => throw new NotSupportedException();
     }
 
@@ -612,7 +611,7 @@ public class MongoQueueTests
     private sealed class ThrowingQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
     {
         public Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
-            where TPayload : class, new()
+            where TPayload : class
             => throw new NotSupportedException();
     }
 }

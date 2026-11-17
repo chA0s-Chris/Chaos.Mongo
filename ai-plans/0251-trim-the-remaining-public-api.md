@@ -12,35 +12,35 @@ This plan resolves them in one pass across `Chaos.Mongo`, `Chaos.Mongo.EventStor
 
 ### Chaos.Mongo
 
-- [ ] `IMongoQueueSubscription<TPayload>` is internal, and `docs/queues.md` no longer describes it as public.
-- [ ] `MongoQueueDefinition` has no `PayloadHandlerType` member, and `docs/queues.md` no longer lists it.
-- [ ] `MongoDefaults` exposes `QueueAutoStartSubscription`, `LockRetryDelay` and `MigrationLockName` in place of `AutoStartSubscription`, `RetryDelay` and `MigrationsLockName`.
-- [ ] `MongoOptions.MigrationsLockName` is renamed to `MigrationLockName`. The default value `"ChaosMongoMigrations"` is unchanged.
-- [ ] Queue and outbox payload type parameters are constrained to `class` only, without `new()`, in every declaration.
-- [ ] `docs/queues.md` and `docs/transactional-outbox.md` no longer show `new()` on queue and outbox payload signatures.
-- [ ] Automated tests show that a positional record works as a queue payload: it is published, stored, and delivered to its handler with an equal value.
-- [ ] Automated tests show that a positional record works as an outbox payload: it is added, stored, and `OutboxMessage.DeserializePayload<TPayload>()` returns an equal value.
+- [x] `IMongoQueueSubscription<TPayload>` is internal, and `docs/queues.md` no longer describes it as public.
+- [x] `MongoQueueDefinition` has no `PayloadHandlerType` member, and `docs/queues.md` no longer lists it.
+- [x] `MongoDefaults` exposes `QueueAutoStartSubscription`, `LockRetryDelay` and `MigrationLockName` in place of `AutoStartSubscription`, `RetryDelay` and `MigrationsLockName`.
+- [x] `MongoOptions.MigrationsLockName` is renamed to `MigrationLockName`. The default value `"ChaosMongoMigrations"` is unchanged.
+- [x] Queue and outbox payload type parameters are constrained to `class` only, without `new()`, in every declaration.
+- [x] `docs/queues.md` and `docs/transactional-outbox.md` no longer show `new()` on queue and outbox payload signatures.
+- [x] Automated tests show that a positional record works as a queue payload: it is published, stored, and delivered to its handler with an equal value.
+- [x] Automated tests show that a positional record works as an outbox payload: it is added, stored, and `OutboxMessage.DeserializePayload<TPayload>()` returns an equal value.
 
 ### Chaos.Mongo.EventStore
 
-- [ ] `MongoEventStoreOptions<TAggregate>` has no public constructor.
-- [ ] `PersonalDataErased<TAggregate>.Entries` and `PersonalDataErasureEntry.Paths` are `IReadOnlyList<>` properties without a public setter.
-- [ ] The stored format of erasure records is unchanged: the existing tests for pinned element names, extra-element tolerance and verification pass, and an automated test deserializes a raw erasure record in the v1 shape into both types.
+- [x] `MongoEventStoreOptions<TAggregate>` has no public constructor.
+- [x] `PersonalDataErased<TAggregate>.Entries` and `PersonalDataErasureEntry.Paths` are `IReadOnlyList<>` properties without a public setter.
+- [x] The stored format of erasure records is unchanged: the existing tests for pinned element names, extra-element tolerance and verification pass, and an automated test deserializes a raw erasure record in the v1 shape into both types.
 
 ### Chaos.Mongo.Outbox
 
-- [ ] `OutboxMessage` has no public constructor.
-- [ ] A new public static `OutboxMessage.Create(...)` builds a message for tests of an `IOutboxPublisher`. Automated tests cover the values it sets, its argument validation, and that its payload deserializes, and `docs/testing.md` shows unit-testing a publisher with it.
-- [ ] `IOutboxConfiguratorRunner.RunConfiguratorsAsync` replaces `RunAsync`, and `docs/transactional-outbox.md` and the package README use the new name.
-- [ ] Registering two payload types with the same discriminator in one outbox makes `WithOutbox` throw an `InvalidOperationException` that names the discriminator and both payload types, covered by automated tests.
-- [ ] The same discriminator registered in two different outboxes is still accepted, covered by an automated test.
+- [x] `OutboxMessage` has no public constructor.
+- [x] A new public static `OutboxMessage.Create(...)` builds a message for tests of an `IOutboxPublisher`. Automated tests cover the values it sets, its argument validation, and that its payload deserializes, and `docs/testing.md` shows unit-testing a publisher with it.
+- [x] `IOutboxConfiguratorRunner.RunConfiguratorsAsync` replaces `RunAsync`, and `docs/transactional-outbox.md` and the package README use the new name.
+- [x] Registering two payload types with the same discriminator in one outbox makes `WithOutbox` throw an `InvalidOperationException` that names the discriminator and both payload types, covered by automated tests.
+- [x] The same discriminator registered in two different outboxes is still accepted, covered by an automated test.
 
 ### Cross-cutting
 
-- [ ] `src/AGENTS.md` records the `Mongo` prefix rule for public types and its listed exceptions.
-- [ ] Each project's `PublicAPI.Unshipped.txt` shows exactly these changes.
-- [ ] `docs/migrating-from-0.x.md` lists every change.
-- [ ] The Release build has no warnings and the full test suite passes.
+- [x] `src/AGENTS.md` records the `Mongo` prefix rule for public types and its listed exceptions.
+- [x] Each project's `PublicAPI.Unshipped.txt` shows exactly these changes.
+- [x] `docs/migrating-from-0.x.md` lists every change.
+- [x] The Release build has no warnings and the full test suite passes.
 
 ## Technical Details
 
@@ -86,7 +86,7 @@ The constraint removal is therefore unconditional. The tests in the acceptance c
                                      Int64 attemptCount = 1)
   ```
 
-  An omitted `id` is generated and an omitted `createdUtc` is the current UTC time. `attemptCount` defaults to `1` because that is what a publisher sees on a message's first claim. Lock and state members keep their defaults. It throws `ArgumentException` for a null or whitespace `type`, `ArgumentNullException` for a null `payload`, `ArgumentOutOfRangeException` for an `attemptCount` below 1, and `ArgumentException` for a `createdUtc` that is not UTC. The factory exists for consumer tests; `MongoOutbox` keeps creating messages itself.
+  An omitted `id` is generated and an omitted `createdUtc` is the current UTC time. `attemptCount` defaults to `1` because that is what a publisher sees on a message's first claim. The message is claimed, as a publisher receives it: `IsLocked` is `true`, `LockedUtc` is the current UTC time and `LockId` is generated. The other state members keep their defaults. It throws `ArgumentException` for a null or whitespace `type`, `ArgumentNullException` for a null `payload`, `ArgumentOutOfRangeException` for an `attemptCount` below 1, and `ArgumentException` for a `createdUtc` that is not UTC. The factory exists for consumer tests; `MongoOutbox` keeps creating messages itself.
 - `RunConfiguratorsAsync` matches `IMongoConfiguratorRunner.RunConfiguratorsAsync` and `IMongoMigrationRunner.RunMigrationsAsync`.
 - Duplicate discriminators are detected in `OutboxBuilder.Validate()`, which runs inside `WithOutbox`, so the application fails while composing its services. The comparison is ordinal and scoped to one outbox, because every outbox has its own collection. Registering the same payload type again with another discriminator still replaces the earlier registration.
 

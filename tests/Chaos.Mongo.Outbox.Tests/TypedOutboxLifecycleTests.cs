@@ -26,9 +26,9 @@ public class TypedOutboxLifecycleTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         capture.BeforeIndex = (_, token) => release.Task.WaitAsync(token);
         using var host = CreateHost(database, false, false);
-        var initialize = host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        var initialize = host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         using var cancellation = new CancellationTokenSource();
-        var waiting = host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync(cancellation.Token);
+        var waiting = host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync(cancellation.Token);
         cancellation.Cancel();
         try
         {
@@ -40,12 +40,12 @@ public class TypedOutboxLifecycleTests
         }
 
         await initialize.WaitAsync(TimeSpan.FromSeconds(5));
-        await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         capture.Collections.Values.Should().OnlyContain(c => c.IndexCalls == 3);
     }
 
     [Test]
-    public async Task RunAsync_ConcurrentInitialization_WaitsAndSharesSuccessfulCompletion()
+    public async Task RunConfiguratorsAsync_ConcurrentInitialization_WaitsAndSharesSuccessfulCompletion()
     {
         var database = DispatchProxy.Create<IMongoDatabase, LifecycleDatabase>();
         // DispatchProxy.Create returns an instance of the proxy type, so the cast always succeeds.
@@ -59,7 +59,7 @@ public class TypedOutboxLifecycleTests
             await release.Task.WaitAsync(token);
         };
         using var host = CreateHost(database, false, false);
-        var first = host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        var first = host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var second = host.Services.GetRequiredService<IMongoConfiguratorRunner>().RunConfiguratorsAsync();
         try
@@ -194,7 +194,7 @@ public class TypedOutboxLifecycleTests
             (manual?.Polls ?? 0).Should().Be(0);
             (manual?.IndexCalls ?? 0).Should().Be(generalStartup ? 3 : 0);
 
-            await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+            await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
             await host.Services.GetRequiredService<IMongoConfiguratorRunner>().RunConfiguratorsAsync();
             capture.Collections.Values.Should().OnlyContain(c => c.IndexCalls == 3);
         }

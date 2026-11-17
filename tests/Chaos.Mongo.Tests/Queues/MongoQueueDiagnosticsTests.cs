@@ -20,7 +20,6 @@ public class MongoQueueDiagnosticsTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
         var processingDuration = TimeSpan.FromSeconds(2.5);

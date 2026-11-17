@@ -51,7 +51,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
         var payload = new TestPayload();
@@ -77,7 +76,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
         var payload = new TestPayload();
@@ -103,7 +101,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
 
@@ -127,7 +124,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(AnotherTestPayload), // Different type
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
         var payload = new TestPayload();
@@ -176,7 +172,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
         var payload = new TestPayload();
@@ -224,7 +219,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
 
@@ -262,7 +256,6 @@ public class MongoQueuePublisherTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = false
         };
         var payload = new TestPayload

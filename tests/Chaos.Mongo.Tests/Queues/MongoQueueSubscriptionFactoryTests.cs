@@ -207,7 +207,6 @@ public class MongoQueueSubscriptionFactoryTests
             RetentionPeriod = null,
             CollectionName = "test-queue",
             LockLeaseTime = TimeSpan.FromMinutes(1),
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             PayloadType = typeof(TestPayload),
             BatchSize = 1
         };
@@ -746,7 +745,7 @@ public class MongoQueueSubscriptionFactoryTests
     /// </summary>
     private sealed class ThrowingPayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
     {
-        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
+        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class
             => throw new NotSupportedException();
     }
 
@@ -756,7 +755,7 @@ public class MongoQueueSubscriptionFactoryTests
     /// </summary>
     private sealed class ThrowingPayloadPrioritizer : IMongoQueuePayloadPrioritizer
     {
-        public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class, new()
+        public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class
             => throw new NotSupportedException();
     }
 }

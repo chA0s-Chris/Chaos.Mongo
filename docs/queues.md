@@ -4,7 +4,7 @@ Chaos.Mongo provides typed, MongoDB-backed queues for asynchronous processing. Q
 
 ## Define a payload and handler
 
-Queue payloads are reference types with a parameterless constructor:
+Queue payloads are reference types that the MongoDB driver can serialize:
 
 ```csharp
 public sealed class EmailMessage
@@ -14,6 +14,9 @@ public sealed class EmailMessage
     public string Body { get; set; } = string.Empty;
 }
 ```
+
+A parameterless constructor is not required, so a positional record such as
+`public sealed record EmailMessage(string To, string Subject, string Body);` works as well.
 
 Implement the typed handler:
 
@@ -61,8 +64,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 If no collection name is specified, `IMongoQueueCollectionNameGenerator` derives one from the payload type. A queue is registered as `IMongoQueue<TPayload>` and as the non-generic `IMongoQueue`.
 
 `IMongoQueue<TPayload>.QueueDefinition` exposes the resolved configuration as a `MongoQueueDefinition`:
-`AutoStartSubscription`, `BatchSize`, `CollectionName`, `LockLeaseTime`, `MaxRetries`, `PayloadHandlerType`,
-`PayloadType` and `RetentionPeriod`. Use it to introspect a queue's effective settings at runtime, for example in
+`AutoStartSubscription`, `BatchSize`, `CollectionName`, `LockLeaseTime`, `MaxRetries`, `PayloadType` and
+`RetentionPeriod`. Use it to introspect a queue's effective settings at runtime, for example in
 diagnostics or health checks.
 
 ### Processing options
@@ -144,7 +147,7 @@ public sealed class PriorityEmailMessage
 public sealed class EmailPriorityQueuePrioritizer : IMongoQueuePayloadPrioritizer
 {
     public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>()
-        where TPayload : class, new()
+        where TPayload : class
     {
         var sort = Builders<MongoQueueItem<TPayload>>.Sort;
 
@@ -188,10 +191,9 @@ The prioritizer is shared by registered queues, so provide a deterministic fallb
   bounded by `WithLockLeaseTime(...)`/the lease recovery interval; it does not get real-time notification of newly
   published items. Any other change-stream failure retries with increasing backoff instead of failing the queue.
 
-`IMongoQueue<TPayload>.IsRunning`, `StartSubscriptionAsync` and `StopSubscriptionAsync` are backed internally by
-`IMongoQueueSubscription<TPayload>`, which manages the change-stream monitor and processing loop. It is public for
-the library's own composition but is not created or replaced by application code; use the `IMongoQueue<TPayload>`
-members above instead.
+`IMongoQueue<TPayload>.IsRunning`, `StartSubscriptionAsync` and `StopSubscriptionAsync` control the queue's
+subscription, which manages the change-stream monitor and processing loop. The subscription itself is internal to
+the library; application code does not create or replace it.
 
 ## Diagnostics
 

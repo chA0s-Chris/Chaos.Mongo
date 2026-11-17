@@ -21,7 +21,7 @@ public static class MongoHelperExtensions
     /// <param name="helper">The MongoDB helper instance.</param>
     /// <param name="lockName">The name of the lock to acquire.</param>
     /// <param name="leaseTime">Optional lease duration. Defaults to <see cref="MongoDefaults.LockLeaseTime"/>.</param>
-    /// <param name="retryDelay">Optional delay between retry attempts. Defaults to <see cref="MongoDefaults.RetryDelay"/>.</param>
+    /// <param name="retryDelay">Optional delay between retry attempts. Defaults to <see cref="MongoDefaults.LockRetryDelay"/>.</param>
     /// <param name="cancellationToken">Optional cancellation token to stop lock acquisition attempts.</param>
     /// <returns>A lock instance that must be disposed to release the lock.</returns>
     /// <exception cref="ArgumentException">Thrown when <paramref name="lockName"/> is null or whitespace.</exception>
@@ -36,7 +36,7 @@ public static class MongoHelperExtensions
         ArgumentNullException.ThrowIfNull(helper);
         ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
 
-        retryDelay ??= MongoDefaults.RetryDelay;
+        retryDelay ??= MongoDefaults.LockRetryDelay;
 
         // Retry until lock is acquired or cancellation requested
         while (true)

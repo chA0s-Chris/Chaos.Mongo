@@ -24,5 +24,5 @@ internal interface IMongoQueuePublisher
     /// collection name is empty.
     /// </exception>
     Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition, TPayload payload, CancellationToken cancellationToken)
-        where TPayload : class, new();
+        where TPayload : class;
 }

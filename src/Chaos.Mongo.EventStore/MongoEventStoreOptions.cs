@@ -13,6 +13,11 @@ public sealed class MongoEventStoreOptions<TAggregate> where TAggregate : class,
     private readonly Dictionary<Type, String> _eventTypes = new();
 
     /// <summary>
+    /// Initializes a new instance of the <see cref="MongoEventStoreOptions{TAggregate}"/> class.
+    /// </summary>
+    internal MongoEventStoreOptions() { }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the MongoDB 8+ client bulk-write optimization is enabled.
     /// Defaults to <c>false</c>.
     /// </summary>

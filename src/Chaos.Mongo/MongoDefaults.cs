@@ -20,7 +20,7 @@ public static class MongoDefaults
     /// <summary>
     /// The default name of the distributed lock used for migration coordination.
     /// </summary>
-    public const String MigrationsLockName = "ChaosMongoMigrations";
+    public const String MigrationLockName = "ChaosMongoMigrations";
 
     /// <summary>
     /// Gets the default value indicating whether migrations should run automatically on application startup.
@@ -28,14 +28,14 @@ public static class MongoDefaults
     public static Boolean ApplyMigrationsOnStartup => false;
 
     /// <summary>
-    /// Gets the default value indicating whether queue subscriptions should start automatically on application startup.
-    /// </summary>
-    public static Boolean AutoStartSubscription => false;
-
-    /// <summary>
     /// Gets the default lease time for distributed locks.
     /// </summary>
     public static TimeSpan LockLeaseTime => TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Gets the default delay between lock acquisition retry attempts.
+    /// </summary>
+    public static TimeSpan LockRetryDelay => TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Gets the default lease time for the migration distributed lock.
@@ -46,6 +46,11 @@ public static class MongoDefaults
     /// Gets the default duration to wait for the migration lock before reporting a skipped run.
     /// </summary>
     public static TimeSpan MigrationLockWaitTimeout => TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Gets the default value indicating whether queue subscriptions should start automatically on application startup.
+    /// </summary>
+    public static Boolean QueueAutoStartSubscription => false;
 
     /// <summary>
     /// Gets the default maximum number of queue items to fetch and process in a single query.
@@ -66,11 +71,6 @@ public static class MongoDefaults
     /// Gets the default retention time for successfully processed queue items before TTL cleanup removes them.
     /// </summary>
     public static TimeSpan? QueueRetentionPeriod => TimeSpan.FromHours(1);
-
-    /// <summary>
-    /// Gets the default delay between lock acquisition retry attempts.
-    /// </summary>
-    public static TimeSpan RetryDelay => TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Gets the default value indicating whether configurators should run automatically on application startup.

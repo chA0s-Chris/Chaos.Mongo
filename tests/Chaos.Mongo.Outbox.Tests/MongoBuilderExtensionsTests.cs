@@ -51,6 +51,79 @@ public class MongoBuilderExtensionsTests
     }
 
     [Test]
+    public void WithOutbox_SameDiscriminatorInDifferentOutboxes_IsAccepted()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        builder.WithOutbox(o => o
+                                .WithPublisher<TestOutboxPublisher>()
+                                .WithMessage<TestPayload>("Shared"));
+        var act = () => builder.WithOutbox<SharedDiscriminatorDestination>(o => o
+                                                                                .WithPublisher<TestOutboxPublisher>()
+                                                                                .WithMessage<AnotherTestPayload>("Shared")
+                                                                                .WithCollectionName("SharedDiscriminatorOutbox"));
+
+        act.Should().NotThrow();
+        services.Where(s => s.ServiceType == typeof(OutboxRegistration))
+                .Select(s => s.ImplementationInstance)
+                .OfType<OutboxRegistration>()
+                .Should().HaveCount(2)
+                .And.OnlyContain(r => r.Options.MessageTypeLookup.Values.Single() == "Shared");
+    }
+
+    [Test]
+    public void WithOutbox_SamePayloadTypeRegisteredAgain_ReplacesItsDiscriminator()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        builder.WithOutbox(o => o
+                                .WithPublisher<TestOutboxPublisher>()
+                                .WithMessage<TestPayload>("Shared")
+                                .WithMessage<AnotherTestPayload>("Shared")
+                                .WithMessage<AnotherTestPayload>("Other"));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<OutboxOptions>().MessageTypeLookup.Should().BeEquivalentTo(new Dictionary<Type, String>
+        {
+            [typeof(TestPayload)] = "Shared",
+            [typeof(AnotherTestPayload)] = "Other"
+        });
+    }
+
+    [Test]
+    public void WithOutbox_TwoPayloadTypesWithDefaultDiscriminatorOfTheSameName_ThrowsInvalidOperationException()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        var act = () => builder.WithOutbox(o => o
+                                                .WithPublisher<TestOutboxPublisher>()
+                                                .WithMessage<Payloads.FirstNamespace.SameNamePayload>()
+                                                .WithMessage<Payloads.SecondNamespace.SameNamePayload>());
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage($"*'SameNamePayload'*{typeof(Payloads.FirstNamespace.SameNamePayload).FullName}*{typeof(Payloads.SecondNamespace.SameNamePayload).FullName}*");
+    }
+
+    [Test]
+    public void WithOutbox_TwoPayloadTypesWithSameDiscriminator_ThrowsBeforeRegisteringAnything()
+    {
+        var services = new ServiceCollection();
+        var builder = new MongoBuilder(services);
+
+        var act = () => builder.WithOutbox(o => o
+                                                .WithPublisher<TestOutboxPublisher>()
+                                                .WithMessage<TestPayload>("Shared")
+                                                .WithMessage<AnotherTestPayload>("Shared"));
+
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage($"*'Shared'*{typeof(TestPayload).FullName}*{typeof(AnotherTestPayload).FullName}*");
+        services.Should().BeEmpty();
+    }
+
+    [Test]
     public void WithOutbox_NoMessageTypes_ThrowsInvalidOperationException()
     {
         var services = new ServiceCollection();
@@ -248,3 +321,5 @@ public class MongoBuilderExtensionsTests
             => throw new NotImplementedException();
     }
 }
+
+internal abstract class SharedDiscriminatorDestination;

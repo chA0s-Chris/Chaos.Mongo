@@ -33,6 +33,81 @@ public class PersonalDataErasureRegistrationTests
     }
 
     [Test]
+    public void ErasureRecord_RawDocumentInFormatV1Shape_DeserializesIntoBothTypesAndSerializesUnchanged()
+    {
+        new MongoBuilder(new ServiceCollection()).WithEventStore<ErasureRawRecordAggregate>(es => es.WithEvent<ErasureRawRecordEvent>());
+        var aggregateId = Guid.NewGuid();
+        var entries = new BsonArray
+        {
+            new BsonDocument
+            {
+                {
+                    "Paths", new BsonArray
+                    {
+                        "Name",
+                        "Address.Street"
+                    }
+                },
+                { "Version", 1L }
+            },
+            new BsonDocument
+            {
+                {
+                    "Paths", new BsonArray
+                    {
+                        "Name"
+                    }
+                },
+                { "Version", 2L }
+            }
+        };
+        var document = new BsonDocument
+        {
+            { "_id", new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard) },
+            {
+                "_t", new BsonArray
+                {
+                    "Event<ErasureRawRecordAggregate>",
+                    PersonalDataErased<ErasureRawRecordAggregate>.Discriminator
+                }
+            },
+            { "AggregateId", new BsonBinaryData(aggregateId, GuidRepresentation.Standard) },
+            { "AggregateType", nameof(ErasureRawRecordAggregate) },
+            { "CreatedUtc", new BsonDateTime(new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc)) },
+            { "Revision", 2L },
+            { "Version", 3L },
+            { "Reference", "request-17" },
+            { "Entries", entries }
+        };
+
+        var erased = BsonSerializer.Deserialize<PersonalDataErased<ErasureRawRecordAggregate>>(document);
+        var erasedThroughBaseType = BsonSerializer.Deserialize<Event<ErasureRawRecordAggregate>>(document);
+        var entry = BsonSerializer.Deserialize<PersonalDataErasureEntry>(entries[0].AsBsonDocument);
+
+        erased.AggregateId.Should().Be(aggregateId);
+        erased.Version.Should().Be(3);
+        erased.Reference.Should().Be("request-17");
+        erased.Entries.Should().HaveCount(2);
+        erased.Entries[0].Version.Should().Be(1);
+        erased.Entries[0].Paths.Should().Equal("Name", "Address.Street");
+        erased.Entries[1].Version.Should().Be(2);
+        erased.Entries[1].Paths.Should().Equal("Name");
+        entry.Version.Should().Be(1);
+        entry.Paths.Should().Equal("Name", "Address.Street");
+
+        var readThroughBaseType = erasedThroughBaseType.Should().BeOfType<PersonalDataErased<ErasureRawRecordAggregate>>().Subject;
+        readThroughBaseType.Reference.Should().Be("request-17");
+        readThroughBaseType.Entries.Select(e => e.Version).Should().Equal(1, 2);
+        readThroughBaseType.Entries.SelectMany(e => e.Paths).Should().Equal("Name", "Address.Street", "Name");
+
+        var serialized = erased.ToBsonDocument(typeof(Event<ErasureRawRecordAggregate>));
+        serialized["_t"].Should().Be(document["_t"]);
+        serialized["Reference"].Should().Be(document["Reference"]);
+        serialized["Entries"].Should().Be(entries);
+        entry.ToBsonDocument().Equals(entries[0]).Should().BeTrue();
+    }
+
+    [Test]
     public void ErasureRequest_CallerCollectionsChangedLater_KeepsTheValidatedSelection()
     {
         var versions = new List<Int64>
@@ -348,4 +423,11 @@ public sealed class ErasureReservedAggregate : Aggregate;
 public sealed class ErasureReservedEvent : Event<ErasureReservedAggregate>
 {
     public override void Execute(ErasureReservedAggregate aggregate) { }
+}
+
+public sealed class ErasureRawRecordAggregate : Aggregate;
+
+public sealed class ErasureRawRecordEvent : Event<ErasureRawRecordAggregate>
+{
+    public override void Execute(ErasureRawRecordAggregate aggregate) { }
 }

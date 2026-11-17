@@ -33,7 +33,7 @@ public class TypedOutboxIntegrationTests
         // ReSharper disable once AccessToDisposedClosure
         var noTransaction = () => first.AddMessageAsync(session, new AnotherTestPayload());
         await noTransaction.Should().ThrowAsync<InvalidOperationException>().WithMessage("*active MongoDB transaction*");
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         session.StartTransaction();
         await first.AddMessageAsync(session, new AnotherTestPayload());
         // The assertion below invokes the delegate before the session is disposed.
@@ -50,7 +50,7 @@ public class TypedOutboxIntegrationTests
     public async Task AddMessageAsync_SharedTransaction_CommitsOrRollsBackEveryDestination(Boolean commit)
     {
         await using var provider = CreateServices().BuildServiceProvider();
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         var helper = provider.GetRequiredService<IMongoHelper>();
         using var session = await helper.Client.StartSessionAsync();
         session.StartTransaction();
@@ -119,7 +119,7 @@ public class TypedOutboxIntegrationTests
             mongoBuilder.WithOutbox(ConfigureFactory);
 
         await using var provider = mongoBuilder.Services.BuildServiceProvider();
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         var outbox = typed ? provider.GetRequiredService<IOutbox<FirstDestination>>() : provider.GetRequiredService<IOutbox>();
         var processor = typed
             ? provider.GetRequiredService<IOutboxProcessor<FirstDestination>>()
@@ -162,7 +162,7 @@ public class TypedOutboxIntegrationTests
         {
             ValidateScopes = true
         });
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         using (var session = await provider.GetRequiredService<IMongoHelper>().Client.StartSessionAsync())
         {
             session.StartTransaction();
@@ -186,10 +186,10 @@ public class TypedOutboxIntegrationTests
     }
 
     [Test]
-    public async Task RunAsync_DifferentRetentionPolicies_CreatesIndependentIndexes()
+    public async Task RunConfiguratorsAsync_DifferentRetentionPolicies_CreatesIndependentIndexes()
     {
         await using var provider = CreateServices().BuildServiceProvider();
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         var database = provider.GetRequiredService<IMongoHelper>().Database;
         foreach (var (name, days) in new[]
                  {
@@ -225,7 +225,7 @@ public class TypedOutboxIntegrationTests
                 throw new InvalidOperationException("First destination unavailable");
             await release.Task.WaitAsync(token);
         };
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         await EnqueueAsync(provider);
         var first = provider.GetRequiredService<IOutboxProcessor<FirstDestination>>();
         var second = provider.GetRequiredService<IOutboxProcessor<SecondDestination>>();
@@ -266,7 +266,7 @@ public class TypedOutboxIntegrationTests
     public async Task StartAsync_DifferentFiltersAndRetryPolicies_KeepEligibilityAndFailuresIsolated()
     {
         await using var provider = CreateServices(filterSecond: true).BuildServiceProvider();
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         await EnqueueAsync(provider);
         var hub = provider.GetRequiredService<TypedPublicationHub>();
         hub.Handlers["First"] = _ => throw new InvalidOperationException("Failed");
@@ -320,7 +320,7 @@ public class TypedOutboxIntegrationTests
         {
             ValidateScopes = true
         });
-        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await provider.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         var hub = provider.GetRequiredService<TypedPublicationHub>();
         await EnqueueAsync(provider);
         var first = provider.GetRequiredService<IOutboxProcessor<FirstDestination>>();
@@ -404,7 +404,7 @@ public class TypedOutboxIntegrationTests
                 throw;
             }
         };
-        await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync();
+        await host.Services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync();
         await EnqueueAsync(host.Services);
         await host.StartAsync();
         using var shutdown = new CancellationTokenSource();

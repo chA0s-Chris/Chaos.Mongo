@@ -7,7 +7,7 @@ namespace Chaos.Mongo.Queues;
 /// </summary>
 /// <typeparam name="TPayload">The type of payload to handle.</typeparam>
 public interface IMongoQueuePayloadHandler<in TPayload>
-    where TPayload : class, new()
+    where TPayload : class
 {
     /// <summary>
     /// Handles the specified payload asynchronously.

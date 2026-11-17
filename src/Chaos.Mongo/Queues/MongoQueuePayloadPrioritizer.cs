@@ -11,7 +11,7 @@ public sealed class MongoQueuePayloadPrioritizer : IMongoQueuePayloadPrioritizer
 {
     /// <inheritdoc/>
     public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>()
-        where TPayload : class, new()
+        where TPayload : class
         => Builders<MongoQueueItem<TPayload>>.Sort
                                              .Ascending(x => x.Id);
 }

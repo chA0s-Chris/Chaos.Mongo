@@ -267,6 +267,43 @@ public class MongoQueueIntegrationTests
     }
 
     [Test]
+    public async Task PublishAsync_PositionalRecordPayload_IsStoredAndDeliveredWithEqualValue()
+    {
+        // Arrange
+        var handler = new OrderPlacedHandler();
+        var services = new ServiceCollection();
+        services.AddNUnitTestLogging();
+
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var uniqueDbName = TestDatabases.NewName("QueueRecordPayloadTest");
+        services.AddMongo(url, uniqueDbName)
+                .WithQueue<OrderPlaced>(queue => queue
+                                                 .WithPayloadHandler(_ => handler)
+                                                 .WithCollectionName("record-queue")
+                                                 .WithoutAutoStartSubscription());
+
+        var serviceProvider = services.BuildServiceProvider();
+        var queue = serviceProvider.GetRequiredService<IMongoQueue<OrderPlaced>>();
+        var payload = new OrderPlaced("A-1001", 3, new OrderAddress("Main Street 1", "Springfield"));
+
+        // Act
+        await queue.StartSubscriptionAsync();
+        await queue.PublishAsync(payload);
+        await handler.WaitForMessages(1, TimeSpan.FromSeconds(10));
+
+        // Assert
+        handler.ProcessedPayloads.Should().ContainSingle().Which.Should().Be(payload);
+        var storedItem = await serviceProvider.GetRequiredService<IMongoHelper>().Database
+                                              .GetCollection<MongoQueueItem<OrderPlaced>>("record-queue")
+                                              .Find(FilterDefinition<MongoQueueItem<OrderPlaced>>.Empty)
+                                              .SingleAsync();
+        storedItem.Payload.Should().Be(payload);
+
+        // Cleanup
+        await queue.StopSubscriptionAsync();
+    }
+
+    [Test]
     public async Task Queue_ProcessingManyMessages_HandlesThemInOrder()
     {
         // Arrange
@@ -521,6 +558,34 @@ public class MongoQueueIntegrationTests
             }
 
             _successfulPayloads.Add(payload);
+            _semaphore.Release();
+            return Task.CompletedTask;
+        }
+    }
+
+    public sealed record OrderAddress(String Street, String City);
+
+    public sealed record OrderPlaced(String OrderNumber, Int32 Quantity, OrderAddress ShipTo);
+
+    public class OrderPlacedHandler : IMongoQueuePayloadHandler<OrderPlaced>
+    {
+        private readonly List<OrderPlaced> _processedPayloads = [];
+        private readonly SemaphoreSlim _semaphore = new(0);
+
+        public IReadOnlyList<OrderPlaced> ProcessedPayloads => _processedPayloads;
+
+        public async Task WaitForMessages(Int32 count, TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            for (var i = 0; i < count; i++)
+            {
+                await _semaphore.WaitAsync(cts.Token);
+            }
+        }
+
+        public Task HandlePayloadAsync(OrderPlaced payload, CancellationToken cancellationToken = default)
+        {
+            _processedPayloads.Add(payload);
             _semaphore.Release();
             return Task.CompletedTask;
         }

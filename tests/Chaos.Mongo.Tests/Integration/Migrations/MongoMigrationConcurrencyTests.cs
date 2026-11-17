@@ -126,7 +126,7 @@ public class MongoMigrationConcurrencyTests
         // refused. The lease (300ms) and the renewal interval (half of it) mean this is observed within ~150ms.
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
         await lockCollection.UpdateOneAsync(
-            Builders<MongoLockDocument>.Filter.Eq(x => x.Id, Chaos.Mongo.MongoDefaults.MigrationsLockName),
+            Builders<MongoLockDocument>.Filter.Eq(x => x.Id, Chaos.Mongo.MongoDefaults.MigrationLockName),
             Builders<MongoLockDocument>.Update.Set(x => x.Holder, "someone-else"));
 
         var act = async () => await runTask.WaitAsync(TimeSpan.FromSeconds(10));

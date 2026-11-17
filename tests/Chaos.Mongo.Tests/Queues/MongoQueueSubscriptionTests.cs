@@ -122,7 +122,6 @@ public class MongoQueueSubscriptionTests
                                          CollectionName = "test-queue",
                                          LockLeaseTime = TimeSpan.FromMinutes(1),
                                          MaxRetries = 1,
-                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                          PayloadType = typeof(TestPayload),
                                          BatchSize = 10
                                      },
@@ -196,7 +195,6 @@ public class MongoQueueSubscriptionTests
                                          RetentionPeriod = null,
                                          CollectionName = "test-queue",
                                          LockLeaseTime = TimeSpan.FromMinutes(1),
-                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                          PayloadType = typeof(TestPayload),
                                          BatchSize = 10
                                      },
@@ -429,7 +427,6 @@ public class MongoQueueSubscriptionTests
                                          CollectionName = "test-queue",
                                          LockLeaseTime = TimeSpan.FromMinutes(1),
                                          MaxRetries = 1,
-                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                          PayloadType = typeof(TestPayload),
                                          BatchSize = 10
                                      },
@@ -543,7 +540,6 @@ public class MongoQueueSubscriptionTests
                                          RetentionPeriod = null,
                                          CollectionName = "test-queue",
                                          LockLeaseTime = TimeSpan.FromMinutes(1),
-                                         PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                          PayloadType = typeof(TestPayload),
                                          BatchSize = 10
                                      },
@@ -1063,7 +1059,6 @@ public class MongoQueueSubscriptionTests
                                       AutoStartSubscription = false,
                                       CollectionName = "test-queue",
                                       LockLeaseTime = lease ?? TimeSpan.FromSeconds(1),
-                                      PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                                       PayloadType = typeof(TestPayload),
                                       BatchSize = 1
                                   }, new SingleDatabaseMongoHelper(database), new StubPayloadHandlerFactory(() => Task.CompletedTask),
@@ -1123,7 +1118,6 @@ public class MongoQueueSubscriptionTests
                    AutoStartSubscription = false,
                    CollectionName = "test-queue",
                    LockLeaseTime = TimeSpan.FromMinutes(1),
-                   PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
                    PayloadType = typeof(TestPayload),
                    BatchSize = 10
                },
@@ -2249,7 +2243,7 @@ public class MongoQueueSubscriptionTests
 
         public StubPayloadHandlerFactory(Func<Task> handle) => _handler = new StubPayloadHandler(handle);
 
-        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
+        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class
             => (IMongoQueuePayloadHandler<TPayload>)_handler;
     }
 
@@ -2273,7 +2267,7 @@ public class MongoQueueSubscriptionTests
     /// </summary>
     private sealed class UnusedPayloadHandlerFactory : IMongoQueuePayloadHandlerFactory
     {
-        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class, new()
+        public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider) where TPayload : class
             => throw new NotSupportedException();
     }
 
@@ -2283,7 +2277,7 @@ public class MongoQueueSubscriptionTests
     /// </summary>
     private sealed class UnusedPayloadPrioritizer : IMongoQueuePayloadPrioritizer
     {
-        public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class, new()
+        public SortDefinition<MongoQueueItem<TPayload>> CreateSortDefinition<TPayload>() where TPayload : class
             => throw new NotSupportedException();
     }
 }

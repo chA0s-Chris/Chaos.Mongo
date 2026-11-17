@@ -16,7 +16,7 @@ public interface IOutboxConfiguratorRunner
     /// </summary>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>A task that completes when all configurators have run.</returns>
-    Task RunAsync(CancellationToken cancellationToken = default);
+    Task RunConfiguratorsAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -55,7 +55,7 @@ internal sealed class OutboxConfiguratorRunner : IOutboxConfiguratorRunner
     }
 
     /// <inheritdoc/>
-    public async Task RunAsync(CancellationToken cancellationToken = default)
+    public async Task RunConfiguratorsAsync(CancellationToken cancellationToken = default)
     {
         foreach (var configurator in _configurators)
         {

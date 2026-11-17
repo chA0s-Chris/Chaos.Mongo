@@ -132,7 +132,7 @@ factory.
 Automatic startup initializes and starts every enabled processor. Successful index
 initialization is shared with general MongoDB startup and cached for the
 configurator's lifetime; failed or canceled attempts can be retried. For manual
-outboxes, call `IOutboxConfiguratorRunner.RunAsync()` to initialize **all** outboxes
+outboxes, call `IOutboxConfiguratorRunner.RunConfiguratorsAsync()` to initialize **all** outboxes
 (or enable `MongoOptions.RunConfiguratorsOnStartup`), then control the destination
 with `IOutboxProcessor<AuditOutbox>.StartAsync()` and `StopAsync()`. Manual processors
 remain the caller's responsibility. Host shutdown signals all automatic processors

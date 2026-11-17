@@ -609,7 +609,6 @@ public class MongoHostedServiceTests
             LockLeaseTime = MongoDefaults.QueueLockLeaseTime,
             PayloadType = typeof(TestPayload),
             BatchSize = 1,
-            PayloadHandlerType = typeof(IMongoQueuePayloadHandler<TestPayload>),
             AutoStartSubscription = autoStart
         };
 

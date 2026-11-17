@@ -112,7 +112,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
 
         if (waitTimeout == TimeSpan.Zero)
         {
-            return await _mongoHelper.TryAcquireLockAsync(_options.MigrationsLockName, _options.MigrationLockLeaseTime, cancellationToken);
+            return await _mongoHelper.TryAcquireLockAsync(_options.MigrationLockName, _options.MigrationLockLeaseTime, cancellationToken);
         }
 
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -123,7 +123,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
 
         try
         {
-            return await _mongoHelper.AcquireLockAsync(_options.MigrationsLockName,
+            return await _mongoHelper.AcquireLockAsync(_options.MigrationLockName,
                                                        _options.MigrationLockLeaseTime,
                                                        cancellationToken: waitCts.Token);
         }
@@ -212,7 +212,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
             return;
         }
 
-        _logger.LogWarning("Migration lock {LockName} is no longer valid; stopping in-progress migration work", _options.MigrationsLockName);
+        _logger.LogWarning("Migration lock {LockName} is no longer valid; stopping in-progress migration work", _options.MigrationLockName);
 
         if (!lockLostCts.IsCancellationRequested)
         {
@@ -266,7 +266,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
                 }
 
                 _logger.LogWarning("Migration lock {LockName} could not be renewed; stopping in-progress migration work",
-                                   _options.MigrationsLockName);
+                                   _options.MigrationLockName);
                 await lockLostCts.CancelAsync();
                 return;
             }
@@ -278,12 +278,12 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         catch (Exception ex) when (stopToken.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "Migration lock {LockName} lease renewal failed after migration work finished; the lock may stay held until its lease expires",
-                               _options.MigrationsLockName);
+                               _options.MigrationLockName);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Migration lock {LockName} lease renewal failed unexpectedly; stopping in-progress migration work",
-                             _options.MigrationsLockName);
+                             _options.MigrationLockName);
             await lockLostCts.CancelAsync();
             throw;
         }
@@ -318,7 +318,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         var mongoLock = await AcquireMigrationLockAsync(cancellationToken);
         if (mongoLock is null)
         {
-            _logger.LogWarning("Timed out waiting for migration lock {LockName}; skipping migrations", _options.MigrationsLockName);
+            _logger.LogWarning("Timed out waiting for migration lock {LockName}; skipping migrations", _options.MigrationLockName);
             return new MongoMigrationResult
             {
                 Skipped = true,

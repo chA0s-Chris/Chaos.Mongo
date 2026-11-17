@@ -8,6 +8,7 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using System.Diagnostics;
+using System.Globalization;
 
 /// <summary>
 /// Index option names that the legacy, unnamed four-key queue processing index never requested. Their presence
@@ -39,7 +40,7 @@ file static class LegacyProcessingIndexOptions
 /// Items are locked during processing to ensure single-consumer semantics.
 /// </remarks>
 internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPayload>
-    where TPayload : class, new()
+    where TPayload : class
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
     private const String ProcessingIndexName = "IX_Queue_Processing";
@@ -635,7 +636,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                     _logger.LogWarning(
                         "Recovering queue item lock {QueueItemId} (previous LockedUtc: {PreviousLockedUtc}, expiry threshold: {ExpiryThreshold}) with payload {PayloadType}",
                         queueItemId,
-                        projectedResult.LockedUtc?.ToString("O") ?? "null",
+                        projectedResult.LockedUtc?.ToString("O", CultureInfo.InvariantCulture) ?? "null",
                         lockExpiryUtc.ToString("O"),
                         typeof(TPayload).FullName);
                 }

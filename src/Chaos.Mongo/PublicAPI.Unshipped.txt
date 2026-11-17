@@ -3,7 +3,7 @@
 Chaos.Mongo.Queues.MongoQueueDefinition.<Clone>$() -> Chaos.Mongo.Queues.MongoQueueDefinition!
 Chaos.Mongo.Queues.MongoQueueDefinition.Equals(Chaos.Mongo.Queues.MongoQueueDefinition? other) -> bool
 static Chaos.Mongo.MongoDefaults.ApplyMigrationsOnStartup.get -> bool
-static Chaos.Mongo.MongoDefaults.AutoStartSubscription.get -> bool
+static Chaos.Mongo.MongoDefaults.QueueAutoStartSubscription.get -> bool
 static Chaos.Mongo.MongoDefaults.QueueBatchSize.get -> int
 static Chaos.Mongo.MongoDefaults.QueueRetentionPeriod.get -> System.TimeSpan?
 static Chaos.Mongo.MongoDefaults.RunConfiguratorsOnStartup.get -> bool
@@ -150,3 +150,17 @@ static Chaos.Mongo.MongoDefaults.MigrationLockWaitTimeout.get -> System.TimeSpan
 *REMOVED*Chaos.Mongo.Queues.MongoQueueItem.RetryCount.set -> void
 Chaos.Mongo.Queues.MongoQueueItem.AttemptCount.get -> long
 Chaos.Mongo.Queues.MongoQueueItem.DeferredUtc.get -> System.DateTime?
+const Chaos.Mongo.MongoDefaults.MigrationLockName = "ChaosMongoMigrations" -> string!
+static Chaos.Mongo.MongoDefaults.LockRetryDelay.get -> System.TimeSpan
+Chaos.Mongo.MongoOptions.MigrationLockName.get -> string!
+Chaos.Mongo.MongoOptions.MigrationLockName.set -> void
+*REMOVED*const Chaos.Mongo.MongoDefaults.MigrationsLockName = "ChaosMongoMigrations" -> string!
+*REMOVED*static Chaos.Mongo.MongoDefaults.RetryDelay.get -> System.TimeSpan
+*REMOVED*Chaos.Mongo.MongoOptions.MigrationsLockName.get -> string!
+*REMOVED*Chaos.Mongo.MongoOptions.MigrationsLockName.set -> void
+*REMOVED*Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>
+*REMOVED*Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>.IsActive.get -> bool
+*REMOVED*Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>.StartAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Chaos.Mongo.Queues.IMongoQueueSubscription<TPayload>.StopAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Chaos.Mongo.Queues.MongoQueueDefinition.PayloadHandlerType.get -> System.Type!
+*REMOVED*Chaos.Mongo.Queues.MongoQueueDefinition.PayloadHandlerType.init -> void

@@ -163,13 +163,15 @@ public interface IOutbox
         TPayload payload,
         string? correlationId = null,
         CancellationToken cancellationToken = default)
-        where TPayload : class, new();
+        where TPayload : class;
 }
 ```
 
 - `AddMessageAsync` inserts a message into the outbox collection
 - The provided session must already have an active transaction
 - `TPayload` must be registered via `WithMessage<TPayload>()`
+- `TPayload` is a class or record that the MongoDB driver serializes as a document; a parameterless constructor is
+  not required, so positional records work
 - `correlationId` is optional and stored with the message for tracing
 
 ### IOutboxPublisher
@@ -208,6 +210,9 @@ public interface IOutboxPublisher
 | `IsLocked` | Indicates whether a processor currently owns the message |
 | `LockedUtc` | When the current lock was acquired |
 | `LockId` | Ownership token used to prevent stale processors from overwriting newer results |
+
+The outbox creates the messages it stores. To build one in a unit test of your publisher, use
+`OutboxMessage.Create(...)`; see [Testing](testing.md#testing-an-outbox-publisher).
 
 For typed access to the payload:
 
@@ -361,7 +366,7 @@ the configurator's lifetime; restarting a processor does not recreate indexes.
 For manual initialization and lifecycle control:
 
 ```csharp
-await services.GetRequiredService<IOutboxConfiguratorRunner>().RunAsync(token);
+await services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync(token);
 var processor = services.GetRequiredService<IOutboxProcessor<AuditOutbox>>();
 await processor.StartAsync(token);
 // Later, when this destination should stop:
@@ -542,6 +547,8 @@ Each payload type must be registered ahead of time:
 
 - The discriminator is written to `OutboxMessage.Type`
 - If you omit the discriminator, the payload class name is used
+- Two payload types of one outbox must not share a discriminator: `WithOutbox` throws an `InvalidOperationException`
+  naming the discriminator and both types. The same discriminator may be used in different outboxes
 - Payload types are automatically registered with MongoDB BSON serialization when the outbox is configured
 
 ### Correlation IDs
