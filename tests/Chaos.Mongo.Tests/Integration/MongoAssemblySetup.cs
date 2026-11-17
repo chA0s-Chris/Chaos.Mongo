@@ -18,13 +18,23 @@ public sealed class MongoAssemblySetup
     {
         try
         {
-            var leftovers = await TestDatabases.DropRemainingAndFindLeftoversAsync();
-
-            // Only the process that owns the server checks it: an isolated child process shares the server of its
-            // parent, whose tests may still use their databases.
-            if (MongoDbTestContainer.OwnsServer && (leftovers.Count > 0))
+            var cleanup = await TestDatabases.DropRemainingAndFindLeftoversAsync();
+            var problems = new List<String>();
+            if (cleanup.FailedDrops.Count > 0)
             {
-                Assert.Fail($"Tests left these databases behind; name them through {nameof(TestDatabases)} so they are dropped: {String.Join(", ", leftovers)}");
+                problems.Add($"These databases could not be dropped: {String.Join(", ", cleanup.FailedDrops)}.");
+            }
+
+            // Only the process that owns the server checks it for leftovers: an isolated child process shares the
+            // server of its parent, whose tests may still use their databases.
+            if (MongoDbTestContainer.OwnsServer && (cleanup.Leftovers.Count > 0))
+            {
+                problems.Add($"Tests left these databases behind; name them through {nameof(TestDatabases)} so they are dropped: {String.Join(", ", cleanup.Leftovers)}");
+            }
+
+            if (problems.Count > 0)
+            {
+                Assert.Fail(String.Join(" ", problems));
             }
         }
         finally

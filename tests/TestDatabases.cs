@@ -19,6 +19,7 @@ using System.Collections.Concurrent;
 /// </remarks>
 public static class TestDatabases
 {
+    private static readonly ConcurrentQueue<String> FailedDrops = new();
     private static readonly ConcurrentDictionary<String, ConcurrentQueue<String>> NamesByOwner = new();
     private static readonly ConcurrentQueue<Task> PendingDrops = new();
     private static readonly String[] ServerDatabases = ["admin", "config", "local"];
@@ -34,15 +35,16 @@ public static class TestDatabases
 
         foreach (var name in names.Distinct())
         {
-            PendingDrops.Enqueue(Task.Run(() => client.DropDatabaseAsync(name)));
+            PendingDrops.Enqueue(Task.Run(() => DropAsync(client, name)));
         }
     }
 
     /// <summary>
-    /// Drops the databases still registered and waits for every drop, then returns the databases on the server that
-    /// no test registered: those were created by a test that did not name them through this class and are left behind.
+    /// Drops the databases still registered and waits for every drop, then returns the drops that failed together
+    /// with the databases left on the server: those were created by a test that did not name them through this
+    /// class, or could not be dropped.
     /// </summary>
-    public static async Task<IReadOnlyList<String>> DropRemainingAndFindLeftoversAsync()
+    public static async Task<TestDatabaseCleanup> DropRemainingAndFindLeftoversAsync()
     {
         foreach (var ownerId in NamesByOwner.Keys)
         {
@@ -51,10 +53,10 @@ public static class TestDatabases
 
         await Task.WhenAll(PendingDrops);
         if (Client is not { } client)
-            return [];
+            return new TestDatabaseCleanup([], [.. FailedDrops]);
 
         var names = await (await client.ListDatabaseNamesAsync()).ToListAsync();
-        return names.Except(ServerDatabases, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        return new TestDatabaseCleanup(names.Except(ServerDatabases, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), [.. FailedDrops]);
     }
 
     /// <summary>
@@ -78,4 +80,27 @@ public static class TestDatabases
     /// Points the drops at the server of this test process.
     /// </summary>
     public static void UseServer(String connectionString) => Client = new MongoClient(connectionString);
+
+    /// <summary>
+    /// Drops one database and records a failure instead of throwing, so one failed drop neither stops the others nor
+    /// hides the leftover databases at the end of the run.
+    /// </summary>
+    private static async Task DropAsync(IMongoClient client, String name)
+    {
+        try
+        {
+            await client.DropDatabaseAsync(name);
+        }
+        catch (Exception exception)
+        {
+            FailedDrops.Enqueue($"{name} ({exception.Message})");
+        }
+    }
 }
+
+/// <summary>
+/// The result of dropping the test databases at the end of a run.
+/// </summary>
+/// <param name="Leftovers">The databases still on the server, apart from its own.</param>
+/// <param name="FailedDrops">The databases whose drop failed, each with the error.</param>
+public sealed record TestDatabaseCleanup(IReadOnlyList<String> Leftovers, IReadOnlyList<String> FailedDrops);
