@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -25,7 +26,7 @@ public class AggregateRepositoryIntegrationTests
         var sp = new ServiceCollection()
                  .AddMongo(url, configure: options =>
                  {
-                     options.DefaultDatabase = $"RepoTestDb_{Guid.NewGuid():N}";
+                     options.DefaultDatabase = TestDatabases.NewName("RepoTestDb");
                      options.RunConfiguratorsOnStartup = false;
                  })
                  .WithEventStore<OrderAggregate>(es => es

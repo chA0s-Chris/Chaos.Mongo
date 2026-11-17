@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
@@ -149,7 +150,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ConsumeBatchAsync_RetroactiveSealing_DeliversSealedHead()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(databaseName, false);
         var context = await CreateInitializedContextAsync(databaseName, options => options.SealingChunkSize = 2);
         var aggregateId = await unprotected.AppendStreamAsync(5);
@@ -205,7 +206,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_AfterRestart_ReturnsOnlyUnacknowledgedCandidates()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateInitializedContextAsync(databaseName);
         var acknowledged = await context.AppendStreamAsync(1);
         await ConsumeUntilAsync(context.CreateConsumer(), consumed => consumed.Any(c => c.AggregateId == acknowledged));
@@ -224,7 +225,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_ConsecutiveReads_ContinueAndLastAcknowledgementCoversAll()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateInitializedContextAsync(databaseName);
         var first = await context.AppendStreamAsync(2);
         var second = await context.AppendStreamAsync(1);
@@ -247,7 +248,7 @@ public class AnchorCandidateSourceTests
     [Test]
     public async Task ReadBatchAsync_RestartAfterConsecutiveUnacknowledgedReads_DeliversThemAgain()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateInitializedContextAsync(databaseName);
         var first = await context.AppendStreamAsync(1);
         var second = await context.AppendStreamAsync(1);
@@ -269,14 +270,13 @@ public class AnchorCandidateSourceTests
         var before = DateTime.UtcNow.AddSeconds(-5);
         var aggregateId = await context.AppendStreamAsync(1);
 
-        // Reading well after the commit tells the commit time apart from the time of the read.
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        var readStart = DateTime.UtcNow;
+        // Reading in a later second than the commit tells the commit time apart from the time of the read.
+        var readSecond = await context.WaitForNextServerSecondAsync();
         var batch = await ReadUntilAsync(context.CandidateSource, read => read.Candidates.Any(c => c.AggregateId == aggregateId));
 
         var committed = batch.Candidates.Single(candidate => candidate.AggregateId == aggregateId).CommittedUtc;
         committed.Kind.Should().Be(DateTimeKind.Utc);
-        committed.Should().BeOnOrAfter(before).And.BeBefore(readStart.AddSeconds(-1));
+        committed.Should().BeOnOrAfter(before).And.BeBefore(readSecond);
     }
 
     [Test]
@@ -285,9 +285,10 @@ public class AnchorCandidateSourceTests
         var context = await CreateInitializedContextAsync();
         var aggregateId = await context.AppendStreamAsync(1);
         using var cancellation = new CancellationTokenSource();
+        using var observed = new AcknowledgementObservingCandidateSource(context.CandidateSource, aggregateId);
 
-        var loop = context.CreateConsumer().RunAsync(BatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token);
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        var loop = new AnchorCandidateConsumer(context.MongoHelper, observed).RunAsync(BatchSize, TimeSpan.FromMilliseconds(10), cancellation.Token);
+        await observed.Acknowledged.WaitAsync(TimeSpan.FromSeconds(30));
         await cancellation.CancelAsync();
         await loop;
 

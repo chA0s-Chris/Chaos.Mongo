@@ -18,15 +18,14 @@ internal partial class BuildPipeline
         target.DependsOn(Restore)
               .Executes(() =>
               {
-                  TestsDirectory.GlobFiles("**/*.csproj")
-                                .ForEach(testProject =>
-                                {
-                                    DotNetBuild(s => s
-                                                     .SetProjectFile(testProject)
-                                                     .SetConfiguration(TargetBuildConfiguration)
-                                                     .SetProcessAdditionalArguments("/nowarn:CS1591;CS1998;CS4014")
-                                                     .EnableNoRestore());
-                                });
+                  // One invocation over all test projects: per-project builds in sequence would re-evaluate the
+                  // shared library projects each time, and the solution would also build the benchmarks.
+                  DotNetBuild(s => s
+                                   .SetProjectFile(TestsSolutionFilter)
+                                   .SetConfiguration(TargetBuildConfiguration)
+                                   .SetFramework(TestFramework)
+                                   .SetProcessAdditionalArguments("/nowarn:CS1591;CS1998;CS4014")
+                                   .EnableNoRestore());
               });
 
     private Target Test => target =>
@@ -39,25 +38,34 @@ internal partial class BuildPipeline
                   CoverageDirectory.CreateOrCleanDirectory();
                   ArtifactsDirectory.GlobFiles(TestResultFiles.Pattern).ForEach(file => file.DeleteFile());
 
-                  // One run per test project and target framework. Nuke executes the combinations one after the
-                  // other, so two test hosts of a project never start their MongoDB containers at the same time.
+                  // One run per test project and target framework. The projects of one framework run concurrently,
+                  // the frameworks one after the other, so two test hosts of one project never start their MongoDB
+                  // containers at the same time: a trial that ran both frameworks of a project at once failed tests
+                  // with Docker's "container ... is not running".
                   var runs = (from project in TestsDirectory.GlobFiles("**/*.Tests.csproj")
-                              from framework in GetTargetFrameworks(project)
-                              let resultFile = ArtifactsDirectory / TestResultFiles.GetFileName(Path.GetFileNameWithoutExtension(project), framework)
+                              let projectName = Path.GetFileNameWithoutExtension(project)
+                              from framework in TestFrameworkSelection.Select(projectName, GetTargetFrameworks(project), TestFramework)
+                              let resultFile = ArtifactsDirectory / TestResultFiles.GetFileName(projectName, framework)
                               select (Project: project, Framework: framework, ResultFile: resultFile)).ToList();
 
-                  DotNetTest(s => s
-                                  .SetConfiguration(TargetBuildConfiguration)
-                                  .EnableNoBuild()
-                                  .EnableNoRestore()
-                                  .SetDataCollector("XPlat Code Coverage")
-                                  .SetSettingsFile(RootDirectory / "coverlet.xml")
-                                  .SetResultsDirectory(CoverageDirectory)
-                                  .CombineWith(
-                                      runs,
-                                      (settings, run) => settings.SetProjectFile(run.Project)
-                                                                 .SetFramework(run.Framework)
-                                                                 .SetLoggers($"junit;LogFilePath={run.ResultFile}")));
+                  foreach (var frameworkRuns in runs.GroupBy(run => run.Framework))
+                  {
+                      var batch = frameworkRuns.ToList();
+                      DotNetTest(s => s
+                                      .SetConfiguration(TargetBuildConfiguration)
+                                      .EnableNoBuild()
+                                      .EnableNoRestore()
+                                      .SetDataCollector("XPlat Code Coverage")
+                                      .SetSettingsFile(RootDirectory / "coverlet.xml")
+                                      .SetResultsDirectory(CoverageDirectory)
+                                      .CombineWith(
+                                          batch,
+                                          (settings, run) => settings.SetProjectFile(run.Project)
+                                                                     .SetFramework(run.Framework)
+                                                                     .SetLoggers($"junit;LogFilePath={run.ResultFile}")),
+                                 degreeOfParallelism: batch.Count,
+                                 completeOnFailure: true);
+                  }
 
                   DotNet($"coverage merge {CoverageDirectory}/**/coverage.cobertura.xml -f cobertura -o {MergedCoverageResultsFile}");
 

@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -42,7 +43,7 @@ public class ReconstructionIntegrationTests
         _serviceProvider = new ServiceCollection()
                            .AddMongo(url, configure: options =>
                            {
-                               options.DefaultDatabase = $"ReconstructionTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("ReconstructionTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithEventStore<OrderAggregate>(es =>

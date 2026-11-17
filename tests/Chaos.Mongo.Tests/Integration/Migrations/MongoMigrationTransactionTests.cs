@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Migrations;
 
 using Chaos.Mongo.Migrations;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,7 +22,7 @@ public class MongoMigrationTransactionTests
     public async Task RunMigrationsAsync_WithTransactionsDisabled_AppliesWithoutSession()
     {
         // Arrange
-        var databaseName = $"NoTransactionMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("NoTransactionMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
         SessionAwareMigration.Reset();
@@ -49,7 +50,7 @@ public class MongoMigrationTransactionTests
     public async Task RunMigrationsAsync_WithTransactionsEnabled_AppliesWithSession()
     {
         // Arrange
-        var databaseName = $"WithTransactionMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("WithTransactionMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
         SessionAwareMigration.Reset();

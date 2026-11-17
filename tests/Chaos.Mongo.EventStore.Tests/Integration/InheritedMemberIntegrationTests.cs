@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -33,7 +34,7 @@ public class InheritedMemberIntegrationTests
         _serviceProvider = new ServiceCollection()
                            .AddMongo(url, configure: options =>
                            {
-                               options.DefaultDatabase = $"InheritedMemberTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("InheritedMemberTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithEventStore<InheritedLedgerAggregate>(es => es.WithEvent<InheritedOwnerAssignedEvent>("OwnerAssigned")

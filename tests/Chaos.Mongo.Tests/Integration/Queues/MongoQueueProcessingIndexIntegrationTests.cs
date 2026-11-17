@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -33,7 +34,7 @@ public class MongoQueueProcessingIndexIntegrationTests
         // could have created independently that must survive: one sharing the same four keys but under its own
         // custom name with a different partial filter, one sharing the same four keys but with a unique option
         // the legacy definition never had, and one with an unrelated key shape entirely.
-        var uniqueDbName = $"QueueLegacyProcessingIndexTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLegacyProcessingIndexTest");
         const String collectionName = "processing-index-queue";
         const String unrelatedCustomNamedIndexName = "IX_App_OpenItems";
         const String unrelatedUniqueIndexName = "IX_App_UniqueShape";
@@ -124,7 +125,7 @@ public class MongoQueueProcessingIndexIntegrationTests
         // that inherited collation on every index, including ones that never requested one explicitly), then
         // pre-create the exact old, unnamed, four-key processing index without an explicit collation, so it
         // inherits the collection's default exactly as a pre-#243 release's index would have.
-        var uniqueDbName = $"QueueCollationLegacyIndexTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueCollationLegacyIndexTest");
         const String collectionName = "processing-index-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName, collectionName);
@@ -181,7 +182,7 @@ public class MongoQueueProcessingIndexIntegrationTests
         // soon-to-be-unique constraint. MongoDB's listIndexes reports prepareUnique on the index itself without
         // ever adding a "unique" key, so this is a distinct, server-recognized option the legacy definition
         // never had and must not be mistaken for the unmodified legacy index this library owns.
-        var uniqueDbName = $"QueuePrepareUniqueTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueuePrepareUniqueTest");
         const String collectionName = "processing-index-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName, collectionName);
@@ -253,7 +254,7 @@ public class MongoQueueProcessingIndexIntegrationTests
     public async Task StartSubscription_OnFreshCollection_CreatesExplicitlyNamedProcessingIndex()
     {
         // Arrange
-        var uniqueDbName = $"QueueFreshProcessingIndexTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueFreshProcessingIndexTest");
         const String collectionName = "processing-index-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName, collectionName);

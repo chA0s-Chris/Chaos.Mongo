@@ -42,7 +42,7 @@ public class BatchMetadataIntegrationTests
         _serviceProvider = new ServiceCollection()
                            .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
                            {
-                               options.DefaultDatabase = $"BatchMetadataTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("BatchMetadataTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithEventStore<BatchMetadataAggregate>(builder =>

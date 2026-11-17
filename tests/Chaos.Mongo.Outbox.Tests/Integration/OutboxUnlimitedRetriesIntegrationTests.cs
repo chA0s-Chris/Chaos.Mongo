@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
@@ -29,7 +30,7 @@ public class OutboxUnlimitedRetriesIntegrationTests
         // long, while still exercising the real exponential backoff schedule (ComputeNextAttemptUtc), which
         // only ever reschedules the next attempt and never terminalizes the message on its own.
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var databaseName = $"OutboxUnlimitedRetriesTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxUnlimitedRetriesTestDb");
         var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var publisher = new TestOutboxPublisher
         {

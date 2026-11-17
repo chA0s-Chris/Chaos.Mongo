@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,7 +34,7 @@ public class MongoQueueRetryIntegrationTests
         // invoking its handler, or incrementing AttemptCount beyond Int32.MaxValue + 1.
         var leaseTime = TimeSpan.FromMilliseconds(750);
         const String collectionName = "retry-queue-crash-boundary";
-        var uniqueDbName = $"QueueRetryCrashBoundaryTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueRetryCrashBoundaryTest");
         var firstHandler = new HangingPayloadHandler();
         var secondHandler = new HangingPayloadHandler();
 
@@ -98,7 +99,7 @@ public class MongoQueueRetryIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueRetryBoundaryTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueRetryBoundaryTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<RetryPayload>(queue => queue
                                                   .WithPayloadHandler(_ => handler)
@@ -157,7 +158,7 @@ public class MongoQueueRetryIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueRetryTerminalTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueRetryTerminalTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<RetryPayload>(queue => queue
                                                   .WithPayloadHandler(_ => handler)
@@ -210,7 +211,7 @@ public class MongoQueueRetryIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueNoRetryTerminalTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueNoRetryTerminalTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<RetryPayload>(queue => queue
                                                   .WithPayloadHandler(_ => handler)
@@ -264,7 +265,7 @@ public class MongoQueueRetryIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueResolutionFailureTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueResolutionFailureTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<RetryPayload>(queue => queue
                                                   .WithPayloadHandler<UnresolvablePayloadHandler>()

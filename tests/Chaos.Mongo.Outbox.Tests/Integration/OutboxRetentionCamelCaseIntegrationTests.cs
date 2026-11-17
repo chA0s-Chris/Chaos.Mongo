@@ -10,7 +10,6 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 using NUnit.Framework;
-using Testcontainers.MongoDb;
 
 /// <summary>
 /// Verifies that the outbox's processed/failed TTL retention still expires eligible messages, and leaves
@@ -18,13 +17,16 @@ using Testcontainers.MongoDb;
 /// is first used.
 /// </summary>
 [Category("Integration")]
+// Not parallel: the isolated case switches the shared server's TTL monitor off (ttlMonitorEnabled) for a while, which
+// would stop TTL deletions that fixtures running at the same time wait for.
+[NonParallelizable]
 public class OutboxRetentionCamelCaseIntegrationTests
 {
-    private MongoDbContainer _container;
+    private String _connectionString;
 
     [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-        => _container = await MongoDbTestContainer.StartContainerAsync();
+    public async Task GetConnectionString()
+        => _connectionString = await MongoDbTestContainer.GetConnectionStringAsync();
 
     [Test]
     [Explicit("Runs only via process isolation from " + nameof(Outbox_RetentionUnderCamelCaseConvention_StillFiltersAndDeletesCorrectly) +
@@ -45,8 +47,7 @@ public class OutboxRetentionCamelCaseIntegrationTests
             },
             type => type == typeof(OutboxMessage));
 
-        var container = await MongoDbTestContainer.StartContainerAsync();
-        var adminClient = new MongoClient(container.GetConnectionString());
+        var adminClient = new MongoClient(_connectionString);
         var adminDatabase = adminClient.GetDatabase("admin");
         await adminDatabase.RunCommandAsync<BsonDocument>(new BsonDocument
         {
@@ -54,9 +55,9 @@ public class OutboxRetentionCamelCaseIntegrationTests
             { "ttlMonitorEnabled", false }
         });
 
-        var databaseName = $"OutboxCamelCaseRetentionTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxCamelCaseRetentionTest");
         var services = new ServiceCollection();
-        var url = MongoUrl.Create(container.GetConnectionString());
+        var url = MongoUrl.Create(_connectionString);
         services.AddMongo(url, configure: options =>
                 {
                     options.DefaultDatabase = databaseName;
@@ -123,16 +124,11 @@ public class OutboxRetentionCamelCaseIntegrationTests
         var failedMatches = await rawCollection.Find(new BsonDocumentFilterDefinition<BsonDocument>(failedTtlFilter)).ToListAsync();
         failedMatches.Select(x => x["_id"].AsObjectId).Should().BeEquivalentTo([failedMessageId]);
 
-        // Act & Assert (actual expiry): only now re-enable the TTL monitor, with a short sleep interval, so the
-        // eventual deletion assertion below stays within a bounded wait without having been able to race the
-        // selection assertions above, which ran while the monitor was fully disabled. The processed and failed
+        // Act & Assert (actual expiry): only now re-enable the TTL monitor, which MongoDbTestContainer starts with a
+        // 1 s interval, so the eventual deletion assertion below stays within a bounded wait without having been
+        // able to race the selection assertions above, which ran while the monitor was fully disabled. The processed and failed
         // messages must eventually be deleted by TTL, while the pending message, seeded under the camelCase
         // convention's own element names, must remain untouched.
-        await adminDatabase.RunCommandAsync<BsonDocument>(new BsonDocument
-        {
-            { "setParameter", 1 },
-            { "ttlMonitorSleepSecs", 1 }
-        });
         await adminDatabase.RunCommandAsync<BsonDocument>(new BsonDocument
         {
             { "setParameter", 1 },
@@ -153,7 +149,17 @@ public class OutboxRetentionCamelCaseIntegrationTests
         // and irreversible, and every other test in this shared process may already have registered
         // OutboxMessage's class map under the default convention.
         var result = IsolatedConventionTestProcess.Run(
-            $"{typeof(OutboxRetentionCamelCaseIntegrationTests).FullName}.{nameof(Outbox_RetentionUnderCamelCaseConvention_IsolatedCase)}");
+            $"{typeof(OutboxRetentionCamelCaseIntegrationTests).FullName}.{nameof(Outbox_RetentionUnderCamelCaseConvention_IsolatedCase)}",
+            _connectionString);
+
+        // The isolated case disables the server-wide TTL monitor of this shared server for a while; a child that
+        // failed in between would leave it disabled for every later test.
+        await new MongoClient(_connectionString).GetDatabase("admin")
+                                                .RunCommandAsync<BsonDocument>(new BsonDocument
+                                                {
+                                                    { "setParameter", 1 },
+                                                    { "ttlMonitorEnabled", true }
+                                                });
 
         // Assert
         result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);

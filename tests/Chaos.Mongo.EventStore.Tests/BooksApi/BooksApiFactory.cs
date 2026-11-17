@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.BooksApi;
 
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.TestSupport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -22,7 +23,7 @@ public sealed class BooksApiFactory : WebApplicationFactory<BooksApiEntryPoint>
     public BooksApiFactory(String connectionString)
     {
         _connectionString = connectionString;
-        _databaseName = $"BooksApiTestDb_{Guid.NewGuid():N}";
+        _databaseName = TestDatabases.NewName("BooksApiTestDb");
     }
 
     public static String GetRepositoryRootPath()

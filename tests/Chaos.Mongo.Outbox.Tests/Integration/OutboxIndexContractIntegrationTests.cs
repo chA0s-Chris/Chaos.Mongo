@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -24,7 +25,7 @@ public class OutboxIndexContractIntegrationTests
     public async Task ConfigureAsync_CreatesOutboxIndexesWithExpectedContract()
     {
         // Arrange
-        var databaseName = $"OutboxIndexContract_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxIndexContract");
         var retentionPeriod = TimeSpan.FromMinutes(20);
 
         await using var serviceProvider = CreateServiceProvider(databaseName,
@@ -71,7 +72,7 @@ public class OutboxIndexContractIntegrationTests
     public async Task ConfigureAsync_WithExpireFailedMessages_CreatesFailedTtlIndexWithExpectedContract()
     {
         // Arrange
-        var databaseName = $"OutboxIndexExpireFailed_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxIndexExpireFailed");
         var retentionPeriod = TimeSpan.FromMinutes(20);
 
         await using var serviceProvider = CreateServiceProvider(databaseName,
@@ -105,7 +106,7 @@ public class OutboxIndexContractIntegrationTests
     public async Task ConfigureAsync_ProcessedAndFailedTtlFilters_SelectOnlyEligibleMessages()
     {
         // Arrange
-        var databaseName = $"OutboxTtlFilterSelection_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxTtlFilterSelection");
         await using var serviceProvider = CreateServiceProvider(databaseName,
                                                                 builder => builder.WithRetentionPeriod(TimeSpan.FromMinutes(20))
                                                                                   .WithExpireFailedMessages());
@@ -161,7 +162,7 @@ public class OutboxIndexContractIntegrationTests
     public async Task Processor_ProcessesEligibleMessagesInPollingIndexOrder()
     {
         // Arrange
-        var databaseName = $"OutboxPollingOrder_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxPollingOrder");
         const String collectionName = "Outbox";
         await using var serviceProvider = CreateServiceProvider(databaseName);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();

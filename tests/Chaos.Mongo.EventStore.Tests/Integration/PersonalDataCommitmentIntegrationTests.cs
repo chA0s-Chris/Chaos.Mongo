@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -300,7 +301,7 @@ public class PersonalDataCommitmentIntegrationTests
     [Test]
     public async Task VerifyStreamAsync_EventsSealedWithMarks_VerifyWithStoreWithoutMarks()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var marked = await CreateContextAsync(databaseName: databaseName);
         var unmarked = await CreateContextAsync(databaseName: databaseName, personalData: false);
         var aggregateId = await marked.AppendStreamAsync(2);
@@ -318,7 +319,7 @@ public class PersonalDataCommitmentIntegrationTests
     [Test]
     public async Task VerifyStreamAsync_EventsSealedWithoutMarks_UsesOnlyRecordedPaths()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unmarked = await CreateContextAsync(databaseName: databaseName, personalData: false);
         var marked = await CreateContextAsync(databaseName: databaseName);
         var aggregateId = await unmarked.AppendStreamAsync(2);
@@ -430,7 +431,7 @@ public class PersonalDataCommitmentIntegrationTests
 
     private async Task<(LedgerStoreContext Unprotected, LedgerStoreContext Sealing)> CreateSharedContextsAsync()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName: databaseName, personalData: false);
         var sealing = await CreateContextAsync(databaseName: databaseName);
         return (unprotected, sealing);

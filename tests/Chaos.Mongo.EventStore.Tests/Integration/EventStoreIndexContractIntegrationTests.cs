@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -23,7 +24,7 @@ public class EventStoreIndexContractIntegrationTests
     public async Task ConfigureAsync_CreatesNearestCheckpointLookupIndexes()
     {
         // Arrange
-        var databaseName = $"EventStoreIndexContract_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("EventStoreIndexContract");
         await using var serviceProvider = CreateServiceProvider(databaseName);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
         var checkpointCollection = helper.Database.GetCollection<BsonDocument>("Orders_Checkpoints");
@@ -55,7 +56,7 @@ public class EventStoreIndexContractIntegrationTests
     public async Task ConfigureAsync_CreatesUniqueAggregateVersionIndex()
     {
         // Arrange
-        var databaseName = $"EventStoreIndexContract_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("EventStoreIndexContract");
         await using var serviceProvider = CreateServiceProvider(databaseName);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
         var eventsCollection = helper.Database.GetCollection<BsonDocument>("Orders_Events");
@@ -82,7 +83,7 @@ public class EventStoreIndexContractIntegrationTests
     public async Task ConfigureAsync_WithoutCheckpoints_CreatesNoCheckpointCollection()
     {
         // Arrange
-        var databaseName = $"EventStoreIndexContract_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("EventStoreIndexContract");
         await using var serviceProvider = CreateServiceProvider(databaseName, 0);
         var helper = serviceProvider.GetRequiredService<IMongoHelper>();
 

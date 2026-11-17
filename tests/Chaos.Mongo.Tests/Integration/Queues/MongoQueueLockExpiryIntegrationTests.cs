@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,7 +34,7 @@ public class MongoQueueLockExpiryIntegrationTests
         // AttemptCount (2) that already exceeds MaxRetries (1), so it must terminalize atomically without
         // granting a lock or ever invoking its handler.
         var leaseTime = TimeSpan.FromMilliseconds(750);
-        var uniqueDbName = $"QueueLeaseExhaustionTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLeaseExhaustionTest");
         const String collectionName = "lease-queue";
 
         var firstHandler = new HangingPayloadHandler();
@@ -104,7 +105,7 @@ public class MongoQueueLockExpiryIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueLeaseRecoveryTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLeaseRecoveryTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<LeasePayload>(queue => queue
                                                   .WithPayloadHandler(_ => handler)
@@ -159,7 +160,7 @@ public class MongoQueueLockExpiryIntegrationTests
     {
         // Arrange
         var leaseTime = TimeSpan.FromMilliseconds(750);
-        var uniqueDbName = $"QueueLeaseOwnershipTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLeaseOwnershipTest");
         var collectionName = "lease-queue";
         var firstHandler = new BlockingPayloadHandler();
         var secondHandler = new BlockingPayloadHandler();
@@ -240,7 +241,7 @@ public class MongoQueueLockExpiryIntegrationTests
         services.AddNUnitTestLogging();
 
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"QueueLeaseIndexTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLeaseIndexTest");
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<LeasePayload>(queue => queue
                                                   .WithPayloadHandler(_ => handler)

@@ -23,6 +23,12 @@ using System.Reflection;
 public static class IsolatedConventionTestProcess
 {
     /// <summary>
+    /// The environment variable through which a parent test process hands its running MongoDB server to the child,
+    /// so the child connects to it instead of starting a container of its own.
+    /// </summary>
+    public const String MongoConnectionStringVariable = "CHAOSMONGO_TEST_MONGODB_CONNECTION_STRING";
+
+    /// <summary>
     /// Launches the calling assembly's test host in a child process, filtered to exactly
     /// <paramref name="fullyQualifiedTestName"/>, waits for it to exit, and returns its result.
     /// </summary>
@@ -30,8 +36,12 @@ public static class IsolatedConventionTestProcess
     /// The full name (namespace, type, and method) of the single <c>[Explicit]</c> test method to run in
     /// isolation.
     /// </param>
+    /// <param name="mongoConnectionString">
+    /// The connection string of the parent's MongoDB server, passed to the child through
+    /// <see cref="MongoConnectionStringVariable"/>; <c>null</c> for a test that needs no database.
+    /// </param>
     /// <returns>The child process's exit code together with its captured standard output and error streams.</returns>
-    public static IsolatedTestResult Run(String fullyQualifiedTestName)
+    public static IsolatedTestResult Run(String fullyQualifiedTestName, String? mongoConnectionString = null)
     {
         var assemblyPath = Assembly.GetExecutingAssembly().Location;
         var startInfo = new ProcessStartInfo("dotnet")
@@ -45,6 +55,10 @@ public static class IsolatedConventionTestProcess
         startInfo.ArgumentList.Add(assemblyPath);
         startInfo.ArgumentList.Add("--filter");
         startInfo.ArgumentList.Add($"FullyQualifiedName={fullyQualifiedTestName}");
+        if (mongoConnectionString is not null)
+        {
+            startInfo.Environment[MongoConnectionStringVariable] = mongoConnectionString;
+        }
 
         using var process = Process.Start(startInfo) ??
                             throw new InvalidOperationException("Failed to start the isolated test process.");

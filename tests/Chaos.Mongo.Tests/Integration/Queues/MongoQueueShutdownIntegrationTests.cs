@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Queues;
 
 using Chaos.Mongo.Queues;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,7 +27,7 @@ public class MongoQueueShutdownIntegrationTests
         // released immediately, the second subscription below would never observe it within its short timeout.
         var leaseTime = TimeSpan.FromSeconds(30);
         var firstHandler = new ShutdownAwarePayloadHandler();
-        var uniqueDbName = $"QueueShutdownReleaseTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueShutdownReleaseTest");
         const String collectionName = "shutdown-queue";
 
         await using var firstServiceProvider = CreateServiceProvider(uniqueDbName, collectionName, leaseTime, firstHandler);

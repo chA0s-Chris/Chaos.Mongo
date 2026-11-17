@@ -12,18 +12,17 @@ using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 using NUnit.Framework;
 using System.Linq.Expressions;
-using Testcontainers.MongoDb;
 using MongoDefaults = MongoDefaults;
 
 [Category("Integration")]
 public class MongoQueueRetentionIntegrationTests
 {
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
-    private MongoDbContainer _container;
+    private String _connectionString;
 
     [OneTimeSetUp]
-    public async Task GetMongoDbContainer()
-        => _container = await MongoDbTestContainer.StartContainerAsync();
+    public async Task GetConnectionString()
+        => _connectionString = await MongoDbTestContainer.GetConnectionStringAsync();
 
     [Test]
     [Explicit("Runs only via process isolation from " +
@@ -44,13 +43,12 @@ public class MongoQueueRetentionIntegrationTests
             },
             type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
 
-        var container = await MongoDbTestContainer.StartContainerAsync();
-        var uniqueDbName = $"QueueCamelCaseTtlFilterTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueCamelCaseTtlFilterTest");
         const String collectionName = "camelcase-retention-queue";
 
         var services = new ServiceCollection();
         services.AddNUnitTestLogging();
-        var url = MongoUrl.Create(container.GetConnectionString());
+        var url = MongoUrl.Create(_connectionString);
         services.AddMongo(url, uniqueDbName)
                 .WithQueue<RetentionPayload>(queue => queue.WithCollectionName(collectionName)
                                                            .WithPayloadHandler(_ => new PassivePayloadHandler())
@@ -77,7 +75,9 @@ public class MongoQueueRetentionIntegrationTests
         // whole point of this change, so a camelCase-registered host still writes (and must still match) exactly
         // these stored names, not renamed ones. An open, never-closed item is included as a retained control: the
         // partial filter requires IsClosed: true, so it must never be selected.
-        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        // ClosedUtc lies in the future: the filter only asks for a date, and the shared server runs its TTL monitor
+        // every second, so already expired items could be deleted before the filter is evaluated.
+        var closedUtc = DateTime.UtcNow.AddDays(1);
         var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
         await rawCollection.InsertManyAsync([
             new BsonDocument
@@ -130,7 +130,8 @@ public class MongoQueueRetentionIntegrationTests
         // and irreversible, and every other test in this shared process may already have registered
         // MongoQueueItem's class map under the default convention.
         var result = IsolatedConventionTestProcess.Run(
-            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase)}");
+            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_ClosedItemTtlFilterUnderCamelCaseConvention_IsolatedCase)}",
+            _connectionString);
 
         // Assert
         result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
@@ -142,7 +143,7 @@ public class MongoQueueRetentionIntegrationTests
         // Arrange: start (and then stop) the subscription only to let production code create the real TTL
         // index, so the filter asserted below is the exact partialFilterExpression the server stored, not a
         // hand-built approximation of it.
-        var uniqueDbName = $"QueueLegacyTerminalFilterTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueLegacyTerminalFilterTest");
         const String collectionName = "retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -167,7 +168,9 @@ public class MongoQueueRetentionIntegrationTests
         // Act: insert raw legacy documents (bypassing the typed model, which cannot represent a missing or
         // explicit-null IsTerminal for a non-nullable member) directly, with the subscription stopped so nothing
         // else touches this collection while the filter below is evaluated.
-        var closedUtc = DateTime.UtcNow.AddHours(-1);
+        // ClosedUtc lies in the future: the filter only asks for a date, and the shared server runs its TTL monitor
+        // every second, so already expired items could be deleted before the filter is evaluated.
+        var closedUtc = DateTime.UtcNow.AddDays(1);
         var rawCollection = helper.Database.GetCollection<BsonDocument>(collectionName);
         await rawCollection.InsertManyAsync([
             new BsonDocument
@@ -227,8 +230,8 @@ public class MongoQueueRetentionIntegrationTests
         // Arrange: register a global camelCase convention for the queue item types before anything in this fresh
         // process has used them, then start (and immediately stop) a subscription only to let production code
         // create the real TTL index under that convention, exactly as the filter-selection isolated case above
-        // does. The container's TTL monitor is sped up so the eventual deletion assertion below stays within a
-        // bounded wait.
+        // does. MongoDbTestContainer starts the server with a 1 s TTL monitor interval, so the eventual deletion
+        // assertion below stays within a bounded wait.
         ConventionRegistry.Register(
             nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase),
             new ConventionPack
@@ -237,16 +240,7 @@ public class MongoQueueRetentionIntegrationTests
             },
             type => type == typeof(MongoQueueItem) || type == typeof(MongoQueueItem<RetentionPayload>));
 
-        var container = await MongoDbTestContainer.StartContainerAsync();
-        var adminClient = new MongoClient(container.GetConnectionString());
-        await adminClient.GetDatabase("admin")
-                         .RunCommandAsync<BsonDocument>(new BsonDocument
-                         {
-                             { "setParameter", 1 },
-                             { "ttlMonitorSleepSecs", 1 }
-                         });
-
-        var uniqueDbName = $"QueueCamelCaseRetentionTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueCamelCaseRetentionTest");
         const String collectionName = "camelcase-retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -342,7 +336,8 @@ public class MongoQueueRetentionIntegrationTests
         // and irreversible, and every other test in this shared process may already have registered
         // MongoQueueItem's class map under the default convention.
         var result = IsolatedConventionTestProcess.Run(
-            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase)}");
+            $"{typeof(MongoQueueRetentionIntegrationTests).FullName}.{nameof(Queue_RetentionUnderCamelCaseConvention_IsolatedCase)}",
+            _connectionString);
 
         // Assert
         result.ExitCode.Should().Be(0, "the isolated camelCase case must pass; output:\n{0}\n{1}", result.StandardOutput, result.StandardError);
@@ -353,7 +348,7 @@ public class MongoQueueRetentionIntegrationTests
     {
         // Arrange
         var handler = new PassivePayloadHandler();
-        var uniqueDbName = $"QueueImmediateDeleteTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueImmediateDeleteTest");
         const String collectionName = "retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -396,7 +391,7 @@ public class MongoQueueRetentionIntegrationTests
     {
         // Arrange
         var handler = new PassivePayloadHandler();
-        var uniqueDbName = $"QueueDefaultRetentionTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueDefaultRetentionTest");
         const String collectionName = "retention-queue";
 
         await using var serviceProvider = CreateServiceProvider(uniqueDbName,
@@ -445,7 +440,7 @@ public class MongoQueueRetentionIntegrationTests
     public async Task StartSubscription_SameCollectionWithDifferentRetentionPolicies_ReconcilesTtlIndex()
     {
         // Arrange
-        var uniqueDbName = $"QueueRetentionPolicySwitchTest_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("QueueRetentionPolicySwitchTest");
         const String collectionName = "retention-queue";
 
         await using var firstServiceProvider = CreateServiceProvider(uniqueDbName,
@@ -619,7 +614,7 @@ public class MongoQueueRetentionIntegrationTests
         var services = new ServiceCollection();
         services.AddNUnitTestLogging();
 
-        var url = MongoUrl.Create(_container.GetConnectionString());
+        var url = MongoUrl.Create(_connectionString);
         services.AddMongo(url, databaseName)
                 .WithQueue<RetentionPayload>(queue =>
                 {

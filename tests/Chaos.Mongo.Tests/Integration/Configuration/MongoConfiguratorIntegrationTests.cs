@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Configuration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -25,7 +26,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task RunConfiguratorsAsync_WithCancellationToken_CancelsExecution()
     {
         // Arrange
-        var databaseName = $"CancellationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("CancellationTest");
         var connectionString = _container.GetConnectionString();
         ExecutionTracker.Reset();
 
@@ -58,7 +59,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task RunConfiguratorsAsync_WithManuallyRegisteredConfigurators_CreatesCollectionsAndIndexes()
     {
         // Arrange
-        var databaseName = $"ManualConfiguratorTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ManualConfiguratorTest");
         var connectionString = _container.GetConnectionString();
         ExecutionTracker.Reset();
 
@@ -107,7 +108,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task RunConfiguratorsAsync_WithMultipleConfigurators_ExecutesInRegistrationOrder()
     {
         // Arrange
-        var databaseName = $"ExecutionOrderTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ExecutionOrderTest");
         var connectionString = _container.GetConnectionString();
         ExecutionTracker.Reset();
 
@@ -139,7 +140,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task RunConfiguratorsAsync_WithNoRegisteredConfigurators_CompletesSuccessfully()
     {
         // Arrange
-        var databaseName = $"NoConfiguratorsTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("NoConfiguratorsTest");
         var connectionString = _container.GetConnectionString();
 
         var serviceProvider = new ServiceCollection()
@@ -161,7 +162,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task RunConfiguratorsAsync_WithScopedDependencies_ConfiguratorCanAccessScopedServices()
     {
         // Arrange
-        var databaseName = $"ScopedDepsTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ScopedDepsTest");
         var connectionString = _container.GetConnectionString();
         ExecutionTracker.Reset();
 
@@ -192,7 +193,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task StartAsync_WithManualRegistrationAndRunOnStartupEnabled_ConfiguratorsRunViaHostedService()
     {
         // Arrange
-        var databaseName = $"AutoRunTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("AutoRunTest");
         var connectionString = _container.GetConnectionString();
         ExecutionTracker.Reset();
 
@@ -259,7 +260,7 @@ public class MongoConfiguratorIntegrationTests
     public async Task StartAsync_WithManualRegistrationButRunOnStartupDisabled_ConfiguratorsDoNotRun()
     {
         // Arrange
-        var databaseName = $"NoAutoRunTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("NoAutoRunTest");
         var connectionString = _container.GetConnectionString();
         ExecutionTracker.Reset();
 

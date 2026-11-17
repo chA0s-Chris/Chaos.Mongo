@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -201,7 +202,7 @@ public class AnchoringRunTests
     public async Task RunAsync_CrashAfterPhase_NewRunnerCompletesWithoutLosingOrDuplicatingCandidates(String phaseName)
     {
         var phase = Enum.Parse<AnchoringPhase>(phaseName);
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var context = await CreateContextAsync(databaseName);
         var testAuthority = CreateTestAuthority();
         var streams = new[]
@@ -397,7 +398,9 @@ public class AnchoringRunTests
         await AssertVerifiableAsync(context, anchor);
         var resolved = await CreateResolver(context).ResolveAsync(anchor);
         resolved.Timestamps.Select(timestamp => timestamp.CertificateRevocationLists.Single())
-                .Should().BeEquivalentTo(testAuthorities.Select(testAuthority => testAuthority.Crl), options => options.WithStrictOrdering());
+                // Compared as byte sequences: a structural equivalency check walks the ~19 MB element by element for
+                // tens of seconds.
+                .Should().Equal(testAuthorities.Select(testAuthority => testAuthority.Crl), (actual, expected) => actual.AsSpan().SequenceEqual(expected));
     }
 
     [TestCase(nameof(AnchoringPhase.CandidatesRead))]

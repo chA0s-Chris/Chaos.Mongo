@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -87,7 +88,7 @@ public class OutboxMetricsIntegrationTests
     private IHost CreateHost(String destination, Boolean typed, IOutboxPublisher publisher, Int32? maxRetries = null)
         => new HostBuilder().ConfigureServices(services =>
         {
-            var mongoBuilder = services.AddMongo(_container.GetConnectionString(), $"OutboxMetrics_{Guid.NewGuid():N}", o =>
+            var mongoBuilder = services.AddMongo(_container.GetConnectionString(), TestDatabases.NewName("OutboxMetrics"), o =>
             {
                 o.RunConfiguratorsOnStartup = false;
                 o.ApplyMigrationsOnStartup = false;

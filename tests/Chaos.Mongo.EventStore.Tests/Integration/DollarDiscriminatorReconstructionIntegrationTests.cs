@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -37,7 +38,7 @@ public class DollarDiscriminatorReconstructionIntegrationTests
         _serviceProvider = new ServiceCollection()
                            .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
                            {
-                               options.DefaultDatabase = $"DollarDiscriminatorTestDb_{Guid.NewGuid():N}";
+                               options.DefaultDatabase = TestDatabases.NewName("DollarDiscriminatorTestDb");
                                options.RunConfiguratorsOnStartup = false;
                            })
                            .WithEventStore<DollarDiscriminatorAggregate>(builder =>

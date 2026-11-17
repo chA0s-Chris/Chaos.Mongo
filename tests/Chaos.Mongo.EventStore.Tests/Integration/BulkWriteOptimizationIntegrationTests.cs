@@ -29,7 +29,7 @@ public class BulkWriteOptimizationIntegrationTests
         var sp = new ServiceCollection()
                  .AddMongo(url, configure: options =>
                  {
-                     options.DefaultDatabase = $"EventStoreBulkWriteTestDb_{Guid.NewGuid():N}";
+                     options.DefaultDatabase = TestDatabases.NewName("EventStoreBulkWriteTestDb");
                      options.RunConfiguratorsOnStartup = false;
                  })
                  .WithEventStore<OrderAggregate>(es => es

@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Errors;
 using Chaos.Mongo.EventStore.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,9 @@ using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
+// Not parallel: AnchoringMetricsCollector listens to the process-wide integrity meter, so measurements of fixtures
+// running at the same time would end up in this fixture's assertions.
+[NonParallelizable]
 [Category("Integration")]
 public class IntegritySealingIntegrationTests
 {
@@ -123,7 +127,7 @@ public class IntegritySealingIntegrationTests
     public async Task HostedService_AfterStart_RunsPassImmediatelyAndAfterEachInterval()
     {
         var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(true, databaseName, timeProvider: timeProvider);
         var firstStream = await unprotected.AppendStreamAsync(2);
@@ -199,7 +203,7 @@ public class IntegritySealingIntegrationTests
     public async Task HostedService_PassLosesLock_ResumesAfterRetryDelay()
     {
         var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(true, databaseName, timeProvider: timeProvider);
 
@@ -304,7 +308,7 @@ public class IntegritySealingIntegrationTests
     {
         var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var logger = new CapturingLogger<EventStreamSealingSweep<LedgerAggregate>>();
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var context = await CreateContextAsync(true, databaseName, timeProvider: timeProvider,
                                                configureMongo: builder => builder.Services.AddSingleton<ILogger<EventStreamSealingSweep<LedgerAggregate>>>(logger));
@@ -391,7 +395,7 @@ public class IntegritySealingIntegrationTests
     public async Task RunPassAsync_LockLostWithinStream_KeepsCountsOfCommittedChunksAndCountsStreamOnce()
     {
         var timeProvider = new ClockHookTimeProvider();
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(true, databaseName, options => options.SealingChunkSize = 2, timeProvider);
         var aggregateId = await unprotected.AppendStreamAsync(5);
@@ -813,7 +817,7 @@ public class IntegritySealingIntegrationTests
         Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
         Action<MongoBuilder>? configureProtectedMongo = null)
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
         var protectedContext = await CreateContextAsync(true, databaseName, configureOptions, configureMongo: configureProtectedMongo);
         return (unprotected, protectedContext);

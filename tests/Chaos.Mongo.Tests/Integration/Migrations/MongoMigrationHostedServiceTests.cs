@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Tests.Integration.Migrations;
 
 using Chaos.Mongo.Migrations;
+using Chaos.Mongo.TestSupport;
 using Chaos.Testing.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,7 @@ public class MongoMigrationHostedServiceTests
     public async Task StartingAsync_WhenAnotherInstanceHoldsTheMigrationLock_ThrowsAndPreventsStartup()
     {
         // Arrange
-        var databaseName = $"BlockedStartupTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("BlockedStartupTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -70,7 +71,7 @@ public class MongoMigrationHostedServiceTests
     public async Task StartingAsync_WithApplyMigrationsOnStartupDisabled_MigrationsDoNotRun()
     {
         // Arrange
-        var databaseName = $"NoAutoRunMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("NoAutoRunMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 
@@ -122,7 +123,7 @@ public class MongoMigrationHostedServiceTests
     public async Task StartingAsync_WithApplyMigrationsOnStartupEnabled_MigrationsRunViaHostedService()
     {
         // Arrange
-        var databaseName = $"AutoRunMigrationTest_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("AutoRunMigrationTest");
         var connectionString = _container.GetConnectionString();
         MigrationTestTracker.Reset();
 

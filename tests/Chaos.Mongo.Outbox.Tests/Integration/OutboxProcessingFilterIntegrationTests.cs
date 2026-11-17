@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -26,7 +27,7 @@ public class OutboxProcessingFilterIntegrationTests
             }
         };
         var filter = Builders<OutboxMessage>.Filter.Eq(message => message.IsLocked, false);
-        await using var services = await CreateServicesAsync($"OutboxFilter_{Guid.NewGuid():N}", filter, publisher);
+        await using var services = await CreateServicesAsync(TestDatabases.NewName("OutboxFilter"), filter, publisher);
         var collection = Collection(services);
         var messages = Enumerable.Range(0, 2).Select(_ => new OutboxMessage
                                  {
@@ -87,7 +88,7 @@ public class OutboxProcessingFilterIntegrationTests
         var filter = Builders<OutboxMessage>.Filter.Eq(message => message.IsLocked, false);
         // "Failure" uses MaxRetries = 0 (one total attempt allowed under the unified meaning), so the single
         // failure below immediately exhausts it; a MaxRetries of 1 would allow a second attempt first.
-        await using var services = await CreateServicesAsync($"OutboxFilter_{Guid.NewGuid():N}", filter, publisher,
+        await using var services = await CreateServicesAsync(TestDatabases.NewName("OutboxFilter"), filter, publisher,
                                                              builder => builder.WithMaxRetries(outcome == "Failure" ? 0 : 3)
                                                                                .WithRetryBackoff(TimeSpan.FromHours(1), TimeSpan.FromHours(1)));
         var collection = Collection(services);
@@ -141,7 +142,7 @@ public class OutboxProcessingFilterIntegrationTests
         var filter = TypeFilter("Allowed") &
                      (filters.Eq(message => message.CorrelationId, "Selected") | filters.Eq(message => message.AttemptCount, 2));
         var publisher = new ProcessingFilterPublisher();
-        await using var services = await CreateServicesAsync($"OutboxFilter_{Guid.NewGuid():N}", filter, publisher);
+        await using var services = await CreateServicesAsync(TestDatabases.NewName("OutboxFilter"), filter, publisher);
         var collection = Collection(services);
         var now = DateTime.UtcNow;
         var excluded = new[]
@@ -247,7 +248,7 @@ public class OutboxProcessingFilterIntegrationTests
                 }
             }
         };
-        await using var services = await CreateServicesAsync($"OutboxFilter_{Guid.NewGuid():N}", TypeFilter("Allowed"), publisher);
+        await using var services = await CreateServicesAsync(TestDatabases.NewName("OutboxFilter"), TypeFilter("Allowed"), publisher);
         var collection = Collection(services);
         await collection.InsertManyAsync(messages);
         var processor = services.GetRequiredService<IOutboxProcessor>();
@@ -287,7 +288,7 @@ public class OutboxProcessingFilterIntegrationTests
     [Test]
     public async Task Processor_ExcludedBacklog_LeavesDocumentsUntouchedAndDeliversThemWithAnotherFilter()
     {
-        var databaseName = $"OutboxFilter_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("OutboxFilter");
         var publisher = new ProcessingFilterPublisher();
         await using var services = await CreateServicesAsync(databaseName, TypeFilter("Allowed"), publisher);
         var collection = Collection(services);

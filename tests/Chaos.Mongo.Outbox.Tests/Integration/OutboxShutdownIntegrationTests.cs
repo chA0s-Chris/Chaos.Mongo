@@ -3,6 +3,7 @@
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -67,7 +68,7 @@ public class OutboxShutdownIntegrationTests
         services.AddLogging();
         services.AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
                 {
-                    options.DefaultDatabase = $"OutboxShutdown_{Guid.NewGuid():N}";
+                    options.DefaultDatabase = TestDatabases.NewName("OutboxShutdown");
                     options.RunConfiguratorsOnStartup = false;
                 })
                 .WithOutbox(builder => builder

@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.EventStore.Integrity;
 using Chaos.Mongo.EventStore.Tests.Integrity;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -562,7 +563,7 @@ public class IntegrityVerificationIntegrationTests
     [Test]
     public async Task VerifyEventAnchorAsync_VerificationOnlyContainer_VerifiesAnchorsOfAnotherContainer()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var (anchoring, testAuthority) = await CreateAnchoredContextAsync(databaseName);
         var aggregateId = await anchoring.AppendStreamAsync(2);
         await anchoring.RunUntilAnchoredAsync(aggregateId, 2);
@@ -831,7 +832,7 @@ public class IntegrityVerificationIntegrationTests
     [Test]
     public async Task VerifyStreamAsync_RetroactivelySealedSuffix_ReportsSealModeTransition()
     {
-        var databaseName = $"IntegrityTestDb_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var protectedContext = await CreateContextAsync(databaseName: databaseName);
         var unprotected = await LedgerStoreContext.CreateAsync(_container, false, databaseName: databaseName);
         _contexts.Add(unprotected);

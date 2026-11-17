@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
@@ -23,7 +24,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "shared-holder", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
@@ -48,7 +49,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var helper1 = CreateMongoHelper(url, uniqueDbName, "holder-1", timeProvider);
         var helper2 = CreateMongoHelper(url, uniqueDbName, "holder-2", timeProvider);
@@ -78,7 +79,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var helper1 = CreateMongoHelper(url, uniqueDbName, "holder-1", timeProvider);
         var helper2 = CreateMongoHelper(url, uniqueDbName, "holder-2", timeProvider);
@@ -106,7 +107,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var serviceProvider = new ServiceCollection()
                               .AddMongo(url, configure: options =>
                               {
@@ -137,7 +138,7 @@ public class MongoHelperLockIntegrationTests
         // Arrange: the frozen clock makes both acquisitions below compute the exact same LeaseUntilUtc, so only
         // the per-acquisition token - not the expiry - can tell them apart.
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "shared-expiry-holder", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
@@ -169,7 +170,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var serviceProvider = new ServiceCollection()
                               .AddMongo(url, configure: options =>
                               {
@@ -200,7 +201,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var serviceProvider = new ServiceCollection()
                               .AddMongo(url, configure: options =>
                               {
@@ -235,7 +236,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -264,7 +265,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -294,7 +295,7 @@ public class MongoHelperLockIntegrationTests
         // Arrange: seed the exact shape written before AcquisitionToken existed, to prove documents left behind by
         // an older release still expire and can be taken over normally.
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "legacy-holder", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
@@ -333,7 +334,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -357,7 +358,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -389,7 +390,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var uniqueLockName = $"contended-lock-{Guid.NewGuid()}";
 
         var helper1 = new ServiceCollection()
@@ -431,7 +432,7 @@ public class MongoHelperLockIntegrationTests
         // new binaries is unsupported, because the stale token from the newer instance's acquisition survives
         // the older instance's takeover unchanged.
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         const String holder = "rollout-shared-holder";
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, holder, timeProvider);
@@ -469,7 +470,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -494,7 +495,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -519,7 +520,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -541,7 +542,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -563,7 +564,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "test-holder", new FakeTimeProvider());
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
 
@@ -580,7 +581,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var helper1 = CreateMongoHelper(url, uniqueDbName, "holder-1", timeProvider);
         var helper2 = CreateMongoHelper(url, uniqueDbName, "holder-2", timeProvider);
@@ -609,7 +610,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         const String lockName = "cancelled-renewal-lock";
         const String holder = "cancelled-renewal-holder";
@@ -660,7 +661,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "holder-1", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
@@ -688,7 +689,7 @@ public class MongoHelperLockIntegrationTests
         // Arrange: a renewal applied directly through the helper, bypassing lockInstance, stands in for a renewal
         // whose result the caller never observed - lockInstance's cached expiry stays at the pre-renewal value.
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "retry-holder", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
@@ -716,7 +717,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "shared-holder", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
@@ -747,7 +748,7 @@ public class MongoHelperLockIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"LockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("LockTestDb");
         var timeProvider = new FakeTimeProvider();
         var mongoHelper = CreateMongoHelper(url, uniqueDbName, "holder-1", timeProvider);
         var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");

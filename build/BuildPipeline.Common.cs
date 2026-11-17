@@ -54,5 +54,14 @@ internal partial class BuildPipeline
     [Parameter]
     private String TargetBuildConfiguration { get; set; } = "Release";
 
+    /// <summary>
+    /// Restricts BuildTests and Test to one target framework, for example <c>net10.0</c>. The CI matrix runs one
+    /// framework per job; without it, both targets cover every framework the test projects declare.
+    /// </summary>
+    [Parameter("Restricts BuildTests and Test to one target framework; all declared frameworks when omitted")]
+    private String? TestFramework { get; set; }
+
     private AbsolutePath TestsDirectory => RootDirectory / "tests";
+
+    private AbsolutePath TestsSolutionFilter => TestsDirectory / "Tests.slnf";
 }

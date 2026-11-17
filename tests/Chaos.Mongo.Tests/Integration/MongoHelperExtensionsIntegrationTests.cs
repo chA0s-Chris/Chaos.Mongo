@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -23,7 +24,7 @@ public class MongoHelperExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"AcquireLockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("AcquireLockTestDb");
         var uniqueLockName = $"retry-lock-{Guid.NewGuid()}";
 
         var helper1 = new ServiceCollection()
@@ -71,7 +72,7 @@ public class MongoHelperExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"AcquireLockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("AcquireLockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -95,7 +96,7 @@ public class MongoHelperExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"AcquireLockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("AcquireLockTestDb");
         var uniqueLockName = $"cancel-retry-lock-{Guid.NewGuid()}";
 
         var helper1 = new ServiceCollection()
@@ -139,7 +140,7 @@ public class MongoHelperExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"AcquireLockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("AcquireLockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -164,7 +165,7 @@ public class MongoHelperExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"AcquireLockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("AcquireLockTestDb");
         var uniqueLockName = $"custom-delay-lock-{Guid.NewGuid()}";
 
         var helper1 = new ServiceCollection()
@@ -195,7 +196,8 @@ public class MongoHelperExtensionsIntegrationTests
         // Start acquisition in background with custom delay
         var acquireTask = Task.Run(async () =>
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            // Long enough for more than two retries of 300 ms.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
             try
             {
                 await helper2.AcquireLockAsync(uniqueLockName, retryDelay: customDelay, cancellationToken: cts.Token);
@@ -222,7 +224,7 @@ public class MongoHelperExtensionsIntegrationTests
     {
         // Arrange
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"AcquireLockTestDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("AcquireLockTestDb");
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
                           {
@@ -243,7 +245,7 @@ public class MongoHelperExtensionsIntegrationTests
     public async Task ExecuteInTransaction_ShouldRetryOnTransientErrorAndEventuallyCommitChanges()
     {
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"ExecuteInTransactionDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("ExecuteInTransactionDb");
 
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>
@@ -319,7 +321,7 @@ public class MongoHelperExtensionsIntegrationTests
     public async Task ExecuteInTransaction_ShouldStopOnApplicationErrorAndRollbackChanges()
     {
         var url = MongoUrl.Create(_container.GetConnectionString());
-        var uniqueDbName = $"ExecuteInTransactionDb_{Guid.NewGuid():N}";
+        var uniqueDbName = TestDatabases.NewName("ExecuteInTransactionDb");
 
         var mongoHelper = new ServiceCollection()
                           .AddMongo(url, configure: options =>

@@ -6,5 +6,6 @@
     <Compile Include="../../build/PublicKeyTokenCheck.cs" Link="PublicKeyTokenCheck.cs" />
     <Compile Include="../../build/CoverageThresholds.cs" Link="CoverageThresholds.cs" />
     <Compile Include="../../build/TestResultFiles.cs" Link="TestResultFiles.cs" />
+    <Compile Include="../../build/TestFrameworkSelection.cs" Link="TestFrameworkSelection.cs" />
   </ItemGroup>
 </Project>

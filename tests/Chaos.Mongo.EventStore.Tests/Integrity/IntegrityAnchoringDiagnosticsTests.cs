@@ -7,6 +7,9 @@ using Chaos.Mongo.EventStore.Tests.Integration;
 using FluentAssertions;
 using NUnit.Framework;
 
+// Not parallel: AnchoringMetricsCollector listens to the process-wide integrity meter, so measurements of fixtures
+// running at the same time would end up in this fixture's assertions.
+[NonParallelizable]
 public class IntegrityAnchoringDiagnosticsTests
 {
     [Test]

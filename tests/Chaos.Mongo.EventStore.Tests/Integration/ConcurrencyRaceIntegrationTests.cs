@@ -4,6 +4,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 
 using Chaos.Mongo.Configuration;
 using Chaos.Mongo.EventStore.Errors;
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -36,7 +37,7 @@ public class ConcurrencyRaceIntegrationTests
     [Test]
     public async Task AppendEventsAsync_ConcurrentAppendsAtSameVersion_ExactlyOneSucceedsPerRound()
     {
-        var databaseName = $"ConcurrencyRace_{Guid.NewGuid():N}";
+        var databaseName = TestDatabases.NewName("ConcurrencyRace");
         await using var serviceProvider = new ServiceCollection()
                                           .AddLogging()
                                           .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>

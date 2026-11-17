@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.OrdersApi;
 
+using Chaos.Mongo.TestSupport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -22,7 +23,7 @@ public sealed class OrdersApiFactory : WebApplicationFactory<OrdersApiEntryPoint
     public OrdersApiFactory(String connectionString)
     {
         _connectionString = connectionString;
-        _databaseName = $"OrdersApiTestDb_{Guid.NewGuid():N}";
+        _databaseName = TestDatabases.NewName("OrdersApiTestDb");
     }
 
     public static String GetRepositoryRootPath()

@@ -613,7 +613,7 @@ public class StoreAssignedAppendIntegrationTests
         var serviceProvider = new ServiceCollection()
                               .AddMongo(MongoUrl.Create(_container.GetConnectionString()), configure: options =>
                               {
-                                  options.DefaultDatabase = $"StoreAssignedRetryTestDb_{Guid.NewGuid():N}";
+                                  options.DefaultDatabase = TestDatabases.NewName("StoreAssignedRetryTestDb");
                                   options.RunConfiguratorsOnStartup = false;
                               })
                               .WithEventStore<BatchMetadataAggregate>(builder =>

@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests.Integration;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -98,7 +99,7 @@ public class TypedOutboxIntegrationTests
         var invocations = 0;
         var mongoBuilder = new ServiceCollection()
                            .AddLogging()
-                           .AddMongo(_container.GetConnectionString(), $"TypedOutboxFactory_{Guid.NewGuid():N}", o =>
+                           .AddMongo(_container.GetConnectionString(), TestDatabases.NewName("TypedOutboxFactory"), o =>
                            {
                                o.RunConfiguratorsOnStartup = false;
                                o.ApplyMigrationsOnStartup = false;
@@ -148,7 +149,7 @@ public class TypedOutboxIntegrationTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(hub);
-        services.AddMongo(_container.GetConnectionString(), $"TypedOutboxAsyncOnly_{Guid.NewGuid():N}", o =>
+        services.AddMongo(_container.GetConnectionString(), TestDatabases.NewName("TypedOutboxAsyncOnly"), o =>
                 {
                     o.RunConfiguratorsOnStartup = false;
                     o.ApplyMigrationsOnStartup = false;
@@ -475,7 +476,7 @@ public class TypedOutboxIntegrationTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<TypedPublicationHub>();
-        services.AddMongo(_container.GetConnectionString(), $"TypedOutbox_{Guid.NewGuid():N}", o =>
+        services.AddMongo(_container.GetConnectionString(), TestDatabases.NewName("TypedOutbox"), o =>
                 {
                     o.RunConfiguratorsOnStartup = false;
                     o.ApplyMigrationsOnStartup = false;
