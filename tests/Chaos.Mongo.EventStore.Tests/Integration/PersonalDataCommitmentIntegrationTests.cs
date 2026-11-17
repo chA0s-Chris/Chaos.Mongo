@@ -167,7 +167,7 @@ public class PersonalDataCommitmentIntegrationTests
     }
 
     [Test]
-    public async Task RunPassAsync_UnknownDiscriminator_SealsWithoutCommitments()
+    public async Task RunPassAsync_UnknownDiscriminator_LeavesTheEventUnsealed()
     {
         var (unprotected, sealing) = await CreateSharedContextsAsync();
         var aggregateId = await unprotected.AppendStreamAsync(1);
@@ -177,10 +177,15 @@ public class PersonalDataCommitmentIntegrationTests
 
         await sealing.Sweep.RunPassAsync();
 
+        // Sealed without a commitment, the event's personal data could never be erased again without breaking the
+        // chain, so an event whose marks cannot be determined is not sealed at all.
         var stored = await sealing.FindEventAsync(aggregateId, 1);
-        stored[EventIntegrityChain.ElementName].AsBsonDocument.Contains("PersonalData").Should().BeFalse();
-        LedgerStoreContext.ReadIntegrity(stored).SealMode.Should().Be(IntegritySealMode.Retroactive);
-        (await sealing.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
+        stored.Contains(EventIntegrityChain.ElementName).Should().BeFalse();
+        (await sealing.CreateVerifier().VerifyStreamAsync(aggregateId))
+            .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.NotSealed));
+        var status = await sealing.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.StreamsFailed.Should().Be(1);
     }
 
     [Test]

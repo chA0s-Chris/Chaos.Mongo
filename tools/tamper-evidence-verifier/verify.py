@@ -1888,14 +1888,24 @@ def verify_raw_signature(signed_data, signature_algorithm, signature, public_key
     OpenSSL 1.1.1 does not have. RSA PKCS #1 v1.5 additionally needs `-pkeyopt digest:<name>` so pkeyutl knows which
     DigestInfo to wrap the bare digest in before verifying: manually pre-wrapping it instead (and omitting that
     option) makes pkeyutl guess the digest from the input's length, which only coincidentally matches SHA-256's
-    32-byte digest and rejects SHA-384/512 as an oversized hash. RSASSA-PSS and ECDSA sign the bare digest directly."""
+    32-byte digest and rejects SHA-384/512 as an oversized hash. RSASSA-PSS and ECDSA sign the bare digest directly.
+
+    This is also the policy for chain certificates (whole_chain_validates applies it to every link of a path): only
+    these algorithms with SHA-256, SHA-384 or SHA-512, parameters that are NULL or absent for RSA PKCS #1 v1.5 and
+    absent for ECDSA, and an issuer key of at least 2048 bits for RSA or 256 bits for ECDSA, so a certificate signed
+    with SHA-1 or under a smaller key fails whatever `openssl verify` would accept."""
     _, alg_start, alg_end = der_single(signature_algorithm)
     algorithm = der_children(signature_algorithm, alg_start, alg_end)
     oid = der_oid(signature_algorithm, algorithm[0])
+    parameters = [signature_algorithm[part[3]:part[4]] for part in algorithm[1:]]
     if oid in _RSA_PKCS1_DIGESTS:
+        if parameters not in ([], [DER_NULL]):
+            return False
         digest = _RSA_PKCS1_DIGESTS[oid]
         padding = ["-pkeyopt", "rsa_padding_mode:pkcs1", "-pkeyopt", f"digest:{digest}"]
     elif oid in _ECDSA_DIGESTS:
+        if parameters:
+            return False
         digest, padding = _ECDSA_DIGESTS[oid], []
     elif oid == OID_RSASSA_PSS and len(algorithm) == 2:
         hash_oid = pss_hash(signature_algorithm, algorithm[1])

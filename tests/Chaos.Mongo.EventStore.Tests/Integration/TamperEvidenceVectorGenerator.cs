@@ -32,6 +32,17 @@ public class TamperEvidenceVectorGenerator
     public static readonly Guid RetroactiveStream = Guid.Parse("0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e03");
     public static readonly Guid SharedIdentifierStream = Guid.Parse("0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e07");
     public static readonly Guid TamperedStream = Guid.Parse("0f5a9c2e-6b1d-4c3a-9e2f-1a2b3c4d5e04");
+
+    /// <summary>
+    /// The name of the element the specification does not list.
+    /// </summary>
+    public const String UnknownElementName = "Note";
+
+    /// <summary>
+    /// The authority of the anchor whose documents carry elements the specification does not list.
+    /// </summary>
+    public const String UnknownElementsAuthority = "unknown-elements-tsa";
+
     private static readonly DateTime CreatedUtc = new(2026, 10, 1, 8, 0, 0, DateTimeKind.Utc);
     private MongoDbContainer _container;
     private TestTimestampAuthority _testAuthority;
@@ -129,6 +140,40 @@ public class TamperEvidenceVectorGenerator
         await File.WriteAllTextAsync(Path.Combine(directory, "anchors.json"), Serialize(anchors));
         await File.WriteAllTextAsync(Path.Combine(directory, "merkle.json"), Serialize(TamperEvidenceVectorTests.BuildMerkleVectors()));
         await File.WriteAllTextAsync(Path.Combine(directory, "evidence-chunked.json"), Serialize(TamperEvidenceVectorTests.BuildChunkedEvidenceVector()));
+    }
+
+    /// <summary>
+    /// Adds an element the specification does not list to the newest anchor document, to its first timestamp entry,
+    /// to an entry of its failed authority requests and to its leaf documents.
+    /// </summary>
+    private static async Task AddUnknownElementsToLatestAnchorAsync(LedgerStoreContext context)
+    {
+        var store = context.ServiceProvider.GetRequiredService<AnchorVerifier>().Store;
+        var latest = await store.FindLatestCommittedAsync(CancellationToken.None) ??
+                     throw new InvalidOperationException("There is no anchor to add unknown elements to.");
+        var anchorId = new BsonBinaryData(latest.Id, GuidRepresentation.Standard);
+        var unknown = new BsonDocument
+        {
+            { "Text", "ignored" },
+            { "Nested", new BsonDocument("Number", 1) }
+        };
+        var failures = new BsonArray
+        {
+            new BsonDocument
+            {
+                { "Authority", "unreachable-tsa" },
+                { "FailureCount", 1 },
+                { "LastFailure", "The authority did not answer." },
+                { "LastFailureUtc", new BsonDateTime(CreatedUtc) },
+                { UnknownElementName, unknown }
+            }
+        };
+        await store.Anchors.UpdateOneAsync(new BsonDocument("_id", anchorId),
+                                           Builders<BsonDocument>.Update
+                                                                 .Set(UnknownElementName, unknown)
+                                                                 .Set($"Timestamps.0.{UnknownElementName}", unknown)
+                                                                 .Set("AuthorityFailures", failures));
+        await store.Leaves.UpdateManyAsync(new BsonDocument("AnchorId", anchorId), Builders<BsonDocument>.Update.Set(UnknownElementName, unknown));
     }
 
     /// <summary>
@@ -599,6 +644,29 @@ public class TamperEvidenceVectorGenerator
         await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildBothSiblingsEmbeddedNonUniqueRejected);
         await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildThreeSharedKeySiblingsEachConstraintIneligibleAccepted);
         await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildSameRootSiblingNonUniqueRejected);
+
+        // The policy for chain certificates: a certificate signature with SHA-1 and an issuer key below the minimum
+        // are rejected on a path, while the self-signature of a configured trusted root is not part of the policy.
+        await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildWeakIntermediateSignatureRejected);
+        await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildUndersizedIntermediateKeyRejected);
+        await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildSha1SelfSignedRootAccepted);
+
+        // Unknown elements in an anchor document, in its timestamp and failed-authority entries and in its leaf
+        // document are ignored: the anchor, its token and its leaf set verify as if they were not there.
+        var unknownElements = new ChainedTimestampAuthority(UnknownElementsAuthority, subjectPrefix: "Chaos.Mongo Unknown-Elements Vector");
+        await AddScenarioAsync(UnknownElementsAuthority,
+                               [unknownElements.Root],
+                               async digest =>
+                               {
+                                   var token = await unknownElements.TimestampAsync(digest, HashAlgorithmName.SHA256, CancellationToken.None);
+                                   return new SyntheticTimestamp(UnknownElementsAuthority, token.Token, token.CertificateChain, null,
+                                                                 TimestampRevocationStatus.NoRevocationSource, token.TimestampUtc);
+                               });
+        await AddUnknownElementsToLatestAnchorAsync(context);
+
+        // Also the policy for chain certificates, added after the anchors above so their sequence numbers stay: an
+        // ECDSA signature algorithm identifier that carries parameters is rejected although its signature verifies.
+        await AddTrustPathScenarioAsync(TrustPathVectorFixtures.BuildSignatureParametersRejected);
 
         return rootFiles;
     }

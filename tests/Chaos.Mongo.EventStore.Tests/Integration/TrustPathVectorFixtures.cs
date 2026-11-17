@@ -177,6 +177,18 @@ internal static class TrustPathVectorFixtures
                             DateTimeOffset.UtcNow, [signer, intermediate, root], [root]);
     }
 
+    /// <summary>
+    /// A trusted root whose self-signature uses SHA-1, with a path below it that follows the chain policy: accepted,
+    /// because a configured trusted root is accepted as configured and its own signature is not part of the policy.
+    /// </summary>
+    internal static Scenario BuildSha1SelfSignedRootAccepted()
+    {
+        var (root, rootKey) = TrustedChainValidationTests.CreateRootSelfSignedWithSha1("CN=Chaos.Mongo Vector SHA-1 Root");
+        var (intermediate, intermediateKey) = TrustedChainValidationTests.CreateIntermediate("CN=Chaos.Mongo Vector SHA-1 Root Intermediate", root, rootKey);
+        var signer = TrustedChainValidationTests.CreateSigner("CN=Chaos.Mongo Vector SHA-1 Root Signer", intermediate, intermediateKey);
+        return new Scenario("trust-sha1-self-signed-root-accepted", signer, [], DateTimeOffset.UtcNow, [signer, intermediate, root], [root]);
+    }
+
     internal static Scenario BuildSharedKeySiblingIneligibleAlternateAccepted()
     {
         var (rootA, rootAKey) = TrustedChainValidationTests.CreateRoot("CN=Chaos.Mongo Vector Ineligible Sibling Root A");
@@ -196,6 +208,21 @@ internal static class TrustPathVectorFixtures
         var intermediateB = TrustedChainValidationTests.CreateCrossSigned(intermediateA, rootB, rootBKey);
         var signer = TrustedChainValidationTests.CreateSigner("CN=Chaos.Mongo Vector Sibling Signer", intermediateA, intermediateKey);
         return new Scenario("trust-shared-key-sibling-non-unique-rejected", signer, [intermediateB], DateTimeOffset.UtcNow, [signer, intermediateA, rootA], [rootA, rootB]);
+    }
+
+    /// <summary>
+    /// An intermediate whose <c>ecdsa-with-SHA256</c> signature algorithm identifier carries <c>NULL</c> parameters.
+    /// The signature itself verifies, so only the rule that an ECDSA identifier has no parameters rejects the link.
+    /// </summary>
+    internal static Scenario BuildSignatureParametersRejected()
+    {
+        var (root, rootKey) = TrustedChainValidationTests.CreateRoot("CN=Chaos.Mongo Vector Signature Parameters Root");
+        var (intermediate, intermediateKey) = TrustedChainValidationTests.CreateIntermediateSignedWithNullParameters(
+            "CN=Chaos.Mongo Vector Signature Parameters Intermediate",
+            root,
+            rootKey);
+        var signer = TrustedChainValidationTests.CreateSigner("CN=Chaos.Mongo Vector Signature Parameters Signer", intermediate, intermediateKey);
+        return new Scenario("trust-signature-parameters-rejected", signer, [], DateTimeOffset.UtcNow, [signer, intermediate, root], [root]);
     }
 
     internal static Scenario BuildSubstitutedRootRejected()
@@ -264,6 +291,23 @@ internal static class TrustPathVectorFixtures
                             [signer, inner, outer, rootA], [rootA, rootB]);
     }
 
+    /// <summary>
+    /// An upper intermediate holding a 1024-bit RSA key, so the intermediate below it is issued under a key below the
+    /// chain policy's minimum: rejected, although every signature of the path is genuine and uses SHA-256.
+    /// </summary>
+    internal static Scenario BuildUndersizedIntermediateKeyRejected()
+    {
+        var (root, rootKey) = TrustedChainValidationTests.CreateRoot("CN=Chaos.Mongo Vector Undersized Key Root");
+        var (upper, upperKey) = TrustedChainValidationTests.CreateIntermediateWithRsaKey("CN=Chaos.Mongo Vector Undersized Key Upper Intermediate",
+                                                                                         root,
+                                                                                         rootKey,
+                                                                                         1024,
+                                                                                         pathLengthConstraint: 1);
+        var (lower, lowerKey) = TrustedChainValidationTests.CreateIntermediateIssuedByRsaKey("CN=Chaos.Mongo Vector Undersized Key Lower Intermediate", upper, upperKey);
+        var signer = TrustedChainValidationTests.CreateSigner("CN=Chaos.Mongo Vector Undersized Key Signer", lower, lowerKey);
+        return new Scenario("trust-undersized-intermediate-key-rejected", signer, [], DateTimeOffset.UtcNow, [signer, lower, upper, root], [root]);
+    }
+
     internal static Scenario BuildValidOnlyAtTokenTimeAccepted()
     {
         var now = DateTimeOffset.UtcNow;
@@ -272,6 +316,20 @@ internal static class TrustPathVectorFixtures
         var (root, rootKey) = TrustedChainValidationTests.CreateRoot("CN=Chaos.Mongo Vector Time Window Root", notBefore: now.AddDays(-90), notAfter: now.AddDays(10));
         var signer = TrustedChainValidationTests.CreateSigner("CN=Chaos.Mongo Vector Time Window Signer", root, rootKey, validFrom, validUntil);
         return new Scenario("trust-valid-only-at-token-time-accepted", signer, [], now.AddDays(-45), [signer, root], [root]);
+    }
+
+    /// <summary>
+    /// An intermediate whose certificate carries a genuine ECDSA signature with SHA-1: rejected by the chain policy,
+    /// whatever the verifier's X.509 implementation would accept.
+    /// </summary>
+    internal static Scenario BuildWeakIntermediateSignatureRejected()
+    {
+        var (root, rootKey) = TrustedChainValidationTests.CreateRoot("CN=Chaos.Mongo Vector Weak Signature Root");
+        var (intermediate, intermediateKey) = TrustedChainValidationTests.CreateIntermediateSignedWithSha1("CN=Chaos.Mongo Vector Weak Signature Intermediate",
+                                                                                                           root,
+                                                                                                           rootKey);
+        var signer = TrustedChainValidationTests.CreateSigner("CN=Chaos.Mongo Vector Weak Signature Signer", intermediate, intermediateKey);
+        return new Scenario("trust-weak-intermediate-signature-rejected", signer, [], DateTimeOffset.UtcNow, [signer, intermediate, root], [root]);
     }
 
     /// <summary>

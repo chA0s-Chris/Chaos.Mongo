@@ -10,13 +10,16 @@ using System.Security.Cryptography.X509Certificates;
 /// Verifies a DER-encoded signed value's signature against a candidate signer's public key, without building or
 /// validating a certificate chain. Used both for CRLs (<see cref="CertificateRevocationListSignature"/>) and to test
 /// direct cryptographic issuer adjacency between two certificates (<see cref="TimestampTokenValidation"/>'s path
-/// search for <see cref="TimestampAuthorityTrust"/>), so neither carries the final-target-dependent semantics a full
-/// chain validation call would.
+/// search for <see cref="TimestampAuthorityTrust"/> and its link policy,
+/// <see cref="TimestampTokenValidation.FollowsLinkPolicy"/>), so neither carries the final-target-dependent
+/// semantics a full chain validation call would.
 /// </summary>
 /// <remarks>
 /// The accepted algorithms follow the policy for timestamp tokens: RSA with PKCS #1 v1.5 or PSS padding and ECDSA,
 /// each with SHA-256, SHA-384 or SHA-512, and keys of at least 2048 bits for RSA and 256 bits for ECDSA. MD5 and
-/// SHA-1 are rejected.
+/// SHA-1 are rejected. The same policy therefore applies to tokens, CRLs and every certificate of a token's chain.
+/// Not covered here: the self-signature of a configured trusted root, which is accepted as configured, and any
+/// algorithm beyond these, such as EdDSA.
 /// </remarks>
 internal static class DirectSignatureVerification
 {

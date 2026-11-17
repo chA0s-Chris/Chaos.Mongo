@@ -62,6 +62,21 @@
     ],
     "trust-shared-key-sibling-non-unique-rejected-same-root": [
       "trust-shared-key-sibling-non-unique-rejected-same-root.pem"
+    ],
+    "trust-weak-intermediate-signature-rejected": [
+      "trust-weak-intermediate-signature-rejected.pem"
+    ],
+    "trust-undersized-intermediate-key-rejected": [
+      "trust-undersized-intermediate-key-rejected.pem"
+    ],
+    "trust-sha1-self-signed-root-accepted": [
+      "trust-sha1-self-signed-root-accepted.pem"
+    ],
+    "unknown-elements-tsa": [
+      "unknown-elements-tsa.pem"
+    ],
+    "trust-signature-parameters-rejected": [
+      "trust-signature-parameters-rejected.pem"
     ]
   },
   "graceHours": 24,
@@ -69,12 +84,12 @@
     "intact": true,
     "firstBrokenSequence": null,
     "failure": null,
-    "anchorCount": 25
+    "anchorCount": 30
   },
   "anchors": [
     {
       "sequence": 1,
-      "digest": "e19c081b9383e570e43149f8da5074c70794d281409c4b46b48f18d2099f965f",
+      "digest": "2bd7e3e8bdc751d02177521328b8518756ba6a4872df1c5cea225468a31c62bc",
       "timestamps": [
         [
           true,
@@ -84,7 +99,7 @@
     },
     {
       "sequence": 2,
-      "digest": "0ff15d30663d6f4665add39bc679b5c03f47eb6eab5b0b1ed7042db528964ec8",
+      "digest": "034589c21fe6d1fc365dd6addc5e56e606552db8eee589ec9693a94d48fb0731",
       "timestamps": [
         [
           true,
@@ -94,7 +109,7 @@
     },
     {
       "sequence": 3,
-      "digest": "9fba3bfeb1f482865cce2337fa793ec86afc40ec4c3eb1bb9e22246505d18627",
+      "digest": "f48c329e84c5b1dab388148200c7c1c522b89b206876239d55bb1bd8b614ac8c",
       "timestamps": [
         [
           true,
@@ -104,7 +119,7 @@
     },
     {
       "sequence": 4,
-      "digest": "5b4d2e00eced558bbd10c8260d6ce163c0b7672b0aa58a98b1ffb9b8a0113769",
+      "digest": "88b455bcff20507aeb6f4fb78a32d3969b667260cddc3c537f1f1c2589c8ab77",
       "timestamps": [
         [
           false,
@@ -114,7 +129,7 @@
     },
     {
       "sequence": 5,
-      "digest": "49b585d070286b5a664f7464b84fa0a164daf74eca57b705123b08f7ba476c75",
+      "digest": "e9131f5a81c60343df94d21d23ba22a3d9b052d2736a302cbf82e2d541f152ed",
       "timestamps": [
         [
           true,
@@ -124,7 +139,7 @@
     },
     {
       "sequence": 6,
-      "digest": "ff8d3c9649b0aec7cd1bcf240c07b615f541232dc4c8ac03a05c886caa72deca",
+      "digest": "397f3c1c59f6fc04f6d8aaa3500952668259fb0986bbb8d4e23dc1eac2aba3b1",
       "timestamps": [
         [
           true,
@@ -134,7 +149,7 @@
     },
     {
       "sequence": 7,
-      "digest": "fea2e0b7b7ba79dfc89f26baa3102daa13ea53d6fd6ce8dd4c865dccc6e6ef4d",
+      "digest": "8c467e65ef9782a2ce3815ad3ec5a4a568f46c762e6669d60ddfcbc83eccff6f",
       "timestamps": [
         [
           true,
@@ -144,7 +159,7 @@
     },
     {
       "sequence": 8,
-      "digest": "10d4849e1f506e67ecaa7dd75b1a7ef27081d07015810e188b62a089eecd4522",
+      "digest": "2f63149e0e2118f139d03a7deca45f32b61316b7aaed5a3baff0fec5d03dfad4",
       "timestamps": [
         [
           false,
@@ -154,7 +169,7 @@
     },
     {
       "sequence": 9,
-      "digest": "7c84e4b8ac9ca361119268b373e560715c96e10df2a12f4515a4b6e7952aeb52",
+      "digest": "2d04f9bf88573c62d128831d1ff07dbb061ff712ddb707c88029313d74dc26c8",
       "timestamps": [
         [
           true,
@@ -164,7 +179,7 @@
     },
     {
       "sequence": 10,
-      "digest": "c8cb3d02ebeb3541bc63fe864cd6f414c548e7cea286a99b6a90f2f9f9afb6d4",
+      "digest": "8546c3f57289c8136dda985e70f3d96795817d0bc7cbd0c605ba02d548492438",
       "timestamps": [
         [
           false,
@@ -174,7 +189,7 @@
     },
     {
       "sequence": 11,
-      "digest": "0039ad815e75e43b6c1618d7b97a78f70e84c14033655ef9af446c226bc04b4e",
+      "digest": "e7ae769cd56f1530e2e01f35422e5c01a51b3055f2c2488116d4f444975acd58",
       "timestamps": [
         [
           false,
@@ -184,7 +199,7 @@
     },
     {
       "sequence": 12,
-      "digest": "d977b49405979db7f85edb27d0fb0141ca761dc23803e5b4529e5c59a66e9d18",
+      "digest": "551dbedcb9d76bc2683ffcc360f5fbb3c879580bdc981d18e6dc8fcfa9624e37",
       "timestamps": [
         [
           true,
@@ -194,7 +209,7 @@
     },
     {
       "sequence": 13,
-      "digest": "61ab3284d0648cb4919207448a5984e1ff6cb1bb6b02d263f68c8835973f57cd",
+      "digest": "aa48059f82e4fb8025991b4a0a4350dae1626d98ebc18dc20ab26ffb67a9223c",
       "timestamps": [
         [
           false,
@@ -204,7 +219,7 @@
     },
     {
       "sequence": 14,
-      "digest": "84a2dddf62ac6f5eedfdf0a3f8527d0422bd710490c203f46ff71bf4cce92992",
+      "digest": "57efd66448551b5ca3c9f3bb5feb382ef4a672c43ab117a70a522ebb6b5b9c61",
       "timestamps": [
         [
           false,
@@ -214,7 +229,7 @@
     },
     {
       "sequence": 15,
-      "digest": "67e15fa8d4acef09c706686c5f816d665d7ba5dd2289ebc7d272f30c677db354",
+      "digest": "f313c447e7c0091f171ddb9ef7f683a74a213ace978ac21e74e1017a37354957",
       "timestamps": [
         [
           false,
@@ -224,7 +239,7 @@
     },
     {
       "sequence": 16,
-      "digest": "45151940a565cd968acaff5431e89d988bc3942854fa7eed9df10018bce44534",
+      "digest": "c74d3de4cf1d95b670a8284e8f196cbd61ec361771740f101d666c439be8af58",
       "timestamps": [
         [
           false,
@@ -234,7 +249,7 @@
     },
     {
       "sequence": 17,
-      "digest": "329090a651d23ef8396729c32b7f2640e33e157724e913a592d185bd141b1e90",
+      "digest": "06e0a41dbf556a7d77dcf75bfb166207c3813eae3d48442dad3c6950e06c6011",
       "timestamps": [
         [
           false,
@@ -244,7 +259,7 @@
     },
     {
       "sequence": 18,
-      "digest": "a583c3b7e2264b72d365c813245c05e7facc07687dee5a85cd4473210bb5e328",
+      "digest": "2f3431621ab5152934b1922e631badf6fd850f3b9e9372ca8674d9b5684dcafb",
       "timestamps": [
         [
           false,
@@ -254,7 +269,7 @@
     },
     {
       "sequence": 19,
-      "digest": "f322b83a3ca4e277bd6459ceacb551e55b85b2d3ac284fe7c4aa7916f4314e1c",
+      "digest": "609420d7727c1d5ae5cd3b8769a1cd32a952d26de27be07853ed51a532636df0",
       "timestamps": [
         [
           true,
@@ -264,7 +279,7 @@
     },
     {
       "sequence": 20,
-      "digest": "887476303ae1b5a01ac822bc8b8807b89f3662dca26f46cf127c75320449805a",
+      "digest": "1d7d8084794afdc456c6882eb4f06352abfe71339997bcb2f8254e0a869eb2a6",
       "timestamps": [
         [
           true,
@@ -274,7 +289,7 @@
     },
     {
       "sequence": 21,
-      "digest": "79b01326f441f1fc22ba62a77fed582a524e228fddf09cf73ac77e0cc01031a5",
+      "digest": "5c455912c6b544504768ed444376066a549793e39ad705b24101976ac09e1b6c",
       "timestamps": [
         [
           false,
@@ -284,7 +299,7 @@
     },
     {
       "sequence": 22,
-      "digest": "82848abc37f55d0a13610ce1ef88c024b089181e565b19dc5b04c29f9b1a587f",
+      "digest": "4d8c5ff0946070f503820fb5a2b88c0ac9527152276692873e421ed7b3cb557b",
       "timestamps": [
         [
           false,
@@ -294,7 +309,7 @@
     },
     {
       "sequence": 23,
-      "digest": "54ac0a01561d450bdcfa40555966dc2bf9bdcfbf5c178157d073f1959c66681f",
+      "digest": "ac0623e7cce099949da59e591bfe2ee0e42ee3ac7dbd342b5dd9a354411f18c6",
       "timestamps": [
         [
           false,
@@ -304,7 +319,7 @@
     },
     {
       "sequence": 24,
-      "digest": "bd46402eeb56f8ebe09496b8da9fe7d334144f973c2eea412a591aa1fd811c85",
+      "digest": "a56439b94c83bb3772485c39db55e38ee807b651d1dd93cb3e98e4e5bc56adba",
       "timestamps": [
         [
           true,
@@ -314,7 +329,57 @@
     },
     {
       "sequence": 25,
-      "digest": "5f2bf8f73136e51d60ad724ad0b007d1e90738f55cf00e56b67112228c7f781c",
+      "digest": "3e03b0da5d276584d8c8ac7e1b229b50ec3d27bf37597fef7e246fb32e80a84c",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 26,
+      "digest": "99800d61c906992a560f63518ebe875a62908c3b6433990a5e26f3fbb2b5a914",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 27,
+      "digest": "393448a78922468cf67f564966747922048a8f3f9b69dc01d1ce610cb747dfd8",
+      "timestamps": [
+        [
+          false,
+          "Unconfirmed"
+        ]
+      ]
+    },
+    {
+      "sequence": 28,
+      "digest": "e838ed20bc8fc059534aabf12cd123aa908d7530f3aa59ea732f024ddde5fc21",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 29,
+      "digest": "711a71c8e199c0468529f6d1f014ac4255edec11a6be26885c4250cf2f5084d7",
+      "timestamps": [
+        [
+          true,
+          "NoRevocationSource"
+        ]
+      ]
+    },
+    {
+      "sequence": 30,
+      "digest": "333f2098c972447bd7e7eaa84f9137909ca0a93be4e7008ba65c63c22d4a9c83",
       "timestamps": [
         [
           false,

@@ -22,38 +22,39 @@ it, without changing anything format v1 already persists.
 
 ## Acceptance Criteria
 
-- [ ] `docs/tamper-evidence-specification.md` states that readers ignore unknown elements of anchor documents, of
+- [x] `docs/tamper-evidence-specification.md` states that readers ignore unknown elements of anchor documents, of
       their `Timestamps` and `AuthorityFailures` entries, and of leaf documents, as long as the document is readable
       as a whole, and that an unknown element never changes a format v1 verification result.
-- [ ] The library and `verify.py` ignore an unknown element in an anchor document, a timestamp entry, an
+- [x] The library and `verify.py` ignore an unknown element in an anchor document, a timestamp entry, an
       `AuthorityFailures` entry and a leaf document. When the unknown element cannot be read, both report an anchor
       document, or one with such an entry, as `MalformedAnchor`, and a leaf document as `AnchoredLeafInvalid` for its
       stream and `LeafSetMismatch` for its anchor. Automated tests cover each place in both tools.
-- [ ] The specification states the policy for chain certificates: every certificate signature on a path that Check A
+- [x] The specification states the policy for chain certificates: every certificate signature on a path that Check A
       or Check B validates uses RSA with PKCS #1 v1.5 padding, RSASSA-PSS or ECDSA, each with SHA-256, SHA-384 or
       SHA-512, under an issuer key that is an RSA key of at least 2048 bits or an ECDSA key of at least 256 bits. The
       self-signature of a configured trusted root stays exempt.
-- [ ] The library applies that policy to every link itself, both when a token is received at anchoring and when a
-      stored token is verified or confirmed, so the result does not depend on the platform's X.509 implementation.
-      `verify.py` applies the same policy. Automated tests in both tools cover an intermediate signed with SHA-1, an
-      intermediate issued under an undersized key, and a trusted root whose self-signature uses SHA-1.
-- [ ] The threat table in `docs/event-store.md` covers forged erasure records, and the specification's Limitations
+- [x] The library applies that policy itself to every link of the path it validates, both when a token is received
+      at anchoring and when a stored token is verified or confirmed, so which signature algorithms and key sizes are
+      accepted does not depend on the platform's X.509 implementation. `verify.py` applies the same policy. Automated
+      tests in both tools cover an intermediate signed with SHA-1, an intermediate issued under an undersized key,
+      and a trusted root whose self-signature uses SHA-1.
+- [x] The threat table in `docs/event-store.md` covers forged erasure records, and the specification's Limitations
       section says the same: what verification cannot tell apart, and what a reader has to check outside the
       database.
-- [ ] Retroactive sealing of an event whose discriminator is missing or does not resolve to a registered event type
+- [x] Retroactive sealing of an event whose discriminator is missing or does not resolve to a registered event type
       fails with a `MongoEventStoreException` when the aggregate has personal data marked, and writes no integrity
       data for that event. The sealing sweep counts the stream as failed and continues with the next stream, and an
       append to that stream fails for as long as the event is unsealed.
-- [ ] An aggregate without personal-data marks still seals events with an unknown discriminator as before.
-- [ ] Automated tests cover the sealing cases above: the sweep, the append path, and the aggregate without marks.
-- [ ] The specification states the producer rule for sealing with an unknown event type, and `docs/event-store.md`
+- [x] An aggregate without personal-data marks still seals events with an unknown discriminator as before.
+- [x] Automated tests cover the sealing cases above: the sweep, the append path, and the aggregate without marks.
+- [x] The specification states the producer rule for sealing with an unknown event type, and `docs/event-store.md`
       describes the failure and its remedy.
-- [ ] `spec/tamper-evidence/v1` holds vectors for unknown elements in an anchor document, a leaf document and a
+- [x] `spec/tamper-evidence/v1` holds vectors for unknown elements in an anchor document, a leaf document and a
       timestamp entry, for an intermediate signed with SHA-1, for an intermediate issued under an undersized key, and
       for a trusted root with a SHA-1 self-signature. `TamperEvidenceVectorTests` and `verify.py vectors` reproduce
       all of them. Every existing vector keeps its name and its expected outcome (status and failure); only values
       derived from regenerated keys change.
-- [ ] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) has no warnings, and the full test suite passes.
+- [x] The Release build (`dotnet build -c Release Chaos.Mongo.slnx`) has no warnings, and the full test suite passes.
 
 ## Technical Details
 
@@ -101,6 +102,11 @@ Validation policy, so the boundary is fixed before review:
   does not depend on what `X509Chain.Build` reports.
 - A stored token whose chain has a weak intermediate becomes invalid in the library, as it already is in `verify.py`.
   Its anchor's evidence degrades to the next anchor under the existing coverage rule. Nothing is migrated.
+- Accepted limit: the library checks the one path `X509Chain` builds. When that path holds a link outside the policy
+  while another path with the stored prefix follows it, for example past a cross-certificate signed with SHA-1
+  between two configured roots, the library rejects the token and `verify.py`, which examines the candidate paths
+  itself, accepts it. The difference fails closed and is stated in the specification's Limitations. No vector pins
+  it, because the library's outcome depends on the path the platform picks.
 - State the policy and the boundary above in the doc comments of the types that enforce it.
 
 Non-goals: no additional algorithms such as EdDSA, no policy for the self-signature of a configured trusted root, no
