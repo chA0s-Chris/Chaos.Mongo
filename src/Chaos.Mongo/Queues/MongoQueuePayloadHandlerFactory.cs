@@ -11,7 +11,7 @@ internal class MongoQueuePayloadHandlerFactory : IMongoQueuePayloadHandlerFactor
 {
     /// <inheritdoc/>
     public IMongoQueuePayloadHandler<TPayload> CreateHandler<TPayload>(IServiceProvider serviceProvider)
-        where TPayload : class, new()
+        where TPayload : class
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
 

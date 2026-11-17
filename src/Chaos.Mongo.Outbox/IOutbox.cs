@@ -37,5 +37,5 @@ public interface IOutbox
                                    TPayload payload,
                                    String? correlationId = null,
                                    CancellationToken cancellationToken = default)
-        where TPayload : class, new();
+        where TPayload : class;
 }

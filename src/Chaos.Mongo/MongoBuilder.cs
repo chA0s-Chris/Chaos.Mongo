@@ -206,7 +206,7 @@ public sealed class MongoBuilder
     /// already exists.
     /// </exception>
     public MongoBuilder WithQueue<TPayload>(Action<MongoQueueBuilder<TPayload>> configure)
-        where TPayload : class, new()
+        where TPayload : class
     {
         ArgumentNullException.ThrowIfNull(configure);
 

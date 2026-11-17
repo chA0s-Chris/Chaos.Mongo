@@ -16,5 +16,5 @@ internal interface IMongoQueueSubscriptionFactory
     /// <returns>A task that completes with the started subscription.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="queueDefinition"/> is null.</exception>
     Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
-        where TPayload : class, new();
+        where TPayload : class;
 }

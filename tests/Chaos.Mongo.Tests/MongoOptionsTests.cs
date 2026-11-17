@@ -39,6 +39,35 @@ public class MongoOptionsTests
     }
 
     [Test]
+    public void AddMongo_ConfigurationWithMigrationLockName_BindsItAndIgnoresTheFormerKey()
+    {
+        IConfiguration renamed = new ConfigurationBuilder()
+                                 .AddInMemoryCollection(new Dictionary<String, String?>
+                                 {
+                                     ["Mongo:Url"] = "mongodb://localhost:27017/confdb",
+                                     ["Mongo:MigrationLockName"] = "custom-lock"
+                                 })
+                                 .Build();
+        IConfiguration former = new ConfigurationBuilder()
+                                .AddInMemoryCollection(new Dictionary<String, String?>
+                                {
+                                    ["Mongo:Url"] = "mongodb://localhost:27017/confdb",
+                                    ["Mongo:MigrationsLockName"] = "custom-lock"
+                                })
+                                .Build();
+        var renamedServices = new ServiceCollection();
+        renamedServices.AddMongo(renamed, "Mongo");
+        var formerServices = new ServiceCollection();
+        formerServices.AddMongo(former, "Mongo");
+
+        using var renamedProvider = renamedServices.BuildServiceProvider();
+        using var formerProvider = formerServices.BuildServiceProvider();
+
+        renamedProvider.GetRequiredService<IOptions<MongoOptions>>().Value.MigrationLockName.Should().Be("custom-lock");
+        formerProvider.GetRequiredService<IOptions<MongoOptions>>().Value.MigrationLockName.Should().Be(Chaos.Mongo.MongoDefaults.MigrationLockName);
+    }
+
+    [Test]
     public void AddMongo_WhenCollectionTypeMapHasEmptyName_FailsValidation()
     {
         // Arrange

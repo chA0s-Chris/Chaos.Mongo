@@ -44,7 +44,7 @@ public class OutboxConfiguratorRunnerTests
     }
 
     [Test]
-    public async Task RunAsync_DelegatesToConfigurator()
+    public async Task RunConfiguratorsAsync_DelegatesToConfigurator()
     {
         var options = new OutboxOptions
         {
@@ -65,7 +65,7 @@ public class OutboxConfiguratorRunnerTests
         var logger = Mock.Of<ILogger<OutboxConfiguratorRunner>>();
         var runner = new OutboxConfiguratorRunner(mockHelper.Object, configurator, logger);
 
-        await runner.RunAsync();
+        await runner.RunConfiguratorsAsync();
 
         mockDatabase.Verify(
             d => d.GetCollection<OutboxMessage>(options.CollectionName, null),

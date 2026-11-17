@@ -5,7 +5,10 @@ namespace Chaos.Mongo.EventStore.Integrity;
 /// <summary>
 /// The personal data paths erased from one event, as recorded by a <see cref="PersonalDataErased{TAggregate}"/> event.
 /// </summary>
-/// <remarks>A read-only output of erasure; the constructor and setters exist for deserialization.</remarks>
+/// <remarks>
+/// A read-only output of erasure; the constructor and the <see cref="Version"/> setter are public for deserialization
+/// only.
+/// </remarks>
 public sealed class PersonalDataErasureEntry
 {
     /// <summary>
@@ -19,9 +22,9 @@ public sealed class PersonalDataErasureEntry
     internal const String VersionElement = "Version";
 
     /// <summary>
-    /// Gets or sets the dotted element paths whose values were erased.
+    /// Gets the dotted element paths whose values were erased.
     /// </summary>
-    public List<String> Paths { get; set; } = [];
+    public IReadOnlyList<String> Paths { get; internal set; } = [];
 
     /// <summary>
     /// Gets or sets the version of the event the values were erased from.

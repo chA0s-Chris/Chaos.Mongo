@@ -74,7 +74,7 @@ internal class MongoHostedService : IHostedLifecycleService
             if (result.Skipped && _options.MigrationLockWaitTimeout != TimeSpan.Zero)
             {
                 throw new InvalidOperationException(
-                    $"MongoDB migrations were skipped because the migration lock '{_options.MigrationsLockName}' could " +
+                    $"MongoDB migrations were skipped because the migration lock '{_options.MigrationLockName}' could " +
                     $"not be acquired within the configured {nameof(MongoOptions.MigrationLockWaitTimeout)} " +
                     $"({_options.MigrationLockWaitTimeout}). Hosted startup cannot continue against a potentially " +
                     "stale schema. Set MigrationLockWaitTimeout to TimeSpan.Zero to opt out of this check.");

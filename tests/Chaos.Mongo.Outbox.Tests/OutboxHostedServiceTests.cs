@@ -49,7 +49,7 @@ public class OutboxHostedServiceTests
         var callOrder = new List<String>();
         var mockRunner = new Mock<IOutboxConfiguratorRunner>();
         mockRunner
-            .Setup(r => r.RunAsync(It.IsAny<CancellationToken>()))
+            .Setup(r => r.RunConfiguratorsAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("configurator"))
             .Returns(Task.CompletedTask);
 
@@ -113,7 +113,7 @@ public class OutboxHostedServiceTests
         await sut.StartingAsync(cts.Token);
 
         var cancellationToken = cts.Token;
-        mockRunner.Verify(r => r.RunAsync(cancellationToken), Times.Once);
+        mockRunner.Verify(r => r.RunConfiguratorsAsync(cancellationToken), Times.Once);
     }
 
     [Test]
@@ -124,7 +124,7 @@ public class OutboxHostedServiceTests
 
         await sut.StartingAsync(CancellationToken.None);
 
-        mockRunner.Verify(r => r.RunAsync(CancellationToken.None), Times.Once);
+        mockRunner.Verify(r => r.RunConfiguratorsAsync(CancellationToken.None), Times.Once);
     }
 
     [Test]

@@ -15,6 +15,11 @@ using MongoDB.Bson.Serialization;
 public sealed class OutboxMessage
 {
     /// <summary>
+    /// Initializes a new instance of the <see cref="OutboxMessage"/> class.
+    /// </summary>
+    internal OutboxMessage() { }
+
+    /// <summary>
     /// Gets or sets the number of times this message has been claimed for processing, not the number of
     /// failures. Every lock claim increments this, including a lease-expiry reclaim after a crash, so a
     /// message that succeeds on its very first claim has <c>AttemptCount == 1</c>.
@@ -90,6 +95,61 @@ public sealed class OutboxMessage
     /// Set automatically from the discriminator registered via the builder API.
     /// </summary>
     public String Type { get; internal init; } = String.Empty;
+
+    /// <summary>
+    /// Creates an outbox message as an <see cref="IOutboxPublisher"/> receives it, for tests of a publisher.
+    /// </summary>
+    /// <remarks>
+    /// The outbox creates the messages it stores itself. The created message is claimed, like one the processor hands
+    /// to a publisher: <see cref="IsLocked"/> is <c>true</c>, <see cref="LockedUtc"/> is the current UTC time and
+    /// <see cref="LockId"/> is a newly generated value. The other members describing the processing state keep their
+    /// default values.
+    /// </remarks>
+    /// <param name="type">The message type discriminator.</param>
+    /// <param name="payload">The payload as a raw BSON document.</param>
+    /// <param name="correlationId">An optional correlation identifier.</param>
+    /// <param name="id">The document identifier. Defaults to a newly generated identifier.</param>
+    /// <param name="createdUtc">The UTC time the message was written to the outbox. Defaults to the current time.</param>
+    /// <param name="attemptCount">
+    /// The number of times the message was claimed. Defaults to <c>1</c>, which is what a publisher sees on the first
+    /// delivery attempt.
+    /// </param>
+    /// <returns>The outbox message.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="type"/> or <paramref name="payload"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="type"/> is empty or whitespace, or the <see cref="DateTime.Kind"/> of
+    /// <paramref name="createdUtc"/> is not <see cref="DateTimeKind.Utc"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="attemptCount"/> is less than <c>1</c>.</exception>
+    public static OutboxMessage Create(String type,
+                                       BsonDocument payload,
+                                       String? correlationId = null,
+                                       ObjectId? id = null,
+                                       DateTime? createdUtc = null,
+                                       Int64 attemptCount = 1)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentOutOfRangeException.ThrowIfLessThan(attemptCount, 1);
+        if (createdUtc is { Kind: not DateTimeKind.Utc })
+        {
+            throw new ArgumentException("The creation time must be a UTC time.", nameof(createdUtc));
+        }
+
+        var now = DateTime.UtcNow;
+        return new OutboxMessage
+        {
+            AttemptCount = attemptCount,
+            CorrelationId = correlationId,
+            CreatedUtc = createdUtc ?? now,
+            Id = id ?? ObjectId.GenerateNewId(),
+            IsLocked = true,
+            LockedUtc = now,
+            LockId = Guid.NewGuid().ToString(),
+            Payload = payload,
+            Type = type
+        };
+    }
 
     /// <summary>
     /// Deserializes the <see cref="Payload"/> to a typed payload object.

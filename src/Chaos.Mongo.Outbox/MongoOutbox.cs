@@ -37,7 +37,7 @@ internal sealed class MongoOutbox : IOutbox
                                                 TPayload payload,
                                                 String? correlationId = null,
                                                 CancellationToken cancellationToken = default)
-        where TPayload : class, new()
+        where TPayload : class
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(payload);

@@ -89,3 +89,7 @@ const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.PublishTerminalFailed = "chao
 const Chaos.Mongo.Outbox.OutboxMetrics.Instruments.Published = "chaos.mongo.outbox.published" -> string!
 const Chaos.Mongo.Outbox.OutboxMetrics.MeterName = "Chaos.Mongo.Outbox" -> string!
 const Chaos.Mongo.Outbox.OutboxMetrics.Tags.Destination = "outbox.destination" -> string!
+Chaos.Mongo.Outbox.IOutboxConfiguratorRunner.RunConfiguratorsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Chaos.Mongo.Outbox.OutboxMessage.Create(string! type, MongoDB.Bson.BsonDocument! payload, string? correlationId = null, MongoDB.Bson.ObjectId? id = null, System.DateTime? createdUtc = null, long attemptCount = 1) -> Chaos.Mongo.Outbox.OutboxMessage!
+*REMOVED*Chaos.Mongo.Outbox.IOutboxConfiguratorRunner.RunAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+*REMOVED*Chaos.Mongo.Outbox.OutboxMessage.OutboxMessage() -> void

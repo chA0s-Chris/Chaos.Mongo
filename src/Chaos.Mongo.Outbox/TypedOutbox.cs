@@ -12,6 +12,6 @@ internal sealed class TypedOutbox<TOutbox> : IOutbox<TOutbox>
 
     public Task AddMessageAsync<TPayload>(IClientSessionHandle session, TPayload payload,
                                           String? correlationId = null, CancellationToken cancellationToken = default)
-        where TPayload : class, new()
+        where TPayload : class
         => _outbox.AddMessageAsync(session, payload, correlationId, cancellationToken);
 }

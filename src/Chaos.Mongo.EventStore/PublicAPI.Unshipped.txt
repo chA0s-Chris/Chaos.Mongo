@@ -160,3 +160,10 @@ Chaos.Mongo.EventStore.MongoEventStoreBuilder<TAggregate>.WithoutConcurrencyInde
 Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.EventTypes.get -> System.Collections.Generic.IReadOnlyDictionary<System.Type!, string!>!
 Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.VerifyConcurrencyIndexOnAppend.get -> bool
 static Chaos.Mongo.EventStore.Integrity.RevocationLists.IssuedTooEarly(System.DateTime nextUpdateUtc) -> Chaos.Mongo.EventStore.Integrity.RevocationLists!
+Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Entries.get -> System.Collections.Generic.IReadOnlyList<Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry!>!
+Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Paths.get -> System.Collections.Generic.IReadOnlyList<string!>!
+*REMOVED*Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Entries.get -> System.Collections.Generic.List<Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry!>!
+*REMOVED*Chaos.Mongo.EventStore.Integrity.PersonalDataErased<TAggregate>.Entries.set -> void
+*REMOVED*Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Paths.get -> System.Collections.Generic.List<string!>!
+*REMOVED*Chaos.Mongo.EventStore.Integrity.PersonalDataErasureEntry.Paths.set -> void
+*REMOVED*Chaos.Mongo.EventStore.MongoEventStoreOptions<TAggregate>.MongoEventStoreOptions() -> void

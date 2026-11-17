@@ -49,7 +49,7 @@ internal class MongoQueueSubscriptionFactory : IMongoQueueSubscriptionFactory
 
     /// <inheritdoc/>
     public async Task<IMongoQueueSubscription<TPayload>> CreateAndRunAsync<TPayload>(MongoQueueDefinition queueDefinition, CancellationToken cancellationToken = default)
-        where TPayload : class, new()
+        where TPayload : class
     {
         ArgumentNullException.ThrowIfNull(queueDefinition);
 

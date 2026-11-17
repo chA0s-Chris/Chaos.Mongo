@@ -145,13 +145,17 @@ public sealed class OutboxBuilder
     /// Registers a payload type with an explicit discriminator name.
     /// The discriminator is used as the <see cref="OutboxMessage.Type"/> field value.
     /// </summary>
+    /// <remarks>
+    /// Registering the same payload type again replaces its discriminator. Two payload types of one outbox must not
+    /// share a discriminator; registering the outbox fails with an <see cref="InvalidOperationException"/> otherwise.
+    /// </remarks>
     /// <typeparam name="TPayload">The payload type.</typeparam>
     /// <param name="discriminator">
     /// The discriminator name. If <c>null</c>, defaults to the class name.
     /// </param>
     /// <returns>This builder instance for method chaining.</returns>
     public OutboxBuilder WithMessage<TPayload>(String? discriminator = null)
-        where TPayload : class, new()
+        where TPayload : class
     {
         var payloadType = typeof(TPayload);
         if (discriminator is not null)
@@ -320,6 +324,19 @@ public sealed class OutboxBuilder
         {
             throw new InvalidOperationException(
                 "At least one message type must be registered. Use WithMessage<TPayload>() to register message types.");
+        }
+
+        // A publisher tells messages apart by their discriminator only, so two payload types must not share one.
+        var payloadTypesByDiscriminator = new Dictionary<String, Type>(StringComparer.Ordinal);
+        foreach (var (payloadType, discriminator) in MessageTypes)
+        {
+            if (!payloadTypesByDiscriminator.TryAdd(discriminator, payloadType))
+            {
+                throw new InvalidOperationException(
+                    $"The discriminator '{discriminator}' is registered for the payload types " +
+                    $"'{payloadTypesByDiscriminator[discriminator].FullName}' and '{payloadType.FullName}'. " +
+                    "Register each payload type with a distinct discriminator using WithMessage<TPayload>(discriminator).");
+            }
         }
     }
 }

@@ -173,7 +173,64 @@ every default is derived from the CLR type name. Pin the previous name explicitl
 - `OutboxMessage` is `sealed`; every setter/init accessor is `internal`, while every getter stays `public`. Code
   that constructed or mutated `OutboxMessage` directly, instead of through the documented APIs, no longer compiles.
 - `IOutbox`, `IOutbox<T>`, `IOutboxProcessor`, `IOutboxProcessor<T>`, `IOutboxPublisher`, `OutboxMessageState` and
-  `IOutboxConfiguratorRunner` are unchanged and public.
+  `IOutboxConfiguratorRunner` stay public. See [the remaining members](#public-api-trim-remaining-members) for the
+  rename of `IOutboxConfiguratorRunner.RunAsync`.
+
+## Public API trim: remaining members
+
+A final pass before the 1.0 freeze removes, renames or tightens the members below.
+
+### Chaos.Mongo
+
+- `IMongoQueueSubscription<TPayload>` is now `internal`. Nothing could obtain one; control a subscription through
+  `IMongoQueue<TPayload>.StartSubscriptionAsync`, `StopSubscriptionAsync` and `IsRunning`.
+- `MongoQueueDefinition.PayloadHandlerType` is removed. It always held `typeof(IMongoQueuePayloadHandler<TPayload>)`
+  and never the registered handler. Remove reads of it, and remove it from any `MongoQueueDefinition` initializer.
+- `MongoDefaults` members are renamed so that each names its feature:
+
+  | Before | After |
+  | --- | --- |
+  | `MongoDefaults.AutoStartSubscription` | `MongoDefaults.QueueAutoStartSubscription` |
+  | `MongoDefaults.RetryDelay` | `MongoDefaults.LockRetryDelay` |
+  | `MongoDefaults.MigrationsLockName` | `MongoDefaults.MigrationLockName` |
+
+- `MongoOptions.MigrationsLockName` is renamed to `MigrationLockName`. **This also renames the configuration key.**
+  When `MongoOptions` is bound from configuration through `AddMongo(configuration, sectionName)`, a
+  `MigrationsLockName` entry is no longer read and the default name applies instead. Rename the entry to
+  `MigrationLockName` together with the upgrade. In a rolling upgrade, or when instances on both versions share one
+  configuration source, keep both entries until every instance runs the new version; otherwise the two versions use
+  different lock names and can run migrations at the same time. The default value `"ChaosMongoMigrations"` is
+  unchanged.
+- Queue payloads no longer need a parameterless constructor. The `new()` constraint is removed from every queue type
+  and member with a payload type parameter: `IMongoQueue<TPayload>`, `IMongoQueuePayloadHandler<TPayload>`,
+  `IMongoQueuePayloadPrioritizer.CreateSortDefinition<TPayload>()`, `MongoQueueItem<TPayload>`,
+  `MongoQueueBuilder<TPayload>` and `MongoBuilder.WithQueue<TPayload>`. Positional records now work as payloads. Code
+  that only calls these APIs keeps compiling, including generic code that still declares `new()` itself. A class that
+  implements a generic interface method must drop `new()` from its implementation: a custom
+  `IMongoQueuePayloadPrioritizer` otherwise fails to compile with CS0425.
+
+### Chaos.Mongo.EventStore
+
+- The constructor of `MongoEventStoreOptions<TAggregate>` is now `internal`. The event store creates the instance.
+- `PersonalDataErased<TAggregate>.Entries` and `PersonalDataErasureEntry.Paths` are `IReadOnlyList<>` properties with
+  `internal` setters instead of `List<>` properties with public setters. Code that assigned or mutated them, or that
+  used them as `List<>`, no longer compiles; enumerating and indexing them is unaffected. Stored documents are
+  unchanged.
+
+### Chaos.Mongo.Outbox
+
+- The constructor of `OutboxMessage` is now `internal`. To build a message in a unit test of an `IOutboxPublisher`,
+  use the new `OutboxMessage.Create(type, payload, ...)`; see
+  [Testing an Outbox Publisher](testing.md#testing-an-outbox-publisher).
+- `IOutboxConfiguratorRunner.RunAsync` is renamed to `RunConfiguratorsAsync`, matching
+  `IMongoConfiguratorRunner.RunConfiguratorsAsync`. Rename call sites.
+- Outbox payloads no longer need a parameterless constructor either: the `new()` constraint is removed from
+  `IOutbox.AddMessageAsync<TPayload>` and `OutboxBuilder.WithMessage<TPayload>`. A class that implements `IOutbox`
+  must drop `new()` from its `AddMessageAsync<TPayload>`.
+- `WithOutbox` now throws `InvalidOperationException` when two payload types of one outbox share a discriminator,
+  including two classes of the same name registered without an explicit discriminator. Such configurations
+  previously started, and a publisher could not tell their messages apart. Register each payload type with a distinct
+  discriminator. The same discriminator in different outboxes is still accepted.
 
 ## Queue and outbox option renames
 

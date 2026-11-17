@@ -47,7 +47,7 @@ public interface IMongoQueue : IAsyncDisposable
 /// </summary>
 /// <typeparam name="TPayload">The type of payload stored in the queue.</typeparam>
 public interface IMongoQueue<in TPayload> : IMongoQueue
-    where TPayload : class, new()
+    where TPayload : class
 {
     /// <summary>
     /// Publishes a strongly-typed payload to the queue.

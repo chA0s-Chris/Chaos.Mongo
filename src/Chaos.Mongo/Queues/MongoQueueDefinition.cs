@@ -37,11 +37,6 @@ public sealed record MongoQueueDefinition
     public Int32? MaxRetries { get; init; } = MongoDefaults.QueueMaxRetries;
 
     /// <summary>
-    /// Type of the payload handler.
-    /// </summary>
-    public required Type PayloadHandlerType { get; init; }
-
-    /// <summary>
     /// Type of the payload.
     /// </summary>
     public required Type PayloadType { get; init; }

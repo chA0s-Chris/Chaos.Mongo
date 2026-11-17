@@ -98,6 +98,28 @@ Pass a real `IMongoHelper` from an [integration test](#integration-tests-a-real-
 effect, such as an index, can only be observed on a real database; pass a hand-crafted
 [fake](#unit-tests-mocking-the-public-interfaces) when the migration's logic can be verified without one.
 
+## Testing an Outbox Publisher
+
+An [`IOutboxPublisher`](transactional-outbox.md#ioutboxpublisher) receives an `OutboxMessage`, which only the outbox
+can construct. A unit test builds one with `OutboxMessage.Create` and passes it to the publisher directly, without a
+database or a processor:
+
+```csharp
+var payload = new OrderPlacedMessage { OrderId = "A-1001" };
+var message = OutboxMessage.Create("OrderPlaced", payload.ToBsonDocument(), correlationId: "corr-1");
+
+await publisher.PublishAsync(message);
+
+// Assert what the publisher sent to your broker double.
+```
+
+`Create` takes the message type discriminator and the payload as a `BsonDocument`. The correlation identifier, the
+document identifier, the creation time and the attempt count are optional; they default to no correlation
+identifier, a generated identifier, the current UTC time, and `1`, the attempt count a publisher sees on a message's
+first delivery. Pass a higher `attemptCount` to test how the publisher treats a redelivery. The message is claimed,
+like one the processor delivers: `IsLocked` is `true`, `LockedUtc` is the current UTC time and `LockId` is a generated
+value. The other state members keep their defaults.
+
 ## Related documentation
 
 - [Getting Started](getting-started.md)

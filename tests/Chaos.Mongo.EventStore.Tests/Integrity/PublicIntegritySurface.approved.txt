@@ -245,13 +245,13 @@ sealed class IntegrityVerificationBuilder
   IntegrityVerificationBuilder WithRevocationGracePeriod(TimeSpan gracePeriod)
   IntegrityVerificationBuilder WithTimestampAuthorityTrust(String name, Action<TimestampAuthorityTrust>? configure = null)
 sealed class PersonalDataErased<TAggregate> : ObservationalEvent<TAggregate>
-  List<PersonalDataErasureEntry> Entries { get; set; }
+  IReadOnlyList<PersonalDataErasureEntry> Entries { get; }
   String Reference { get; set; }
   const String Discriminator = "Chaos.Mongo.EventStore.PersonalDataErased"
   ctor()
 sealed class PersonalDataErasureEntry
+  IReadOnlyList<String> Paths { get; }
   Int64 Version { get; set; }
-  List<String> Paths { get; set; }
   ctor()
 sealed class PersonalDataPathStatus
   Boolean Equals(PersonalDataPathStatus? other)
@@ -420,4 +420,3 @@ sealed class MongoEventStoreOptions<TAggregate>
   String ReadModelCollectionName { get; }
   TimeSpan SealingSweepInterval { get; }
   TimeSpan SealingSweepRetryDelay { get; }
-  ctor()

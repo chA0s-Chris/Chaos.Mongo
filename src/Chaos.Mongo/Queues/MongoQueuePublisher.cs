@@ -31,7 +31,7 @@ internal class MongoQueuePublisher : IMongoQueuePublisher
     public async Task PublishAsync<TPayload>(MongoQueueDefinition queueDefinition,
                                              TPayload payload,
                                              CancellationToken cancellationToken)
-        where TPayload : class, new()
+        where TPayload : class
     {
         ArgumentNullException.ThrowIfNull(queueDefinition);
         ArgumentNullException.ThrowIfNull(payload);
