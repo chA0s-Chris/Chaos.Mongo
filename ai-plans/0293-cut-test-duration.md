@@ -17,7 +17,7 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 - [x] `BuildTests` builds all test projects in one `dotnet build` invocation, without building the benchmarks.
 - [x] The `ci` job's matrix runs every MongoDB image on every target framework (six legs), each leg passing its framework to the Nuke parameter. The coverage gate is enforced on each `Primary` leg, `result` still aggregates the `ci` legs, and `release.yml`, which calls `ci.yml`, keeps working.
 - [x] Pure logic added to the build pipeline, such as validating the requested framework, has tests in `BuildPipeline.Tests`.
-- [x] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks without retries. Any Docker `Conflict ... container ... is not running` failure is reported with its cause.
+- [x] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks without retries. Any Docker `Conflict ... container ... is not running` failure is reported with its cause, or, when it cannot be reproduced, with the diagnostics that name the cause of the next occurrence.
 - [ ] The pull request records the local `bash ./build.sh Test` wall time and the per-assembly times before and after this layer.
 
 ### Layer 2: Test Hot Spots
