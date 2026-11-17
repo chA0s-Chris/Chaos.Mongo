@@ -288,14 +288,13 @@ public class TimestampTokenValidationTests
     /// </summary>
     private sealed class AiaListener : IDisposable
     {
+        private const Int32 StartAttempts = 5;
         private readonly HttpListener _listener;
         private Int32 _requestCount;
 
         public AiaListener()
         {
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://127.0.0.1:{GetFreePort()}/");
-            _listener.Start();
+            _listener = StartOnFreePort();
             Uri = new Uri(_listener.Prefixes.Single() + "intermediate.cer");
             _ = ServeAsync();
         }
@@ -313,6 +312,28 @@ public class TimestampTokenValidationTests
             var port = ((IPEndPoint)socket.LocalEndpoint).Port;
             socket.Stop();
             return port;
+        }
+
+        /// <summary>
+        /// Starts a listener on a port that was free a moment ago. Another process, such as a test container getting a
+        /// host port, can take that port before the listener binds it, so a few attempts are made.
+        /// </summary>
+        private static HttpListener StartOnFreePort()
+        {
+            for (var attempt = 1;; attempt++)
+            {
+                var listener = new HttpListener();
+                listener.Prefixes.Add($"http://127.0.0.1:{GetFreePort()}/");
+                try
+                {
+                    listener.Start();
+                    return listener;
+                }
+                catch (HttpListenerException) when (attempt < StartAttempts)
+                {
+                    listener.Close();
+                }
+            }
         }
 
         private async Task ServeAsync()

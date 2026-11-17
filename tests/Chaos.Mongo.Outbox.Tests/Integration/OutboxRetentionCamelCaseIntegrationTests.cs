@@ -17,6 +17,9 @@ using NUnit.Framework;
 /// is first used.
 /// </summary>
 [Category("Integration")]
+// Not parallel: the isolated case switches the shared server's TTL monitor off (ttlMonitorEnabled) for a while, which
+// would stop TTL deletions that fixtures running at the same time wait for.
+[NonParallelizable]
 public class OutboxRetentionCamelCaseIntegrationTests
 {
     private String _connectionString;

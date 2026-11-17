@@ -23,6 +23,14 @@ public class OutboxProcessorTests
     private Mock<IServiceScopeFactory> _scopeFactoryMock;
     private FakeTimeProvider _timeProvider;
 
+    /// <summary>
+    /// Rendering resolves the <see cref="OutboxMessage"/> serializer through the driver, which registers a plain class
+    /// map if the outbox's own registration has not run yet. Fixtures run in parallel, so no other fixture can be relied
+    /// on to have registered it first.
+    /// </summary>
+    [OneTimeSetUp]
+    public void RegisterOutboxClassMaps() => OutboxSerializationSetup.RegisterClassMaps(new Dictionary<Type, String>());
+
     [SetUp]
     public void SetUp()
     {
