@@ -123,10 +123,37 @@ jobs:
           cd "${RUNNER_TEMP}/repo-baseline"
           dotnet run tool/sync.cs -- check "${GITHUB_WORKSPACE}"
 
+  # Unit tests of the reference verifier in tools/tamper-evidence-verifier. They need Python and the runner's OpenSSL
+  # only, so they stay out of the ci matrix.
+  verifier-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # The tests build throwaway certificates with the cryptography package; verify.py itself imports the standard
+      # library only. --require-hashes installs nothing that requirements-test.txt does not pin with a hash, and the
+      # file itself restricts pip to wheels.
+      - name: Install the test dependencies
+        run: python3 -m pip install --require-hashes -r tools/tamper-evidence-verifier/requirements-test.txt
+
+      - name: Test the reference verifier
+        working-directory: tools/tamper-evidence-verifier
+        run: python3 -m unittest test_trusted_chain.py -v
+
   result:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [ ci, pack-check, release-scripts, repo-baseline ]
+    needs: [ ci, pack-check, release-scripts, repo-baseline, verifier-tests ]
     if: always()
     permissions: {}
     steps:

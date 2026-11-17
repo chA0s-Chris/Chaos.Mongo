@@ -6,9 +6,11 @@ of the configured trusted roots today (Check A), and the stored chain's own reco
 genuine, not merely configured (Check B). See docs/tamper-evidence-specification.md, item 9, and
 ai-plans/0248-say-what-verification-actually-proved.md, Technical Details section 5.
 
-Unlike verify.py itself (standard library only), these tests use the third-party `cryptography` package
-(pip install cryptography) purely to build throwaway test certificates; nothing here is imported by verify.py or
-shipped with it. Run with: python3 -m unittest tools/tamper-evidence-verifier/test_trusted_chain.py -v
+Unlike verify.py itself (standard library only), these tests use the third-party `cryptography` package purely to
+build throwaway test certificates; nothing here is imported by verify.py or shipped with it. requirements-test.txt
+next to this file pins the package with hashes. From this directory:
+    python3 -m pip install --require-hashes -r requirements-test.txt
+    python3 -m unittest test_trusted_chain.py -v
 """
 import datetime
 import importlib.util
