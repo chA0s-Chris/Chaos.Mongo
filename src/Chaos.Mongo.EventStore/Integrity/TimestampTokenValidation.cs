@@ -84,11 +84,21 @@ internal static class TimestampTokenValidation
     /// Builds the token's certificate chain at the token's time and gets the CRLs the distribution points of its
     /// non-root certificates name.
     /// </summary>
+    /// <remarks>
+    /// Chain building decides the path, its validity at the token's time and its constraints. Which signature
+    /// algorithms and key sizes it accepts along the path depends on the platform, so the built path must also
+    /// follow the link policy (<see cref="FollowsLinkPolicy"/>), which this method checks itself. Every trust
+    /// decision goes through this method, so the policy holds for a token received at anchoring as well as for a
+    /// stored one.
+    /// </remarks>
     /// <param name="token">The token.</param>
     /// <param name="signer">The signing certificate.</param>
     /// <param name="settings">The trust settings.</param>
     /// <returns>The DER-encoded certificates from the signing certificate to the root, and their CRL sources.</returns>
-    /// <exception cref="TimestampTokenValidationException">Thrown when the chain is not trusted or malformed.</exception>
+    /// <exception cref="TimestampTokenValidationException">
+    /// Thrown when the chain is not trusted or malformed, or when one of its certificates is not issued under an
+    /// accepted signature algorithm and key.
+    /// </exception>
     public static ValidatedChain BuildChain(Rfc3161TimestampToken token, X509Certificate2 signer, ChainSettings settings)
     {
         ArgumentNullException.ThrowIfNull(token);
@@ -117,6 +127,14 @@ internal static class TimestampTokenValidation
 
             // Everything needed later is copied out, so the certificates can be disposed here.
             elements.AddRange(chain.ChainElements.Select(element => element.Certificate));
+            if (FindLinkOutsidePolicy(elements) is { } outsidePolicy)
+            {
+                throw new TimestampTokenValidationException(
+                    $"the certificate '{outsidePolicy.Subject}' of the token's chain is not issued by the next certificate under an " +
+                    "accepted signature algorithm and key: RSA or ECDSA with SHA-256, SHA-384 or SHA-512, with an issuer key of at " +
+                    "least 2048 bits for RSA or 256 bits for ECDSA.");
+            }
+
             var crlSources = GetCrlSources(elements.Take(elements.Count - 1));
             return new ValidatedChain(elements.Select(certificate => certificate.RawData).ToList(), crlSources);
         }
@@ -183,6 +201,27 @@ internal static class TimestampTokenValidation
                 certificate.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a path follows the policy for chain certificates: every certificate but the
+    /// last is directly issued by the next one (<see cref="DirectSignatureVerification.IsDirectIssuer"/>), which
+    /// requires a signature of RSA with PKCS #1 v1.5 or PSS padding or of ECDSA, each with SHA-256, SHA-384 or
+    /// SHA-512, under an issuer key of at least 2048 bits for RSA or 256 bits for ECDSA.
+    /// </summary>
+    /// <remarks>
+    /// This is checked here, not left to chain building, whose accepted algorithms and key sizes depend on the
+    /// platform. The last certificate's own signature is not part of the policy: for a built path it is a
+    /// configured trusted root, accepted as configured, and for a stored chain <see cref="IsGenuineRoot"/> decides.
+    /// Its key is covered, because it issues the certificate before it. Validity, constraints and path building
+    /// stay with chain building.
+    /// </remarks>
+    /// <param name="path">The certificates from the signing certificate to the root.</param>
+    /// <returns><c>true</c> when every link follows the policy.</returns>
+    public static Boolean FollowsLinkPolicy(IReadOnlyList<X509Certificate2> path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return FindLinkOutsidePolicy(path) is null;
     }
 
     /// <summary>
@@ -313,6 +352,11 @@ internal static class TimestampTokenValidation
     ///     real path through the first, while Check B fails to reproduce <paramref name="storedOrReceived"/> from its
     ///     own certificates alone.
     ///     </para>
+    ///     <para>
+    ///     <b>Link policy.</b> Both paths follow the policy for chain certificates (<see cref="FollowsLinkPolicy"/>):
+    ///     <paramref name="built"/> because <see cref="BuildChain"/> requires it, and
+    ///     <paramref name="storedOrReceived"/> because this method does.
+    ///     </para>
     /// </remarks>
     /// <param name="token">The token, whose own embedded certificates can carry a bridging or cross-signing certificate.</param>
     /// <param name="signer">The signing certificate.</param>
@@ -361,7 +405,8 @@ internal static class TimestampTokenValidation
                 }
             }
 
-            if (!IsGenuineRoot(stored[^1], settings.TrustedRoots))
+            // Check B validates the stored chain as a path of its own, so the link policy applies to it as well.
+            if (!IsGenuineRoot(stored[^1], settings.TrustedRoots) || !FollowsLinkPolicy(stored))
             {
                 return false;
             }
@@ -833,6 +878,23 @@ internal static class TimestampTokenValidation
                 path.RemoveAt(path.Count - 1);
             }
         }
+    }
+
+    /// <summary>
+    /// Finds the first certificate of a path that the next one does not directly issue under the link policy
+    /// (<see cref="FollowsLinkPolicy"/>), or <c>null</c> when every link follows it.
+    /// </summary>
+    private static X509Certificate2? FindLinkOutsidePolicy(IReadOnlyList<X509Certificate2> path)
+    {
+        for (var index = 0; index + 1 < path.Count; index++)
+        {
+            if (!DirectSignatureVerification.IsDirectIssuer(path[index], path[index + 1]))
+            {
+                return path[index];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

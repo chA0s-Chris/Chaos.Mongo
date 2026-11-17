@@ -103,11 +103,35 @@ public class TamperEvidenceVectorTests
 
         var chain = await verifier.VerifyAnchorChainAsync();
         var anchors = new JsonArray();
+        var anchorsWithUnknownElements = 0;
         foreach (var document in await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).Sort(new BsonDocument(AnchorStore.SequenceField, 1)).ToListAsync())
         {
             var anchor = AnchorStore.ReadAnchor(document);
             var result = await verifier.VerifyAnchorAsync(anchor);
             AnchorEncoding.ComputeAnchorDigest(anchor.FormatVersion, anchor.Sequence, anchor.PreviousDigest, anchor.MerkleRoot).Should().Equal(anchor.AnchorDigest);
+            for (var index = 0; index < anchor.Timestamps.Count; index++)
+            {
+                // A trust scenario names its expected outcome, so a regenerated vector cannot silently flip it.
+                var authority = anchor.Timestamps[index].Authority;
+                if (authority.EndsWith("-accepted", StringComparison.Ordinal) || authority.EndsWith("-rejected", StringComparison.Ordinal))
+                {
+                    result.Timestamps[index].IsValid.Should().Be(authority.EndsWith("-accepted", StringComparison.Ordinal), authority);
+                }
+            }
+
+            if (anchor.Timestamps.Any(timestamp => timestamp.Authority == TamperEvidenceVectorGenerator.UnknownElementsAuthority))
+            {
+                // The unknown elements must really be stored, or the vector would prove nothing about ignoring them.
+                var unknown = TamperEvidenceVectorGenerator.UnknownElementName;
+                document.Contains(unknown).Should().BeTrue();
+                document["Timestamps"][0].AsBsonDocument.Contains(unknown).Should().BeTrue();
+                document["AuthorityFailures"][0].AsBsonDocument.Contains(unknown).Should().BeTrue();
+                var leaves = await verifier.Store.Leaves.Find(new BsonDocument("AnchorId", document["_id"])).ToListAsync();
+                leaves.Should().NotBeEmpty().And.OnlyContain(leaf => leaf.Contains(unknown));
+                result.Timestamps.Should().OnlyContain(timestamp => timestamp.IsValid);
+                anchorsWithUnknownElements++;
+            }
+
             anchors.Add(new JsonObject
             {
                 ["sequence"] = anchor.Sequence,
@@ -117,6 +141,7 @@ public class TamperEvidenceVectorTests
         }
 
         chain.IsIntact.Should().BeTrue();
+        anchorsWithUnknownElements.Should().Be(1);
         chain.AnchorCount.Should().Be(expected["chain"]?["anchorCount"]?.GetValue<Int64>() ?? -1);
         JsonNode.DeepEquals(anchors, expected["anchors"]).Should().BeTrue(anchors.ToJsonString());
         foreach (var leaf in await verifier.Store.Leaves.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync())

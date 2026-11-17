@@ -44,6 +44,18 @@ public class LedgerEntryRecordedEvent : Event<LedgerAggregate>
     }
 }
 
+/// <summary>
+/// A ledger entry type no store registers with <c>WithEvent</c>. Tests register its class map with the driver
+/// alone, so its discriminator resolves although the store does not know the type.
+/// </summary>
+public class LedgerEntryCorrectedEvent : LedgerEntryRecordedEvent
+{
+    /// <summary>
+    /// The discriminator the tests register for this type.
+    /// </summary>
+    public const String Discriminator = "LedgerEntryCorrected";
+}
+
 public class LedgerAuditedEvent : ObservationalEvent<LedgerAggregate>
 {
     public String Auditor { get; set; } = String.Empty;

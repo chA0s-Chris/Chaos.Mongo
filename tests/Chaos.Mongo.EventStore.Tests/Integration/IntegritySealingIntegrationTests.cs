@@ -10,12 +10,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using NUnit.Framework;
 using Testcontainers.MongoDb;
 
 // Not parallel: AnchoringMetricsCollector listens to the process-wide integrity meter, so measurements of fixtures
-// running at the same time would end up in this fixture's assertions.
+// running at the same time would end up in this fixture's assertions. The fixture also registers a process-wide
+// class map for LedgerEntryCorrectedEvent, which needs no isolation: no other fixture stores that type or its
+// discriminator.
 [NonParallelizable]
 [Category("Integration")]
 public class IntegritySealingIntegrationTests
@@ -63,6 +66,27 @@ public class IntegritySealingIntegrationTests
         var act = () => protectedContext.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
 
         await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage("*more than 2*not yet sealed*");
+        (await protectedContext.CountEventsAsync(aggregateId)).Should().Be(3);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId))
+            .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.NotSealed));
+    }
+
+    [Test]
+    [TestCase("RetiredLedgerEvent", "unknown discriminator RetiredLedgerEvent")]
+    [TestCase(null, "has no discriminator")]
+    [TestCase(LedgerEntryCorrectedEvent.Discriminator, "discriminator LedgerEntryCorrected of the event type*not registered with this event store")]
+    public async Task AppendEventsAsync_UnresolvableUnsealedPredecessorWithPersonalDataMarked_ThrowsAndPersistsNothing(
+        String? discriminator,
+        String expectedReason)
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync(personalData: true);
+        RegisterCorrectedEntryWithTheDriverOnly();
+        var aggregateId = await unprotected.AppendStreamAsync(3);
+        await SetDiscriminatorAsync(unprotected, aggregateId, 2, discriminator);
+
+        var act = () => protectedContext.Store.AppendEventsAsync([LedgerStoreContext.CreateEntry(aggregateId, 4)]);
+
+        await act.Should().ThrowAsync<MongoEventStoreException>().WithMessage($"*Version 2*{aggregateId}*{expectedReason}*cannot be sealed*");
         (await protectedContext.CountEventsAsync(aggregateId)).Should().Be(3);
         (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId))
             .Should().Be(StreamVerificationResult.Broken(1, StreamVerificationFailure.NotSealed));
@@ -644,6 +668,52 @@ public class IntegritySealingIntegrationTests
     }
 
     [Test]
+    public async Task RunPassAsync_UnknownDiscriminatorWithoutPersonalDataMarked_SealsStream()
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync();
+        var aggregateId = await unprotected.AppendStreamAsync(3);
+        await SetDiscriminatorAsync(unprotected, aggregateId, 2, "RetiredLedgerEvent");
+
+        var outcome = await protectedContext.Sweep.RunPassAsync();
+
+        outcome.Should().Be(SealingPassOutcome.Completed);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(aggregateId)).IsIntact.Should().BeTrue();
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.StreamsFailed.Should().Be(0);
+        status.EventsSealed.Should().Be(3);
+    }
+
+    [Test]
+    [TestCase("RetiredLedgerEvent")]
+    [TestCase(null)]
+    [TestCase(LedgerEntryCorrectedEvent.Discriminator)]
+    public async Task RunPassAsync_UnresolvableEventTypeWithPersonalDataMarked_SkipsStreamWithoutSealingAndSealsLaterStreams(String? discriminator)
+    {
+        var (unprotected, protectedContext) = await CreateSharedContextsAsync(personalData: true);
+        RegisterCorrectedEntryWithTheDriverOnly();
+        var unresolvableStream = await unprotected.AppendStreamAsync(3);
+        await SetDiscriminatorAsync(unprotected, unresolvableStream, 2, discriminator);
+        var healthyStream = await unprotected.AppendStreamAsync(2);
+
+        var outcome = await protectedContext.Sweep.RunPassAsync();
+
+        outcome.Should().Be(SealingPassOutcome.Completed);
+        (await protectedContext.CreateVerifier().VerifyStreamAsync(healthyStream)).IsIntact.Should().BeTrue();
+        for (var version = 1; version <= 3; version++)
+        {
+            // The chunk is sealed in one transaction, so the resolvable event before the unresolvable one stays unsealed too.
+            (await protectedContext.FindEventAsync(unresolvableStream, version)).Contains("_integrity").Should().BeFalse();
+        }
+
+        var status = await protectedContext.Sweep.GetStatusAsync();
+        status.Should().NotBeNull();
+        status.StreamsChecked.Should().Be(2);
+        status.StreamsSealed.Should().Be(1);
+        status.StreamsFailed.Should().Be(1);
+    }
+
+    [Test]
     public async Task RunPassAsync_UnsealedStreams_SealsEveryEventRetroactivelyAndReportsProgress()
     {
         var (unprotected, protectedContext) = await CreateSharedContextsAsync();
@@ -775,6 +845,37 @@ public class IntegritySealingIntegrationTests
         return aggregateIds.Select(d => d["AggregateId"].AsGuid).Distinct().ToList();
     }
 
+    /// <summary>
+    /// Registers the class map of <see cref="LedgerEntryCorrectedEvent"/> with the driver, as a consumer's own
+    /// registration or a known-types attribute would, without registering the type with any event store. Must run
+    /// after a store registered its class maps, because the type derives from a registered event. The class map is
+    /// process-wide, which is safe here: no other test stores this type or its discriminator.
+    /// </summary>
+    private static void RegisterCorrectedEntryWithTheDriverOnly()
+    {
+        BsonClassMap.TryRegisterClassMap<LedgerEntryCorrectedEvent>(classMap =>
+        {
+            classMap.AutoMap();
+            classMap.SetDiscriminator(LedgerEntryCorrectedEvent.Discriminator);
+        });
+
+        // Looking the class map up freezes it, which registers the discriminator with the driver.
+        BsonClassMap.LookupClassMap(typeof(LedgerEntryCorrectedEvent));
+        EventDocumentFields<LedgerAggregate>.ResolveEventType(LedgerEntryCorrectedEvent.Discriminator)
+                                            .Should()
+                                            .Be(typeof(LedgerEntryCorrectedEvent), "the tests rely on the driver resolving the discriminator, not on it being unknown");
+    }
+
+    /// <summary>
+    /// Replaces the stored discriminator of an event, or removes it when <paramref name="discriminator"/> is <c>null</c>.
+    /// </summary>
+    private static Task SetDiscriminatorAsync(LedgerStoreContext context, Guid aggregateId, Int64 version, String? discriminator)
+        => context.Events.UpdateOneAsync(
+            EventDocumentFields<LedgerAggregate>.ForVersion<BsonDocument>(aggregateId, version),
+            discriminator is null
+                ? Builders<BsonDocument>.Update.Unset(EventDocumentFields<LedgerAggregate>.Discriminator)
+                : Builders<BsonDocument>.Update.Set(EventDocumentFields<LedgerAggregate>.Discriminator, discriminator));
+
     private static async Task WaitUntilAsync(Func<Task<Boolean>> condition, Action? beforeEachCheck = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -796,7 +897,8 @@ public class IntegritySealingIntegrationTests
                                                               String? databaseName = null,
                                                               Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
                                                               TimeProvider? timeProvider = null,
-                                                              Action<MongoBuilder>? configureMongo = null)
+                                                              Action<MongoBuilder>? configureMongo = null,
+                                                              Boolean personalData = false)
     {
         var context = await LedgerStoreContext.CreateAsync(
             _container,
@@ -804,7 +906,8 @@ public class IntegritySealingIntegrationTests
             databaseName: databaseName,
             configureOptions: configureOptions,
             timeProvider: timeProvider,
-            configureMongo: configureMongo);
+            configureMongo: configureMongo,
+            personalData: personalData);
         _contexts.Add(context);
         return context;
     }
@@ -815,11 +918,16 @@ public class IntegritySealingIntegrationTests
     /// </summary>
     private async Task<(LedgerStoreContext Unprotected, LedgerStoreContext Protected)> CreateSharedContextsAsync(
         Action<MongoEventStoreOptions<LedgerAggregate>>? configureOptions = null,
-        Action<MongoBuilder>? configureProtectedMongo = null)
+        Action<MongoBuilder>? configureProtectedMongo = null,
+        Boolean personalData = false)
     {
         var databaseName = TestDatabases.NewName("IntegrityTestDb");
         var unprotected = await CreateContextAsync(false, databaseName);
-        var protectedContext = await CreateContextAsync(true, databaseName, configureOptions, configureMongo: configureProtectedMongo);
+        var protectedContext = await CreateContextAsync(true,
+                                                        databaseName,
+                                                        configureOptions,
+                                                        configureMongo: configureProtectedMongo,
+                                                        personalData: personalData);
         return (unprotected, protectedContext);
     }
 

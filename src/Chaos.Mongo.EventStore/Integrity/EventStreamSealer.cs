@@ -37,7 +37,8 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The hash of the predecessor version.</returns>
     /// <exception cref="MongoEventStoreException">
-    /// Thrown when more events than one chunk are unsealed, or when an event version is missing.
+    /// Thrown when more events than one chunk are unsealed, when an event version is missing, or when the aggregate
+    /// has personal data marked and an unsealed event's type cannot be resolved or is not registered.
     /// </exception>
     /// <exception cref="MongoConcurrencyException">Thrown when the stream changed concurrently.</exception>
     public async Task<Byte[]> SealForAppendAsync(
@@ -90,7 +91,10 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The outcome of the chunk.</returns>
     /// <exception cref="MongoConcurrencyException">Thrown when another writer sealed the stream concurrently.</exception>
-    /// <exception cref="MongoEventStoreException">Thrown when an event version is missing.</exception>
+    /// <exception cref="MongoEventStoreException">
+    /// Thrown when an event version is missing, or when the aggregate has personal data marked and an unsealed
+    /// event's type cannot be resolved or is not registered.
+    /// </exception>
     public async Task<SealingChunkResult> SealNextChunkAsync(
         IClientSessionHandle session,
         Guid aggregateId,
@@ -253,15 +257,45 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
 
     /// <summary>
     /// Resolves the personal data paths of a stored event from its discriminator. The current marks of the
-    /// resolved type apply; an unknown discriminator seals without commitments.
+    /// resolved type apply. An aggregate without marks has nothing to commit to, so its events seal whatever their
+    /// type. With marks, an event whose type cannot be resolved or is not registered with the store is not sealed:
+    /// whether it holds marked personal data is unknown, and a value sealed without a commitment can never be
+    /// erased without breaking the chain.
     /// </summary>
-    private IReadOnlyList<String> ResolvePersonalDataPaths(RawBsonDocument document)
+    /// <exception cref="MongoEventStoreException">
+    /// Thrown when the aggregate has personal data marked and the event's discriminator is missing, unknown or names
+    /// a type that is not registered with the store.
+    /// </exception>
+    private IReadOnlyList<String> ResolvePersonalDataPaths(RawBsonDocument document, Guid aggregateId, Int64 version)
     {
-        if (_options.PersonalDataPaths.Count == 0 ||
-            !document.TryGetValue(EventDocumentFields<TAggregate>.Discriminator, out var discriminator) ||
-            EventDocumentFields<TAggregate>.ResolveEventType(discriminator) is not { } eventType)
+        if (_options.PersonalDataPaths.Count == 0)
         {
             return [];
+        }
+
+        if (!document.TryGetValue(EventDocumentFields<TAggregate>.Discriminator, out var discriminator))
+        {
+            throw new MongoEventStoreException(
+                $"Version {version} of aggregate '{aggregateId}' has no discriminator, so its personal data cannot be " +
+                "determined and the stream cannot be sealed.");
+        }
+
+        if (EventDocumentFields<TAggregate>.ResolveEventType(discriminator) is not { } eventType)
+        {
+            throw new MongoEventStoreException(
+                $"Version {version} of aggregate '{aggregateId}' has the unknown discriminator {discriminator}, so its " +
+                "personal data cannot be determined and the stream cannot be sealed. Register the event type with this " +
+                "discriminator again.");
+        }
+
+        // The driver also resolves types whose class map something else registered, such as a derived type of a
+        // registered event. Marks are resolved for registered types only, so such an event may hold marked members.
+        if (eventType != typeof(PersonalDataErased<TAggregate>) && !_options.EventTypes.ContainsKey(eventType))
+        {
+            throw new MongoEventStoreException(
+                $"Version {version} of aggregate '{aggregateId}' has the discriminator {discriminator} of the event type " +
+                $"'{eventType}', which is not registered with this event store, so its personal data cannot be determined and " +
+                "the stream cannot be sealed. Register the event type with WithEvent<TEvent>().");
         }
 
         return _options.PersonalDataPaths.GetValueOrDefault(eventType) ?? [];
@@ -300,7 +334,10 @@ internal sealed class EventStreamSealer<TAggregate> where TAggregate : class, IA
             // The genesis value comes from the aggregate type stored in version 1, the same bytes an independent
             // verifier reads, so a renamed aggregate class does not change it.
             previousHash ??= EventDocumentFields<TAggregate>.ComputeGenesis(document, aggregateId);
-            var integrity = EventIntegrityChain.Seal(document.ToBson(), ResolvePersonalDataPaths(document), previousHash, IntegritySealMode.Retroactive);
+            var integrity = EventIntegrityChain.Seal(document.ToBson(),
+                                                     ResolvePersonalDataPaths(document, aggregateId, expectedVersion),
+                                                     previousHash,
+                                                     IntegritySealMode.Retroactive);
             var filter = new BsonDocument
             {
                 { "_id", document["_id"] },

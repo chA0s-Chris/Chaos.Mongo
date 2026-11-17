@@ -667,6 +667,186 @@ public class TrustedChainValidationTests
                                 .BeFalse("the stored root is neither the configured root nor validly self-signed");
     }
 
+    [Test]
+    public void BuildChain_IntermediateSignedWithSha1_Throws()
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Weak Signature Build Root");
+        var (intermediate, intermediateKey) = CreateIntermediateSignedWithSha1("CN=Chaos.Mongo Weak Signature Build Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo Weak Signature Build Signer", intermediate, intermediateKey);
+        var settings = new ChainSettings(new X509Certificate2Collection(root), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection(intermediate));
+
+        Action act = () => TimestampTokenValidation.BuildChain(CreateToken(signer), signer, settings);
+
+        AssertRejectedByLinkPolicy(act, signer, intermediate, root, "a path with a SHA-1 certificate signature is rejected whatever the platform's chain building accepts");
+    }
+
+    [Test]
+    public void BuildChain_IntermediateWithUndersizedRsaKey_Throws()
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Undersized Key Build Root");
+        var (intermediate, intermediateKey) = CreateIntermediateWithRsaKey("CN=Chaos.Mongo Undersized Key Build Intermediate", root, rootKey, 1024);
+        var signer = CreateSignerIssuedByRsaKey("CN=Chaos.Mongo Undersized Key Build Signer", intermediate, intermediateKey);
+        var settings = new ChainSettings(new X509Certificate2Collection(root), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection(intermediate));
+
+        Action act = () => TimestampTokenValidation.BuildChain(CreateToken(signer), signer, settings);
+
+        AssertRejectedByLinkPolicy(act, signer, intermediate, root, "a path through an issuer key below 2048 bits is rejected whatever the platform's chain building accepts");
+    }
+
+    [Test]
+    public void FollowsLinkPolicy_IntermediateSignedWithSha1_ReturnsFalse()
+    {
+        // The policy is checked on the certificates alone, without chain building, so the result does not depend on
+        // whether the platform's own chain building happens to reject SHA-1 as well.
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Weak Signature Root");
+        var (weak, weakKey) = CreateIntermediateSignedWithSha1("CN=Chaos.Mongo Weak Signature Intermediate", root, rootKey);
+        var weakSigner = CreateSigner("CN=Chaos.Mongo Weak Signature Signer", weak, weakKey);
+        var (strong, strongKey) = CreateIntermediate("CN=Chaos.Mongo Strong Signature Intermediate", root, rootKey);
+        var strongSigner = CreateSigner("CN=Chaos.Mongo Strong Signature Signer", strong, strongKey);
+
+        weak.SignatureAlgorithm.Value.Should().Be("1.2.840.10045.4.1", "the fixture must carry a genuine ecdsa-with-SHA1 signature");
+        TimestampTokenValidation.FollowsLinkPolicy([weakSigner, weak, root]).Should().BeFalse("the intermediate's own signature uses SHA-1");
+        TimestampTokenValidation.FollowsLinkPolicy([strongSigner, strong, root])
+                                .Should()
+                                .BeTrue("the same path with a SHA-256 signature on the intermediate follows the policy");
+    }
+
+    [Test]
+    public void FollowsLinkPolicy_IntermediateSignedWithNullEcdsaParameters_ReturnsFalse()
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Signature Parameters Root");
+        var (intermediate, intermediateKey) = CreateIntermediateSignedWithNullParameters("CN=Chaos.Mongo Signature Parameters Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo Signature Parameters Signer", intermediate, intermediateKey);
+
+        // The control: the signature over the certificate's signed part verifies under the root's key, so the
+        // parameters of the algorithm identifier are all the link policy can reject.
+        var certificate = new AsnReader(intermediate.RawData, AsnEncodingRules.DER).ReadSequence();
+        var signedPart = certificate.ReadEncodedValue();
+        certificate.ReadSequence();
+        var signature = certificate.ReadBitString(out _);
+
+        intermediate.SignatureAlgorithm.Value.Should().Be("1.2.840.10045.4.3.2", "the fixture must name ecdsa-with-SHA256, so only its parameters differ");
+        rootKey.VerifyData(signedPart.Span, signature, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence)
+               .Should()
+               .BeTrue("the fixture must carry a genuine signature");
+        TimestampTokenValidation.FollowsLinkPolicy([signer, intermediate, root])
+                                .Should()
+                                .BeFalse("an ECDSA signature algorithm identifier must not carry parameters, even though the signature itself verifies");
+    }
+
+    [Test]
+    [TestCase(1024, false)]
+    [TestCase(2048, true)]
+    public void FollowsLinkPolicy_IntermediateIssuedUnderRsaKey_RequiresAtLeast2048Bits(Int32 keySize, Boolean expected)
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Issuer Key Size Root");
+        var (upper, upperKey) = CreateIntermediateWithRsaKey("CN=Chaos.Mongo Issuer Key Size Upper Intermediate", root, rootKey, keySize, pathLengthConstraint: 1);
+        var (lower, lowerKey) = CreateIntermediateIssuedByRsaKey("CN=Chaos.Mongo Issuer Key Size Lower Intermediate", upper, upperKey);
+        var signer = CreateSigner("CN=Chaos.Mongo Issuer Key Size Signer", lower, lowerKey);
+
+        TimestampTokenValidation.FollowsLinkPolicy([signer, lower, upper, root]).Should().Be(expected);
+    }
+
+    [Test]
+    [TestCase(1024, false)]
+    [TestCase(2048, true)]
+    public void FollowsLinkPolicy_SignerIssuedUnderRsaKey_RequiresAtLeast2048Bits(Int32 keySize, Boolean expected)
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Key Size Root");
+        var (intermediate, intermediateKey) = CreateIntermediateWithRsaKey("CN=Chaos.Mongo Key Size Intermediate", root, rootKey, keySize);
+        var signer = CreateSignerIssuedByRsaKey("CN=Chaos.Mongo Key Size Signer", intermediate, intermediateKey);
+
+        TimestampTokenValidation.FollowsLinkPolicy([signer, intermediate, root]).Should().Be(expected);
+    }
+
+    [Test]
+    public void FollowsLinkPolicy_LastCertificateSelfSignedWithSha1_ReturnsTrue()
+    {
+        var (root, rootKey) = CreateRootSelfSignedWithSha1("CN=Chaos.Mongo SHA-1 Root");
+        var (intermediate, intermediateKey) = CreateIntermediate("CN=Chaos.Mongo SHA-1 Root Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo SHA-1 Root Signer", intermediate, intermediateKey);
+
+        root.SignatureAlgorithm.Value.Should().Be("1.2.840.10045.4.1", "the fixture must carry a genuine ecdsa-with-SHA1 self-signature");
+        TimestampTokenValidation.FollowsLinkPolicy([signer, intermediate, root])
+                                .Should()
+                                .BeTrue("the last certificate's own signature is not part of the policy; only its key is, as the issuer of the certificate before it");
+    }
+
+    [Test]
+    public void MatchesTrustedChain_StoredChainWithIntermediateSignedWithSha1_IsRejected()
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Weak Stored Root");
+        var (intermediate, intermediateKey) = CreateIntermediateSignedWithSha1("CN=Chaos.Mongo Weak Stored Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo Weak Stored Signer", intermediate, intermediateKey);
+        var token = CreateToken(signer);
+        var stored = new X509Certificate2Collection
+        {
+            signer,
+            intermediate,
+            root
+        };
+        var settings = new ChainSettings(new X509Certificate2Collection(root), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection(intermediate));
+
+        // The built path is handed in as recorded, as if chain building had accepted it, so the stored chain's own
+        // policy check is what has to reject the token.
+        var matches = TimestampTokenValidation.MatchesTrustedChain(token, signer, stored.Select(certificate => certificate.RawData).ToList(), stored, settings);
+
+        matches.Should().BeFalse("the stored chain holds a certificate signed with SHA-1");
+    }
+
+    [Test]
+    public void MatchesTrustedChain_TrustedRootSelfSignedWithSha1_IsAccepted()
+    {
+        var (root, rootKey) = CreateRootSelfSignedWithSha1("CN=Chaos.Mongo SHA-1 Trusted Root");
+        var (intermediate, intermediateKey) = CreateIntermediate("CN=Chaos.Mongo SHA-1 Trusted Root Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo SHA-1 Trusted Root Signer", intermediate, intermediateKey);
+        var token = CreateToken(signer);
+        var stored = new X509Certificate2Collection
+        {
+            signer,
+            intermediate,
+            root
+        };
+        var settings = new ChainSettings(new X509Certificate2Collection(root), X509RevocationMode.NoCheck, TimeSpan.Zero, new X509Certificate2Collection(intermediate));
+
+        var built = TimestampTokenValidation.BuildChain(token, signer, settings);
+
+        TimestampTokenValidation.MatchesTrustedChain(token, signer, built.Certificates, stored, settings)
+                                .Should()
+                                .BeTrue("a configured trusted root is accepted as configured, whatever digest its own self-signature uses");
+    }
+
+    [Test]
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ValidateReceived_ChainWithIntermediate_RequiresTheLinkPolicy(Boolean weakIntermediate)
+    {
+        var (root, rootKey) = CreateRoot("CN=Chaos.Mongo Received Root");
+        var (intermediate, intermediateKey) = weakIntermediate
+            ? CreateIntermediateSignedWithSha1("CN=Chaos.Mongo Received Intermediate", root, rootKey)
+            : CreateIntermediate("CN=Chaos.Mongo Received Intermediate", root, rootKey);
+        var signer = CreateSigner("CN=Chaos.Mongo Received Signer", intermediate, intermediateKey);
+        var digest = SHA256.HashData(Guid.NewGuid().ToByteArray());
+        var token = CreateToken(signer, digest);
+        var received = new TimestampToken(token.AsSignedCms().Encode(),
+                                          [signer.RawData, intermediate.RawData, root.RawData],
+                                          [],
+                                          token.TokenInfo.Timestamp.UtcDateTime);
+        var trust = new TimestampAuthorityTrust();
+        trust.TrustedRoots.Add(root);
+
+        var act = () => TimestampTokenValidation.ValidateReceived(received, digest, trust);
+
+        if (weakIntermediate)
+        {
+            AssertRejectedByLinkPolicy(() => act(), signer, intermediate, root, "a token received at anchoring is held to the same link policy as a stored one");
+        }
+        else
+        {
+            act.Should().NotThrow("the same chain with a SHA-256 signature on the intermediate is valid, so only the policy rejects the other");
+        }
+    }
+
     internal static X509Certificate2 CreateCrossSigned(X509Certificate2 original,
                                                        X509Certificate2 newIssuer,
                                                        ECDsa newIssuerKey,
@@ -738,6 +918,59 @@ public class TrustedChainValidationTests
     }
 
     /// <summary>
+    /// An intermediate whose certificate an RSA key signs, with PKCS #1 v1.5 padding and SHA-256.
+    /// </summary>
+    internal static (X509Certificate2 Certificate, ECDsa Key) CreateIntermediateIssuedByRsaKey(String subjectName, X509Certificate2 issuer, RSA issuerKey)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest(subjectName, key, HashAlgorithmName.SHA256);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        using var issued = request.Create(issuer.SubjectName,
+                                          X509SignatureGenerator.CreateForRSA(issuerKey, RSASignaturePadding.Pkcs1),
+                                          DateTimeOffset.UtcNow.AddDays(-1),
+                                          DateTimeOffset.UtcNow.AddDays(1),
+                                          RandomNumberGenerator.GetBytes(8));
+        return (issued.CopyWithPrivateKey(key), ECDsa.Create(key.ExportParameters(true)));
+    }
+
+    /// <summary>
+    /// An intermediate whose certificate its issuer signs with ECDSA and SHA-1, an algorithm the chain policy rejects.
+    /// </summary>
+    internal static (X509Certificate2 Certificate, ECDsa Key) CreateIntermediateSignedWithSha1(String subjectName, X509Certificate2 issuer, ECDsa issuerKey)
+        => CreateIntermediateSignedBy(subjectName, issuer, new Sha1EcdsaSignatureGenerator(issuerKey));
+
+    /// <summary>
+    /// An intermediate whose certificate its issuer signs with ECDSA and SHA-256, but whose signature algorithm
+    /// identifier carries <c>NULL</c> parameters, which the chain policy rejects.
+    /// </summary>
+    internal static (X509Certificate2 Certificate, ECDsa Key) CreateIntermediateSignedWithNullParameters(String subjectName,
+                                                                                                         X509Certificate2 issuer,
+                                                                                                         ECDsa issuerKey)
+        => CreateIntermediateSignedBy(subjectName, issuer, new NullParametersEcdsaSignatureGenerator(issuerKey));
+
+    /// <summary>
+    /// An intermediate holding an RSA key of the given size, so the certificates it issues are signed under that key.
+    /// </summary>
+    internal static (X509Certificate2 Certificate, RSA Key) CreateIntermediateWithRsaKey(String subjectName,
+                                                                                         X509Certificate2 issuer,
+                                                                                         ECDsa issuerKey,
+                                                                                         Int32 keySize,
+                                                                                         Int32 pathLengthConstraint = 0)
+    {
+        using var key = RSA.Create(keySize);
+        var request = new CertificateRequest(subjectName, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, pathLengthConstraint, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        using var issued = request.Create(issuer.SubjectName,
+                                          X509SignatureGenerator.CreateForECDsa(issuerKey),
+                                          DateTimeOffset.UtcNow.AddDays(-1),
+                                          DateTimeOffset.UtcNow.AddDays(1),
+                                          RandomNumberGenerator.GetBytes(8));
+        return (issued.CopyWithPrivateKey(key), RSA.Create(key.ExportParameters(true)));
+    }
+
+    /// <summary>
     /// An intermediate carrying a Subject Key Identifier and an Authority Key Identifier naming its issuer's own
     /// (RFC 5280, 4.2.1.1/4.2.1.2), as a genuine, reissued CA certificate would — letting the chain engine
     /// disambiguate same-named candidates by key identifier rather than subject name alone.
@@ -777,6 +1010,23 @@ public class TrustedChainValidationTests
 
         var certificate = request.CreateSelfSigned(notBefore ?? DateTimeOffset.UtcNow.AddDays(-1), notAfter ?? DateTimeOffset.UtcNow.AddDays(1));
         return (certificate, ECDsa.Create(key.ExportParameters(true)));
+    }
+
+    /// <summary>
+    /// A root whose self-signature uses ECDSA and SHA-1, as older roots still in trust stores do.
+    /// </summary>
+    internal static (X509Certificate2 Certificate, ECDsa Key) CreateRootSelfSignedWithSha1(String subjectName)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest(subjectName, key, HashAlgorithmName.SHA256);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        using var issued = request.Create(request.SubjectName,
+                                          new Sha1EcdsaSignatureGenerator(key),
+                                          DateTimeOffset.UtcNow.AddDays(-1),
+                                          DateTimeOffset.UtcNow.AddDays(1),
+                                          RandomNumberGenerator.GetBytes(8));
+        return (issued.CopyWithPrivateKey(key), ECDsa.Create(key.ExportParameters(true)));
     }
 
     /// <summary>
@@ -826,6 +1076,27 @@ public class TrustedChainValidationTests
                                           X509SignatureGenerator.CreateForECDsa(issuerKey),
                                           notBefore ?? DateTimeOffset.UtcNow.AddDays(-1),
                                           notAfter ?? DateTimeOffset.UtcNow.AddDays(1),
+                                          RandomNumberGenerator.GetBytes(8));
+        return issued.CopyWithPrivateKey(key);
+    }
+
+    /// <summary>
+    /// A signer whose certificate an RSA key signs, with PKCS #1 v1.5 padding and SHA-256.
+    /// </summary>
+    internal static X509Certificate2 CreateSignerIssuedByRsaKey(String subjectName, X509Certificate2 issuer, RSA issuerKey)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest(subjectName, key, HashAlgorithmName.SHA256);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection
+        {
+            new Oid(TimestampTokenValidation.TimeStampingPurposeOid)
+        }, true));
+        using var issued = request.Create(issuer.SubjectName,
+                                          X509SignatureGenerator.CreateForRSA(issuerKey, RSASignaturePadding.Pkcs1),
+                                          DateTimeOffset.UtcNow.AddDays(-1),
+                                          DateTimeOffset.UtcNow.AddDays(1),
                                           RandomNumberGenerator.GetBytes(8));
         return issued.CopyWithPrivateKey(key);
     }
@@ -956,5 +1227,58 @@ public class TrustedChainValidationTests
                 writer.WriteEncodedValue(certificate.SubjectName.RawData);
             }
         }
+    }
+
+    /// <summary>
+    /// Asserts that an action rejects a chain of a signer, one intermediate and a root. Where the platform's own
+    /// chain building accepts that chain, the rejection must be the link policy's. Where the platform rejects it
+    /// already, only the exception type can be asserted here, and the <c>FollowsLinkPolicy</c> tests prove the rule.
+    /// </summary>
+    private static void AssertRejectedByLinkPolicy(Action act,
+                                                   X509Certificate2 signer,
+                                                   X509Certificate2 intermediate,
+                                                   X509Certificate2 root,
+                                                   String because)
+    {
+        var thrown = act.Should().Throw<TimestampTokenValidationException>(because);
+        if (PlatformAcceptsChain(signer, intermediate, root))
+        {
+            thrown.WithMessage("*is not issued by the next certificate under an accepted signature algorithm and key*");
+        }
+    }
+
+    /// <summary>
+    /// An intermediate whose certificate the given generator signs, for signatures the built-in generators refuse.
+    /// </summary>
+    private static (X509Certificate2 Certificate, ECDsa Key) CreateIntermediateSignedBy(String subjectName,
+                                                                                        X509Certificate2 issuer,
+                                                                                        X509SignatureGenerator generator)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var request = new CertificateRequest(subjectName, key, HashAlgorithmName.SHA256);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        using var issued = request.Create(issuer.SubjectName,
+                                          generator,
+                                          DateTimeOffset.UtcNow.AddDays(-1),
+                                          DateTimeOffset.UtcNow.AddDays(1),
+                                          RandomNumberGenerator.GetBytes(8));
+        return (issued.CopyWithPrivateKey(key), ECDsa.Create(key.ExportParameters(true)));
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the platform's chain building alone, configured as for a token, accepts a
+    /// chain of a signer, one intermediate and a root.
+    /// </summary>
+    private static Boolean PlatformAcceptsChain(X509Certificate2 signer, X509Certificate2 intermediate, X509Certificate2 root)
+    {
+        using var chain = new X509Chain();
+        chain.ChainPolicy.DisableCertificateDownloads = true;
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.ApplicationPolicy.Add(new Oid(TimestampTokenValidation.TimeStampingPurposeOid));
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(root);
+        chain.ChainPolicy.ExtraStore.Add(intermediate);
+        return chain.Build(signer);
     }
 }

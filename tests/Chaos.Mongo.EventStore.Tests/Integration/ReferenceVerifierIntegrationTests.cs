@@ -1136,12 +1136,52 @@ public class ReferenceVerifierIntegrationTests
     }
 
     [Test]
+    [TestCase("anchor")]
+    [TestCase("timestampEntry")]
+    [TestCase("authorityFailureEntry")]
+    [TestCase("leaf")]
+    public async Task Check_UnknownElementThatCanBeRead_IsIgnoredLikeTheLibrary(String place)
+    {
+        var (context, aggregateId) = await CreateAnchoredStreamAsync();
+        var unknown = new BsonDocument
+        {
+            { "Text", "x" },
+            { "Nested", new BsonDocument("Number", 1) }
+        };
+        var store = GetStore(context);
+        if (place == "leaf")
+        {
+            await store.Leaves.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("Note", unknown));
+        }
+        else
+        {
+            var anchor = await store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+            await store.Anchors.ReplaceOneAsync(new BsonDocument("_id", anchor["_id"]), WithUnknownElement(anchor, place, unknown));
+        }
+
+        await DumpAsync(context);
+        var (code, report) = await RunVerifierAsync(CheckArguments(aggregateId));
+        var stream = await context.CreateVerifier().VerifyStreamAsync(aggregateId);
+        var chain = await context.ServiceProvider.GetRequiredService<AnchorVerifier>().VerifyAnchorChainAsync();
+
+        stream.IsIntact.Should().BeTrue();
+        stream.ComparedLeafCount.Should().Be(1, "the leaf with the unknown element is still read and compared");
+        chain.IsIntact.Should().BeTrue();
+        (await VerifyTimestampWithLibraryAsync(context)).IsValid.Should().BeTrue();
+        code.Should().Be(0, report.ToJsonString());
+        await AssertReportMatchesLibraryAsync(context, aggregateId, report);
+    }
+
+    [Test]
     [TestCase("integrityString", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
     [TestCase("integrityRepeatedName", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
     [TestCase("anchorString", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
     [TestCase("eventDbPointer", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
     [TestCase("pathDbPointer", nameof(StreamVerificationFailure.MalformedIntegrity), null)]
     [TestCase("anchorDbPointer", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
+    [TestCase("timestampEntryString", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
+    [TestCase("authorityFailureEntryString", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.MalformedAnchor))]
+    [TestCase("leafString", nameof(StreamVerificationFailure.AnchoredLeafInvalid), nameof(AnchorChainFailure.LeafSetMismatch))]
     public async Task Check_UnknownElementThatCannotBeRead_MakesTheDocumentMalformedLikeTheLibrary(String place, String streamFailure, String? chainFailure)
     {
         var (context, aggregateId) = await CreateAnchoredStreamAsync();
@@ -1152,14 +1192,21 @@ public class ReferenceVerifierIntegrationTests
                 AllowDuplicateNames = true
             }.Add("a", 1).Add("a", 2)
             : "x";
-        if (place is "anchorString" or "anchorDbPointer")
+        if (place is "anchorString" or "anchorDbPointer" or "timestampEntryString" or "authorityFailureEntryString")
         {
             var anchors = context.MongoHelper.Database.GetCollection<RawBsonDocument>(GetStore(context).Anchors.CollectionNamespace.CollectionName);
             var anchor = await GetStore(context).Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
             await anchors.DeleteOneAsync(new BsonDocument("_id", anchor["_id"]));
             await anchors.InsertOneAsync(new RawBsonDocument(place == "anchorDbPointer"
                                                                  ? WithDbPointer(anchor.ToBson())
-                                                                 : WithUndecodableNote(anchor.Add("Note", unknown).ToBson())));
+                                                                 : WithUndecodableNote(WithUnknownElement(anchor, place, unknown).ToBson())));
+        }
+        else if (place == "leafString")
+        {
+            var leaves = context.MongoHelper.Database.GetCollection<RawBsonDocument>(GetStore(context).Leaves.CollectionNamespace.CollectionName);
+            var leaf = await GetStore(context).Leaves.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+            await leaves.DeleteOneAsync(new BsonDocument("_id", leaf["_id"]));
+            await leaves.InsertOneAsync(new RawBsonDocument(WithUndecodableNote(leaf.Add("Note", unknown).ToBson())));
         }
         else if (place is "eventDbPointer" or "pathDbPointer")
         {
@@ -1459,6 +1506,38 @@ public class ReferenceVerifierIntegrationTests
         var verifier = context.ServiceProvider.GetRequiredService<AnchorVerifier>();
         var anchor = AnchorStore.ReadAnchor(await verifier.Store.Anchors.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync());
         return (await verifier.VerifyAnchorAsync(anchor)).Timestamps[0];
+    }
+
+    /// <summary>
+    /// Adds an element no reader knows, named <c>Note</c>, to an anchor document, to its first timestamp entry or to
+    /// an entry of its failed authority requests.
+    /// </summary>
+    private static BsonDocument WithUnknownElement(BsonDocument anchor, String place, BsonValue unknown)
+    {
+        if (place.StartsWith("timestampEntry", StringComparison.Ordinal))
+        {
+            anchor["Timestamps"][0].AsBsonDocument.Add("Note", unknown);
+        }
+        else if (place.StartsWith("authorityFailureEntry", StringComparison.Ordinal))
+        {
+            anchor["AuthorityFailures"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    { "Authority", "other-tsa" },
+                    { "FailureCount", 1 },
+                    { "LastFailure", "The authority did not answer." },
+                    { "LastFailureUtc", new BsonDateTime(DateTime.UtcNow) },
+                    { "Note", unknown }
+                }
+            };
+        }
+        else
+        {
+            anchor.Add("Note", unknown);
+        }
+
+        return anchor;
     }
 
     /// <summary>

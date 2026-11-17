@@ -909,6 +909,7 @@ The goal is tamper *evidence*, not prevention: anyone with write access to the d
 | Rebuilding or appending anchors consistently, for example to hide unanchored events from the completeness check | Only a trusted head kept outside the database, for anchors up to it, or anchors replicated when they completed: digests and roots involve no secret, and timestamp tokens (`VerifyEventAnchorAsync`) bound when an anchor existed, not who built it, so rebuilt anchors stamped again only show later token times |
 | Changing a read model or checkpoint | Derived-data verification, by replay and compare |
 | Erasing personal data without an erasure record | Stream verification reports it, without breaking the chain |
+| Erasing personal data with a forged erasure record | Not by verification: an erasure record involves no secret, so one written by anyone with write access verifies like a genuine one. Check its `Reference` against the erasure request kept outside the database. Anchors bound when the record existed, and a record inserted below an anchored version shows in the comparison with completed anchors |
 
 Limitations:
 
@@ -940,6 +941,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 **Register class maps, serializers and conventions before the event store.** Marking personal data resolves the class maps of the marked members' types when the event store is registered, which freezes them. Register custom class maps, serializers and convention packs for those types first.
 
 **Existing events** are sealed retroactively by a background sweep that runs once at startup and then at the configured interval, on one instance at a time. It is resumable and reports its progress through `IEventStoreIntegrity<TAggregate>.GetSealingStatusAsync`. An append to a stream with unsealed events seals up to one chunk of them first; a stream with more fails to append until the sweep caught it up. A pass that fails, or that loses the lock it holds while sealing, is retried after `WithSealingSweepRetryDelay` (default 1 minute) instead of waiting for the full `WithSealingSweepInterval`.
+
+**Unsealed events of an unregistered type are not sealed when the aggregate has personal data marked.** Sealing resolves an event's marked members from the type its discriminator names. When the discriminator is missing or names no registered event type, the sweep cannot know whether the event holds personal data, and a value sealed without a commitment could never be erased again without breaking the chain. The sweep therefore seals nothing of the chunk that holds the event, so the stream stays unsealed from that chunk's first event on. It logs the stream, counts it in `StreamsFailed`, and continues with the next stream. An append to that stream fails with a `MongoEventStoreException`. The sweep's log entry names the version and the stored discriminator. To resolve it, register the event type again with its stored discriminator, for example `WithEvent<OrderPlacedV1>("OrderPlacedV1")`, and mark its personal data if it holds any; the next pass then seals the stream. An event without a discriminator matches no registration: its discriminator has to be restored in the database before the stream can be sealed. An aggregate without marked personal data is not affected.
 
 ### Anchoring
 
