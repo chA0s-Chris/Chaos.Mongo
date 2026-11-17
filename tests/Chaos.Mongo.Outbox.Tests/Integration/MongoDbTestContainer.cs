@@ -44,7 +44,7 @@ public static class MongoDbTestContainer
                         })
                         .Build();
 
-            await Container.StartAsync();
+            await Container.StartWithDiagnosticsAsync();
             return Container;
         }
         finally

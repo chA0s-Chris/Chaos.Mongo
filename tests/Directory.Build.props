@@ -12,6 +12,11 @@
              Link="IsolatedConventionTestProcess.cs" />
   </ItemGroup>
 
+  <!-- Container helpers for the test projects that run against MongoDB; the build pipeline tests have no Testcontainers. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'BuildPipeline.Tests'">
+    <Compile Include="$(MSBuildThisFileDirectory)ContainerStartDiagnostics.cs" Link="ContainerStartDiagnostics.cs" />
+  </ItemGroup>
+
   <!-- Moq is not part of the shared test packages. Older tests still use it until they are migrated to
        hand-written test doubles (see tests/AGENTS.md). -->
   <ItemGroup>
