@@ -50,6 +50,15 @@
       ],
       "groupName": "src dependency minimums",
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Update the test dependencies of the reference verifier together in one pull request, major versions included. --require-hashes installs them as one pinned set, and they are test-only, so majors need no Dependency Dashboard approval.",
+      "matchFileNames": [
+        "tools/tamper-evidence-verifier/requirements-test.txt"
+      ],
+      "groupName": "reference verifier test dependencies",
+      "separateMajorMinor": false,
+      "dependencyDashboardApproval": false
     }
   ]
 }

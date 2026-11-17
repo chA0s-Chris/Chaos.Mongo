@@ -10,12 +10,12 @@ Independent implementations of format v1 are compared against `verify.py` once t
 
 ## Acceptance Criteria
 
-- [ ] A new job in `.github/workflows/ci.yml` runs `test_trusted_chain.py` with `python3 -m unittest` on every pull request to `main` and every push to `main`, outside the `ci` matrix and without .NET, Docker or MongoDB.
-- [ ] The job is in the `needs` of the `result` job, so a failing or cancelled run fails `result`.
-- [ ] A new `tools/tamper-evidence-verifier/requirements-test.txt` pins `cryptography` and every package pip installs with it to exact versions with hashes, and the job installs it with `--require-hashes`.
-- [ ] `renovate.json` has a rule that puts every update of the packages in that file into one pull request, and `renovate-config-validator` accepts the configuration.
-- [ ] All tests in the file pass against the current `verify.py` with the pinned versions installed through `--require-hashes`.
-- [ ] The verifier's README says how to install the dependency from the requirements file and that CI runs the tests.
+- [x] A new job in `.github/workflows/ci.yml` runs `test_trusted_chain.py` with `python3 -m unittest` on every pull request to `main` and every push to `main`, outside the `ci` matrix and without .NET, Docker or MongoDB.
+- [x] The job is in the `needs` of the `result` job, so a failing or cancelled run fails `result`.
+- [x] A new `tools/tamper-evidence-verifier/requirements-test.txt` pins `cryptography` and every package pip installs with it to exact versions with hashes, and the job installs it with `--require-hashes`.
+- [x] `renovate.json` has a rule that puts every update of the packages in that file into one pull request, and `renovate-config-validator` accepts the configuration.
+- [x] All tests in the file pass against the current `verify.py` with the pinned versions installed through `--require-hashes`.
+- [x] The verifier's README says how to install the dependency from the requirements file and that CI runs the tests.
 
 ## Technical Details
 
@@ -29,7 +29,7 @@ The tests shell out to `openssl` through `verify.py`, so the job relies on the r
 
 ### Dependency pin
 
-`requirements-test.txt` is hand-kept and lists the full closure pip installs for `cryptography`, currently `cryptography`, `cffi` and `pycparser`, because `--require-hashes` rejects any unpinned transitive package. A later `cryptography` release that adds a transitive dependency needs a manual line; the job then fails on the Renovate pull request, which is the intended signal.
+`requirements-test.txt` is hand-kept and lists the full closure pip installs for `cryptography`, currently `cryptography`, `cffi` and `pycparser`, because `--require-hashes` rejects any unpinned transitive package. A later `cryptography` release that adds a transitive dependency needs a manual line; the job then fails on the Renovate pull request, which is the intended signal. The file also restricts pip to wheels with `--only-binary :all:`.
 
 The file name marks the dependency as test-only. `verify.py` stays standard library only, and the README's Requirements section must keep saying so.
 

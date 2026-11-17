@@ -42,8 +42,20 @@ specification for the full option reference — including `--aggregate-type`, `-
 
 `python3 verify.py vectors DIRECTORY` replays the committed `spec/tamper-evidence/v1` vectors. `test_trusted_chain.py`
 additionally unit-tests `matches_trusted_chain`'s Check A/Check B chain-trust validation directly, using throwaway
-certificates built with the third-party `cryptography` package (`pip install cryptography`) — a test-only dependency
-that `verify.py` itself never imports. Run it with `python3 -m unittest test_trusted_chain.py -v`.
+certificates built with the third-party `cryptography` package — a test-only dependency that `verify.py` itself never
+imports.
+
+[`requirements-test.txt`](requirements-test.txt) pins `cryptography` and its own dependencies to exact versions with
+hashes. The pinned versions need a more recent Python than `verify.py` itself, currently 3.11 or later. Install them,
+preferably into a virtual environment, and run the tests from this directory:
+
+```bash
+python3 -m pip install --require-hashes -r requirements-test.txt
+python3 -m unittest test_trusted_chain.py -v
+```
+
+CI runs these tests on every pull request and on `main`, in the `verifier-tests` job of
+[`ci.yml`](../../.github/workflows/ci.yml).
 
 ## Related documentation
 
