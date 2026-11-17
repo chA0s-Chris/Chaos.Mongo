@@ -18,7 +18,7 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 - [x] The `ci` job's matrix runs every MongoDB image on every target framework (six legs), each leg passing its framework to the Nuke parameter. The coverage gate is enforced on each `Primary` leg, `result` still aggregates the `ci` legs, and `release.yml`, which calls `ci.yml`, keeps working.
 - [x] Pure logic added to the build pipeline, such as validating the requested framework, has tests in `BuildPipeline.Tests`.
 - [x] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks without retries. Any Docker `Conflict ... container ... is not running` failure is reported with its cause, or, when it cannot be reproduced, with the diagnostics that name the cause of the next occurrence.
-- [ ] The pull request records the local `bash ./build.sh Test` wall time and the per-assembly times before and after this layer.
+- [x] The pull request records the local `bash ./build.sh Test` wall time and the per-assembly times before and after this layer.
 
 ### Layer 2: Test Hot Spots
 
@@ -26,14 +26,14 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 - [x] `RunAsync_EvidenceWellBeyond16Megabytes_CompletesAnchorWithoutEmbeddingIt` and `RunAsync_EvidencePartiallyStoredBeforeAFailure_CompletesTheAnchorOnALaterRun` keep their CRL sizes and authorities and still pass.
 - [x] Tests run through `IsolatedConventionTestProcess` start no MongoDB container of their own; the child process uses the parent's container and never stops it. The isolated tests keep running in a separate process.
 - [x] The fixed delays listed in Technical Details no longer coordinate tests: they are replaced by explicit synchronization, bounded polling or shorter configured intervals (for example a shorter migration lease). Delays that assert that something does *not* happen within a window remain, with windows as short as the assertion allows.
-- [ ] The pull request records the durations of the changed tests and the per-assembly wall times before and after this layer.
+- [x] The pull request records the durations of the changed tests and the per-assembly wall times before and after this layer.
 
 ### Layer 3: Databases
 
 - [x] Integration tests drop every database they create, including when a test fails. After a complete run of a test project, the shared container holds no database created by tests. This is checked automatically at the end of the run, and a leftover database fails the test run (verified once by deliberately leaking a database).
 - [x] Configuring once per fixture is evaluated for fixtures whose tests all use identical options (for example `EventStoreIntegrationTests` and `AggregateRepositoryIntegrationTests`), and adopted only if the project's wall time drops by at least 10 % across two runs each with and without the change, and no state is shared between tests. The measurement, or why no fixture qualifies, is recorded in the pull request.
 - [x] A tmpfs mount for the MongoDB data directory is measured. It is adopted only if the `Chaos.Mongo.EventStore.Tests` wall time drops by at least 10 % across two runs each with and without tmpfs, and the replica-set and change-stream tests keep passing; the result is recorded in the pull request either way.
-- [ ] The pull request records the per-assembly wall times before and after this layer.
+- [x] The pull request records the per-assembly wall times before and after this layer.
 
 ### Layer 4: Parallelism
 
@@ -41,9 +41,9 @@ The goal is a CI test job close to one `Chaos.Mongo.EventStore.Tests` run and a 
 - [x] `Chaos.Mongo.EventStore.Tests` runs fixtures in parallel. Every remaining `[NonParallelizable]` has a comment naming the shared state that requires it.
 - [x] Fixture parallelism is measured for `Chaos.Mongo.Tests` and `Chaos.Mongo.Outbox.Tests` and enabled in a project only if its wall time drops by at least 10 % across two runs each with and without it; the result is recorded in the pull request.
 - [x] Three consecutive local `bash ./build.sh Test` runs pass on all target frameworks with the `Primary` image, and one run each with `CHAOSMONGO_MONGODB_IMAGE=MinimumSupported` and `Latest`, all without retries.
-- [ ] All six `ci` legs pass on the published head.
-- [ ] The pull request records the per-assembly wall times before and after the stack, locally and of the CI `ci` job.
-- [ ] The `ci` job's `timeout-minutes` is lowered to about two to three times the measured duration of the slowest `ci` leg on the published head, with the reason in a comment.
+- [x] All six `ci` legs pass on the published head.
+- [x] The pull request records the per-assembly wall times before and after the stack, locally and of the CI `ci` job.
+- [x] The `ci` job's `timeout-minutes` is lowered to about two to three times the measured duration of the slowest `ci` leg on the published head, with the reason in a comment.
 - [x] `./cleanup_code.sh` has been run and its diff inspected, `./inspect_code.sh` reports no warning or error findings for the changes, the Release build has no warnings, and `bash ./build.sh Test` passes with the coverage gate met.
 
 ## Technical Details

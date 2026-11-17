@@ -21,8 +21,9 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # Raised for a leg that ran both target frameworks one after the other; each leg now tests one framework.
-    timeout-minutes: 30
+    # About three times the slowest leg, which took 2.7 minutes with parallel test fixtures, so a hanging run is
+    # cancelled early. Raise it again when the suite grows.
+    timeout-minutes: 8
     permissions:
       contents: read
     strategy:
