@@ -32,6 +32,7 @@ app.Run();
 Resolve `IMongoHelper` to access a mapped collection:
 
 ```csharp
+using Chaos.Mongo;
 using MongoDB.Driver;
 
 public sealed class UserRepository(IMongoHelper mongo)

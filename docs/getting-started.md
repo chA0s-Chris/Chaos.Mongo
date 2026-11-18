@@ -30,6 +30,8 @@ app.Run();
 ### Connection string
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo(
     connectionString: "mongodb://localhost:27017",
     databaseName: "myDatabase",
@@ -54,6 +56,8 @@ services.AddMongo(
 ```
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo(configuration, "MongoDB");
 ```
 
@@ -62,6 +66,7 @@ See [Configuration](configuration.md) for all available options.
 ### MongoUrl
 
 ```csharp
+using Chaos.Mongo;
 using MongoDB.Driver;
 
 var mongoUrl = new MongoUrl("mongodb://localhost:27017/myDatabase");
@@ -73,6 +78,8 @@ services.AddMongo(mongoUrl);
 The parameterless, connection-string, and `MongoUrl` overloads each have a variant whose delegate also receives the `IServiceProvider`. `ConfigureOptions` adds such a delegate after any entry point, including configuration binding:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", null, (serviceProvider, options) =>
 {
     var environment = serviceProvider.GetRequiredService<IHostEnvironment>();
@@ -90,6 +97,9 @@ See [Configuring options with registered services](configuration.md#configuring-
 Map CLR types to collection names during registration:
 
 ```csharp
+using Chaos.Mongo;
+using MongoDB.Driver;
+
 services.AddMongo(options =>
 {
     options.Url = new MongoUrl("mongodb://localhost:27017/myDatabase");
@@ -105,6 +115,8 @@ services.AddMongo(options =>
 Resolve `IMongoHelper` to access a mapped collection:
 
 ```csharp
+using Chaos.Mongo;
+
 public sealed class UserRepository(IMongoHelper mongo)
 {
     public async Task SaveAsync(User user, CancellationToken cancellationToken = default)
@@ -121,6 +133,8 @@ Resolve `ICollectionTypeMap` directly when you need a type's mapped collection n
 example to name a raw command's target or a log message:
 
 ```csharp
+using Chaos.Mongo;
+
 public sealed class DiagnosticsService(ICollectionTypeMap collectionTypeMap)
 {
     public string GetUserCollectionName() => collectionTypeMap.GetCollectionName<User>();
@@ -132,6 +146,7 @@ public sealed class DiagnosticsService(ICollectionTypeMap collectionTypeMap)
 `IMongoHelper` exposes the configured client and database in addition to mapped collections:
 
 ```csharp
+using Chaos.Mongo;
 using MongoDB.Bson;
 
 public sealed class DataService(IMongoHelper mongo)

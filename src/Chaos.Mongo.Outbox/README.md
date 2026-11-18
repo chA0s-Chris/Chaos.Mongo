@@ -46,6 +46,9 @@ public sealed class NotificationsPublisher : IOutboxPublisher
 Register the core MongoDB services and outbox processor:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithOutbox(outbox => outbox
         .WithPublisher<NotificationsPublisher>()
@@ -56,6 +59,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Write the business change and message in the same transaction:
 
 ```csharp
+using Chaos.Mongo;
+
 await mongo.ExecuteInTransactionAsync(async (helper, session, cancellationToken) =>
 {
     await orders.InsertOneAsync(session, order, cancellationToken: cancellationToken);
@@ -75,6 +80,8 @@ Register marker-type outboxes with distinct collections, then inject their typed
 writer and processor interfaces:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
 using Microsoft.Extensions.DependencyInjection;
 
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
@@ -113,6 +120,8 @@ When a publisher needs container services or settings, register a factory instea
 of a type. It works for default and typed outboxes:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
 using Microsoft.Extensions.DependencyInjection;
 
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
@@ -144,9 +153,9 @@ a short grace period once the stop was requested. Logs carry the marker type nam
 Pass the same compatible, active MongoDB transaction session to both writers:
 
 ```csharp
-await notifications.AddMessageAsync(session, orderPlaced, cancellationToken: token);
-await audit.AddMessageAsync(session, orderPlaced, cancellationToken: token);
-await session.CommitTransactionAsync(token);
+await notifications.AddMessageAsync(session, orderPlaced, cancellationToken: cancellationToken);
+await audit.AddMessageAsync(session, orderPlaced, cancellationToken: cancellationToken);
+await session.CommitTransactionAsync(cancellationToken);
 ```
 
 The caller starts and owns this transaction; aborting rolls back both writes.

@@ -1,7 +1,10 @@
 # Migrating from 0.x
 
 This page lists every breaking change merged since the v0.9.0 release and what to do about it when upgrading to
-1.0. Pair it with the [compatibility policy](compatibility-policy.md), which 1.0 starts honoring, and
+1.0: every public type or member of the v0.9.0 packages that was removed, made non-public, renamed or changed, and
+every behavior change that needs attention. Features new in 1.0, such as
+[tamper evidence](event-store.md#tamper-evidence) for event streams, are additions and are not listed here. Pair this
+page with the [compatibility policy](compatibility-policy.md), which 1.0 starts honoring, and
 [requirements](requirements.md) for the platform and MongoDB server versions 1.0 needs.
 
 ## Platform: .NET 10 and later, lowered dependency minimums
@@ -50,30 +53,11 @@ store now registers class maps along the real class hierarchy, so inherited memb
   upgrading. An inherited member marked `[BsonRequired]` makes events, read models and checkpoints stored before the
   upgrade unreadable, because they lack its element — remove the attribute, or rewrite or migrate the affected
   documents, before upgrading.
-- **Stored documents are not rewritten.** Events stored with the shorter discriminator array still deserialize, and
-  sealed events still verify.
+- **Stored documents are not rewritten.** Events stored with the shorter discriminator array still deserialize.
 - **Data dropped by earlier versions cannot be recovered.** Inherited event members were never stored, so replay
   cannot restore them, and existing read models and checkpoints regain inherited members only when later events set
   them. Until then, reconstruction from such a checkpoint can differ from a replay that starts at the beginning of
   the stream. Consumers who registered their own class maps before the event store were not affected.
-
-## Event Store: integrity collection naming
-
-`IntegrityVerificationBuilder.WithAnchorCollections(anchors, leaves, evidence, evidenceChunks)` is removed;
-`IntegrityAnchoringBuilder` had no renaming method before. Both builders now expose `WithCollectionPrefix(prefix)`
-instead, which derives all five module-level collection names from one prefix: `{prefix}Anchors`,
-`{prefix}AnchorLeaves`, `{prefix}AnchorEvidence`, `{prefix}AnchorEvidenceChunks` and `{prefix}ChangeStreamState` (the
-last was never configurable before). A container that both anchors and verifies must configure the same prefix on
-both builders; registration fails otherwise. The default prefix stays `Integrity`, so deployments that never called
-`WithAnchorCollections` keep today's collection names with no changes.
-
-Deployments that did call `WithAnchorCollections` with four names that do not fit that single-prefix pattern cannot
-reproduce them with `WithCollectionPrefix`: configuring names is no longer independent per collection. Before
-upgrading, rename the physical anchors/leaves/evidence/evidence-chunks collections in MongoDB (for example with
-`db.collection.renameCollection(...)`) to the names a chosen prefix derives, then configure that prefix. Until the
-physical collections are renamed to match, existing anchors, leaves and timestamp evidence are unreachable under the
-new names. The change-stream-state collection needs no migration: it was never configurable, and anchoring's
-recovery scan repopulates it from scratch if it starts empty.
 
 ## Queue: stable collection names for generic payload types
 
@@ -103,14 +87,15 @@ Separately, two event-store aggregate types could resolve to the same read-model
 with no error — for example two differently namespaced aggregate types sharing a simple name, because the default
 collection prefix is `typeof(TAggregate).Name`. `WithEventStore<TAggregate>` now throws `InvalidOperationException`,
 naming both aggregate types and the shared collection name, as soon as a second aggregate type is registered with a
-colliding read-model, events, checkpoint, or (when enabled) integrity-state collection name. This applies regardless
-of whether either aggregate has integrity protection enabled, and runs before the two previous integrity-only checks.
+colliding read-model, events or checkpoint collection name.
 
 **Before upgrading**, confirm no two registered aggregate types already resolve to the same default collection
 name; such a configuration now fails startup instead of continuing to silently share data. Pin a distinct name for
 one of them in its `WithEventStore<TAggregate>` configure callback, for example:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+
 builder.WithEventStore<RenamedAggregate>(es => es.WithCollectionPrefix("OldAggregateName")
                                                   .WithEvent<SomeEvent>());
 ```
@@ -123,77 +108,54 @@ every default is derived from the CLR type name. Pin the previous name explicitl
 
 ## Public API trim: Chaos.Mongo
 
-`Chaos.Mongo`'s public surface is now trimmed to its 1.0 contract:
+`Chaos.Mongo`'s public surface is now trimmed to its 1.0 contract.
 
-- Default implementations behind documented interfaces (`MongoHelper`, the configurator/migration/hosted-service
-  runners, `MongoLock`, the queue publisher/subscription/handler-factory stack, and others) are now `internal`.
-  Depend on the documented interfaces (`IMongoHelper`, `IMongoLock`, and so on) instead.
-- `MongoHelperExtensions.ExecuteInTransaction` is renamed to `ExecuteInTransactionAsync` (both overloads). Rename
-  call sites.
-- `MongoOptions` changed from a `sealed record` to a mutable `sealed class`. Code using `with` expressions must
-  switch to object-initializer syntax or property assignment.
-- `MongoDefaults`'s tunable values (`QueryLimit` and its boolean switches) changed from `const` to `static` get-only
-  properties. Code that required a compile-time constant (for example, an attribute argument or a `case` label) must
-  read the value at run time instead; ordinary reads are unaffected.
-- Persisted types (`MongoQueueItem<T>`, `MongoLockDocument`, `MongoMigrationHistoryItem`) have `internal` state
-  setters wherever the BSON mapping allows it. Code that constructed or mutated them directly, instead of through the
-  documented APIs, no longer compiles.
+**Types that are now `internal`.** Depend on the documented interface in the right-hand column instead:
 
-## Public API trim: Chaos.Mongo.EventStore
+| Type | Use instead |
+| --- | --- |
+| `CollectionTypeMap` | `ICollectionTypeMap` |
+| `MongoClientSettingsFactory` | `IMongoClientSettingsFactory` |
+| `MongoConnectionFactory` | `IMongoConnectionFactory` |
+| `MongoHelper` | `IMongoHelper` |
+| `MongoHostedService` | `MongoOptions.ApplyMigrationsOnStartup` and `RunConfiguratorsOnStartup`, and `MongoQueueBuilder<TPayload>.WithAutoStartSubscription()` |
+| `MongoLock`, `MongoLockDocument` | `IMongoLock` |
+| `MongoOptionsValidation` | — (`AddMongo` still validates `MongoOptions` at startup) |
+| `Configuration.MongoConfiguratorRunner` | `IMongoConfiguratorRunner` |
+| `Migrations.MongoMigrationRunner` | `IMongoMigrationRunner` |
+| `Reflection.ReflectionHelper` | `MongoBuilder.WithConfiguratorAutoDiscovery` and `WithMigrationAutoDiscovery` |
+| `Queues.MongoQueue<TPayload>` | `IMongoQueue<TPayload>` |
+| `Queues.IMongoQueuePublisher`, `Queues.MongoQueuePublisher` | `IMongoQueue<TPayload>.PublishAsync` |
+| `Queues.IMongoQueueSubscription<TPayload>`, `Queues.MongoQueueSubscription<TPayload>`, `Queues.IMongoQueueSubscriptionFactory`, `Queues.MongoQueueSubscriptionFactory` | `IMongoQueue<TPayload>.StartSubscriptionAsync`, `StopSubscriptionAsync` and `IsRunning` |
+| `Queues.IMongoQueuePayloadHandlerFactory`, `Queues.MongoQueuePayloadHandlerFactory` | the registered `IMongoQueuePayloadHandler<TPayload>`, resolved in a DI scope per item |
 
-`Chaos.Mongo.EventStore`'s public surface is likewise trimmed, with a few shape changes alongside it:
+**Types that are now `sealed`.** Classes deriving from them no longer compile: `MongoBuilder`, `MongoConnection`,
+`Migrations.MongoMigrationHistoryItem`, `Queues.MongoQueueCollectionNameGenerator`, `Queues.MongoQueueDefinition`,
+`Queues.MongoQueueItem<TPayload>` and `Queues.MongoQueuePayloadPrioritizer`. Sealing `MongoQueueDefinition` makes its
+protected copy constructor, `EqualityContract` getter, and `PrintMembers` method inaccessible to consumers.
+`MongoMigrationHistoryItem` keeps its members unchanged.
 
-- Implementation types (`MongoEventStore<T>`, `MongoAggregateRepository<T>`, the configurator/serialization-setup
-  types, `CheckpointDocument<T>`, `CheckpointId`) are now `internal`. Depend on `IEventStore<T>` and
-  `IAggregateRepository<T>` instead.
-- `IEventStore<T>.GetEventStream` is renamed to `GetEventStreamAsync`. Rename call sites.
-- `ITimestampAuthority`'s boundary, and the revocation/timestamp types (`GetRevocationListsAsync`,
-  `RevocationLists`, `TimestampToken`), use `DateTime` with a `…Utc` suffix instead of `DateTimeOffset`. A custom
-  `ITimestampAuthority` implementation must return UTC `DateTime` values; a non-UTC value crossing the boundary now
-  throws `ArgumentException`.
-- The `.Integrity` result records (`AnchorAuthorityFailure`, `AnchorChainVerificationResult`, `AnchorLeaf`,
-  `AnchorReference`, `AnchorTimestamp`, `CheckpointVerification`, `CompletedAnchor`, `CompletenessFinding`,
-  `DerivedDataVerificationResult`, `EventAnchorVerificationResult`, `IntegritySealingStatus`,
-  `PersonalDataPathStatus`, `StreamVerificationResult`, `TimestampConfirmationFailure`,
-  `TimestampVerificationResult`, `TrustedAnchorHead`, `UnrecordedErasure`, `VerifiedEvent`) changed from positional
-  records to records with `init`-only properties. Code using positional construction or `Deconstruct` on them must
-  switch to object-initializer syntax or named property access. The BSON wire format is unchanged.
-- `TimestampAuthorityException` moved to `Chaos.Mongo.EventStore.Errors`; `IntegrityProtectionBuilder<T>` moved to
-  `Chaos.Mongo.EventStore.Integrity`. Update `using` directives.
-- A new public `IntegrityMetrics` class exposes `MeterName`, `Instruments` and `Tags` for the integrity meter.
+**Members:**
 
-## Public API trim: Chaos.Mongo.Outbox
-
-`Chaos.Mongo.Outbox`'s public surface is trimmed to its documented contract:
-
-- `MongoOutbox`, `OutboxConfigurator`, `OutboxHostedService`, `OutboxProcessor`, `OutboxSerializationSetup` and
-  `OutboxOptions` are now `internal`. `OutboxBuilder` stays public, but its constructor, `Build()`, `Validate()`,
-  `PublisherFactory`, `PublisherLifetime` and `PublisherType` are now `internal` too. Configure an outbox through
-  `OutboxBuilder`'s fluent `With*` methods instead of an `OutboxOptions` initializer.
-- `OutboxMessage` is `sealed`; every setter/init accessor is `internal`, while every getter stays `public`. Code
-  that constructed or mutated `OutboxMessage` directly, instead of through the documented APIs, no longer compiles.
-- `IOutbox`, `IOutbox<T>`, `IOutboxProcessor`, `IOutboxProcessor<T>`, `IOutboxPublisher`, `OutboxMessageState` and
-  `IOutboxConfiguratorRunner` stay public. See [the remaining members](#public-api-trim-remaining-members) for the
-  rename of `IOutboxConfiguratorRunner.RunAsync`.
-
-## Public API trim: remaining members
-
-A final pass before the 1.0 freeze removes, renames or tightens the members below.
-
-### Chaos.Mongo
-
-- `IMongoQueueSubscription<TPayload>` is now `internal`. Nothing could obtain one; control a subscription through
-  `IMongoQueue<TPayload>.StartSubscriptionAsync`, `StopSubscriptionAsync` and `IsRunning`.
+- `MongoBuilder`'s constructor is `internal`, and `DiscoveredConfigurators` and `DiscoveredMigrations` are removed.
+  Obtain the builder from `AddMongo`, and register configurators and migrations through its `With*` methods.
+- `MongoQueueBuilder<TPayload>`'s constructor and `RegisterQueue()` are `internal`. Configure a queue through
+  `MongoBuilder.WithQueue<TPayload>`.
 - `MongoQueueDefinition.PayloadHandlerType` is removed. It always held `typeof(IMongoQueuePayloadHandler<TPayload>)`
   and never the registered handler. Remove reads of it, and remove it from any `MongoQueueDefinition` initializer.
-- `MongoDefaults` members are renamed so that each names its feature:
-
-  | Before | After |
-  | --- | --- |
-  | `MongoDefaults.AutoStartSubscription` | `MongoDefaults.QueueAutoStartSubscription` |
-  | `MongoDefaults.RetryDelay` | `MongoDefaults.LockRetryDelay` |
-  | `MongoDefaults.MigrationsLockName` | `MongoDefaults.MigrationLockName` |
-
+  `QueryLimit` and `ClosedItemRetention` are renamed; see
+  [Queue and outbox option renames](#queue-and-outbox-option-renames).
+- `MongoQueueItem`'s constructor is no longer public, and the setters of `IsClosed`, `IsLocked`, `IsTerminal`,
+  `ClosedUtc` and `LockedUtc` are `internal`. `RetryCount` is replaced by `AttemptCount`; see
+  [below](#queue-and-outbox-retrycount-renamed-to-attemptcount-and-maxretries-now-means-the-same-thing-on-both). Code
+  that mutated queue items directly, instead of through the documented APIs, no longer compiles.
+- `MongoHelperExtensions.ExecuteInTransaction` is renamed to `ExecuteInTransactionAsync` (both overloads). Rename
+  call sites.
+- `MongoOptions` changed from a `sealed record` to a mutable `sealed class`. Replace `with` expressions with object
+  initializers or property assignments. The class no longer implements `IEquatable<MongoOptions>` or declares
+  `Equals(MongoOptions?)`, so it no longer satisfies a generic constraint requiring that interface. Existing
+  `==`, `!=` and instance `Equals` calls still compile and now compare references. If equality depends on the
+  configuration values, compare the relevant settings explicitly.
 - `MongoOptions.MigrationsLockName` is renamed to `MigrationLockName`. **This also renames the configuration key.**
   When `MongoOptions` is bound from configuration through `AddMongo(configuration, sectionName)`, a
   `MigrationsLockName` entry is no longer read and the default name applies instead. Rename the entry to
@@ -201,27 +163,71 @@ A final pass before the 1.0 freeze removes, renames or tightens the members belo
   configuration source, keep both entries until every instance runs the new version; otherwise the two versions use
   different lock names and can run migrations at the same time. The default value `"ChaosMongoMigrations"` is
   unchanged.
+- `IMongoMigrationRunner.RunMigrationsAsync` returns `Task<MongoMigrationResult>`; see
+  [Migrations](#migrations-runmigrationsasync-waits-for-the-lock-and-returns-a-result).
+- `MongoDefaults` members are renamed so that each names its feature, and every tunable value changed from `const` to
+  a `static` get-only property. Code that required a compile-time constant (for example, an attribute argument or a
+  `case` label) must read the value at run time instead; ordinary reads are unaffected. The collection and lock names
+  stay `const`.
+
+  | v0.9.0 | 1.0 |
+  | --- | --- |
+  | `const ApplyMigrationsOnStartup` | `static ApplyMigrationsOnStartup { get; }` |
+  | `const AutoStartSubscription` | `static QueueAutoStartSubscription { get; }` |
+  | `const MigrationsLockName` | `const MigrationLockName` |
+  | `const QueryLimit` | `static QueueBatchSize { get; }` |
+  | `const RunConfiguratorsOnStartup` | `static RunConfiguratorsOnStartup { get; }` |
+  | `const UseDefaultCollectionNames` | `static UseDefaultCollectionNames { get; }` |
+  | `const UseTransactionsForMigrationsIfAvailable` | `static UseTransactionsForMigrationsIfAvailable { get; }` |
+  | `static QueueClosedItemRetention { get; }` | `static QueueRetentionPeriod { get; }` |
+  | `static RetryDelay { get; }` | `static LockRetryDelay { get; }` |
+
 - Queue payloads no longer need a parameterless constructor. The `new()` constraint is removed from every queue type
   and member with a payload type parameter: `IMongoQueue<TPayload>`, `IMongoQueuePayloadHandler<TPayload>`,
-  `IMongoQueuePayloadPrioritizer.CreateSortDefinition<TPayload>()`, `MongoQueueItem<TPayload>`,
-  `MongoQueueBuilder<TPayload>` and `MongoBuilder.WithQueue<TPayload>`. Positional records now work as payloads. Code
+  `IMongoQueuePayloadPrioritizer.CreateSortDefinition<TPayload>()`, `MongoQueuePayloadPrioritizer.CreateSortDefinition<TPayload>()`,
+  `MongoQueueItem<TPayload>`, `MongoQueueBuilder<TPayload>` and `MongoBuilder.WithQueue<TPayload>`. Positional records now work as payloads. Code
   that only calls these APIs keeps compiling, including generic code that still declares `new()` itself. A class that
   implements a generic interface method must drop `new()` from its implementation: a custom
   `IMongoQueuePayloadPrioritizer` otherwise fails to compile with CS0425.
 
-### Chaos.Mongo.EventStore
+## Public API trim: Chaos.Mongo.EventStore
 
-- The constructor of `MongoEventStoreOptions<TAggregate>` is now `internal`. The event store creates the instance.
-- `PersonalDataErased<TAggregate>.Entries` and `PersonalDataErasureEntry.Paths` are `IReadOnlyList<>` properties with
-  `internal` setters instead of `List<>` properties with public setters. Code that assigned or mutated them, or that
-  used them as `List<>`, no longer compiles; enumerating and indexing them is unaffected. Stored documents are
-  unchanged.
+`Chaos.Mongo.EventStore`'s public surface is likewise trimmed:
 
-### Chaos.Mongo.Outbox
+- `CheckpointDocument<TAggregate>`, `CheckpointId`, `MongoAggregateRepository<TAggregate>`,
+  `MongoEventStore<TAggregate>`, `MongoEventStoreConfigurator<TAggregate>` and `MongoEventStoreSerializationSetup`
+  are now `internal`. Depend on `IEventStore<TAggregate>` and `IAggregateRepository<TAggregate>` instead.
+- `IEventStore<TAggregate>.GetEventStream` is renamed to `GetEventStreamAsync`. Rename call sites.
+- `MongoEventStoreBuilder<TAggregate>`'s constructor is `internal`, and its `Options` property is removed. Configure
+  an event store through the `WithEventStore<TAggregate>` callback.
+- `MongoEventStoreOptions<TAggregate>`'s constructor is `internal`; the event store creates the instance. Its
+  `BulkWriteOptimizationEnabled`, `CheckpointCollectionSuffix`, `CheckpointInterval`, `CollectionPrefix` and
+  `EventsCollectionSuffix` properties are read-only, and `EventTypes` is an `IReadOnlyDictionary<Type, string>`
+  instead of a `Dictionary<Type, string>`. Set the values through the builder's `WithBulkWriteOptimization()`,
+  `WithCheckpointCollectionSuffix`, `WithCheckpoints`, `WithCollectionPrefix`, `WithEventsCollectionSuffix` and
+  `WithEvent` methods.
 
-- The constructor of `OutboxMessage` is now `internal`. To build a message in a unit test of an `IOutboxPublisher`,
-  use the new `OutboxMessage.Create(type, payload, ...)`; see
-  [Testing an Outbox Publisher](testing.md#testing-an-outbox-publisher).
+The [stream position and revision](#event-store-stream-position-and-aggregate-revision) changes add members to
+`IAggregate` and `IAggregateRepository<TAggregate>` and change the signature of
+`IEventStore<TAggregate>.AppendEventsAsync` as well.
+
+## Public API trim: Chaos.Mongo.Outbox
+
+`Chaos.Mongo.Outbox`'s public surface is trimmed to its documented contract:
+
+- `MongoOutbox`, `OutboxConfigurator`, `OutboxConfiguratorRunner`, `OutboxHostedService`, `OutboxProcessor`,
+  `OutboxSerializationSetup` and `OutboxOptions` are now `internal`. Configure an outbox through `OutboxBuilder`'s
+  fluent `With*` methods instead of an `OutboxOptions` initializer, and depend on `IOutbox`, `IOutbox<TOutbox>`,
+  `IOutboxProcessor`, `IOutboxProcessor<TOutbox>` and `IOutboxConfiguratorRunner`.
+- `OutboxBuilder` stays public, but its constructor, `Build()`, `Validate()`, `PublisherLifetime` and `PublisherType`
+  are now `internal`. `WithLockTimeout` is renamed; see
+  [Queue and outbox option renames](#queue-and-outbox-option-renames).
+- `OutboxMessage` is `sealed`, its constructor is `internal`, and every setter/init accessor is `internal`, while
+  every getter stays `public`. Code that constructed or mutated `OutboxMessage` directly, instead of through the
+  documented APIs, no longer compiles. To build a message in a unit test of an `IOutboxPublisher`, use the new
+  `OutboxMessage.Create(type, payload, ...)`; see [Testing an Outbox Publisher](testing.md#testing-an-outbox-publisher).
+  `RetryCount` is replaced by `AttemptCount`; see
+  [below](#queue-and-outbox-retrycount-renamed-to-attemptcount-and-maxretries-now-means-the-same-thing-on-both).
 - `IOutboxConfiguratorRunner.RunAsync` is renamed to `RunConfiguratorsAsync`, matching
   `IMongoConfiguratorRunner.RunConfiguratorsAsync`. Rename call sites.
 - Outbox payloads no longer need a parameterless constructor either: the `new()` constraint is removed from
@@ -242,10 +248,9 @@ Queues and the outbox configured the same concepts under different names; both b
 | Items read per poll | `WithQueryLimit` / `QueryLimit` | `WithBatchSize` / `BatchSize` | `WithBatchSize` / `BatchSize` |
 | Retention of finished items | `WithClosedItemRetention` / `ClosedItemRetention` | `WithRetentionPeriod` / `RetentionPeriod` | `WithRetentionPeriod` / `RetentionPeriod` |
 
-The queue keeps `WithImmediateDelete`, which the outbox does not have. `MongoDefaults.QueryLimit` is renamed to
-`MongoDefaults.QueueBatchSize`, and `MongoDefaults.QueueClosedItemRetention` is renamed to
-`MongoDefaults.QueueRetentionPeriod`. Stored document shapes are unchanged; rename call sites to the new builder
-methods, properties and defaults.
+The queue keeps `WithImmediateDelete`, which the outbox does not have. The matching `MongoDefaults` members are
+renamed too; see the [`MongoDefaults` table](#public-api-trim-chaosmongo). Stored document shapes are unchanged;
+rename call sites to the new builder methods, properties and defaults.
 
 ## Queue and outbox: `RetryCount` renamed to `AttemptCount`, and `MaxRetries` now means the same thing on both
 
@@ -271,7 +276,7 @@ or message that succeeds on its very first acquisition has `AttemptCount == 1`, 
 `MaxRetries` now means the same thing on both: the number of retries allowed after the first attempt, so a
 configured value of `N` allows `N + 1` total delivery attempts before the item/message becomes terminal — the
 queue's existing behavior. **The outbox's effective attempt budget for every configured `MaxRetries` increases by
-one** (an unconfigured outbox, `WithMaxRetries(5)`, now allows 6 attempts instead of 5); the queue's behavior is
+one** (an outbox configured with `WithMaxRetries(5)` now allows 6 attempts instead of 5); the queue's behavior is
 unchanged. If outbox alerting or capacity planning assumed the old, one-attempt-shorter budget, account for the
 extra attempt.
 
@@ -283,12 +288,11 @@ into `AttemptCount`.
 
 Rename `RetryCount` references to `AttemptCount` at call sites (`MongoQueueItem.RetryCount`,
 `OutboxMessage.RetryCount`), including any `FilterDefinition`/`SortDefinition`/`UpdateDefinition` built against the
-old member name. Both packages' `PublicAPI.Shipped.txt`/`PublicAPI.Unshipped.txt` reflect the rename and the
-`Int32` → `Int64` widening.
+old member name.
 
 ## Outbox: unlimited retries by default, and `Failed` messages excluded from TTL cleanup by default
 
-An unconfigured outbox (no `WithMaxRetries(...)` call) previously gave up on a message permanently after 6 total
+An unconfigured outbox (no `WithMaxRetries(...)` call) previously gave up on a message permanently after 5 total
 delivery attempts (`MaxRetries` defaulted to `5`), which the default exponential backoff reaches after roughly
 75 to 95 seconds. A broker outage that outlasted that short window silently lost the message to `Failed`, with no
 API to requeue it — in conflict with the outbox's at-least-once delivery purpose. `MaxRetries` is now nullable and
@@ -310,20 +314,28 @@ already used for every other managed index), unless `WithExpireFailedMessages()`
 upgrading. No manual migration step is needed, but messages already deleted by that index before upgrading are
 not recoverable.
 
-To restore the previous behavior explicitly, configure both:
+To restore the v0.9.0 default of five total attempts, configure four retries. If the outbox previously expired
+failed messages, keep its configured retention period and enable `WithExpireFailedMessages()`. The example uses
+seven days.
 
 ```csharp
-.WithOutbox(o => o
-    .WithMaxRetries(5)
-    .WithRetentionPeriod(TimeSpan.FromDays(7))
-    .WithExpireFailedMessages())
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
+
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox(o => o
+        .WithPublisher<NotificationsPublisher>()
+        .WithMessage<OrderPlacedMessage>("OrderPlaced")
+        .WithMaxRetries(4)
+        .WithRetentionPeriod(TimeSpan.FromDays(7))
+        .WithExpireFailedMessages());
 ```
 
 ## Queue metrics: duration histograms now record seconds
 
 `MongoQueueMetrics.Instruments.ProcessingDuration`, `ProcessingQueueAge` and `LockRecoveryAge` now register unit
-`"s"` and record seconds, matching the `IntegrityMetrics` anchoring histograms and OpenTelemetry's convention for
-duration instruments. They previously registered unit `"ms"` and recorded milliseconds.
+`"s"` and record seconds, matching OpenTelemetry's convention for duration instruments. They previously registered
+unit `"ms"` and recorded milliseconds.
 
 Dashboards, alert thresholds and queries built against the old millisecond values now read 1000x too low against
 the same stored/exported data. Rescale them to seconds, or rebuild them against the new unit, before upgrading.
@@ -370,8 +382,9 @@ Lock documents gain an internal per-acquisition token; release and extension now
 last-known lease expiry. This also fixes a renewal that reached the server but whose response the caller never
 observed (including a cancelled renewal on shutdown) from leaving the lock held past disposal, or from refusing a
 legitimate retry. A lock already held when upgrading, or taken over by an older instance after its lease expired,
-lacks the token but still expires and can be acquired normally. No public API changed (`MongoLock` and
-`MongoLockDocument` are internal), so there is nothing for consumers to change beyond this behavior note.
+lacks the token but still expires and can be acquired normally. This change adds no public API (`MongoLock` and
+`MongoLockDocument` are [now internal](#public-api-trim-chaosmongo)), so there is nothing for consumers to change
+beyond this behavior note.
 
 **Boundary: do not run old and new binaries with a shared, configured `HolderId` concurrently against the same
 lock.** An older (pre-upgrade) instance's take-over of an expired lock only `$set`s `Holder`/`LeaseUntilUtc`; it has

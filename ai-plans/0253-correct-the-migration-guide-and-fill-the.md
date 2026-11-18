@@ -15,47 +15,48 @@ comparison with v0.9.0, and the remaining gaps closed before 1.0.
 
 ### Migration guide
 
-- [ ] Every public type or member of the three v0.9.0 packages that was removed, made non-public, renamed, or changed
+- [x] Every public type or member of the three v0.9.0 packages that was removed, made non-public, renamed, or changed
   in signature, constraint or kind appears in `docs/migrating-from-0.x.md`, as established by comparing the published
   0.9.0 packages with the current build.
-- [ ] The guide describes no API that did not exist in v0.9.0 as a change. This includes every tamper-evidence API
+- [x] The guide describes no API that did not exist in v0.9.0 as a change. This includes every tamper-evidence API
   (`.Integrity`, `IntegrityProtectionBuilder<T>`, `ITimestampAuthority`, `TimestampAuthorityException`,
   `IntegrityMetrics`, the integrity collection prefix); tamper evidence appears only as new in 1.0.
-- [ ] The guide describes `MongoLockDocument` and `MongoMigrationHistoryItem` with their actual 1.0 visibility, and
+- [x] The guide describes `MongoLockDocument` and `MongoMigrationHistoryItem` with their actual 1.0 visibility, and
   states that `IMongoQueuePublisher` and the related queue implementation types are internal.
 
 ### Corrections
 
-- [ ] `docs/event-store.md` lists the `EventAnchorVerificationResult.Status` values as `Anchored`, `Failed`,
+- [x] `docs/event-store.md` lists the `EventAnchorVerificationResult.Status` values as `Anchored`, `Failed`,
   `NotAnchored` and `NotChecked`.
-- [ ] The docs use "batch size" instead of "query limit" and "lock lease time" instead of "lock timeout" wherever they
+- [x] The docs use "batch size" instead of "query limit" and "lock lease time" instead of "lock timeout" wherever they
   refer to the renamed options.
-- [ ] Every C# sample in `docs/`, `README.md` and `src/*/README.md` compiles with the `using` directives it shows, and
+- [x] Every C# sample in `docs/`, `README.md` and `src/*/README.md` compiles with the `using` directives it shows, and
   every sample names its cancellation token `cancellationToken`.
 
 ### New topics
 
-- [ ] `docs/queues.md` states that publishing from a queue handler, or from work protected by an `IMongoLock`, is not
+- [x] `docs/queues.md` states that publishing from a queue handler, or from work protected by an `IMongoLock`, is not
   atomic with completing that work, so a retry or lease-expiry reclaim can publish again; follow-up payloads must
   tolerate duplicates, and the outbox is the option when the publish must be atomic with a database write.
-- [ ] `docs/transactional-outbox.md` states that `IOutboxPublisher.PublishAsync` must complete within the configured
+- [x] `docs/transactional-outbox.md` states that `IOutboxPublisher.PublishAsync` must complete within the configured
   lock lease time, because otherwise another processor reclaims the message and publishes it again.
-- [ ] `docs/event-store.md` has an event-evolution section describing what happens to stored events that lack an
+- [x] `docs/event-store.md` has an event-evolution section describing what happens to stored events that lack an
   element, contain an element the class no longer declares, or hold a value of a changed type; how renaming an event
   class interacts with discriminators; and the recommended approach (additive changes, explicit discriminators, a new
   event type for incompatible changes, no built-in upcasting), including that changing an event class never rewrites
-  stored events, which keep their stored shape and keep verifying; personal-data erasure is the only operation that
-  changes a stored event.
-- [ ] A collection-names section recommends pinning collection names explicitly for production and covers
+  stored events, which keep their stored shape and keep verifying; apart from retroactive sealing, which adds an
+  `_integrity` element to events written before protection was enabled, personal-data erasure is the only operation
+  that changes a stored event.
+- [x] A collection-names section recommends pinning collection names explicitly for production and covers
   `CollectionTypeMap`, the event store's and integrity builders' `WithCollectionPrefix`, and the queue's and outbox's
   `WithCollectionName`, linking to the naming rules in `docs/compatibility-policy.md`.
-- [ ] `docs/event-store.md` states that `IEventStore<TAggregate>`, `IAggregateRepository<TAggregate>` and
+- [x] `docs/event-store.md` states that `IEventStore<TAggregate>`, `IAggregateRepository<TAggregate>` and
   `IPersonalDataEraser<TAggregate>` (the latter when integrity protection is enabled) are registered as scoped services
   and shows how to use them from singletons and hosted services.
-- [ ] A new `docs/production-checklist.md`, linked from `README.md`'s docs table, states for each package which indexes
+- [x] A new `docs/production-checklist.md`, linked from `README.md`'s docs table, states for each package which indexes
   are created and how (configurators at startup, or out-of-band with the required roles), which collections expire or
   are retained under which option and default, and which meters to export, with links to the suggested alerts.
-- [ ] Automated tests pin each documented event-evolution behavior for class maps the event store builds (a missing
+- [x] Automated tests pin each documented event-evolution behavior for class maps the event store builds (a missing
   element deserializes to the member's default unless the member is marked `[BsonRequired]`, an undeclared element is
   ignored, an element whose stored type no longer matches fails as documented) and the scoped registration of
   `IEventStore<TAggregate>` and `IAggregateRepository<TAggregate>`, using existing tests where they already cover it.

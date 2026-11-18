@@ -11,6 +11,9 @@ test double instead of a real database. Implement only the members your code und
 `NotImplementedException` from the rest so an unexpected call fails loudly instead of returning a misleading default:
 
 ```csharp
+using Chaos.Mongo;
+using MongoDB.Driver;
+
 private sealed class FakeMongoHelper : IMongoHelper
 {
     public IMongoClient Client => throw new NotImplementedException();
@@ -38,6 +41,9 @@ implementation types directly, ensures collection names and any other builder-co
 production would use for the same configuration:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Queues;
+
 var services = new ServiceCollection();
 var databaseName = $"MyAppTests_{Guid.NewGuid():N}";
 
@@ -66,6 +72,9 @@ deterministically by registering a test `TimeProvider`, such as
 the whole container, including the library's own services, observes your fake clock:
 
 ```csharp
+using Chaos.Mongo;
+using Microsoft.Extensions.Time.Testing;
+
 var timeProvider = new FakeTimeProvider();
 
 var services = new ServiceCollection();
@@ -105,6 +114,9 @@ can construct. A unit test builds one with `OutboxMessage.Create` and passes it 
 database or a processor:
 
 ```csharp
+using Chaos.Mongo.Outbox;
+using MongoDB.Bson;
+
 var payload = new OrderPlacedMessage { OrderId = "A-1001" };
 var message = OutboxMessage.Create("OrderPlaced", payload.ToBsonDocument(), correlationId: "corr-1");
 

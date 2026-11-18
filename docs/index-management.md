@@ -3,6 +3,9 @@
 Chaos.Mongo extends the MongoDB driver's index manager with `CreateOneOrUpdateAsync`. It creates a missing index and recreates an existing named index when its specification differs from the desired definition.
 
 ```csharp
+using Chaos.Mongo;
+using MongoDB.Driver;
+
 var collection = mongo.GetCollection<User>();
 var index = new CreateIndexModel<User>(
     Builders<User>.IndexKeys.Ascending(user => user.Email),
@@ -44,6 +47,8 @@ Resolving the collation this way needs one spare index slot in the target collec
 `DropOneIfExistsAsync` drops a named index and ignores the error when the index or its collection does not already exist, so retiring an index stays idempotent:
 
 ```csharp
+using Chaos.Mongo;
+
 await collection.Indexes.DropOneIfExistsAsync(
     "email_unique",
     cancellationToken: cancellationToken);
