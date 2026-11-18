@@ -71,6 +71,7 @@ Resolve `IMongoHelper` to access the configured database and mapped collections.
 | [Migrating from 0.x](docs/migrating-from-0.x.md) | Breaking changes since v0.9.0 and the upgrade path to 1.0 |
 | [Compatibility Policy](docs/compatibility-policy.md) | SemVer, stored-data and platform support guarantees |
 | [Requirements](docs/requirements.md) | Supported .NET and MongoDB server versions |
+| [Production Checklist](docs/production-checklist.md) | Indexes, retention and metrics to settle before going to production |
 
 ## License
 

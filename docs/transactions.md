@@ -9,6 +9,9 @@ MongoDB transactions require a replica set or sharded deployment. They are not a
 `ExecuteInTransactionAsync` starts a session, commits successful work, and aborts when the callback throws:
 
 ```csharp
+using Chaos.Mongo;
+using MongoDB.Driver;
+
 public sealed class OrderService(IMongoHelper mongo)
 {
     public Task<Order> CreateOrderAsync(
@@ -16,20 +19,20 @@ public sealed class OrderService(IMongoHelper mongo)
         Payment payment,
         CancellationToken cancellationToken = default)
     {
-        return mongo.ExecuteInTransactionAsync(async (helper, session, ct) =>
+        return mongo.ExecuteInTransactionAsync(async (helper, session, cancellationToken) =>
         {
             var orders = helper.GetCollection<Order>();
-            await orders.InsertOneAsync(session, order, cancellationToken: ct);
+            await orders.InsertOneAsync(session, order, cancellationToken: cancellationToken);
 
             var payments = helper.GetCollection<Payment>();
-            await payments.InsertOneAsync(session, payment, cancellationToken: ct);
+            await payments.InsertOneAsync(session, payment, cancellationToken: cancellationToken);
 
             var products = helper.GetCollection<Product>();
             await products.UpdateOneAsync(
                 session,
                 product => product.Id == order.ProductId,
                 Builders<Product>.Update.Inc(product => product.Stock, -order.Quantity),
-                cancellationToken: ct);
+                cancellationToken: cancellationToken);
 
             return order;
         }, cancellationToken: cancellationToken);
@@ -44,6 +47,8 @@ Every operation that must be atomic needs to receive the callback's `session`.
 Use `TryStartTransactionAsync` when an operation can deliberately fall back to non-transactional behavior:
 
 ```csharp
+using Chaos.Mongo;
+
 public async Task ProcessAsync(CancellationToken cancellationToken = default)
 {
     using var session = await mongo.TryStartTransactionAsync(cancellationToken: cancellationToken);

@@ -41,6 +41,9 @@ public sealed class OrderCreated : Event<OrderAggregate>
 Register the core MongoDB services and the event store:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithEventStore<OrderAggregate>(eventStore => eventStore
         .WithEvent<OrderCreated>("OrderCreated")

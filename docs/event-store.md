@@ -16,6 +16,7 @@ Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
   - [Aggregate Repository](#aggregate-repository)
 - [Configuration](#configuration)
   - [Registering an Event Store](#registering-an-event-store)
+  - [Service Lifetimes](#service-lifetimes)
   - [Builder Options](#builder-options)
   - [Checkpoints](#checkpoints)
   - [Collections Created](#collections-created)
@@ -24,6 +25,7 @@ Event sourcing capabilities for MongoDB, built on top of `Chaos.Mongo`.
 - [Working with Events](#working-with-events)
   - [Defining Events](#defining-events)
   - [Class Hierarchies](#class-hierarchies)
+  - [Event Evolution](#event-evolution)
   - [Appending Events](#appending-events)
   - [Reading Events](#reading-events)
 - [Concurrency and Idempotency](#concurrency-and-idempotency)
@@ -95,6 +97,9 @@ public class OrderAggregate : Aggregate
 ### 2. Define Your Events
 
 ```csharp
+using Chaos.Mongo.EventStore;
+using Chaos.Mongo.EventStore.Errors;
+
 public class OrderCreatedEvent : Event<OrderAggregate>
 {
     public string CustomerName { get; set; } = string.Empty;
@@ -123,6 +128,9 @@ public class OrderShippedEvent : Event<OrderAggregate>
 ### 3. Register the Event Store
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithEventStore<OrderAggregate>(es => es
         .WithEvent<OrderCreatedEvent>("OrderCreated")
@@ -139,6 +147,8 @@ without that permission needs the index provisioned out-of-band instead — see
 ### 4. Use the Event Store
 
 ```csharp
+using Chaos.Mongo.EventStore;
+
 public class OrderService
 {
     private readonly IEventStore<OrderAggregate> _eventStore;
@@ -194,6 +204,8 @@ public interface IAggregate
 
 **`Aggregate` Base Class:**
 ```csharp
+using Chaos.Mongo.EventStore;
+
 public class MyAggregate : Aggregate
 {
     // Your aggregate state
@@ -225,6 +237,9 @@ Events represent facts that have occurred. They are immutable and append-only.
 Each event must implement `Execute(TAggregate aggregate)` to apply its changes:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+using Chaos.Mongo.EventStore.Errors;
+
 public class ItemAddedEvent : Event<CartAggregate>
 {
     public string ProductId { get; set; } = string.Empty;
@@ -274,6 +289,9 @@ access or an export. They become part of the ordered (and, with integrity protec
 not change the aggregate:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+using Chaos.Mongo.EventStore.Errors;
+
 public class OrderViewedEvent : ObservationalEvent<OrderAggregate>
 {
     public string ViewedBy { get; set; } = string.Empty;
@@ -308,21 +326,25 @@ Reconstruction excludes observational events on the server, so they are neither 
 `IEventStore<TAggregate>` is the primary interface for working with events:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+using MongoDB.Driver;
+
 public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, new()
 {
-    Task<long> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken ct = default);
+    Task<long> GetExpectedNextVersionAsync(Guid aggregateId, CancellationToken cancellationToken = default);
 
     Task<TAggregate> AppendEventsAsync(
         IEnumerable<Event<TAggregate>> events,
         long? expectedRevision = null,
         Func<IClientSessionHandle, TAggregate, IMongoHelper, CancellationToken, Task>? onBeforeCommit = null,
-        CancellationToken ct = default);
+        CancellationToken cancellationToken = default);
 
     IAsyncEnumerable<Event<TAggregate>> GetEventStreamAsync(
         Guid aggregateId,
         long fromVersion = 0,
         long? toVersion = null,
-        CancellationToken ct = default);
+        CancellationToken cancellationToken = default);
 }
 ```
 
@@ -336,13 +358,16 @@ public interface IEventStore<TAggregate> where TAggregate : class, IAggregate, n
 `IAggregateRepository<TAggregate>` provides access to aggregate state:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+using MongoDB.Driver;
+
 public interface IAggregateRepository<TAggregate> where TAggregate : class, IAggregate, new()
 {
-    Task<TAggregate?> GetAsync(Guid aggregateId, CancellationToken ct = default);
+    Task<TAggregate?> GetAsync(Guid aggregateId, CancellationToken cancellationToken = default);
 
-    Task<TAggregate?> GetAtVersionAsync(Guid aggregateId, long version, CancellationToken ct = default);
+    Task<TAggregate?> GetAtVersionAsync(Guid aggregateId, long version, CancellationToken cancellationToken = default);
 
-    Task<TAggregate?> GetAtRevisionAsync(Guid aggregateId, long revision, CancellationToken ct = default);
+    Task<TAggregate?> GetAtRevisionAsync(Guid aggregateId, long revision, CancellationToken cancellationToken = default);
 
     IMongoCollection<TAggregate> Collection { get; }
 }
@@ -359,6 +384,9 @@ public interface IAggregateRepository<TAggregate> where TAggregate : class, IAgg
 ### Registering an Event Store
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithEventStore<OrderAggregate>(es => es
         .WithEvent<OrderCreatedEvent>("OrderCreated")
@@ -367,6 +395,33 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithCollectionPrefix("Orders")
         .WithCheckpoints(interval: 100)
         .WithBulkWriteOptimization()); // Optional: requires MongoDB 8.0+
+```
+
+### Service Lifetimes
+
+`WithEventStore<TAggregate>` registers `IEventStore<TAggregate>` and `IAggregateRepository<TAggregate>` as scoped
+services, and `IPersonalDataEraser<TAggregate>` as well when integrity protection is enabled. In ASP.NET Core, inject
+them into controllers, minimal API handlers or other request-scoped services as usual.
+
+A singleton or a hosted service must not take them as constructor dependencies: with scope validation, which ASP.NET
+Core enables in the Development environment, the root provider refuses to resolve them, and without it a single
+instance would live as long as the application. Create a scope for each unit of work instead:
+
+```csharp
+using Chaos.Mongo.EventStore;
+
+public sealed class OrderExpiryJob(IServiceScopeFactory scopeFactory)
+{
+    public async Task ExpireAsync(Guid orderId, CancellationToken cancellationToken = default)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var eventStore = scope.ServiceProvider.GetRequiredService<IEventStore<OrderAggregate>>();
+
+        await eventStore.AppendEventsAsync(
+            [new OrderExpiredEvent { AggregateId = orderId }],
+            cancellationToken: cancellationToken);
+    }
+}
 ```
 
 ### Builder Options
@@ -403,9 +458,13 @@ exists, the automatic check's `createIndexes` call is idempotent for a connectio
 Checkpoints are periodic snapshots of aggregate state that speed up reconstruction for aggregates with many events.
 
 ```csharp
-.WithEventStore<OrderAggregate>(es => es
-    .WithEvent<OrderCreatedEvent>("OrderCreated")
-    .WithCheckpoints(interval: 100))  // Checkpoint every 100 events
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithEventStore<OrderAggregate>(es => es
+        .WithEvent<OrderCreatedEvent>("OrderCreated")
+        .WithCheckpoints(interval: 100)); // Checkpoint every 100 events
 ```
 
 When enabled:
@@ -485,7 +544,7 @@ atomically: event inserts, a read-model upsert, and sometimes a checkpoint inser
 combine those built-in operations into one request while retaining the existing transaction boundary.
 
 MongoQueue is excluded because its current processing loop is intentionally single-item and sequential. Database
-operations are separated by user handler execution, and the default query limit is one, so there is no meaningful batch
+operations are separated by user handler execution, and the default batch size is one, so there is no meaningful batch
 to submit as one command. Reconsider Queue only if it gains genuine batch processing and measurements show database
 round trips, rather than handler work, are the limiting factor.
 
@@ -505,6 +564,8 @@ multiple compatible operations at the same point in each workflow, not collectio
 Events should be self-contained and include all data needed to apply changes:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+
 public class PriceChangedEvent : Event<ProductAggregate>
 {
     public decimal OldPrice { get; set; }
@@ -524,6 +585,8 @@ public class PriceChangedEvent : Event<ProductAggregate>
 Throw `MongoEventValidationException` when preconditions aren't met:
 
 ```csharp
+using Chaos.Mongo.EventStore.Errors;
+
 public override void Execute(OrderAggregate aggregate)
 {
     if (aggregate.Status == "Cancelled")
@@ -540,6 +603,8 @@ real class hierarchy, so members declared on an intermediate class are stored an
 members:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+
 public abstract class AuditedEvent : Event<OrderAggregate>
 {
     public string ChangedBy { get; set; } = string.Empty;   // stored with every derived event
@@ -576,6 +641,94 @@ therefore rejects two types in an aggregate's event hierarchy that share a discr
 registered as `"OrderPlaced"` while `OrderPlaced` is no longer registered and thus defaults to the same name. Resolve it
 by registering the intermediate type with a distinct discriminator, such as `WithEvent<OrderPlaced>("OrderPlacedV1")`.
 
+### Event Evolution
+
+Changing an event class never rewrites stored events: every stored event keeps the shape it was written with, and a
+[protected](#tamper-evidence) event keeps verifying, because verification works on the stored bytes. Apart from
+retroactive sealing, which adds an `_integrity` element to events written before protection was enabled, erasing
+personal data is the only operation that changes a stored event. Reading events — `GetEventStreamAsync`, and the replay
+behind `GetAtVersionAsync`, `GetAtRevisionAsync` and erasure — deserializes each stored event with the current class.
+For the class maps the event store builds, events stored before a change read back as follows:
+
+| Change to the event class | Events stored before the change |
+|---|---|
+| A member is added | If the member is marked `[BsonRequired]`, reading throws `FormatException`. For an optional member, `[BsonDefaultValue(...)]` supplies the value when the element is missing. A member that the driver can set after construction otherwise keeps its constructed value, including any initializer. A member bound to a constructor parameter needs a BSON default or a constructor mapping that can read the old shape. |
+| A member is removed | The stored element is ignored. |
+| A member's type changes | Reading throws `FormatException` when the new type's serializer cannot read the stored value, for example a string stored for an `int`. |
+| A member is renamed | The stored value is no longer read, as if the member were removed and another added. Keep the stored element name with `[BsonElement("OldName")]`. |
+| The class is renamed or removed | Unaffected while the class registered under the stored discriminator still exists. Without an explicit discriminator, the stored one is the old class name, and reading throws `BsonSerializationException` (`Unknown discriminator value`). |
+
+`GetAsync` reads the maintained read model, not the events, so it is unaffected until a replay is needed. Read models
+and checkpoints follow the same rules for changes to the aggregate class. Class maps that you register before the
+event store are used unchanged, so whether they ignore removed members is up to your registration; the driver's
+default throws on an unknown element.
+
+If the driver uses a mapped constructor, such as one marked `[BsonConstructor]`, keep its parameter list and add
+the new member as a settable property with an initializer. If the new member needs to be a constructor parameter,
+put `[BsonDefaultValue(...)]` on the corresponding member. An optional C# parameter alone can still leave the
+driver without a matching constructor, in which case reading old events throws `BsonSerializationException`.
+
+The event store has no built-in upcasting, and rewriting stored events yourself breaks the hash chain of protected
+streams. Evolve events so that every stored version stays readable:
+
+- Register every event with an explicit discriminator and never reuse one for a different shape.
+- Make only additive changes: add members whose initializer, or `null`, stands for "not recorded", and handle that
+  value in `Execute`. Do not change a stored member's type or meaning, and do not mark an added member `[BsonRequired]`.
+- For an incompatible change, add a new event type with its own discriminator, and keep the old type registered so
+  that existing events still replay.
+
+The example below evolves the Quick Start's `OrderShippedEvent` and assumes that `OrderAggregate` has since gained
+`Carrier` and `TrackingNumber` properties:
+
+```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+using Chaos.Mongo.EventStore.Errors;
+
+public class OrderShippedEvent : Event<OrderAggregate>
+{
+    // Added later: events stored before have neither element, so Carrier reads back as its initializer and
+    // TrackingNumber as null.
+    public string Carrier { get; set; } = "not recorded";
+    public string? TrackingNumber { get; set; }
+
+    public override void Execute(OrderAggregate aggregate)
+    {
+        if (aggregate.Status != "Created")
+            throw new MongoEventValidationException("Order must be in Created status to ship");
+
+        aggregate.Status = "Shipped";
+        aggregate.Carrier = Carrier;
+        aggregate.TrackingNumber = TrackingNumber ?? "not recorded";
+    }
+}
+
+// Replaces OrderShippedEvent for new appends; its parcels cannot be expressed in the old shape.
+public class OrderShippedInParcelsEvent : Event<OrderAggregate>
+{
+    public List<string> TrackingNumbers { get; set; } = [];
+
+    public override void Execute(OrderAggregate aggregate)
+    {
+        if (aggregate.Status != "Created")
+            throw new MongoEventValidationException("Order must be in Created status to ship");
+
+        aggregate.Status = "Shipped";
+        aggregate.TrackingNumber = string.Join(", ", TrackingNumbers);
+    }
+}
+
+public static class OrderEventStoreRegistration
+{
+    public static MongoBuilder WithOrderEvents(this MongoBuilder builder)
+        => builder.WithEventStore<OrderAggregate>(es => es
+            .WithEvent<OrderCreatedEvent>("OrderCreated")
+            .WithEvent<OrderShippedEvent>("OrderShipped")
+            .WithEvent<OrderShippedInParcelsEvent>("OrderShippedInParcels")
+            .WithCollectionPrefix("Orders"));
+}
+```
+
 ### Appending Events
 
 The simplest way is to leave `Version` unset and let the event store assign the positions:
@@ -611,13 +764,13 @@ public async Task<OrderAggregate> ShipOrderAsync(Guid orderId)
 **Appending Multiple Events:**
 
 ```csharp
-var version = await _eventStore.GetExpectedNextVersionAsync(orderId);
+var version = await _cartEventStore.GetExpectedNextVersionAsync(cartId);
 
-var aggregate = await _eventStore.AppendEventsAsync(
+var aggregate = await _cartEventStore.AppendEventsAsync(
 [
-    new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId, Version = version, ProductId = "P1" },
-    new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId, Version = version + 1, ProductId = "P2" },
-    new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = orderId, Version = version + 2, ProductId = "P3" }
+    new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = cartId, Version = version, ProductId = "P1" },
+    new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = cartId, Version = version + 1, ProductId = "P2" },
+    new ItemAddedEvent { Id = Guid.CreateVersion7(), AggregateId = cartId, Version = version + 2, ProductId = "P3" }
 ]);
 // aggregate is a commit-time snapshot with all three events applied
 ```
@@ -712,6 +865,8 @@ The explicit `Version` only protects the position; it does not detect a writer t
 fresh state, instead of silently overwriting it:
 
 ```csharp
+using Chaos.Mongo.EventStore;
+
 public class OrderUpdatedEvent : Event<OrderAggregate>
 {
     public string CustomerName { get; set; } = string.Empty;
@@ -725,6 +880,10 @@ public class OrderUpdatedEvent : Event<OrderAggregate>
         aggregate.Status = Status;
     }
 }
+```
+
+```csharp
+using Chaos.Mongo.EventStore.Errors;
 
 public async Task UpdateWithRetryAsync(Guid aggregateId, Action<OrderAggregate> update)
 {
@@ -773,6 +932,8 @@ public async Task UpdateWithRetryAsync(Guid aggregateId, Action<OrderAggregate> 
 Each event has a unique `Id`. If you retry an operation with the same event ID, the duplicate is detected:
 
 ```csharp
+using Chaos.Mongo.EventStore.Errors;
+
 var eventId = Guid.CreateVersion7();  // Generate once, use for retries
 
 try
@@ -863,18 +1024,18 @@ await _eventStore.AppendEventsAsync(
             TotalAmount = amount
         }
     ],
-    onBeforeCommit: async (session, aggregate, helper, ct) =>
+    onBeforeCommit: async (session, aggregate, helper, cancellationToken) =>
     {
         await _outbox.AddMessageAsync(
             session,
             new OrderPlacedMessage
             {
-                OrderId = aggregate.Id,
+                OrderId = aggregate.Id.ToString(),
                 CustomerName = aggregate.CustomerName,
                 TotalAmount = aggregate.TotalAmount
             },
             correlationId: aggregate.Id.ToString(),
-            cancellationToken: ct);
+            cancellationToken: cancellationToken);
     });
 ```
 
@@ -924,6 +1085,9 @@ Limitations:
 ### Enabling Protection
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithEventStore<DocumentAggregate>(eventStore => eventStore
         .WithEvent<DocumentShared>("DocumentShared", e => e
@@ -949,6 +1113,11 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Anchoring is configured once for all protected aggregate types:
 
 ```csharp
+using System.Security.Cryptography.X509Certificates;
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+using Chaos.Mongo.EventStore.Integrity;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithEventStore<DocumentAggregate>(eventStore => eventStore /* ... */.WithIntegrityProtection())
     .WithIntegrityAnchoring(anchoring => anchoring
@@ -961,10 +1130,10 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithInterval(TimeSpan.FromMinutes(5))
         .WithMinimumTimestampTokens(1)
         .WithDelayThreshold(TimeSpan.FromHours(1))
-        .OnAnchorCompleted(async (sp, anchor, ct) =>
+        .OnAnchorCompleted(async (sp, anchor, cancellationToken) =>
         {
             // Replicate the anchor, its tokens and its leaves to WORM storage.
-            await foreach (var leaf in sp.GetRequiredService<IAnchorLeafReader>().ReadLeavesAsync(anchor.Id, ct))
+            await foreach (var leaf in sp.GetRequiredService<IAnchorLeafReader>().ReadLeavesAsync(anchor.Id, cancellationToken))
             {
                 // ...
             }
@@ -1035,6 +1204,8 @@ Build it from the digest and sequence number of an anchor already replicated to 
 `OnAnchorCompleted` hook received and replicated:
 
 ```csharp
+using Chaos.Mongo.EventStore.Integrity;
+
 var trustedHead = new TrustedAnchorHead
 {
     AnchorDigest = replicatedAnchor.AnchorDigest,
@@ -1103,7 +1274,7 @@ not equal unless they share the same array/list instances (see `StreamVerificati
 | `DegradedFromAnchor` | The earlier covering anchor the evidence degraded from, because every one of its tokens was invalid; `null` unless that happened before `Anchor` settled the result. Lets a caller tell the evidence degraded to a later anchor's time, rather than the event having been covered by only one anchor from the start. |
 | `Failure` | Why the anchoring does not verify, set only when `Status` is `Failed`. |
 | `LeafVersion` | The version of the stream's leaf in that anchor, or `null` when no anchor is named. |
-| `Status` | The outcome (`Verified`, `Failed`, `NotAnchored` or `NotChecked`). |
+| `Status` | The outcome (`Anchored`, `Failed`, `NotAnchored` or `NotChecked`). |
 | `Timestamps` | The result (`TimestampVerificationResult`) for each of the anchor's tokens; empty when not verified. |
 
 `TimestampVerificationResult` (one entry of `EventAnchorVerificationResult.Timestamps`):
@@ -1153,6 +1324,9 @@ not equal unless they share the same array/list instances (see `StreamVerificati
 Tokens are only valid when their authority's roots are trusted. The roots of RFC 3161 authorities configured for anchoring are trusted automatically; custom authorities, and containers that only verify, configure them with `WithIntegrityVerification`. Trust configured there for a name replaces what an anchoring RFC 3161 authority of that name contributes to verification, roots and policy alike. In a container that also anchors, a new token must pass both on receipt, the authority's own roots and policy and the trust configured for its name, so when an authority's root changes, update both, listing the current root together with any older one in the configured trust, or new tokens fail on receipt and anchors await their timestamps:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.EventStore;
+
 services.AddMongo(auditConnectionString, "myDatabase")
     .WithEventStore<DocumentAggregate>(eventStore => eventStore /* same registration */
         .WithIntegrityProtection(protection => protection.WithoutSealingSweep()))
@@ -1168,6 +1342,8 @@ Only CRLs of issuers whose certificates are part of the stored chain can be veri
 ### Erasing Personal Data
 
 ```csharp
+using Chaos.Mongo.EventStore.Integrity;
+
 using var scope = erasureServices.CreateScope();
 var eraser = scope.ServiceProvider.GetRequiredService<IPersonalDataEraser<DocumentAggregate>>();
 await eraser.ErasePersonalDataAsync(documentId, new ErasureRequest("GDPR-2026-0042", versions: [3], paths: ["RecipientEmail"]));
@@ -1212,6 +1388,8 @@ Erasure permanently needs `update` on the events collection and, with checkpoint
 | `ArgumentException`             | Invalid input (empty events, mixed aggregates, mixed unset and explicit versions, versions below 1, version gaps, non-sequential batches, a `PersonalDataErased<TAggregate>` event not created by the eraser, or an event type not registered via `WithEvent<TEvent>()`) | Fix caller code                       |
 
 ```csharp
+using Chaos.Mongo.EventStore.Errors;
+
 try
 {
     var aggregate = await _eventStore.AppendEventsAsync(events);
@@ -1244,7 +1422,8 @@ catch (MongoEventValidationException ex)
   ```csharp
   .WithEvent<OrderCreatedEvent>("OrderCreated")  // Explicit name
   ```
-- **Version carefully**: If event schema changes, consider event upcasting strategies
+- **Version carefully**: Evolve events additively and add a new event type for incompatible changes; see
+  [Event Evolution](#event-evolution)
 
 ### Aggregate Design
 

@@ -45,6 +45,8 @@ public sealed class UserCollectionConfigurator : IMongoConfigurator
 Register configurators individually:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithConfigurator<UserCollectionConfigurator>()
     .WithConfigurator<OrderCollectionConfigurator>();
@@ -53,6 +55,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Or discover configurators from the calling assembly:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithConfiguratorAutoDiscovery();
 ```
@@ -62,6 +66,9 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Enable configurators during hosted application startup:
 
 ```csharp
+using Chaos.Mongo;
+using MongoDB.Driver;
+
 services.AddMongo(options =>
 {
     options.Url = new MongoUrl("mongodb://localhost:27017/myDatabase");

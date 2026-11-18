@@ -7,6 +7,8 @@ Chaos.Mongo stores leased locks in MongoDB so multiple application instances can
 `AcquireLockAsync` retries until the lock is acquired or the operation is cancelled:
 
 ```csharp
+using Chaos.Mongo;
+
 public sealed class JobProcessor(IMongoHelper mongo)
 {
     public async Task ProcessJobAsync(CancellationToken cancellationToken = default)
@@ -59,6 +61,8 @@ public async Task TryProcessJobAsync(CancellationToken cancellationToken = defau
 Use `EnsureValid()` to fail fast with a named `InvalidOperationException` instead of continuing with a lock that has already expired or been released:
 
 ```csharp
+using Chaos.Mongo;
+
 mongoLock.EnsureValid();
 ```
 
@@ -79,6 +83,8 @@ if (!await mongoLock.TryExtendAsync(cancellationToken: cancellationToken))
 `ExtendAsync` is the throwing companion and returns the same lock after a successful renewal:
 
 ```csharp
+using Chaos.Mongo;
+
 await mongoLock.ExtendAsync(
     leaseTime: TimeSpan.FromMinutes(10),
     cancellationToken: cancellationToken);

@@ -27,6 +27,7 @@ Transactional outbox support for MongoDB, built on top of `Chaos.Mongo`.
   - [Delivery Semantics](#delivery-semantics)
   - [Retries and Backoff](#retries-and-backoff)
   - [Locking and Stale Lock Recovery](#locking-and-stale-lock-recovery)
+  - [Publishing Within the Lock Lease](#publishing-within-the-lock-lease)
   - [Ordering](#ordering)
   - [Retention and Cleanup](#retention-and-cleanup)
 - [Metrics](#metrics)
@@ -114,6 +115,9 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 ### 4. Write Data and Outbox Messages in One Transaction
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
+
 public class OrderService
 {
     private readonly IMongoHelper _mongo;
@@ -127,10 +131,10 @@ public class OrderService
 
     public async Task CreateOrderAsync(Order order)
     {
-        await _mongo.ExecuteInTransactionAsync(async (helper, session, ct) =>
+        await _mongo.ExecuteInTransactionAsync(async (helper, session, cancellationToken) =>
         {
             var orders = helper.GetCollection<Order>();
-            await orders.InsertOneAsync(session, order, cancellationToken: ct);
+            await orders.InsertOneAsync(session, order, cancellationToken: cancellationToken);
 
             await _outbox.AddMessageAsync(
                 session,
@@ -141,7 +145,7 @@ public class OrderService
                     TotalAmount = order.TotalAmount
                 },
                 correlationId: order.Id.ToString(),
-                cancellationToken: ct);
+                cancellationToken: cancellationToken);
         });
     }
 }
@@ -156,6 +160,8 @@ If the transaction commits, both the order and the outbox message are persisted.
 `IOutbox` is the write-side API:
 
 ```csharp
+using MongoDB.Driver;
+
 public interface IOutbox
 {
     Task AddMessageAsync<TPayload>(
@@ -179,6 +185,8 @@ public interface IOutbox
 `IOutboxPublisher` is the delivery abstraction you implement for your broker, queue, API, or webhook target:
 
 ```csharp
+using Chaos.Mongo.Outbox;
+
 public interface IOutboxPublisher
 {
     Task PublishAsync(OutboxMessage message, CancellationToken cancellationToken = default);
@@ -241,6 +249,9 @@ public interface IOutboxProcessor
 ### Registering the Outbox
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithOutbox(o => o
         .WithPublisher<NotificationsPublisher>()
@@ -271,6 +282,10 @@ Use the factory overload of `WithPublisher` when the publisher needs services or
 values from the container that a type registration cannot supply:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
+using Microsoft.Extensions.Options;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithOutbox(o => o
         .WithMessage<OrderPlacedMessage>("OrderPlaced")
@@ -301,8 +316,8 @@ Use marker types to select independent destinations. Markers supply identity onl
 they are never instantiated and need no public constructor.
 
 ```csharp
-public sealed class NotificationsOutbox { }
-public sealed class AuditOutbox { }
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
 
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithOutbox<NotificationsOutbox>(o => o
@@ -316,6 +331,9 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
         .WithMessage<OrderPlacedMessage>("OrderAudit")
         .WithPublisher<AuditPublisher>(ServiceLifetime.Singleton)
         .WithRetentionPeriod(TimeSpan.FromDays(30)));
+
+public sealed class NotificationsOutbox { }
+public sealed class AuditOutbox { }
 ```
 
 `WithOutbox<TOutbox>` registers:
@@ -332,7 +350,7 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 
 Resolve `IOutbox<NotificationsOutbox>` and `IOutbox<AuditOutbox>` through constructor
 injection or the service provider. Each destination owns its collection, message
-registry, publisher, processor, batch size, polling interval, lock timeout,
+registry, publisher, processor, batch size, polling interval, lock lease time,
 processing filter, retry policy, and retention indexes. Sharing a payload type is
 supported; its discriminator can differ between destinations without changing the
 stored payload format. Registration validates messages against the destination's
@@ -366,11 +384,13 @@ the configurator's lifetime; restarting a processor does not recreate indexes.
 For manual initialization and lifecycle control:
 
 ```csharp
-await services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync(token);
+using Chaos.Mongo.Outbox;
+
+await services.GetRequiredService<IOutboxConfiguratorRunner>().RunConfiguratorsAsync(cancellationToken);
 var processor = services.GetRequiredService<IOutboxProcessor<AuditOutbox>>();
-await processor.StartAsync(token);
+await processor.StartAsync(cancellationToken);
 // Later, when this destination should stop:
-await processor.StopAsync(shutdownToken);
+await processor.StopAsync(cancellationToken);
 ```
 
 Here `services` is an `IServiceProvider`. The runner initializes **all** registered
@@ -386,13 +406,15 @@ name or `Default`) and `CollectionName`.
 Use the same compatible MongoDB session to enqueue atomically to multiple destinations:
 
 ```csharp
+using Chaos.Mongo.Outbox;
+
 var notifications = services.GetRequiredService<IOutbox<NotificationsOutbox>>();
 var audit = services.GetRequiredService<IOutbox<AuditOutbox>>();
-using var session = await mongo.Client.StartSessionAsync(cancellationToken: token);
+using var session = await mongo.Client.StartSessionAsync(cancellationToken: cancellationToken);
 session.StartTransaction();
-await notifications.AddMessageAsync(session, payload, cancellationToken: token);
-await audit.AddMessageAsync(session, payload, cancellationToken: token);
-await session.CommitTransactionAsync(token);
+await notifications.AddMessageAsync(session, payload, cancellationToken: cancellationToken);
+await audit.AddMessageAsync(session, payload, cancellationToken: cancellationToken);
+await session.CommitTransactionAsync(cancellationToken);
 ```
 
 The caller owns the transaction. Aborting it rolls back both writes, along with
@@ -427,6 +449,8 @@ destination's processor.
 Workers sharing an outbox can restrict which messages they process:
 
 ```csharp
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
 using MongoDB.Driver;
 
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
@@ -489,6 +513,8 @@ shutdown or a manual `StopAsync` call:
 With auto-start disabled, you can manage the processor manually:
 
 ```csharp
+using Chaos.Mongo.Outbox;
+
 public class OutboxAdminService
 {
     private readonly IOutboxProcessor _processor;
@@ -539,10 +565,14 @@ If you use `TryStartTransactionAsync()`, you must handle the `null` case yoursel
 Each payload type must be registered ahead of time:
 
 ```csharp
-.WithOutbox(o => o
-    .WithPublisher<NotificationsPublisher>()
-    .WithMessage<OrderPlacedMessage>("OrderPlaced")
-    .WithMessage<OrderShippedMessage>("OrderShipped"));
+using Chaos.Mongo;
+using Chaos.Mongo.Outbox;
+
+services.AddMongo("mongodb://localhost:27017", "myDatabase")
+    .WithOutbox(o => o
+        .WithPublisher<NotificationsPublisher>()
+        .WithMessage<OrderPlacedMessage>("OrderPlaced")
+        .WithMessage<OrderShippedMessage>("OrderShipped"));
 ```
 
 - The discriminator is written to `OutboxMessage.Type`
@@ -621,6 +651,18 @@ Completion and failure updates match on `LockId`. This prevents an older process
 If a processor crashes while holding a lock, another processor can reclaim the message once `LockedUtc` is older
 than the configured `LockLeaseTime`. That reclaim is itself a claim and counts toward `MaxRetries` the same way,
 whether it is granted another attempt or terminalizes the message directly.
+
+### Publishing Within the Lock Lease
+
+Each message is claimed right before its `IOutboxPublisher.PublishAsync` call, and the claim's lease is not renewed
+while the publisher runs. **`PublishAsync` must complete well within `WithLockLeaseTime(...)`.** A publish that runs
+past the lease lets another processor reclaim the message and publish it again while the first publish is still in
+progress. The late first publish then cannot mark the message `Processed`, because its `LockId` no longer matches,
+and the second attempt counts toward `MaxRetries`.
+
+The `CancellationToken` passed to `PublishAsync` signals processor shutdown, not lease expiry. Bound the publish
+yourself, for example with the broker client's own timeout, and choose a lease well above that bound. Downstream
+consumers must tolerate duplicates in any case; see [Delivery Semantics](#delivery-semantics).
 
 ### Ordering
 
@@ -711,7 +753,7 @@ The event store exposes an `onBeforeCommit` callback that runs inside the same t
 ```csharp
 await _eventStore.AppendEventsAsync(
     [new OrderCreatedEvent { /* ... */ }],
-    onBeforeCommit: async (session, aggregate, helper, ct) =>
+    onBeforeCommit: async (session, aggregate, helper, cancellationToken) =>
     {
         await _outbox.AddMessageAsync(
             session,
@@ -722,7 +764,7 @@ await _eventStore.AppendEventsAsync(
                 TotalAmount = aggregate.TotalAmount
             },
             correlationId: aggregate.Id.ToString(),
-            cancellationToken: ct);
+            cancellationToken: cancellationToken);
     });
 ```
 

@@ -40,6 +40,8 @@ If a migration performs data operations and `session` is non-null, pass the sess
 Register migrations individually:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithMigration<AddUserIndexes>()
     .WithMigration<AddOrderIndexes>();
@@ -48,6 +50,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Or discover them from the calling assembly:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithMigrationAutoDiscovery();
 ```
@@ -55,6 +59,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Pass explicit assemblies when migrations live elsewhere:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithMigrationAutoDiscovery([typeof(AddUserIndexes).Assembly]);
 ```
@@ -64,6 +70,9 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 Enable automatic execution during hosted application startup:
 
 ```csharp
+using Chaos.Mongo;
+using MongoDB.Driver;
+
 services.AddMongo(options =>
 {
     options.Url = new MongoUrl("mongodb://localhost:27017/myDatabase");
@@ -74,6 +83,8 @@ services.AddMongo(options =>
 For explicit control, resolve the runner:
 
 ```csharp
+using Chaos.Mongo.Migrations;
+
 public sealed class MigrationService(IMongoMigrationRunner migrationRunner)
 {
     public async Task RunAsync(CancellationToken cancellationToken = default)

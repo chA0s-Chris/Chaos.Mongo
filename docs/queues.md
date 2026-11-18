@@ -40,6 +40,8 @@ public sealed class EmailMessageHandler(IEmailService emailService)
 ## Register a queue
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithQueue<EmailMessage>(queue => queue
         .WithPayloadHandler<EmailMessageHandler>()
@@ -54,6 +56,8 @@ services.AddMongo("mongodb://localhost:27017", "myDatabase")
 When the handler needs more than constructor injection can supply, register a factory instead. Each queue item is handled in its own DI scope: the handler is resolved from that scope and the scope is disposed once handling completes, whether it succeeds, fails, or is canceled. The handler type registration and the factory both receive the item's scoped `IServiceProvider`, so either way a handler may depend on scoped services such as a `DbContext`. A queue accepts either a handler type or a factory, not both:
 
 ```csharp
+using Chaos.Mongo;
+
 services.AddMongo("mongodb://localhost:27017", "myDatabase")
     .WithQueue<EmailMessage>(queue => queue
         .WithPayloadHandler(sp => new EmailMessageHandler(
@@ -88,6 +92,8 @@ Terminal failed items are excluded from TTL cleanup so they remain available for
 Resolve the typed queue and publish a payload:
 
 ```csharp
+using Chaos.Mongo.Queues;
+
 public sealed class UserService(IMongoQueue<EmailMessage> emailQueue)
 {
     public Task SendWelcomeEmailAsync(
@@ -108,9 +114,30 @@ public sealed class UserService(IMongoQueue<EmailMessage> emailQueue)
 
 Publishing and processing are separate operations. Make handlers idempotent because an item can be processed again after a failure or expired lease.
 
+## Publishing within a lease
+
+A handler runs while its queue item is locked for `WithLockLeaseTime(...)`, and work protected by an `IMongoLock` runs
+within that lock's lease. `PublishAsync` takes no session: it inserts the new item immediately and on its own, so the
+publish is not atomic with completing the current item, with releasing the lock, or with any other database write.
+
+- **A publish can repeat.** When a handler publishes and then throws, its item is retried and the handler publishes
+  again. When the handler runs past the lease, which is not renewed while it runs, another instance can acquire the
+  same item and publish while the first one is still running; the late first instance then cannot complete the item.
+  The same applies to work under an `IMongoLock` whose lease expires or whose renewal is refused.
+- **A publish is never rolled back.** An item published before the handler fails, or before a surrounding
+  transaction aborts, stays in the queue.
+
+Design follow-up payloads for this: give each one an identifier derived from the work that produced it, such as the
+source item's business key, and have its handler ignore an identifier it has already processed. Publish as the last
+step of the handler, after the effects that the follow-up item relies on. When the publish must be atomic with a
+database write, write a [transactional outbox](transactional-outbox.md) message in the same transaction instead, and
+have its publisher publish to the queue.
+
 ## Manual subscription control
 
 ```csharp
+using Chaos.Mongo.Queues;
+
 public sealed class QueueManager(IMongoQueue<EmailMessage> queue)
 {
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -136,6 +163,7 @@ public sealed class QueueManager(IMongoQueue<EmailMessage> queue)
 Implement and register `IMongoQueuePayloadPrioritizer` to change the order in which payloads are processed:
 
 ```csharp
+using Chaos.Mongo.Queues;
 using MongoDB.Driver;
 
 public sealed class PriorityEmailMessage
@@ -156,6 +184,12 @@ public sealed class EmailPriorityQueuePrioritizer : IMongoQueuePayloadPrioritize
             : sort.Ascending(item => item.Id);
     }
 }
+```
+
+Register it before or after `AddMongo`:
+
+```csharp
+using Chaos.Mongo.Queues;
 
 services.AddSingleton<IMongoQueuePayloadPrioritizer, EmailPriorityQueuePrioritizer>();
 ```

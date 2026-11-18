@@ -55,6 +55,34 @@ public class MongoBuilderExtensionsTests
     }
 
     [Test]
+    public void WithEventStore_EventStoreAndRepository_AreScopedServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IMongoHelper>(new FakeMongoHelper());
+        var builder = new MongoBuilder(services);
+
+        builder.WithEventStore<TestAggregate>(es => es.WithEvent<TestCreatedEvent>());
+
+        using var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true
+        });
+        using var firstScope = sp.CreateScope();
+        using var secondScope = sp.CreateScope();
+
+        sp.Invoking(provider => provider.GetRequiredService<IEventStore<TestAggregate>>())
+          .Should().Throw<InvalidOperationException>().WithMessage("*scoped*");
+        sp.Invoking(provider => provider.GetRequiredService<IAggregateRepository<TestAggregate>>())
+          .Should().Throw<InvalidOperationException>().WithMessage("*scoped*");
+        firstScope.ServiceProvider.GetRequiredService<IEventStore<TestAggregate>>()
+                  .Should().BeSameAs(firstScope.ServiceProvider.GetRequiredService<IEventStore<TestAggregate>>())
+                  .And.NotBeSameAs(secondScope.ServiceProvider.GetRequiredService<IEventStore<TestAggregate>>());
+        firstScope.ServiceProvider.GetRequiredService<IAggregateRepository<TestAggregate>>()
+                  .Should().BeSameAs(firstScope.ServiceProvider.GetRequiredService<IAggregateRepository<TestAggregate>>())
+                  .And.NotBeSameAs(secondScope.ServiceProvider.GetRequiredService<IAggregateRepository<TestAggregate>>());
+    }
+
+    [Test]
     public void WithEventStore_NegativeMaxAppendRetries_ThrowsInvalidOperationException()
     {
         var services = new ServiceCollection();
