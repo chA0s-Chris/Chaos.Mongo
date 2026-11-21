@@ -21,6 +21,13 @@
     <Compile Include="$(MSBuildThisFileDirectory)DropTestDatabasesAttribute.cs" Link="DropTestDatabasesAttribute.cs" />
   </ItemGroup>
 
+  <!-- The implicit usings of .NET 11 include System.Net.Http.Json, those of .NET 10 do not. Importing it for every
+       target framework keeps code cleanup, which removes the using as redundant under .NET 11, from breaking the
+       .NET 10 build. -->
+  <ItemGroup>
+    <Using Include="System.Net.Http.Json" />
+  </ItemGroup>
+
   <!-- Moq is not part of the shared test packages. Older tests still use it until they are migrated to
        hand-written test doubles (see tests/AGENTS.md). -->
   <ItemGroup>
