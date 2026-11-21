@@ -2,3 +2,6 @@
 
 # style: apply repo-baseline cleanup to the whole solution (#274)
 6540bca9b5c16546c8cf8ee16ca7d4a9f99b563d
+
+# style: apply repo-baseline 0.7.0 cleanup to the whole solution (#310)
+f0f83a32cf6e399be6a7c66387d0050d77d5df22
