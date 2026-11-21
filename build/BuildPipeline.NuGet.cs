@@ -34,6 +34,7 @@ internal partial class BuildPipeline
 
     private Target Pack => target =>
         target.DependsOn(Restore)
+              .Requires(() => !UseLatestTestedMongoDriver)
               .Executes(() =>
               {
                   AssertReleaseKeyFileExists();
@@ -74,6 +75,7 @@ internal partial class BuildPipeline
     [UsedImplicitly]
     private Target PackCheck => target =>
         target.DependsOn(Restore)
+              .Requires(() => !UseLatestTestedMongoDriver)
               .Executes(() =>
               {
                   ClearSourceBuildOutputs();

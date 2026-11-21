@@ -32,6 +32,10 @@ The minimum `MongoDB.Driver` version is **3.9.0**: older 3.x releases depend on 
 SharpCompress version. `ClientBulkWriteException`, which the package also uses, has been available since 3.1.0 and
 does not independently raise this floor.
 
+CI runs the complete test suite against both this minimum and the latest tested `MongoDB.Driver` release, which
+automated dependency updates keep current within the 3.x line. The latest tested driver runs against the 8.0.x server
+line.
+
 ## Tested server versions
 
 The test and benchmark suites run against the MongoDB 7.0.x, 8.0.x and 9.0.x lines; CI covers all three.

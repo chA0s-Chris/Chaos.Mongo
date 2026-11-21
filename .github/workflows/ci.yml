@@ -30,7 +30,8 @@ jobs:
       fail-fast: false
       matrix:
         mongo-image: [ MinimumSupported, Primary, Latest ]
-        # Keep in sync with MainTargets in Directory.Build.props, like the setup-dotnet versions below.
+        # Keep in sync with MainTargets in Directory.Build.props, like the setup-dotnet versions below and the
+        # latest-driver job's matrix.
         framework: [ net10.0, net11.0 ]
     env:
       DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
@@ -60,6 +61,50 @@ jobs:
 
       - name: Run NUKE pipeline
         run: bash build.sh Test --test-framework "$TEST_FRAMEWORK"
+        env:
+          TEST_FRAMEWORK: ${{ matrix.framework }}
+
+  # The ci job tests the MongoDB.Driver minimum the packages declare. This job tests the latest driver release,
+  # pinned as LatestTestedMongoDriverVersion in Directory.Packages.props and updated by Renovate, on the Primary image
+  # only.
+  latest-driver:
+    runs-on: ubuntu-latest
+    # Same budget as the ci job.
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with MainTargets in Directory.Build.props, like the ci job's matrix.
+        framework: [ net10.0, net11.0 ]
+    env:
+      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+      DOCKERHUB_PAT: ${{ secrets.DOCKERHUB_PAT }}
+      CHAOSMONGO_MONGODB_IMAGE: Primary
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # See the ci job: forks pull anonymously.
+      - name: Authenticate to Docker Hub
+        if: env.DOCKERHUB_USER != ''
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ env.DOCKERHUB_USER }}
+          password: ${{ env.DOCKERHUB_PAT }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+
+      - name: Run NUKE pipeline
+        run: bash build.sh Test --test-framework "$TEST_FRAMEWORK" --use-latest-tested-mongo-driver
         env:
           TEST_FRAMEWORK: ${{ matrix.framework }}
 
@@ -150,7 +195,7 @@ jobs:
   result:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [ ci, pack-check, release-scripts, repo-baseline, verifier-tests ]
+    needs: [ ci, latest-driver, pack-check, release-scripts, repo-baseline, verifier-tests ]
     if: always()
     permissions: {}
     steps:

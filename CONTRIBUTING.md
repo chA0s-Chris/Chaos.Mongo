@@ -83,7 +83,7 @@ For pull requests, these matter most:
 - Follow the [Compatibility Policy](docs/compatibility-policy.md) for anything that affects the public API, stored data, default names or metrics.
 - Update the documentation in [`docs/`](docs/) when behavior changes.
 
-The `ai-plans/` folder is part of the maintainer's workflow. You don't need to write a plan to contribute.
+The `ai-plans/` folder is part of the maintainer's workflow. You don't need to write a plan to contribute. The maintainer cuts releases as described in [`RELEASING.md`](RELEASING.md).
 
 ## AI-assisted contributions
 

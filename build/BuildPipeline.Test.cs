@@ -25,6 +25,8 @@ internal partial class BuildPipeline
                                    .SetConfiguration(TargetBuildConfiguration)
                                    .SetFramework(TestFramework)
                                    .SetProcessAdditionalArguments("/nowarn:CS1591;CS1998;CS4014")
+                                   .When(_ => UseLatestTestedMongoDriver,
+                                         t => t.AddProperty(UseLatestTestedMongoDriverProperty, "true"))
                                    .EnableNoRestore());
               });
 
@@ -58,6 +60,8 @@ internal partial class BuildPipeline
                                       .SetDataCollector("XPlat Code Coverage")
                                       .SetSettingsFile(RootDirectory / "coverlet.xml")
                                       .SetResultsDirectory(CoverageDirectory)
+                                      .When(_ => UseLatestTestedMongoDriver,
+                                            t => t.AddProperty(UseLatestTestedMongoDriverProperty, "true"))
                                       .CombineWith(
                                           batch,
                                           (settings, run) => settings.SetProjectFile(run.Project)

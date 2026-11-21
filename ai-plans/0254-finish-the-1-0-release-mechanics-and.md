@@ -16,29 +16,29 @@ release candidate before 1.0.
 
 ### Latest driver in CI
 
-- [ ] A new CI job runs the complete suite with the latest-tested `MongoDB.Driver` on the `Primary` MongoDB image
+- [x] A new CI job runs the complete suite with the latest-tested `MongoDB.Driver` on the `Primary` MongoDB image
   for every framework in `MainTargets`, and the `result` job requires it. The existing `ci` matrix keeps testing the
   3.9.0 minimum.
-- [ ] The latest-tested driver version is pinned in exactly one place in the repository. Renovate proposes minor and
+- [x] The latest-tested driver version is pinned in exactly one place in the repository. Renovate proposes minor and
   patch updates to it without Dependency Dashboard approval. Major updates stay held for approval by the
   repo-baseline preset, so moving the job to a new driver major is a deliberate decision.
-- [ ] The new Renovate custom regex manager matches the pin line. This is checked locally, for example with
+- [x] The new Renovate custom regex manager matches the pin line. This is checked locally, for example with
   `renovate-config-validator` and a regex test against the file.
-- [ ] Packages produced by `Pack` and `PackCheck` still declare `MongoDB.Driver` `>= 3.9.0`.
-- [ ] `docs/requirements.md` states that CI tests both the minimum and the latest-tested driver.
+- [x] Packages produced by `Pack` and `PackCheck` still declare `MongoDB.Driver` `>= 3.9.0`.
+- [x] `docs/requirements.md` states that CI tests both the minimum and the latest-tested driver.
 
 ### Release mechanics
 
-- [ ] A new Nuke target folds each `src/` project's `PublicAPI.Unshipped.txt` into its `PublicAPI.Shipped.txt`,
+- [x] A new Nuke target folds each `src/` project's `PublicAPI.Unshipped.txt` into its `PublicAPI.Shipped.txt`,
   applying `*REMOVED*` entries, and fails without changing any file when a removed entry is absent from the shipped
   file.
-- [ ] `BuildPipeline.Tests` covers the fold logic, including additions, removals, the failure case and the header.
-- [ ] The API files are folded for 1.0: every `PublicAPI.Unshipped.txt` contains only `#nullable enable`, and
+- [x] `BuildPipeline.Tests` covers the fold logic, including additions, removals, the failure case and the header.
+- [x] The API files are folded for 1.0: every `PublicAPI.Unshipped.txt` contains only `#nullable enable`, and
   `dotnet build -c Release Chaos.Mongo.slnx` passes without RS0016 or RS0017.
-- [ ] A new release document describes how to cut a release: when to run the fold target, dispatching the Release
+- [x] A new release document describes how to cut a release: when to run the fold target, dispatching the Release
   workflow, setting `PackageValidationBaselineVersion` after a stable release, and the rc.2-then-1.0.0 order for
   this milestone. `CONTRIBUTING.md` links to it.
-- [ ] A follow-up issue tracks setting `PackageValidationBaselineVersion` to `1.0.0` once 1.0.0 is published.
+- [x] A follow-up issue tracks setting `PackageValidationBaselineVersion` to `1.0.0` once 1.0.0 is published.
 
 ### After merge (maintainer)
 

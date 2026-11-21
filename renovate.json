@@ -14,6 +14,16 @@
       "matchStrings": [
         "renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?) packageName=(?<packageName>.*?) versioning=(?<versioning>.*?)\\s*\\n\\s*public const String \\w+ = \"mongo:(?<currentValue>.*?)\";"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Pick up the latest tested MongoDB.Driver version that the latest-driver CI job tests against. The nuget manager cannot see an MSBuild property, and the src dependency minimums rule matches the nuget manager only, so minor and patch updates of this pin open pull requests directly. Major updates wait for Dependency Dashboard approval through the repo-baseline preset.",
+      "managerFilePatterns": [
+        "/^Directory\\.Packages\\.props$/"
+      ],
+      "matchStrings": [
+        "<!-- renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?) packageName=(?<packageName>.*?) -->\\s*\\n\\s*<LatestTestedMongoDriverVersion>(?<currentValue>.*?)</LatestTestedMongoDriverVersion>"
+      ]
     }
   ],
   "packageRules": [

@@ -7,5 +7,6 @@
     <Compile Include="../../build/CoverageThresholds.cs" Link="CoverageThresholds.cs" />
     <Compile Include="../../build/TestResultFiles.cs" Link="TestResultFiles.cs" />
     <Compile Include="../../build/TestFrameworkSelection.cs" Link="TestFrameworkSelection.cs" />
+    <Compile Include="../../build/PublicApiFold.cs" Link="PublicApiFold.cs" />
   </ItemGroup>
 </Project>

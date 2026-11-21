@@ -16,6 +16,7 @@ internal partial class BuildPipeline
         target.DependsOn(Restore)
               .After(Clean, RestoreTools)
               .Before(Test)
+              .Requires(() => !UseLatestTestedMongoDriver)
               .Executes(() =>
               {
                   DotNetBuild(s => s
@@ -36,6 +37,9 @@ internal partial class BuildPipeline
               .Executes(() =>
               {
                   var settings = new DotNetRestoreSettings().SetProjectFile(Solution);
+
+                  if (UseLatestTestedMongoDriver)
+                      settings = settings.AddProperty(UseLatestTestedMongoDriverProperty, "true");
 
                   if (GitLab.Instance?.Ci == true)
                       settings = settings.SetPackageDirectory(PackagesDirectory);
