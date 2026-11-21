@@ -112,16 +112,13 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
-      # Clones the pinned release outside the workspace, so the workspace's global.json and MSBuild files do not
-      # apply to the tool, and fails when synced content differs from that release.
+      # Fails when synced content differs from the release pinned in .repo-baseline.json.
       - name: Check the repo-baseline content
         run: |
-          version="$(jq -r .version .repo-baseline.json)"
-          git clone --quiet --depth 1 --branch "v${version}" https://github.com/chA0s-Chris/repo-baseline.git "${RUNNER_TEMP}/repo-baseline"
-          cd "${RUNNER_TEMP}/repo-baseline"
-          dotnet run tool/sync.cs -- check "${GITHUB_WORKSPACE}"
+          dotnet tool restore
+          dotnet repo-baseline check .
 
   # Unit tests of the reference verifier in tools/tamper-evidence-verifier. They need Python and the runner's OpenSSL
   # only, so they stay out of the ci matrix.

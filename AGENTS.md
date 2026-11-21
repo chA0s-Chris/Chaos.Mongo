@@ -4,14 +4,12 @@
 
 ## General Rules for the Code Base
 
-- Warnings are errors in Release builds and in CI, and nullable warnings are errors in every configuration, so your code changes must not generate warnings.
-- Expose types and members publicly when consumers need them for configuration, extension, or testing. Keep implementation details non-public, and treat every new public API as a compatibility commitment.
 - Target frameworks are defined in `Directory.Build.props` and directory-specific props files. Do not change them unless the task explicitly requires it.
 - NuGet package versions are managed centrally in `Directory.Packages.props`; project files reference packages without versions.
 
 ## Local Development Commands
 
-Run these commands from the repository root. The coverage tooling, like the code-style scripts, uses the local tools declared in `dotnet-tools.json`.
+Run these commands from the repository root. The coverage tooling, the code-style scripts and the repo-baseline commands use the local tools declared in `dotnet-tools.json`.
 
 | Purpose | Command |
 | --- | --- |
@@ -24,6 +22,8 @@ Run these commands from the repository root. The coverage tooling, like the code
 | One test project | `dotnet test <path-to-test-project.csproj>` |
 | Release build | `dotnet build -c Release Chaos.Mongo.slnx` |
 | Validate the Nuke test pipeline and collect merged coverage | `bash ./build.sh Test` |
+| Check the content synced from repo-baseline | `dotnet repo-baseline check .` |
+| Sync the pinned repo-baseline release, for example on the branch of a Renovate profile update | `dotnet repo-baseline sync .` |
 
 The complete suite includes Testcontainers-based MongoDB integration tests and needs Docker. Integration tests carry the `Integration` test category, so the category filter above excludes them. The test projects target multiple frameworks; install the SDK selected by `global.json` and the runtimes required by `Directory.Build.props` and any directory-specific props files.
 
@@ -58,9 +58,9 @@ If you notice something worth recording while working on this code base, do not 
 <!-- BEGIN repo-baseline: code-style-and-inspections -->
 ## Code Style and Inspections
 
-Follow `CODESTYLE.md`. The code-style scripts use the local tools from the tool manifest, so run `dotnet tool restore` after cloning or when the manifest changes.
+Follow `CODESTYLE.md`. Code style rules that apply to the whole repository go into a section `Repository-Specific Rules` of `CODESTYLE.md`, not into `AGENTS.md`; rules for one subtree only may go into a nested `AGENTS.md` there. The code-style scripts use the local tools from the tool manifest, so run `dotnet tool restore` after cloning or when the manifest changes.
 
-Run `./cleanup_code.sh` when a code change is complete. It applies ReSharper's `Zorn` profile to relevant files that Git reports as changed, staged, or untracked; `--all` applies it to the whole solution instead. Scoped cleanup leaves Razor files out on purpose, because ReSharper's Razor cleanup does not apply the shared C# rules to them. Inspect the resulting diff, then run scoped inspections and the relevant build and test checks. Do not run cleanup during read-only reviews.
+Run `./cleanup_code.sh` when a code change is complete. It applies ReSharper's `Zorn` profile to relevant files that Git reports as changed, staged, or untracked; `--all` applies it to files of the same types in the whole solution instead. Both modes leave Razor files out on purpose, because ReSharper's Razor cleanup does not apply the shared C# rules to them. Inspect the resulting diff, then run scoped inspections and the relevant build and test checks. Do not run cleanup during read-only reviews.
 
 `./inspect_code.sh` reports semantic findings at warning or error severity by default and selects only C# and Razor files. Arguments not owned by the script are forwarded to `dotnet jb inspectcode`; for example, `-e=SUGGESTION` also includes suggestions. The script owns `--all`, `--base`, `--format`, and `--output`; it rejects the last two to preserve the XML report used to display findings grouped by project. Findings whose inspection ID is listed in `inspection.suppressedIds` of `.repo-baseline.json` are not displayed. Both scripts print `No matching files to process.` and exit successfully when no relevant files are selected.
 

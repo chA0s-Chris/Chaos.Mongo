@@ -6,7 +6,6 @@ using Chaos.Mongo.EventStore.Tests.BooksApi;
 using FluentAssertions;
 using NUnit.Framework;
 using System.Net;
-using System.Net.Http.Json;
 using Testcontainers.MongoDb;
 
 [Category("Integration")]

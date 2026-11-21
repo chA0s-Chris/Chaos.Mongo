@@ -18,6 +18,8 @@ tab_width = 2
 charset = utf-8
 indent_size = 2
 tab_width = 2
+max_line_length = 180
+xml_blank_line_after_pi = false
 
 [*.{cs,razor}]
 charset = utf-8
@@ -199,6 +201,7 @@ resharper_redundant_argument_default_value_highlighting = suggestion
 resharper_redundant_anonymous_type_property_name_highlighting = suggestion
 resharper_redundant_type_arguments_of_method_highlighting = suggestion
 resharper_arrange_redundant_parentheses_highlighting = suggestion
+resharper_redundant_cast_highlighting = suggestion
 # END repo-baseline: editorconfig
 
 [*.cs]

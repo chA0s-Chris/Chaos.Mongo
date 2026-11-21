@@ -1,15 +1,16 @@
-<!-- Managed by repo-baseline (https://github.com/chA0s-Chris/repo-baseline). Do not edit; change it there. -->
-
+<!-- BEGIN repo-baseline: code-style -->
 ## Code Style Guidelines
 
 The code style is configured in `.editorconfig` and `.repo-baseline/ReSharper.DotSettings`. This file describes it for people and agents.
 
+Rules that apply to this whole repository go into a section `Repository-Specific Rules` after the shared rules; rules for one subtree only may go into a nested `AGENTS.md` there. A repository rule that replaces a shared rule names the rule it replaces.
+
 ### General
 - Follow the [.NET Coding Conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions)
 - Use `PascalCase` for class names, method names, and public members
-- Use `camelCase` for local variables, constants, and parameters
-- Use `_camelCase` for private fields
-- Use `PascalCase` for constant members and static readonly fields
+- Use `camelCase` for local variables, local constants, and parameters
+- Use `_camelCase` for private instance fields, readonly or not
+- Use `PascalCase` without a prefix for private static fields, static readonly fields, and constant fields
 - Use `IPascalCase` for interfaces
 - Use meaningful and descriptive names
 - Keep methods small and focused (ideally < 30 lines)
@@ -27,6 +28,7 @@ The code style is configured in `.editorconfig` and `.repo-baseline/ReSharper.Do
 - Use string interpolation (`$"Hello {name}"`) over string concatenation
 - Use `nameof()` when referencing parameters, properties, or methods
 - Always use parentheses for clarity in expressions
+- Explicit casts may stay even when redundant, for example a widening cast of every operand in `checked` arithmetic
 - Name an argument at the call site when the value alone does not convey its meaning, as a boolean literal rarely does (`Apply(migration, commit: false)`). The `Zorn` cleanup profile keeps `ArrangeArgumentsStyle` off, so cleanup preserves these names instead of rewriting them to positional form
 
 ### Documentation
@@ -70,6 +72,11 @@ The code style is configured in `.editorconfig` and `.repo-baseline/ReSharper.Do
 - Use `ArgumentNullException.ThrowIfNull()` for null checks
 - Use `String.IsNullOrEmpty()` for string validation
 
+### Suppressing Inspections
+- Suppress a finding only where this file or a repository rule allows it, and give the reason in a comment
+- Suppress with `// ReSharper disable once <InspectionId>` directly above the statement
+- `disable once` covers only the first finding of that inspection in the statement. When a statement has several, for example a lambda that captures two disposed variables, put `// ReSharper disable <InspectionId>` above the statement and `// ReSharper restore <InspectionId>` below it
+
 ### Nullability
 
 - Nullable reference types are enabled for every project, and nullable warnings are errors in every build configuration
@@ -88,3 +95,19 @@ The code style is configured in `.editorconfig` and `.repo-baseline/ReSharper.Do
 - Suffix async methods with `Async` (e.g., `GetDataAsync`)
 - Avoid `async void` (except for event handlers)
 - Use `ValueTask<T>` for performance-critical paths
+<!-- END repo-baseline: code-style -->
+
+### Repository-Specific Rules
+
+- Warnings are errors in Release builds and in CI, so code changes must not generate warnings.
+- Expose types and members publicly when consumers need them for configuration, extension, or testing. Keep implementation details non-public, and treat every new public API as a compatibility commitment.
+
+#### Naming of Public Types
+
+These naming rules apply to the public types of the production libraries under `src/`. Internal types, such as `MongoOutbox` and `MongoEventStore<TAggregate>`, are not covered.
+
+- Types in the core `Chaos.Mongo` package carry the `Mongo` prefix, `IMongo…` for interfaces: `MongoOptions`, `IMongoLock`, `MongoQueueBuilder<TPayload>`.
+- Types in the feature packages `Chaos.Mongo.EventStore` and `Chaos.Mongo.Outbox` are named after their feature concept, without the prefix: `IEventStore<TAggregate>`, `Aggregate`, `IOutbox`, `OutboxMessage`.
+- Extension classes are named after the type they extend, for example `MongoBuilderExtensions` and `ServiceCollectionExtensions`.
+- A few existing types do not follow these rules. They are kept for 1.0 and are not a precedent for new types: `ICollectionTypeMap` in the core package, and `MongoEventStoreBuilder<TAggregate>`, `MongoEventStoreOptions<TAggregate>` and the five `Mongo*Exception` types of `Chaos.Mongo.EventStore.Errors` in the event store.
+- Members of `MongoDefaults` are named `<Feature><Setting>` with the feature in the singular, for example `QueueBatchSize`, `LockRetryDelay` and `MigrationLockName`. Switches that apply to the whole library, such as `RunConfiguratorsOnStartup`, need no feature prefix.
