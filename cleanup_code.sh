@@ -35,18 +35,23 @@ fi
 
 SOLUTION="${SOLUTIONS[0]}"
 
+# Both modes clean only these file types. Razor files are left out on purpose: ReSharper's Razor
+# cleanup does not apply the shared C# rules to them and would rewrite them against those rules
+# (TOOL-1). Plain .xml files are left out as well, because they are often data such as test fixtures.
+EXTENSIONS=(cs csproj json sh slnx config props targets nuspec)
+
 if [ "${CLEAN_ALL}" -eq 1 ]; then
-    dotnet jb cleanupcode --profile="Zorn" --verbosity=ERROR "${SOLUTION}"
+    PATTERNS=$(printf '**/*.%s\n' "${EXTENSIONS[@]}" | paste -sd ';')
+    dotnet jb cleanupcode --profile="Zorn" --verbosity=ERROR --include="${PATTERNS}" "${SOLUTION}"
     exit 0
 fi
+
+EXTENSION_REGEX="\.($(IFS='|'; echo "${EXTENSIONS[*]}"))\$"
 
 # Untracked files are included on purpose: new files are the ones most in need of the code style,
 # and they are not staged yet at the point this script is normally run.
 # Include rename destinations as well, since staged renames can also contain code changes.
-# Razor files are left out on purpose: ReSharper's Razor cleanup does not apply the shared C# rules
-# to them and would rewrite them against those rules (TOOL-1). Plain .xml files are left out as well,
-# because they are often data such as test fixtures.
-PATTERNS=$({ git diff --name-only --diff-filter=ACMR; git diff --name-only --cached --diff-filter=ACMR; git ls-files --others --exclude-standard; } | { grep '\.\(cs\|csproj\|json\|sh\|slnx\|config\|props\|targets\|nuspec\)$' | sort -u | sed 's|^|**/|' | paste -sd ';' || true; })
+PATTERNS=$({ git diff --name-only --diff-filter=ACMR; git diff --name-only --cached --diff-filter=ACMR; git ls-files --others --exclude-standard; } | { grep -E "${EXTENSION_REGEX}" | sort -u | sed 's|^|**/|' | paste -sd ';' || true; })
 
 if [ -n "${PATTERNS}" ]; then
     dotnet jb cleanupcode --profile="Zorn" --verbosity=ERROR --include="${PATTERNS}" "${SOLUTION}"

@@ -2,6 +2,13 @@
   "version": 1,
   "isRoot": true,
   "tools": {
+    "chaos.repobaseline": {
+      "version": "0.2.0",
+      "commands": [
+        "repo-baseline"
+      ],
+      "rollForward": false
+    },
     "dotnet-coverage": {
       "version": "18.12.0",
       "commands": [
