@@ -10,16 +10,16 @@ The goal is to adopt tool 0.2.0 and profiles 0.7.0, collect the repository-wide 
 
 ## Acceptance Criteria
 
-- [ ] `dotnet-tools.json` declares the local tool `chaos.repobaseline` 0.2.0 with the command `repo-baseline` and `rollForward: false`.
-- [ ] `.repo-baseline.json` pins `0.7.0`, and all synced content matches that release.
-- [ ] `CODESTYLE.md` consists of the `code-style` managed block followed by a local `### Repository-Specific Rules` section; none of the former whole-file content remains outside the block.
-- [ ] Repository-Specific Rules contains the warnings rule and the public-API exposure rule from the root `AGENTS.md` and the "Naming of public types" rules from `src/AGENTS.md`, and these rules no longer appear in their former places. A rule that replaces a shared rule names the rule it replaces.
-- [ ] The root `AGENTS.md` keeps the target-framework and central-package-version rules, `src/AGENTS.md` keeps its project overview, and `tests/AGENTS.md` and `benchmarks/AGENTS.md` are unchanged.
+- [x] `dotnet-tools.json` declares the local tool `chaos.repobaseline` 0.2.0 with the command `repo-baseline` and `rollForward: false`.
+- [x] `.repo-baseline.json` pins `0.7.0`, and all synced content matches that release.
+- [x] `CODESTYLE.md` consists of the `code-style` managed block followed by a local `### Repository-Specific Rules` section; none of the former whole-file content remains outside the block.
+- [x] Repository-Specific Rules contains the warnings rule and the public-API exposure rule from the root `AGENTS.md` and the "Naming of public types" rules from `src/AGENTS.md`, and these rules no longer appear in their former places. A rule that replaces a shared rule names the rule it replaces.
+- [x] The root `AGENTS.md` keeps the target-framework and central-package-version rules, `src/AGENTS.md` keeps its project overview, and `tests/AGENTS.md` and `benchmarks/AGENTS.md` are unchanged.
 - [ ] Running `./cleanup_code.sh --all` on the final branch produces no diff. The changes it made after the sync are in their own `style:` commit, and `.git-blame-ignore-revs` lists that commit's full hash unless the cleanup changed nothing. After it, no MSBuild or `.config` file in the solution has a blank line after the XML declaration. When it lists one, the PR description states that the PR must be merged with a merge commit.
-- [ ] If the branch adds, modifies, or renames C# or Razor files relative to `origin/main`, `./inspect_code.sh --base origin/main` reports no findings at warning or error severity.
+- [x] If the branch adds, modifies, or renames C# or Razor files relative to `origin/main`, `./inspect_code.sh --base origin/main` reports no findings at warning or error severity.
 - [ ] The CI `repo-baseline` job runs `dotnet tool restore` and `dotnet repo-baseline check .` in the workspace and passes on the pull request.
-- [ ] The "Local Development Commands" table in the root `AGENTS.md` lists `dotnet repo-baseline check .` and `dotnet repo-baseline sync .`, the latter for the branches of Renovate's profile updates.
-- [ ] `dotnet repo-baseline check .` reports no findings locally, and `dotnet build -c Release Chaos.Mongo.slnx` and `bash ./build.sh Test` succeed at the branch head and, if the cleanup produced one, at the `style:` commit.
+- [x] The "Local Development Commands" table in the root `AGENTS.md` lists `dotnet repo-baseline check .` and `dotnet repo-baseline sync .`, the latter for the branches of Renovate's profile updates.
+- [x] `dotnet repo-baseline check .` reports no findings locally, and `dotnet build -c Release Chaos.Mongo.slnx` and `bash ./build.sh Test` succeed at the branch head and, if the cleanup produced one, at the `style:` commit.
 
 ## Technical Details
 
