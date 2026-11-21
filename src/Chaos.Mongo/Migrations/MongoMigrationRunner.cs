@@ -87,6 +87,57 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
 
     internal ImmutableArray<IMongoMigration> Migrations { get; }
 
+    /// <summary>
+    /// Guards a protected-work boundary against a lock that is no longer held: a lease that has expired locally, or a
+    /// loss that the renewal loop has signalled through <paramref name="lockLostCts"/>.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     Checking <see cref="IMongoLock.IsValid"/> is a local, synchronous comparison against the lease the lock
+    ///     was last known to hold, so it catches an already-expired lease (for example, one returned by a slow
+    ///     acquisition that outlived its own lease, or one whose in-flight renewal has not yet completed) without
+    ///     waiting for a round trip. A cancelled <paramref name="lockLostCts"/> counts as a lost lock even while the
+    ///     lease is still locally valid, because the renewal loop cancels it when an extension is refused or fails
+    ///     unexpectedly.
+    ///     </para>
+    ///     <para>
+    ///     The guard throws as soon as it detects the loss instead of relying on
+    ///     <paramref name="protectedCancellationToken"/>: <see cref="CancellationTokenSource.CancelAsync"/> cancels
+    ///     the linked token source from a thread-pool callback, so that token can still be uncancelled here although
+    ///     <paramref name="lockLostCts"/> already is. This does not add fencing: a migration that ignores
+    ///     <paramref name="protectedCancellationToken"/> can still complete its own non-transactional effects, per
+    ///     the documented cooperative-cancellation limitation.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="OperationCanceledException">Thrown when the lock is no longer held.</exception>
+    internal async Task EnsureLockStillValidAsync(IMongoLock mongoLock, CancellationTokenSource lockLostCts, CancellationToken protectedCancellationToken)
+    {
+        var leaseExpired = !mongoLock.IsValid;
+        if (!leaseExpired && !lockLostCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (leaseExpired)
+        {
+            _logger.LogWarning("Migration lock {LockName} is no longer valid; stopping in-progress migration work", _options.MigrationLockName);
+        }
+        else
+        {
+            _logger.LogWarning("Migration lock {LockName} was lost during lease renewal; stopping in-progress migration work",
+                               _options.MigrationLockName);
+        }
+
+        if (!lockLostCts.IsCancellationRequested)
+        {
+            // Signals work that a migration may have left running after ApplyAsync returned.
+            await SignalLockLostAsync(lockLostCts);
+        }
+
+        throw new OperationCanceledException($"Migration lock '{_options.MigrationLockName}' is no longer held; stopping in-progress migration work.",
+                                             protectedCancellationToken);
+    }
+
     private static async Task AbortTransactionIfActiveAsync(IClientSessionHandle? session, CancellationToken cancellationToken)
     {
         if (session?.IsInTransaction == true)
@@ -150,13 +201,12 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
 
         try
         {
+            // The lock may have been lost while the transaction was starting. Checking inside the try lets the
+            // catch block abort that transaction.
+            await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
+
             var stopWatch = Stopwatch.StartNew();
             await migration.ApplyAsync(_mongoHelper, session, protectedCancellationToken);
-
-            // The lease may have expired locally while ApplyAsync ran, without the renewal loop having observed
-            // and cancelled it yet (for example, a slow extension still in flight). Re-check before recording the
-            // migration as applied so a lock we no longer provably hold cannot commit its history.
-            await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
 
             var historyItem = new MongoMigrationHistoryItem
             {
@@ -166,6 +216,12 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
                 Description = migration.Description
             };
 
+            // The lease may have expired locally while ApplyAsync ran, without the renewal loop having observed
+            // and cancelled it yet (for example, a slow extension still in flight). Re-check right before recording
+            // the migration as applied, after the migration's own getters have run, so a lock we no longer provably
+            // hold cannot commit its history.
+            await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
+
             if (session is null)
             {
                 await historyCollection.InsertOneAsync(historyItem, cancellationToken: protectedCancellationToken);
@@ -173,6 +229,10 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
             else
             {
                 await historyCollection.InsertOneAsync(session, historyItem, cancellationToken: protectedCancellationToken);
+
+                // The lock may have been lost while the history entry was being written. Nothing is applied or
+                // recorded until the commit, so check once more before committing.
+                await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
                 await session.CommitTransactionAsync(protectedCancellationToken);
             }
 
@@ -183,7 +243,17 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "Failed to apply migration {MigrationId}", migration.Id);
+            if (e is OperationCanceledException && lockLostCts.IsCancellationRequested)
+            {
+                // The guard or the renewal loop has already logged the lock loss; the migration itself did not fail.
+                // The exception is kept, because a migration's own cancellation can coincide with the lock loss.
+                _logger.LogWarning(e, "Stopped migration {MigrationId} because migration lock {LockName} was lost", migration.Id, _options.MigrationLockName);
+            }
+            else
+            {
+                _logger.LogError(e, "Failed to apply migration {MigrationId}", migration.Id);
+            }
+
             await AbortTransactionIfActiveAsync(session, cancellationToken);
             throw;
         }
@@ -191,35 +261,6 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         {
             session?.Dispose();
         }
-    }
-
-    /// <summary>
-    /// Guards a protected-work boundary against a lease that has already expired locally but whose loss the
-    /// renewal loop has not yet observed and signalled through <paramref name="lockLostCts"/>.
-    /// </summary>
-    /// <remarks>
-    /// Checking <see cref="IMongoLock.IsValid"/> is a local, synchronous comparison against the lease the lock
-    /// was last known to hold, so it catches an already-expired lease (for example, one returned by a slow
-    /// acquisition that outlived its own lease, or one whose in-flight renewal has not yet completed) without
-    /// waiting for a round trip. This does not add fencing: a migration that ignores
-    /// <paramref name="protectedCancellationToken"/> can still complete its own non-transactional effects, per
-    /// the documented cooperative-cancellation limitation.
-    /// </remarks>
-    private async Task EnsureLockStillValidAsync(IMongoLock mongoLock, CancellationTokenSource lockLostCts, CancellationToken protectedCancellationToken)
-    {
-        if (mongoLock.IsValid)
-        {
-            return;
-        }
-
-        _logger.LogWarning("Migration lock {LockName} is no longer valid; stopping in-progress migration work", _options.MigrationLockName);
-
-        if (!lockLostCts.IsCancellationRequested)
-        {
-            await lockLostCts.CancelAsync();
-        }
-
-        protectedCancellationToken.ThrowIfCancellationRequested();
     }
 
     /// <summary>
@@ -267,7 +308,7 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
 
                 _logger.LogWarning("Migration lock {LockName} could not be renewed; stopping in-progress migration work",
                                    _options.MigrationLockName);
-                await lockLostCts.CancelAsync();
+                await SignalLockLostAsync(lockLostCts);
                 return;
             }
         }
@@ -284,8 +325,25 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         {
             _logger.LogError(ex, "Migration lock {LockName} lease renewal failed unexpectedly; stopping in-progress migration work",
                              _options.MigrationLockName);
-            await lockLostCts.CancelAsync();
+            await SignalLockLostAsync(lockLostCts);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Cancels <paramref name="lockLostCts"/>. A cancellation callback that throws, for example one a migration
+    /// registered on its token, is logged instead of replacing the lock loss as the reason the run stops.
+    /// </summary>
+    private async Task SignalLockLostAsync(CancellationTokenSource lockLostCts)
+    {
+        try
+        {
+            await lockLostCts.CancelAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A cancellation callback failed while stopping work under migration lock {LockName}",
+                               _options.MigrationLockName);
         }
     }
 
@@ -330,8 +388,11 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         {
             // One renewal loop spans the whole run, starting immediately after acquiring the lock so it covers
             // the history read below, the no-pending early return, every migration, and transaction cleanup -
-            // not just the migration loop. lockLostCts is cancelled only when renewal is refused or fails
-            // unexpectedly, and that cancellation flows into all of that protected work via protectedCts below.
+            // not just the migration loop. lockLostCts is cancelled when renewal is refused or fails unexpectedly,
+            // or when EnsureLockStillValidAsync finds the lease already expired, and that cancellation flows into
+            // all of that protected work via protectedCts below.
+            // That flow runs on the thread pool, so EnsureLockStillValidAsync checks lockLostCts itself at every
+            // boundary instead of relying on protectedCts having been cancelled already.
             using var lockLostCts = new CancellationTokenSource();
             using var renewalStopCts = new CancellationTokenSource();
             using var extensionAbortCts = new CancellationTokenSource();
@@ -355,6 +416,8 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
                 var pendingMigrations = Migrations.Where(x => !appliedMigrationIds.Contains(x.Id)).ToImmutableArray();
                 if (pendingMigrations.Length == 0)
                 {
+                    // The history was read under the lock; report it as complete only if the lock still holds.
+                    await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
                     _logger.LogInformation("No pending MongoDB migrations found");
                 }
                 else

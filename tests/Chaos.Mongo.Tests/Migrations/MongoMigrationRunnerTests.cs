@@ -5,11 +5,14 @@ namespace Chaos.Mongo.Tests.Migrations;
 using Chaos.Mongo.Migrations;
 using Chaos.Testing.Logging;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Bindings;
+using MongoDB.Driver.Core.Clusters;
 using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
@@ -174,7 +177,12 @@ public class MongoMigrationRunnerTests
                                       () => Task.CompletedTask,
                                       (_, _) => throw new InvalidOperationException("No extension should be attempted once the lock is already invalid."));
 
-        var historyCollection = new FakeHistoryCollection();
+        var historyReadCount = 0;
+        var historyCollection = new FakeHistoryCollection(onFind: _ =>
+        {
+            historyReadCount++;
+            return Task.CompletedTask;
+        });
         var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
         var options = Options.Create(new MongoOptions
         {
@@ -191,8 +199,387 @@ public class MongoMigrationRunnerTests
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
+        historyReadCount.Should().Be(0);
         migration.ApplyCallCount.Should().Be(0);
         historyCollection.InsertedItems.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithHistoryReadReturningAfterLeaseExpiry_StopsBeforeApplyingAnyMigration()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+
+        // Every extension is refused, so the lease cannot outlive the history read below.
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult<DateTime?>(null));
+
+        // The read itself completes normally; only the clock has passed the lease's expiry by the time it returns.
+        var historyCollection = new FakeHistoryCollection(onFind: _ =>
+        {
+            timeProvider.Advance(leaseTime);
+            return Task.CompletedTask;
+        });
+
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+        var migration = new FakeMigration("001_NeverReached");
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(0);
+        historyCollection.InsertedItems.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithMigrationIgnoringCancellationPastLeaseExpiry_DoesNotRecordIt()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The extension stalls until the lease it is meant to extend has expired.
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, ct) =>
+        {
+            extensionStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return null;
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+
+        // The migration ignores its cancellation token and returns normally once the test releases it.
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migration = new FakeMigration("001_IgnoresCancellation", async (_, _, _) =>
+        {
+            migrationStarted.SetResult();
+            await releaseMigration.Task;
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        timeProvider.Advance(leaseTime / 2);
+        await extensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        timeProvider.Advance(leaseTime / 2);
+        releaseMigration.SetResult();
+
+        var act = async () => await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(1);
+        historyCollection.InsertedItems.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task EnsureLockStillValidAsync_InvalidLockWithLockLostAlreadyCancelled_ThrowsWithoutWaitingForProtectedToken()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var sut = CreateGuardTestRunner(timeProvider, new NUnitTestLogger<MongoMigrationRunner>());
+        var mongoLock = CreateExpiredMongoLock(timeProvider);
+        using var lockLostCts = new CancellationTokenSource();
+        await lockLostCts.CancelAsync();
+
+        // An uncancelled token stands in for a protectedCts whose propagation from lockLostCts is still pending.
+        using var pendingProtectedCts = new CancellationTokenSource();
+
+        // Act
+        // The assertion below awaits the delegate before the token sources are disposed.
+        // ReSharper disable AccessToDisposedClosure
+        var act = async () => await sut.EnsureLockStillValidAsync(mongoLock, lockLostCts, pendingProtectedCts.Token);
+        // ReSharper restore AccessToDisposedClosure
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Test]
+    public async Task EnsureLockStillValidAsync_ValidLockWithLockLostAlreadyCancelled_ThrowsWithoutWaitingForProtectedToken()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var sut = CreateGuardTestRunner(timeProvider, new NUnitTestLogger<MongoMigrationRunner>());
+
+        // The lease is still locally valid, as after an extension that threw instead of being refused.
+        var mongoLock = CreateMongoLock(timeProvider, TimeSpan.FromMinutes(10), (_, _) => Task.FromResult<DateTime?>(null));
+        using var lockLostCts = new CancellationTokenSource();
+        await lockLostCts.CancelAsync();
+        using var pendingProtectedCts = new CancellationTokenSource();
+
+        // Act
+        // The assertion below awaits the delegate before the token sources are disposed.
+        // ReSharper disable AccessToDisposedClosure
+        var act = async () => await sut.EnsureLockStillValidAsync(mongoLock, lockLostCts, pendingProtectedCts.Token);
+        // ReSharper restore AccessToDisposedClosure
+
+        // Assert
+        mongoLock.IsValid.Should().BeTrue();
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Test]
+    public async Task EnsureLockStillValidAsync_InvalidLockWithLockLostNotCancelled_CancelsLockLostAndThrows()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var sut = CreateGuardTestRunner(timeProvider, new NUnitTestLogger<MongoMigrationRunner>());
+        var mongoLock = CreateExpiredMongoLock(timeProvider);
+        using var lockLostCts = new CancellationTokenSource();
+        using var pendingProtectedCts = new CancellationTokenSource();
+
+        // Act
+        // The assertion below awaits the delegate before the token sources are disposed.
+        // ReSharper disable AccessToDisposedClosure
+        var act = async () => await sut.EnsureLockStillValidAsync(mongoLock, lockLostCts, pendingProtectedCts.Token);
+        // ReSharper restore AccessToDisposedClosure
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        lockLostCts.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task EnsureLockStillValidAsync_CancellationCallbackThrows_LogsCallbackFailureAndThrowsOperationCanceled()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var logger = new NUnitTestLogger<MongoMigrationRunner>(captureMessages: true);
+        var sut = CreateGuardTestRunner(timeProvider, logger);
+        var mongoLock = CreateExpiredMongoLock(timeProvider);
+        using var lockLostCts = new CancellationTokenSource();
+
+        // A migration's token is linked to lockLostCts through protectedCts, so its registrations run during the
+        // propagation that cancelling lockLostCts starts.
+        using var migrationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(lockLostCts.Token);
+        var callbackFailure = new InvalidOperationException("Migration cancellation callback failed");
+        await using var registration = migrationTokenSource.Token.Register(() => throw callbackFailure);
+
+        // Act
+        // The assertion below awaits the delegate before lockLostCts is disposed.
+        // ReSharper disable once AccessToDisposedClosure
+        var act = async () => await sut.EnsureLockStillValidAsync(mongoLock, lockLostCts, CancellationToken.None);
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        logger.LogMessages.Should().Contain(message => message.LogLevel == LogLevel.Warning && ContainsException(message.Exception, callbackFailure));
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithLeaseLostWhileTransactionStarts_AbortsTransactionWithoutApplyingMigration()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+
+        // Every extension is refused, so the lease cannot outlive the transaction start below.
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult<DateTime?>(null));
+        var client = new FakeMongoClient(() =>
+        {
+            timeProvider.Advance(leaseTime);
+            return Task.CompletedTask;
+        });
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+        var migration = new FakeMigration("001_NeverReached");
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(0);
+        var session = client.Sessions.Should().ContainSingle().Subject;
+        session.AbortCount.Should().Be(1);
+        session.CommitCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithLeaseLostWhileHistoryEntryIsWritten_AbortsTransactionWithoutCommitting()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+
+        // Every extension is refused, so the lease cannot outlive the history write below.
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult<DateTime?>(null));
+        var client = new FakeMongoClient();
+
+        // The write itself completes normally; only the clock has passed the lease's expiry by the time it returns.
+        var historyCollection = new FakeHistoryCollection(onInsert: _ =>
+        {
+            timeProvider.Advance(leaseTime);
+            return Task.CompletedTask;
+        });
+
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>();
+        var migration = new FakeMigration("001_NotCommitted");
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(1);
+        var session = client.Sessions.Should().ContainSingle().Subject;
+        session.CommitCount.Should().Be(0);
+        session.AbortCount.Should().Be(1);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithRefusedExtensionAndThrowingCancellationCallback_LogsCallbackFailureAndStopsMigration()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult<DateTime?>(null));
+
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>(captureMessages: true);
+
+        // The migration's only cancellation callback releases it and then throws, so the callback is guaranteed to
+        // run before the migration can continue, regardless of callback order or scheduling.
+        var callbackFailure = new InvalidOperationException("Migration cancellation callback failed");
+        var migrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migrationReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var migration = new FakeMigration("001_ThrowingCallback", async (_, _, ct) =>
+        {
+            await using var registration = ct.Register(() =>
+            {
+                migrationReleased.TrySetResult();
+                throw callbackFailure;
+            });
+            migrationStarted.SetResult();
+            await migrationReleased.Task;
+            ct.ThrowIfCancellationRequested();
+        });
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        await migrationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        timeProvider.Advance(leaseTime / 2);
+
+        var act = async () => await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert: the refused renewal stays a lock loss; the failing callback is logged instead of turning it into an
+        // unexpected renewal failure.
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        historyCollection.InsertedItems.Should().BeEmpty();
+        logger.LogMessages.Should().Contain(message => message.LogLevel == LogLevel.Warning &&
+                                                       message.Message.StartsWith("A cancellation callback failed while stopping work under migration lock") &&
+                                                       ContainsException(message.Exception, callbackFailure));
+        logger.LogMessages.Should().NotContain(message => message.Message.Contains("renewal failed"));
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithNothingPendingAndHistoryReadReturningAfterLeaseExpiry_ThrowsInsteadOfReportingSuccess()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var extensionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseExtension = new TaskCompletionSource<DateTime?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The extension stalls and ignores its token until the test releases it, so the renewal loop cannot signal the
+        // loss while the history read is running; only the local lease check can detect it.
+        var mongoLock = CreateMongoLock(timeProvider, leaseTime, async (_, _) =>
+        {
+            extensionStarted.TrySetResult();
+            return await releaseExtension.Task;
+        });
+
+        // Every registered migration is already in the history, but the read returns only after the lease expired.
+        var historyCollection = new FakeHistoryCollection([
+                                                              new MongoMigrationHistoryItem
+                                                              {
+                                                                  Id = "001_AlreadyApplied",
+                                                                  AppliedUtc = DateTime.UnixEpoch,
+                                                                  DurationMs = 0
+                                                              }
+                                                          ],
+                                                          onFind: async _ =>
+                                                          {
+                                                              timeProvider.Advance(leaseTime / 2);
+                                                              await extensionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                                                              timeProvider.Advance(leaseTime / 2);
+                                                          });
+
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var logger = new SignalingLogger(new NUnitTestLogger<MongoMigrationRunner>(),
+                                         message => message.StartsWith("No pending MongoDB migrations found") ||
+                                                    message.Contains("is no longer valid"));
+        var migration = new FakeMigration("001_AlreadyApplied");
+
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act: release the stalled extension only once the run has decided how to end, so it cannot influence that.
+        var runTask = sut.RunMigrationsAsync(CancellationToken.None);
+        try
+        {
+            await logger.Signal.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            releaseExtension.TrySetResult(null);
+        }
+
+        var act = async () => await runTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(0);
     }
 
     [Test]
@@ -885,6 +1272,22 @@ public class MongoMigrationRunnerTests
             releaseAction ?? (() => Task.CompletedTask),
             extendAction);
 
+    private static Boolean ContainsException(Exception? exception, Exception expected)
+        => exception is not null &&
+           (ReferenceEquals(exception, expected) ||
+            (exception is AggregateException aggregate && aggregate.Flatten().InnerExceptions.Any(inner => ReferenceEquals(inner, expected))));
+
+    private static MongoLock CreateExpiredMongoLock(TimeProvider timeProvider) =>
+        new("migration-lock",
+            timeProvider.GetUtcNow().UtcDateTime.AddMilliseconds(-1),
+            TimeSpan.FromMinutes(10),
+            timeProvider,
+            () => Task.CompletedTask,
+            (_, _) => throw new InvalidOperationException("No extension should be attempted by the guard."));
+
+    private static MongoMigrationRunner CreateGuardTestRunner(TimeProvider timeProvider, NUnitTestLogger<MongoMigrationRunner> logger)
+        => new([], new ThrowingMongoHelper(), Options.Create(new MongoOptions()), logger, timeProvider);
+
     private static async Task WaitForAsync(Func<Boolean> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);
@@ -937,11 +1340,15 @@ public class MongoMigrationRunnerTests
         private readonly IReadOnlyList<MongoMigrationHistoryItem> _initialItems;
         private readonly List<MongoMigrationHistoryItem> _insertedItems = [];
         private readonly Func<CancellationToken, Task>? _onFind;
+        private readonly Func<CancellationToken, Task>? _onInsert;
 
-        public FakeHistoryCollection(IReadOnlyList<MongoMigrationHistoryItem>? initialItems = null, Func<CancellationToken, Task>? onFind = null)
+        public FakeHistoryCollection(IReadOnlyList<MongoMigrationHistoryItem>? initialItems = null,
+                                     Func<CancellationToken, Task>? onFind = null,
+                                     Func<CancellationToken, Task>? onInsert = null)
         {
             _initialItems = initialItems ?? [];
             _onFind = onFind;
+            _onInsert = onInsert;
         }
 
         public IReadOnlyList<MongoMigrationHistoryItem> InsertedItems => _insertedItems;
@@ -1193,23 +1600,32 @@ public class MongoMigrationRunnerTests
         public void InsertOne(IClientSessionHandle session, MongoMigrationHistoryItem document, InsertOneOptions? options = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task InsertOneAsync(MongoMigrationHistoryItem document, CancellationToken cancellationToken)
+        public async Task InsertOneAsync(MongoMigrationHistoryItem document, CancellationToken cancellationToken)
         {
             _insertedItems.Add(document);
-            return Task.CompletedTask;
+            if (_onInsert is not null)
+            {
+                await _onInsert(cancellationToken);
+            }
         }
 
-        public Task InsertOneAsync(MongoMigrationHistoryItem document, InsertOneOptions? options = null, CancellationToken cancellationToken = default)
+        public async Task InsertOneAsync(MongoMigrationHistoryItem document, InsertOneOptions? options = null, CancellationToken cancellationToken = default)
         {
             _insertedItems.Add(document);
-            return Task.CompletedTask;
+            if (_onInsert is not null)
+            {
+                await _onInsert(cancellationToken);
+            }
         }
 
-        public Task InsertOneAsync(IClientSessionHandle session, MongoMigrationHistoryItem document, InsertOneOptions? options = null,
-                                   CancellationToken cancellationToken = default)
+        public async Task InsertOneAsync(IClientSessionHandle session, MongoMigrationHistoryItem document, InsertOneOptions? options = null,
+                                         CancellationToken cancellationToken = default)
         {
             _insertedItems.Add(document);
-            return Task.CompletedTask;
+            if (_onInsert is not null)
+            {
+                await _onInsert(cancellationToken);
+            }
         }
 
         public IAsyncCursor<TResult> MapReduce<TResult>(BsonJavaScript map, BsonJavaScript reduce, MapReduceOptions<MongoMigrationHistoryItem, TResult>? options = null,
@@ -1475,27 +1891,239 @@ public class MongoMigrationRunnerTests
     }
 
     /// <summary>
+    /// Hand-crafted stub for <see cref="IMongoClient"/>. Only <see cref="StartSessionAsync"/> is reachable: it runs an
+    /// optional hook, standing in for the time the session start takes, and returns a <see cref="FakeClientSession"/>.
+    /// </summary>
+    private sealed class FakeMongoClient : IMongoClient
+    {
+        private readonly Func<Task>? _onStartSession;
+
+        public FakeMongoClient(Func<Task>? onStartSession = null)
+        {
+            _onStartSession = onStartSession;
+        }
+
+        public List<FakeClientSession> Sessions { get; } = [];
+
+        public ICluster Cluster => throw new NotSupportedException();
+        public MongoClientSettings Settings => throw new NotSupportedException();
+
+        public void Dispose() { }
+
+        public ClientBulkWriteResult BulkWrite(IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ClientBulkWriteResult BulkWrite(IClientSessionHandle session, IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null,
+                                               CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<ClientBulkWriteResult> BulkWriteAsync(IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null,
+                                                          CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<ClientBulkWriteResult> BulkWriteAsync(IClientSessionHandle session, IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null,
+                                                          CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public void DropDatabase(String name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public void DropDatabase(IClientSessionHandle session, String name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task DropDatabaseAsync(String name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task DropDatabaseAsync(IClientSessionHandle session, String name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IMongoDatabase GetDatabase(String name, MongoDatabaseSettings? settings = null) => throw new NotSupportedException();
+
+        public IAsyncCursor<String> ListDatabaseNames(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<String> ListDatabaseNames(ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<String> ListDatabaseNames(IClientSessionHandle session, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<String> ListDatabaseNames(IClientSessionHandle session, ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<String>> ListDatabaseNamesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<String>> ListDatabaseNamesAsync(ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<String>> ListDatabaseNamesAsync(IClientSessionHandle session, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<String>> ListDatabaseNamesAsync(IClientSessionHandle session, ListDatabaseNamesOptions options,
+                                                                 CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<BsonDocument> ListDatabases(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<BsonDocument> ListDatabases(ListDatabasesOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<BsonDocument> ListDatabases(IClientSessionHandle session, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncCursor<BsonDocument> ListDatabases(IClientSessionHandle session, ListDatabasesOptions options, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(ListDatabasesOptions options, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(IClientSessionHandle session, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(IClientSessionHandle session, ListDatabasesOptions options,
+                                                                   CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IClientSessionHandle StartSession(ClientSessionOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public async Task<IClientSessionHandle> StartSessionAsync(ClientSessionOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            if (_onStartSession is not null)
+            {
+                await _onStartSession();
+            }
+
+            var session = new FakeClientSession(this);
+            Sessions.Add(session);
+            return session;
+        }
+
+        public IChangeStreamCursor<TResult> Watch<TResult>(PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline, ChangeStreamOptions? options = null,
+                                                           CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IChangeStreamCursor<TResult> Watch<TResult>(IClientSessionHandle session, PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline,
+                                                           ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline,
+                                                                      ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(IClientSessionHandle session,
+                                                                      PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline,
+                                                                      ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IMongoClient WithReadConcern(ReadConcern readConcern) => throw new NotSupportedException();
+
+        public IMongoClient WithReadPreference(ReadPreference readPreference) => throw new NotSupportedException();
+
+        public IMongoClient WithWriteConcern(WriteConcern writeConcern) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Hand-crafted recording double for <see cref="IClientSessionHandle"/> that tracks whether its transaction was
+    /// committed or aborted.
+    /// </summary>
+    private sealed class FakeClientSession : IClientSessionHandle
+    {
+        public FakeClientSession(IMongoClient client)
+        {
+            Client = client;
+        }
+
+        public Int32 AbortCount { get; private set; }
+        public Int32 CommitCount { get; private set; }
+        public IMongoClient Client { get; }
+        public BsonDocument ClusterTime => throw new NotSupportedException();
+        public Boolean IsImplicit => false;
+        public Boolean IsInTransaction { get; private set; }
+        public BsonTimestamp OperationTime => throw new NotSupportedException();
+        public ClientSessionOptions Options => throw new NotSupportedException();
+        public IServerSession ServerSession => throw new NotSupportedException();
+        public ICoreSessionHandle WrappedCoreSession => throw new NotSupportedException();
+
+        public void AbortTransaction(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task AbortTransactionAsync(CancellationToken cancellationToken = default)
+        {
+            AbortCount++;
+            IsInTransaction = false;
+            return Task.CompletedTask;
+        }
+
+        public void AdvanceClusterTime(BsonDocument newClusterTime) => throw new NotSupportedException();
+
+        public void AdvanceOperationTime(BsonTimestamp newOperationTime) => throw new NotSupportedException();
+
+        public void CommitTransaction(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task CommitTransactionAsync(CancellationToken cancellationToken = default)
+        {
+            CommitCount++;
+            IsInTransaction = false;
+            return Task.CompletedTask;
+        }
+
+        public void StartTransaction(TransactionOptions? transactionOptions = null) => IsInTransaction = true;
+
+        public TResult WithTransaction<TResult>(Func<IClientSessionHandle, CancellationToken, TResult> callback, TransactionOptions? transactionOptions = null,
+                                                CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<TResult> WithTransactionAsync<TResult>(Func<IClientSessionHandle, CancellationToken, Task<TResult>> callbackAsync,
+                                                           TransactionOptions? transactionOptions = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IClientSessionHandle Fork() => throw new NotSupportedException();
+
+        public void Dispose() { }
+    }
+
+    /// <summary>
     /// Hand-crafted stub for <see cref="IMongoHelper"/> with a controllable <see cref="TryAcquireLockAsync"/>.
     /// Every other member is unreachable in the tests that use it and throws deliberately.
     /// </summary>
     private sealed class FakeMongoHelper : IMongoHelper
     {
+        private readonly IMongoClient? _client;
         private readonly Func<String, TimeSpan?, CancellationToken, Task<IMongoLock?>> _tryAcquireLockAsync;
 
         public FakeMongoHelper(Func<String, TimeSpan?, CancellationToken, Task<IMongoLock?>> tryAcquireLockAsync,
-                               FakeHistoryCollection? historyCollection = null)
+                               FakeHistoryCollection? historyCollection = null,
+                               IMongoClient? client = null)
         {
             _tryAcquireLockAsync = tryAcquireLockAsync;
+            _client = client;
             Database = new FakeMongoDatabase(historyCollection);
         }
 
-        public IMongoClient Client => throw new NotSupportedException();
+        public IMongoClient Client => _client ?? throw new NotSupportedException();
         public IMongoDatabase Database { get; }
 
         public IMongoCollection<TDocument> GetCollection<TDocument>(MongoCollectionSettings? settings = null) => throw new NotSupportedException();
 
         public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default) =>
             _tryAcquireLockAsync(lockName, leaseTime, cancellationToken);
+    }
+
+    /// <summary>
+    /// Forwards to another logger and completes <see cref="Signal"/> when a formatted message matches, so a test can
+    /// wait for a specific point in a run without polling a shared message list.
+    /// </summary>
+    private sealed class SignalingLogger : ILogger<MongoMigrationRunner>
+    {
+        private readonly ILogger<MongoMigrationRunner> _inner;
+        private readonly Func<String, Boolean> _matches;
+
+        public SignalingLogger(ILogger<MongoMigrationRunner> inner, Func<String, Boolean> matches)
+        {
+            _inner = inner;
+            _matches = matches;
+        }
+
+        public TaskCompletionSource Signal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => _inner.BeginScope(state);
+
+        public Boolean IsEnabled(LogLevel logLevel) => _inner.IsEnabled(logLevel);
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, String> formatter)
+        {
+            _inner.Log(logLevel, eventId, state, exception, formatter);
+            if (_matches(formatter(state, exception)))
+            {
+                Signal.TrySetResult();
+            }
+        }
     }
 
     /// <summary>
