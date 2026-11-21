@@ -15,6 +15,12 @@ using Microsoft.Extensions.Logging;
 /// and kept alive while its evidence is resolved and its hook runs; when the lease cannot be extended, the hook is
 /// cancelled and its anchor stays unnotified, so a slow hook keeps the lock instead of outliving it while another
 /// instance notifies the same anchors.
+/// <para>
+/// An anchor whose hook returned is marked notified even when an extension of the lease fails after that, without
+/// checking the lock again. The lock does not fence the write, so a check would only narrow that window, and failing
+/// it would call the hook a second time for work it already did. Marking is safe without the lock: only the first
+/// mark of an anchor is stored, and the next anchor is not notified before the lock is checked again.
+/// </para>
 /// </remarks>
 internal sealed class AnchorCompletionNotifier
 {

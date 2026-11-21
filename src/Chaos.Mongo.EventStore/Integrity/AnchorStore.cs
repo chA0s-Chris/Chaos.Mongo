@@ -609,16 +609,19 @@ internal sealed class AnchorStore
     }
 
     /// <summary>
-    /// Marks a completed anchor as notified.
+    /// Marks a completed anchor as notified. An anchor that is already notified keeps the time of its first mark, as
+    /// another instance may have notified it too.
     /// </summary>
     public Task MarkNotifiedAsync(Guid anchorId, DateTime utcNow, CancellationToken cancellationToken)
     {
+        var filter = ById(anchorId, AnchorStatus.Completed);
+        filter.Add(NotifiedField, false);
         var update = new BsonDocument("$set", new BsonDocument
         {
             { NotifiedField, true },
             { "NotifiedUtc", utcNow }
         });
-        return Anchors.UpdateOneAsync(ById(anchorId, AnchorStatus.Completed), update, cancellationToken: cancellationToken);
+        return Anchors.UpdateOneAsync(filter, update, cancellationToken: cancellationToken);
     }
 
     /// <summary>

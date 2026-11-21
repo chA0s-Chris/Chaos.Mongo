@@ -178,6 +178,40 @@ public class IntegrityAnchoringIntegrationTests
     }
 
     [Test]
+    public async Task NotifyAsync_AnchorNotifiedByAnotherInstanceMeanwhile_KeepsTheFirstNotificationTime()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var options = context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>();
+        var scopeFactory = context.ServiceProvider.GetRequiredService<IServiceScopeFactory>();
+        var store = GetStore(context);
+        var stream = await context.AppendStreamAsync(1);
+        await RunUntilAsync(context.ServiceProvider.GetRequiredService<AnchoringRun>(), _ => IsAnchoredAsync(store, stream));
+        var firstTime = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var laterTime = new FakeTimeProvider(firstTime.GetUtcNow().AddHours(1));
+        var otherInstance = new AnchorCompletionNotifier(context.MongoHelper,
+                                                         options,
+                                                         scopeFactory,
+                                                         (_, _, _) => Task.CompletedTask,
+                                                         firstTime,
+                                                         NullLogger<AnchorCompletionNotifier>.Instance);
+        var notifier = new AnchorCompletionNotifier(context.MongoHelper,
+                                                    options,
+                                                    scopeFactory,
+                                                    async (_, _, ct) => await otherInstance.NotifyAsync(_ => Task.FromResult(true), ct),
+                                                    laterTime,
+                                                    NullLogger<AnchorCompletionNotifier>.Instance);
+
+        // While this instance's hook runs, the other instance notifies the same anchor and marks it first.
+        var completed = await notifier.NotifyAsync(_ => Task.FromResult(true), CancellationToken.None);
+
+        completed.Should().BeTrue();
+        var anchor = await store.Anchors.Find(new BsonDocument(AnchorStore.SequenceField, 1)).SingleAsync();
+        anchor["Notified"].AsBoolean.Should().BeTrue();
+        anchor["NotifiedUtc"].ToUniversalTime().Should().Be(firstTime.GetUtcNow().UtcDateTime);
+    }
+
+    [Test]
     public async Task NotifyAsync_EvidenceMissing_KeepsTheAnchorUnnotifiedUntilItCanBeResolved()
     {
         var testAuthority = CreateTestAuthority();
@@ -214,6 +248,61 @@ public class IntegrityAnchoringIntegrationTests
                 .Which.CertificateRevocationLists.Should().ContainSingle()
                 .Which.Should().Equal(testAuthority.Crl);
         (await store.FindFirstUnnotifiedAsync(CancellationToken.None)).Should().BeNull();
+    }
+
+    [Test]
+    public async Task NotifyAsync_LockLostAfterHookReturned_MarksTheAnchorNotifiedAndStops()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var store = GetStore(context);
+        var run = context.ServiceProvider.GetRequiredService<AnchoringRun>();
+        var first = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, first));
+        var second = await context.AppendStreamAsync(1);
+        await RunUntilAsync(run, _ => IsAnchoredAsync(store, second));
+        var extensionInFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notified = new List<Int64>();
+        var notifier = new AnchorCompletionNotifier(context.MongoHelper,
+                                                    context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>(),
+                                                    context.ServiceProvider.GetRequiredService<IServiceScopeFactory>(),
+                                                    async (_, anchor, _) =>
+                                                    {
+                                                        await extensionInFlight.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                                                        notified.Add(anchor.Sequence);
+                                                    },
+                                                    TimeProvider.System,
+                                                    NullLogger<AnchorCompletionNotifier>.Instance)
+        {
+            LeaseCheckInterval = TimeSpan.FromMilliseconds(50)
+        };
+        var lockChecks = 0;
+
+        // The check before the hook succeeds. The first extension starts while the hook runs and is refused only after
+        // the hook returned, while the notifier waits for it; every later check fails too.
+        var completed = await notifier.NotifyAsync(async ct =>
+                                                   {
+                                                       if (++lockChecks == 1)
+                                                       {
+                                                           return true;
+                                                       }
+
+                                                       if (lockChecks == 2)
+                                                       {
+                                                           var hookReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                                                           await using var registration = ct.Register(() => hookReturned.TrySetResult());
+                                                           extensionInFlight.TrySetResult();
+                                                           await hookReturned.Task;
+                                                       }
+
+                                                       return false;
+                                                   },
+                                                   CancellationToken.None);
+
+        completed.Should().BeFalse();
+        lockChecks.Should().Be(3);
+        notified.Should().Equal(1);
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None))!.Sequence.Should().Be(2);
     }
 
     [TestCase(false)]
