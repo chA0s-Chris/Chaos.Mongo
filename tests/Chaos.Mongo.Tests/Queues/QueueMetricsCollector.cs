@@ -4,6 +4,7 @@ namespace Chaos.Mongo.Tests.Queues;
 
 using Chaos.Mongo.Queues;
 using System.Diagnostics.Metrics;
+using System.Globalization;
 
 internal sealed class QueueMetricsCollector : IDisposable
 {
@@ -39,7 +40,7 @@ internal sealed class QueueMetricsCollector : IDisposable
         }
 
         _measurements.Add(new QueueMetricMeasurement(instrument.Name,
-                                                     Convert.ToDouble(measurement),
+                                                     Convert.ToDouble(measurement, CultureInfo.InvariantCulture),
                                                      tagDictionary,
                                                      instrument.Unit));
     }
