@@ -60,6 +60,10 @@ nunit-*.xml
 *.user
 # END repo-baseline: gitignore
 
+# Fallout
+.fallout/*
+!.fallout/parameters.json
+
 # The release workflow scripts are sources, not build results. Must follow the shared [Rr]elease/ pattern.
 !/.github/scripts/release/
 

@@ -8,17 +8,17 @@ NUKE is no longer maintained, and its stale dependencies forced the transitive p
 
 ## Acceptance Criteria
 
-- [ ] The build project references `Fallout.Common` 10.5.0 and targets `net10.0`, and no tracked file outside `ai-plans/`, `CHANGELOG.md` and the blocks managed by repo-baseline mentions NUKE in its path or content, regardless of case. No build source uses the `Fallout.Common.ProjectModel` namespace.
-- [ ] `dotnet repo-baseline check .` reports no findings, and Git tracks `.fallout/parameters.json` and ignores everything else in `.fallout/`.
-- [ ] `bash build.sh Test`, run without existing `build/bin` and `build/obj`, passes without warnings in the build project's restore and compile output and in the pipeline, including no NU1701, NU1901, NU1902 or NU1903 warnings and no `Exception was suppressed` warning.
-- [ ] `bash build.sh Pack --release-version <test version>`, run with the release key and an empty publish directory, produces one `.nupkg` and one `.snupkg` for each of the three packages and verifies the signatures, and `bash build.sh PackCheck` passes.
-- [ ] `pwsh -File build.ps1 PackCheck` passes.
-- [ ] `bash build.sh Test` passes in a linked git worktree outside the clone's directory tree and writes the merged coverage file, so #321 stays fixed.
-- [ ] `HOST=chaos-mongo-workstation bash build.sh Restore` passes.
-- [ ] With the .NET 10 and .NET 11 SDKs installed, Fallout's in-process MSBuild loads from the .NET 10 SDK and evaluates the `net10.0` and the `net11.0` target of `src/Chaos.Mongo/Chaos.Mongo.csproj` with the final set of pins.
-- [ ] `dotnet list build/Build.csproj package --vulnerable --include-transitive` reports no vulnerable packages.
-- [ ] Every #126 pin is either removed or kept with a comment that explains why Fallout 10.5.0 still needs it.
-- [ ] For each target framework, the packed nuspecs of all three packages declare the same dependency IDs and version ranges as packages built from the branch's base commit.
+- [x] The build project references `Fallout.Common` 10.5.0 and targets `net10.0`, and no tracked file outside `ai-plans/`, `CHANGELOG.md` and the blocks managed by repo-baseline mentions NUKE in its path or content, regardless of case. No build source uses the `Fallout.Common.ProjectModel` namespace.
+- [x] `dotnet repo-baseline check .` reports no findings, and Git tracks `.fallout/parameters.json` and ignores everything else in `.fallout/`.
+- [x] `bash build.sh Test`, run without existing `build/bin` and `build/obj`, passes without warnings in the build project's restore and compile output and in the pipeline, including no NU1701, NU1901, NU1902 or NU1903 warnings and no `Exception was suppressed` warning.
+- [x] `bash build.sh Pack --release-version <test version>`, run with the release key and an empty publish directory, produces one `.nupkg` and one `.snupkg` for each of the three packages and verifies the signatures, and `bash build.sh PackCheck` passes.
+- [x] `pwsh -File build.ps1 PackCheck` passes.
+- [x] `bash build.sh Test` passes in a linked git worktree outside the clone's directory tree and writes the merged coverage file, so #321 stays fixed.
+- [x] `HOST=chaos-mongo-workstation bash build.sh Restore` passes.
+- [x] With the .NET 10 and .NET 11 SDKs installed, Fallout's in-process MSBuild loads from the .NET 10 SDK and evaluates the `net10.0` and the `net11.0` target of `src/Chaos.Mongo/Chaos.Mongo.csproj` with the final set of pins.
+- [x] `dotnet list build/Build.csproj package --vulnerable --include-transitive` reports no vulnerable packages.
+- [x] Every #126 pin is either removed or kept with a comment that explains why Fallout 10.5.0 still needs it.
+- [x] For each target framework, the packed nuspecs of all three packages declare the same dependency IDs and version ranges as packages built from the branch's base commit.
 
 ## Technical Details
 
@@ -39,6 +39,10 @@ repo-baseline manages the `.gitignore` block with the `.nuke` rules and the bloc
 No automated test is added. `tests/BuildPipeline.Tests` links only build sources that do not depend on the build framework, so it cannot run the pipeline, and no behavior of those sources changes.
 
 The change is build configuration only, so the pull request carries `skip-changelog` instead of the issue's `enhancement` label.
+
+PR/MR description must include:
+
+- Fallout reads `parameters.<profile>.json` from `.fallout/` instead of `.nuke/`; local profile files must be moved there.
 
 Verified by PR/MR checks:
 

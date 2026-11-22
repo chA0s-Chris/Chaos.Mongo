@@ -5,7 +5,7 @@ namespace BuildPipeline;
 /// <summary>
 /// Checks that a test run against the latest tested <c>MongoDB.Driver</c> really uses that version. A restore by another
 /// process between Restore and BuildTests resolves the minimum again, and the tests would then pass without testing the
-/// requested driver. Has no dependency on Nuke or the file system, so it can be linked into a test project.
+/// requested driver. Has no dependency on Fallout or the file system, so it can be linked into a test project.
 /// </summary>
 internal static class TestedDriverCheck
 {

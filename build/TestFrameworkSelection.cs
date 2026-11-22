@@ -3,7 +3,7 @@
 namespace BuildPipeline;
 
 /// <summary>
-/// Decides which target frameworks of a test project the pipeline builds and tests. Has no dependency on Nuke, so it
+/// Decides which target frameworks of a test project the pipeline builds and tests. Has no dependency on Fallout, so it
 /// can be linked into a test project.
 /// </summary>
 internal static class TestFrameworkSelection

@@ -4,7 +4,7 @@
     <Project Path="benchmarks/Chaos.Mongo.EventStore.LoadTests/Chaos.Mongo.EventStore.LoadTests.csproj" />
   </Folder>
   <Folder Name="/build/">
-    <Project Path="build/Nuke.csproj">
+    <Project Path="build/Build.csproj">
       <Configuration Solution="Debug|Any CPU" Project="Debug|Any CPU|NoBuild" />
       <Configuration Solution="Release|Any CPU" Project="Release|Any CPU|NoBuild" />
     </Project>

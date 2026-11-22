@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <!-- Strong naming: ordinary builds are public-signed with the committed public key, so every
-       build carries the released identity (PublicKeyToken=258e5594a5dc8a36). Only the Nuke Pack
+       build carries the released identity (PublicKeyToken=258e5594a5dc8a36). Only the Fallout Pack
        target signs fully; it overrides PublicSign and AssemblyOriginatorKeyFile with the private key. -->
   <PropertyGroup>
     <SignAssembly>true</SignAssembly>

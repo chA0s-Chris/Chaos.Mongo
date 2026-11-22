@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Writes the release notes body (body.md) and the ReleaseNotes.md that Nuke Pack reads to NOTES_DIR.
+# Writes the release notes body (body.md) and the ReleaseNotes.md that Fallout Pack reads to NOTES_DIR.
 #
 # If the release v$VERSION is already published, its body is reused: release-drafter would compare against that
 # release and report no changes. Otherwise the body drafted by release-drafter is used.

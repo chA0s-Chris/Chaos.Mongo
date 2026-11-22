@@ -36,7 +36,7 @@ is_prerelease() {
     [[ $VERSION == *-* ]]
 }
 
-# Prints the sorted package IDs of every project that the Nuke Pack target packs: every project under src/.
+# Prints the sorted package IDs of every project that the Fallout Pack target packs: every project under src/.
 package_ids() {
     local src_dir="${SRC_DIR:-src}" project id
     local -a projects=() ids=()

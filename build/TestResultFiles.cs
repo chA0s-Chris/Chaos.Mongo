@@ -5,7 +5,7 @@ namespace BuildPipeline;
 /// <summary>
 /// Names the JUnit result file of one test project running on one target framework. The Test target writes the
 /// files and the report reads them back through <see cref="Pattern"/>, so both agree on one naming contract. Has
-/// no dependency on Nuke, so it can be linked into a test project.
+/// no dependency on Fallout, so it can be linked into a test project.
 /// </summary>
 internal static class TestResultFiles
 {

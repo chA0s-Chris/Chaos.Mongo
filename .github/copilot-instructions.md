@@ -10,3 +10,7 @@ When performing a code review, always ignore files in these directories:
 - ./.nuke
 - ./.windsurf
 <!-- END repo-baseline: code-review-ignore -->
+
+Also ignore files in these directories:
+
+- ./.fallout

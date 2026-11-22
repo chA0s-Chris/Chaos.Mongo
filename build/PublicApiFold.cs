@@ -4,7 +4,7 @@ namespace BuildPipeline;
 
 /// <summary>
 /// Folds a project's <c>PublicAPI.Unshipped.txt</c> into its <c>PublicAPI.Shipped.txt</c> when a release ships its API.
-/// Has no dependency on Nuke or the file system, so it can be linked into a test project.
+/// Has no dependency on Fallout or the file system, so it can be linked into a test project.
 /// </summary>
 internal static class PublicApiFold
 {
