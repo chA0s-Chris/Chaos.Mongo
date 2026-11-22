@@ -28,6 +28,8 @@ using Testcontainers.MongoDb;
 [Category("Integration")]
 public class IntegrityAnchoringIntegrationTests
 {
+    private static readonly TimeSpan Generous = TimeSpan.FromSeconds(5);
+
     private readonly List<LedgerStoreContext> _contexts = [];
     private readonly List<TestTimestampAuthority> _testAuthorities = [];
     private MongoDbContainer _container;
@@ -209,6 +211,235 @@ public class IntegrityAnchoringIntegrationTests
         var anchor = await store.Anchors.Find(new BsonDocument(AnchorStore.SequenceField, 1)).SingleAsync();
         anchor["Notified"].AsBoolean.Should().BeTrue();
         anchor["NotifiedUtc"].ToUniversalTime().Should().Be(firstTime.GetUtcNow().UtcDateTime);
+    }
+
+    [Test]
+    public async Task NotifyAsync_CallbackOnTheHookTokenThrowsWhenTheExtensionThrows_StillCancelsTheHookAndReportsBothFailures()
+    {
+        var (context, store) = await CreateContextWithCompletedAnchorAsync();
+        var logger = new RecordingLogger<AnchorCompletionNotifier>();
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notifier = CreateNotifier(context, ThrowingCallbackHook(registered), logger);
+        var lockChecks = 0;
+
+        // The check before the hook succeeds; the first extension while the hook runs throws, but only once the hook has
+        // registered its callback, however long resolving the evidence takes.
+        var completed = await notifier.NotifyAsync(async _ =>
+                                                   {
+                                                       if (Interlocked.Increment(ref lockChecks) == 1)
+                                                       {
+                                                           return true;
+                                                       }
+
+                                                       await registered.Task.WaitAsync(Generous);
+                                                       throw new InvalidOperationException("extension failed");
+                                                   },
+                                                   CancellationToken.None);
+
+        completed.Should().BeFalse();
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None))!.Sequence.Should().Be(1);
+        var warnings = logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToList();
+        warnings.Should().ContainSingle(entry => entry.Exception is InvalidOperationException && entry.Exception.Message == "extension failed")
+                .Which.Message.Should().Contain("could not be extended while a completion hook was running");
+        warnings.Should().ContainSingle(entry => entry.Exception is AggregateException)
+                .Which.Exception!.InnerException.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("callback failed");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task NotifyAsync_CallbackOnTheHookTokenThrowsWhenTheExtensionIsRefused_StillCancelsTheHookAndDoesNotBlameTheExtension(
+        Boolean loggerFailsOnTheCallbackWarning)
+    {
+        var (context, store) = await CreateContextWithCompletedAnchorAsync();
+        var logger = CreateCallbackWarningLogger(loggerFailsOnTheCallbackWarning);
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notifier = CreateNotifier(context, ThrowingCallbackHook(registered), logger);
+        var lockChecks = 0;
+
+        // The check before the hook succeeds; the first extension while the hook runs is refused, but only once the hook
+        // has registered its callback, however long resolving the evidence takes.
+        var completed = await notifier.NotifyAsync(async _ =>
+                                                   {
+                                                       if (Interlocked.Increment(ref lockChecks) == 1)
+                                                       {
+                                                           return true;
+                                                       }
+
+                                                       await registered.Task.WaitAsync(Generous);
+                                                       return false;
+                                                   },
+                                                   CancellationToken.None);
+
+        completed.Should().BeFalse();
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None))!.Sequence.Should().Be(1);
+        var warnings = logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToList();
+        var callbackFailure = warnings.Should().ContainSingle(entry => entry.Exception is AggregateException).Subject;
+        callbackFailure.Exception!.InnerException.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("callback failed");
+        callbackFailure.Message.Should().NotContain("could not be extended while a completion hook was running",
+                                                    "the callback's failure is not an extension failure");
+        warnings.Should().NotContain(entry => entry.Message.Contains("could not be extended while a completion hook was running"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task NotifyAsync_LeaseCheckIsRefusedWhileJoinedAfterTheHookReturned_LogsTheCallbackFailureAndMarksTheAnchorNotified(
+        Boolean checkThrows)
+    {
+        var (context, store) = await CreateContextWithCompletedAnchorAsync();
+        var logger = new RecordingLogger<AnchorCompletionNotifier>();
+        var leaseCheckRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLeaseCheck = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The hook registers a throwing callback and returns normally, but only once the lease check is in flight.
+        var notifier = CreateNotifier(context,
+                                      async (_, _, token) =>
+                                      {
+                                          token.Register(() => throw new InvalidOperationException("callback failed"));
+                                          await leaseCheckRunning.Task.WaitAsync(Generous);
+                                      },
+                                      logger);
+        var lockChecks = 0;
+        Task<Boolean> notify;
+
+        try
+        {
+            notify = notifier.NotifyAsync(async _ =>
+            {
+                if (Interlocked.Increment(ref lockChecks) != 2)
+                {
+                    return true;
+                }
+
+                // The lease check that is running when the hook returns. It outlives the hook and is then refused.
+                leaseCheckRunning.TrySetResult();
+                await releaseLeaseCheck.Task;
+                return checkThrows ? throw new InvalidOperationException("extension failed") : false;
+            }, CancellationToken.None);
+
+            await leaseCheckRunning.Task.WaitAsync(Generous);
+
+            // The hook has returned, and the notifier has not decided yet: it joins the lease check.
+            (await Task.WhenAny(notify, Task.Delay(TimeSpan.FromMilliseconds(300))) == notify).Should().BeFalse("the lease check has not ended");
+        }
+        finally
+        {
+            releaseLeaseCheck.TrySetResult();
+        }
+
+        // Losing the lock after the hook returned does not undo the hook's work, and the failing callback does not either.
+        (await notify.WaitAsync(Generous)).Should().BeTrue("the hook returned normally before the lock was lost");
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None)).Should().BeNull("the anchor is marked notified");
+        var warnings = logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToList();
+        warnings.Should().ContainSingle(entry => entry.Exception is AggregateException)
+                .Which.Exception!.InnerException.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("callback failed");
+        warnings.Should().NotContain(entry => entry.Message.Contains("was cancelled because the anchoring lock could not be extended"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task NotifyAsync_CallbackOnTheLeaseCheckTokenThrowsAfterTheHookReturned_KeepsTheHooksOutcomeAndAwaitsTheLeaseCheck(
+        Boolean loggerFailsOnTheCallbackWarning)
+    {
+        var (context, store) = await CreateContextWithCompletedAnchorAsync();
+        var logger = CreateCallbackWarningLogger(loggerFailsOnTheCallbackWarning);
+        var leaseCheckRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLeaseCheck = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notifier = CreateNotifier(context,
+                                      async (_, _, _) => await leaseCheckRunning.Task.WaitAsync(Generous),
+                                      logger);
+        var lockChecks = 0;
+
+        // The first check precedes the hook; the second is the lease check, which registers a throwing callback on the
+        // token that is cancelled once the hook has returned and then stays busy until the test releases it.
+        Task<Boolean> notify;
+        try
+        {
+            notify = notifier.NotifyAsync(async token =>
+            {
+                if (Interlocked.Increment(ref lockChecks) != 2)
+                {
+                    return true;
+                }
+
+                token.Register(() => throw new InvalidOperationException("callback failed"));
+                leaseCheckRunning.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The hook has returned.
+                }
+
+                await releaseLeaseCheck.Task;
+                return true;
+            }, CancellationToken.None);
+
+            await leaseCheckRunning.Task.WaitAsync(Generous);
+            await WaitUntilAsync(() => Task.FromResult(logger.Entries.Any(entry => entry.Exception is AggregateException)), Generous);
+
+            // The callback has thrown and the hook has returned, yet the notifier still joins the lease check.
+            (await Task.WhenAny(notify, Task.Delay(TimeSpan.FromMilliseconds(200))) == notify).Should().BeFalse("the lease check has not ended");
+        }
+        finally
+        {
+            releaseLeaseCheck.TrySetResult();
+        }
+
+        (await notify.WaitAsync(Generous)).Should().BeTrue("the hook returned normally");
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None)).Should().BeNull("the anchor is marked notified");
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning && entry.Exception is AggregateException)
+              .Which.Exception!.InnerException.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("callback failed");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task NotifyAsync_CallbackOnTheLeaseCheckTokenThrowsWhenTheCallerCancels_KeepsTheCancellationAndTheAnchorUnnotified(
+        Boolean loggerFailsOnTheCallbackWarning)
+    {
+        var (context, store) = await CreateContextWithCompletedAnchorAsync();
+        var logger = CreateCallbackWarningLogger(loggerFailsOnTheCallbackWarning);
+        var hookRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var leaseCheckRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var notifier = CreateNotifier(context,
+                                      async (_, _, token) =>
+                                      {
+                                          hookRunning.TrySetResult();
+                                          await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                                      },
+                                      logger);
+        using var caller = new CancellationTokenSource();
+        var lockChecks = 0;
+
+        var notify = notifier.NotifyAsync(async token =>
+        {
+            if (Interlocked.Increment(ref lockChecks) != 2)
+            {
+                return true;
+            }
+
+            token.Register(() => throw new InvalidOperationException("callback failed"));
+            leaseCheckRunning.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // The hook has ended.
+            }
+
+            return true;
+        }, caller.Token);
+        await Task.WhenAll(hookRunning.Task, leaseCheckRunning.Task).WaitAsync(Generous);
+
+        await caller.CancelAsync();
+
+        // The caller's cancellation, not the failing callback on the lease check's token, decides the outcome.
+        await notify.Invoking(task => task.WaitAsync(Generous)).Should().ThrowAsync<OperationCanceledException>();
+        (await store.FindFirstUnnotifiedAsync(CancellationToken.None))!.Sequence.Should().Be(1);
+        logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning && entry.Exception is AggregateException);
     }
 
     [Test]
@@ -723,6 +954,43 @@ public class IntegrityAnchoringIntegrationTests
         }
     }
 
+    /// <summary>
+    /// A hook that registers a throwing callback on its token, reports that through <paramref name="registered"/>, and
+    /// runs until the token is cancelled.
+    /// </summary>
+    private static Func<IServiceProvider, CompletedAnchor, CancellationToken, Task> ThrowingCallbackHook(TaskCompletionSource registered)
+        => async (_, _, token) =>
+        {
+            token.Register(() => throw new InvalidOperationException("callback failed"));
+            registered.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // The notifier cancelled the hook, as the test intends.
+            }
+        };
+
+    /// <summary>
+    /// Creates a logger that, when asked to, fails while recording the warning about a failing cancellation callback,
+    /// as a faulty logging provider would.
+    /// </summary>
+    private static RecordingLogger<AnchorCompletionNotifier> CreateCallbackWarningLogger(Boolean failsOnTheCallbackWarning)
+        => failsOnTheCallbackWarning
+            ? new RecordingLogger<AnchorCompletionNotifier>
+            {
+                OnLog = entry =>
+                {
+                    if (entry.Message.StartsWith("A cancellation callback failed", StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException("logger failed");
+                    }
+                }
+            }
+            : new RecordingLogger<AnchorCompletionNotifier>();
+
     private static AnchorStore GetStore(LedgerStoreContext context)
         => new(context.MongoHelper, context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>());
 
@@ -794,6 +1062,29 @@ public class IntegrityAnchoringIntegrationTests
 
             await Task.Delay(100);
         }
+    }
+
+    private static AnchorCompletionNotifier CreateNotifier(LedgerStoreContext context,
+                                                           Func<IServiceProvider, CompletedAnchor, CancellationToken, Task> hook,
+                                                           ILogger<AnchorCompletionNotifier> logger)
+        => new(context.MongoHelper,
+               context.ServiceProvider.GetRequiredService<IntegrityAnchoringOptions>(),
+               context.ServiceProvider.GetRequiredService<IServiceScopeFactory>(),
+               hook,
+               TimeProvider.System,
+               logger)
+        {
+            LeaseCheckInterval = TimeSpan.FromMilliseconds(50)
+        };
+
+    private async Task<(LedgerStoreContext Context, AnchorStore Store)> CreateContextWithCompletedAnchorAsync()
+    {
+        var testAuthority = CreateTestAuthority();
+        var context = await CreateContextAsync(anchoring => anchoring.WithTimestampAuthority(_ => testAuthority.CreateAuthority()));
+        var store = GetStore(context);
+        var stream = await context.AppendStreamAsync(1);
+        await RunUntilAsync(context.ServiceProvider.GetRequiredService<AnchoringRun>(), _ => IsAnchoredAsync(store, stream));
+        return (context, store);
     }
 
     private async Task<LedgerStoreContext> CreateContextAsync(Action<IntegrityAnchoringBuilder> configure,

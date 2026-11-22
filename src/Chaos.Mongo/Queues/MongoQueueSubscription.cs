@@ -45,6 +45,7 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     private const String ClosedItemTtlIndexName = "IX_Queue_ClosedUtc_TTL";
     private const String ProcessingIndexName = "IX_Queue_Processing";
     private readonly CancellationTokenSource _cancellationTokenSource = new();
+    private readonly Object _gate = new();
     private readonly ILogger _logger;
     private readonly IMongoHelper _mongoHelper;
     private readonly IMongoQueuePayloadHandlerFactory _payloadHandlerFactory;
@@ -53,10 +54,13 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly SemaphoreSlim _signalSemaphore = new(0, Int32.MaxValue);
     private readonly TimeProvider _timeProvider;
-    private Boolean _isActive;
-    private Boolean _isDisposed;
+    private Task? _disposeOperation;
+    private volatile Boolean _isActive;
+    private volatile Boolean _isDisposed;
     private Task _monitorTask = Task.CompletedTask;
     private Task _processingTask = Task.CompletedTask;
+    private TaskCompletionSource? _startup;
+    private Task? _stopOperation;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MongoQueueSubscription{TPayload}"/> class.
@@ -311,6 +315,25 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
             : doubled;
     }
 
+    /// <summary>
+    /// Cancels the stopping token. A cancellation callback that throws, for example one a payload handler registered on
+    /// its token, faults <see cref="CancellationTokenSource.CancelAsync"/> after every callback has run; the failure is
+    /// logged instead of failing the stop or the disposal.
+    /// </summary>
+    private async Task CancelLoggingFailuresAsync()
+    {
+        try
+        {
+            await _cancellationTokenSource.CancelAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                               "A cancellation callback failed while stopping the queue subscription for payload {PayloadType}",
+                               _queueDefinition.PayloadType.FullName);
+        }
+    }
+
     private FilterDefinition<MongoQueueItem<TPayload>> CreateAvailableQueueItemFilter()
     {
         var filterBuilder = Builders<MongoQueueItem<TPayload>>.Filter;
@@ -385,6 +408,25 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     }
 
     /// <summary>
+    /// Returns the current stop operation, or publishes a new one and reports it in <paramref name="created"/>, in
+    /// which case the caller starts it with <see cref="RunStopAsync"/> after leaving the gate. Must be called under
+    /// <see cref="_gate"/>.
+    /// </summary>
+    private Task GetOrCreateStopOperationLocked(out TaskCompletionSource? created)
+    {
+        _isActive = false;
+        if (_stopOperation is not null)
+        {
+            created = null;
+            return _stopOperation;
+        }
+
+        created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _stopOperation = created.Task;
+        return _stopOperation;
+    }
+
+    /// <summary>
     /// Handles a resolved failure (a handler exception, a DI resolution failure, or a poison-payload secondary
     /// read failure) for the attempt the caller already knows was just granted. Unlike acquisition, a resolved
     /// failure never needs to increment <see cref="MongoQueueItem.AttemptCount"/> itself — that already happened
@@ -452,6 +494,19 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
                          typeof(TPayload).FullName,
                          attemptCount,
                          _queueDefinition.MaxRetries!.Value);
+    }
+
+    private void LogStopWaitCancelled()
+    {
+        try
+        {
+            _logger.LogWarning("Stopping queue subscription for payload {PayloadType} has been cancelled, " +
+                               "background tasks may still be running", _queueDefinition.PayloadType.FullName);
+        }
+        catch (Exception)
+        {
+            // Reporting the timeout is best effort; the stop operation itself continues independently.
+        }
     }
 
     /// <summary>
@@ -870,6 +925,99 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     }
 
     /// <summary>
+    /// The one disposal, shared by every caller of <see cref="DisposeAsync"/>: it waits for the stop operation, logs and
+    /// swallows a faulted loop, and then releases the token source and the semaphore exactly once.
+    /// </summary>
+    private async Task RunDisposeAsync(TaskCompletionSource disposal, Task stopOperation)
+    {
+        try
+        {
+            await stopOperation;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _logger.LogWarning(ex, "A background task of the queue subscription for payload {PayloadType} failed while it was being disposed",
+                                   _queueDefinition.PayloadType.FullName);
+            }
+            catch (Exception)
+            {
+                // Reporting the failed loop is best effort. A failing logging provider must not turn a disposal that has
+                // released its resources into a permanent fault, which would keep a queue from replacing the subscription.
+            }
+        }
+
+        _cancellationTokenSource.Dispose();
+        _signalSemaphore.Dispose();
+        disposal.SetResult();
+    }
+
+    /// <summary>
+    /// The one stop operation, shared by every overlapping <see cref="StopAsync"/> and <see cref="DisposeAsync"/>: it
+    /// cancels the stopping token, waits for a startup that is still running, and joins the monitor and processing tasks.
+    /// It runs to completion whatever happens to its callers' own waits, so the token source and the semaphore are
+    /// released only once nothing uses them.
+    /// </summary>
+    private async Task RunStopAsync(TaskCompletionSource operation)
+    {
+        // The operation always cancels, joins and settles, even when logging a failing cancellation callback fails.
+        Exception? failure = null;
+        try
+        {
+            await CancelLoggingFailuresAsync();
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+
+        try
+        {
+            TaskCompletionSource? startup;
+            lock (_gate)
+            {
+                startup = _startup;
+            }
+
+            if (startup is not null)
+            {
+                // The outcome of the startup belongs to the caller of StartAsync; it only matters here that it has ended and
+                // published the tasks to join.
+                await startup.Task;
+            }
+
+            await Task.WhenAll(_monitorTask, _processingTask);
+        }
+        catch (Exception ex)
+        {
+            failure ??= ex;
+        }
+
+        // The stop stays published until it is settled: clearing and settling are one transition, so no caller can start a
+        // second stop or admit a startup while this one is still pending.
+        lock (_gate)
+        {
+            if (ReferenceEquals(_stopOperation, operation.Task))
+            {
+                _stopOperation = null;
+            }
+
+            if (failure is null)
+            {
+                operation.SetResult();
+            }
+            else
+            {
+                operation.SetException(failure);
+            }
+        }
+
+        // Every caller may have abandoned its wait, so the operation observes its own fault.
+        _ = operation.Task.Exception;
+    }
+
+    /// <summary>
     /// Opens one change-stream cursor and classifies the outcome, so <see cref="StartAsync"/> and
     /// <see cref="MonitorChangeStreamAsync"/>'s retry loop share one failure policy: a standalone/non-replica-set
     /// server (<see cref="MongoCommandException.Code"/> <see cref="MongoQueueSubscriptionDefaults.StandaloneServerErrorCode"/>)
@@ -951,86 +1099,132 @@ internal class MongoQueueSubscription<TPayload> : IMongoQueueSubscription<TPaylo
     }
 
     /// <inheritdoc/>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_isDisposed)
+        TaskCompletionSource? disposal = null;
+        TaskCompletionSource? createdStop = null;
+        Task disposeOperation;
+        var stopOperation = Task.CompletedTask;
+        lock (_gate)
         {
-            return;
+            if (_disposeOperation is null)
+            {
+                _isDisposed = true;
+                disposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _disposeOperation = disposal.Task;
+                stopOperation = GetOrCreateStopOperationLocked(out createdStop);
+            }
+
+            disposeOperation = _disposeOperation;
         }
 
-        _isDisposed = true;
-        await _cancellationTokenSource.CancelAsync();
-        _cancellationTokenSource.Dispose();
-        _signalSemaphore.Dispose();
+        // Both operations are published above. Their work, which may complete synchronously and call logging providers, runs
+        // off the caller's stack: the caller returns the published disposal and its own token bounds the wait for it.
+        if (createdStop is not null)
+        {
+            _ = Task.Run(() => RunStopAsync(createdStop), CancellationToken.None);
+        }
+
+        if (disposal is not null)
+        {
+            _ = Task.Run(() => RunDisposeAsync(disposal, stopOperation), CancellationToken.None);
+        }
+
+        return new ValueTask(disposeOperation);
     }
 
     /// <inheritdoc/>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (_isDisposed)
+        TaskCompletionSource startup;
+        lock (_gate)
         {
-            throw new InvalidOperationException("Subscription is disposed.");
+            if (_isDisposed)
+            {
+                throw new InvalidOperationException("Subscription is disposed.");
+            }
+
+            // A running stop owns the single, non-resettable stopping token source and the tasks it is joining, so it
+            // cannot admit another startup, which could publish tasks the stop does not join.
+            if (_isActive || _stopOperation is not null)
+            {
+                return;
+            }
+
+            _isActive = true;
+
+            // A stop or disposal that arrives while startup is still running waits for it, because startup uses the
+            // token source and the semaphore and hands the cursor it opened to the monitor.
+            startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _startup = startup;
         }
 
-        if (_isActive)
+        try
         {
-            return;
+            var collection = _mongoHelper.Database.GetCollection<MongoQueueItem<TPayload>>(_queueDefinition.CollectionName);
+            await EnsureIndexesAsync(collection, cancellationToken);
+
+            // Opening (or attempting to open) the change stream before releasing the startup signal below closes the
+            // race between that signal and the change stream becoming active: once a cursor is confirmed open, every
+            // subsequent insert is guaranteed to produce a change event, so the startup signal only needs to cover
+            // items that existed at or before this point.
+            var openResult = await TryOpenChangeStreamAsync(collection, cancellationToken);
+
+            // Signal initially to start processing any existing messages
+            _signalSemaphore.Release();
+
+            // From here on the subscription is started: both loops are scheduled without the startup token, so a
+            // late startup cancellation can neither skip the monitor delegate (which owns, and in its finally disposes,
+            // the pre-opened cursor) nor leave a subscription marked active without its loops. Both stop through
+            // _cancellationTokenSource instead, whose token is read here, before the delegates are scheduled, so a
+            // stop that already cancelled it cannot keep a delegate from running and its finally from disposing the
+            // cursor. The stop operation waits for this method before it joins the tasks and before anything is released.
+            var stoppingToken = _cancellationTokenSource.Token;
+            if (openResult.Outcome != ChangeStreamOpenOutcome.Unsupported)
+            {
+                // On a transient first-open failure, the monitor task begins its own retry loop at the initial
+                // backoff delay instead of with a pre-opened cursor; a transient failure here never blocks polling
+                // from starting, since the processing task below is always started regardless of this outcome.
+                var initialOpenFailed = openResult.Outcome == ChangeStreamOpenOutcome.Failed;
+                _monitorTask = Task.Run(
+                    async () => await MonitorChangeStreamAsync(collection, openResult.Cursor, initialOpenFailed, stoppingToken),
+                    CancellationToken.None);
+            }
+
+            _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, stoppingToken), CancellationToken.None);
         }
-
-        _isActive = true;
-
-        var collection = _mongoHelper.Database.GetCollection<MongoQueueItem<TPayload>>(_queueDefinition.CollectionName);
-        await EnsureIndexesAsync(collection, cancellationToken);
-
-        // Opening (or attempting to open) the change stream before releasing the startup signal below closes the
-        // race between that signal and the change stream becoming active: once a cursor is confirmed open, every
-        // subsequent insert is guaranteed to produce a change event, so the startup signal only needs to cover
-        // items that existed at or before this point.
-        var openResult = await TryOpenChangeStreamAsync(collection, cancellationToken);
-
-        // Signal initially to start processing any existing messages
-        _signalSemaphore.Release();
-
-        // From here on the subscription is started: both loops are scheduled without the startup token, so a
-        // late startup cancellation can neither skip the monitor delegate (which owns, and in its finally disposes,
-        // the pre-opened cursor) nor leave a subscription marked active without its loops. Both stop through
-        // _cancellationTokenSource instead, whose token is read here rather than inside the delegates: DisposeAsync
-        // may dispose the source before a delegate runs, and reading Token then would throw before the monitor's
-        // finally could dispose the cursor.
-        var stoppingToken = _cancellationTokenSource.Token;
-        if (openResult.Outcome != ChangeStreamOpenOutcome.Unsupported)
+        finally
         {
-            // On a transient first-open failure, the monitor task begins its own retry loop at the initial
-            // backoff delay instead of with a pre-opened cursor; a transient failure here never blocks polling
-            // from starting, since the processing task below is always started regardless of this outcome.
-            var initialOpenFailed = openResult.Outcome == ChangeStreamOpenOutcome.Failed;
-            _monitorTask = Task.Run(
-                async () => await MonitorChangeStreamAsync(collection, openResult.Cursor, initialOpenFailed, stoppingToken),
-                CancellationToken.None);
+            startup.SetResult();
         }
-
-        _processingTask = Task.Run(async () => await ProcessQueueItemsAsync(collection, stoppingToken), CancellationToken.None);
     }
 
     /// <inheritdoc/>
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        if (_isDisposed)
+        TaskCompletionSource? created = null;
+        Task operation;
+        lock (_gate)
         {
-            return;
+            // A disposal includes the stop and outlives it, so a stop during disposal joins the disposal.
+            operation = _disposeOperation ?? GetOrCreateStopOperationLocked(out created);
         }
 
-        await _cancellationTokenSource.CancelAsync();
-        _isActive = false;
+        // The operation is published above. Its work runs off the caller's stack, so the caller's token bounds the wait for it.
+        if (created is not null)
+        {
+            _ = Task.Run(() => RunStopAsync(created), CancellationToken.None);
+        }
 
         try
         {
-            await Task.WhenAll(_monitorTask, _processingTask).WaitAsync(cancellationToken);
+            await operation.WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            _logger.LogWarning("Stopping queue subscription for payload {PayloadType} has been cancelled, " +
-                               "background tasks may still be running", _queueDefinition.PayloadType.FullName);
+            // The caller's token has already ended its wait, so the warning is best effort and runs off the caller's stack:
+            // a blocked or throwing logging provider neither keeps the caller waiting nor replaces its result.
+            _ = Task.Run(LogStopWaitCancelled, CancellationToken.None);
         }
     }
 

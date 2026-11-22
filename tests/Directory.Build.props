@@ -19,6 +19,8 @@
     <Compile Include="$(MSBuildThisFileDirectory)ContainerStartDiagnostics.cs" Link="ContainerStartDiagnostics.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)TestDatabases.cs" Link="TestDatabases.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)DropTestDatabasesAttribute.cs" Link="DropTestDatabasesAttribute.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)CancellationCallbackBarrier.cs" Link="CancellationCallbackBarrier.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)RecordingLogger.cs" Link="RecordingLogger.cs" />
   </ItemGroup>
 
   <!-- The implicit usings of .NET 11 include System.Net.Http.Json, those of .NET 10 do not. Importing it for every

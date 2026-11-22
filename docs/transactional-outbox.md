@@ -241,7 +241,9 @@ public interface IOutboxProcessor
 ```
 
 - `StartAsync` begins polling for eligible messages
-- `StopAsync` cancels polling and waits for the processing loop to stop
+- `StopAsync` cancels polling and waits for the processing loop to stop. Concurrent calls share one stop; a caller
+  whose token is cancelled first returns without error while the stop continues, and `StartAsync` treats the processor
+  as running until the loop has finished
 - If auto-start is enabled, the hosted service manages this automatically
 
 ## Configuration

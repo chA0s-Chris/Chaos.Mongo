@@ -29,6 +29,8 @@ public interface IOutboxProcessor
     /// successfully is still marked as processed; once a stop has been requested, that update gets a
     /// short grace period, after which its lock is released and it remains pending for redelivery.
     /// Any remaining unclaimed messages from the current batch also remain pending for later processing.
+    /// Concurrent calls share one stop. A caller whose token is cancelled first stops waiting and returns
+    /// without error; the stop itself continues, and the processor can be started again once it has finished.
     /// </remarks>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>A task that completes when the processor has stopped.</returns>

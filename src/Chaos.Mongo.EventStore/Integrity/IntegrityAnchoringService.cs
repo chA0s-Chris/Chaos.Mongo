@@ -18,12 +18,11 @@ using Microsoft.Extensions.Logging;
 internal sealed class IntegrityAnchoringService
 {
     private readonly ILogger _logger;
+    private readonly StoppableLoop _loop;
     private readonly IntegrityAnchoringOptions _options;
     private readonly AnchoringRun _run;
     private readonly AnchorStore _store;
     private readonly TimeProvider _timeProvider;
-    private CancellationTokenSource? _cancellationTokenSource;
-    private Task _loop = Task.CompletedTask;
     private DateTime? _unanchoredSinceUtc;
 
     public IntegrityAnchoringService(AnchoringRun run,
@@ -41,6 +40,7 @@ internal sealed class IntegrityAnchoringService
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _loop = new StoppableLoop(logger, "stopping the integrity anchoring service");
     }
 
     /// <summary>
@@ -94,43 +94,18 @@ internal sealed class IntegrityAnchoringService
     /// <returns>A completed task; the loop runs in the background.</returns>
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (_cancellationTokenSource is not null)
-        {
-            return Task.CompletedTask;
-        }
-
-        _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _loop = RunLoopAsync(_cancellationTokenSource.Token);
+        _loop.TryStart(RunLoopAsync, cancellationToken);
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Stops the background loop and waits for the current run to observe cancellation.
+    /// Stops the background loop and waits for the current run to observe cancellation. Overlapping stops share one
+    /// stop operation.
     /// </summary>
-    /// <param name="cancellationToken">A cancellation token that limits the wait.</param>
-    /// <returns>A task that completes when the loop has stopped.</returns>
-    public async Task StopAsync(CancellationToken cancellationToken = default)
-    {
-        if (_cancellationTokenSource is null)
-        {
-            return;
-        }
-
-        await _cancellationTokenSource.CancelAsync();
-        try
-        {
-            await _loop.WaitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown.
-        }
-        finally
-        {
-            _cancellationTokenSource.Dispose();
-            _cancellationTokenSource = null;
-        }
-    }
+    /// <param name="cancellationToken">A cancellation token that limits this caller's wait; the stop itself continues.</param>
+    /// <returns>A task that completes when the loop has stopped or the token ended the wait.</returns>
+    public Task StopAsync(CancellationToken cancellationToken = default)
+        => _loop.StopAsync(cancellationToken);
 
     private void ReportDelay(DateTime oldest)
     {

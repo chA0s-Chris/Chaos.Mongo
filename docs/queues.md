@@ -227,7 +227,12 @@ The prioritizer is shared by registered queues, so provide a deterministic fallb
 
 `IMongoQueue<TPayload>.IsRunning`, `StartSubscriptionAsync` and `StopSubscriptionAsync` control the queue's
 subscription, which manages the change-stream monitor and processing loop. The subscription itself is internal to
-the library; application code does not create or replace it.
+the library; application code does not create or replace it. The token of `StopSubscriptionAsync` is a shutdown
+timeout: when it expires while a handler that ignores cancellation is still running, and the stop has acquired the
+queue's internal semaphore, the call returns without error (a token that is already cancelled, or that expires while
+the stop still waits behind another stop or start, makes that wait throw as before), the subscription keeps shutting
+down in the background, and a later `StartSubscriptionAsync` waits for that shutdown
+(bounded by its own token) before it creates a new subscription.
 
 ## Diagnostics
 

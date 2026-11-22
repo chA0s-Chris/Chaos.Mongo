@@ -85,7 +85,9 @@ internal class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : cla
                     return;
                 }
 
-                await _subscription.DisposeAsync();
+                // The previous subscription must be gone before a new one starts, so the caller's token bounds this wait
+                // and a timeout surfaces as cancellation of the start; the subscription stays shutting down.
+                await _subscription.DisposeAsync().AsTask().WaitAsync(cancellationToken);
             }
 
             _subscription = await _subscriptionFactory.CreateAndRunAsync<TPayload>(QueueDefinition, cancellationToken);
@@ -109,7 +111,18 @@ internal class MongoQueue<TPayload> : IMongoQueue<TPayload> where TPayload : cla
                     await _subscription.StopAsync(cancellationToken);
                 }
 
-                await _subscription.DisposeAsync();
+                try
+                {
+                    // The token is the caller's shutdown timeout, so it also bounds the wait for the loops to end.
+                    await _subscription.DisposeAsync().AsTask().WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // The disposal continues on its own. The subscription stays, inactive and still shutting down, so a
+                    // later stop or start joins that shutdown instead of creating a subscription beside its loops.
+                    return;
+                }
+
                 _subscription = null;
             }
         }

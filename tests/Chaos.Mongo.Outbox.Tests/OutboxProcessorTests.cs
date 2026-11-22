@@ -2,6 +2,7 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo.Outbox.Tests;
 
+using Chaos.Mongo.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public class OutboxProcessorTests
 {
     private Mock<IMongoCollection<OutboxMessage>> _collectionMock;
     private Mock<IMongoDatabase> _databaseMock;
+    private IServiceScopeFactory? _handCraftedScopeFactory;
     private Mock<ILogger<OutboxProcessor>> _loggerMock;
     private Mock<IMongoHelper> _mongoHelperMock;
     private OutboxOptions _options;
@@ -66,6 +68,7 @@ public class OutboxProcessorTests
 
         _scopeFactoryMock = new Mock<IServiceScopeFactory>();
         _scopeFactoryMock.Setup(f => f.CreateScope()).Returns(serviceScopeMock.Object);
+        _handCraftedScopeFactory = null;
     }
 
     [Test]
@@ -554,6 +557,455 @@ public class OutboxProcessorTests
     }
 
     [Test]
+    public async Task StopAsync_CallbackThrows_LogsTheFailureAndStillStops()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var logger = new RecordingLogger<OutboxProcessor>();
+        UsePublisher(new DelegatePublisher((_, token) =>
+        {
+            token.Register(() => throw new InvalidOperationException("callback failed"));
+            publishing.TrySetResult(true);
+            return Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+
+        var act = () => sut.StopAsync();
+
+        await act.Should().NotThrowAsync();
+        var warning = logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning && entry.Exception != null).Subject;
+        warning.Exception.Should().BeOfType<AggregateException>().Which.InnerException.Should().BeOfType<InvalidOperationException>()
+               .Which.Message.Should().Be("callback failed");
+        await sut.StartAsync();
+        await sut.StopAsync();
+    }
+
+    [Test]
+    public async Task StopAsync_StoppingLogThrows_StillCancelsJoinsAndSettlesTheStop()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        var publisherCancelled = CreateSignal();
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var failuresLeft = 1;
+        var logger = new RecordingLogger<OutboxProcessor>
+        {
+            OnLog = entry =>
+            {
+                if (entry.Message.StartsWith("Stopping outbox processor", StringComparison.Ordinal) && Interlocked.Decrement(ref failuresLeft) >= 0)
+                {
+                    throw new InvalidOperationException("logger failed");
+                }
+            }
+        };
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            token.Register(() => publisherCancelled.TrySetResult(true));
+            publishing.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+
+        var act = async () => await sut.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The stop settles, with the logging failure, instead of never cancelling the loop and hanging its callers.
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("logger failed");
+        await WaitForSignalAsync(publisherCancelled);
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        await sut.StopAsync();
+    }
+
+    [Test]
+    public async Task StartAsync_StartingLogThrows_NeverReachesThePublisherAndALaterStartSucceeds()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        var publishCalls = 0;
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var failuresLeft = 1;
+        var logger = new RecordingLogger<OutboxProcessor>
+        {
+            OnLog = entry =>
+            {
+                if (entry.Message.StartsWith("Starting outbox processor", StringComparison.Ordinal) && Interlocked.Decrement(ref failuresLeft) >= 0)
+                {
+                    throw new InvalidOperationException("logger failed");
+                }
+            }
+        };
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            Interlocked.Increment(ref publishCalls);
+            publishing.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+
+        var start = () => sut.StartAsync();
+
+        await start.Should().ThrowAsync<InvalidOperationException>().WithMessage("logger failed");
+        _timeProvider.Advance(_options.PollingInterval * 2);
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        publishCalls.Should().Be(0, "a start that failed must not process messages");
+        await sut.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        await sut.StopAsync();
+    }
+
+    [Test]
+    public async Task StartAsync_StartingLogThrowsWhileAStopIsAdmitted_SettlesTheStopWithoutRunningTheLoop()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        var publishCalls = 0;
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var processors = new List<OutboxProcessor>();
+        var admittedStops = new List<Task>();
+        var failuresLeft = 1;
+        var logger = new RecordingLogger<OutboxProcessor>
+        {
+            OnLog = entry =>
+            {
+                if (entry.Message.StartsWith("Starting outbox processor", StringComparison.Ordinal) && Interlocked.Decrement(ref failuresLeft) >= 0)
+                {
+                    // The run is already published, so this stop is admitted while the start is still failing.
+                    admittedStops.Add(processors.Single().StopAsync());
+                    throw new InvalidOperationException("logger failed");
+                }
+            }
+        };
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            Interlocked.Increment(ref publishCalls);
+            publishing.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+        processors.Add(sut);
+
+        var start = () => sut.StartAsync();
+
+        await start.Should().ThrowAsync<InvalidOperationException>().WithMessage("logger failed");
+        await admittedStops.Should().ContainSingle().Subject.WaitAsync(TimeSpan.FromSeconds(5));
+        publishCalls.Should().Be(0, "the failed start never ran the loop");
+
+        // The stop released the run, so a later start works.
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        await sut.StopAsync();
+    }
+
+    [TestCase("Stopping outbox processor")]
+    [TestCase("Outbox processor stopped")]
+    public async Task StopAsync_StopLogThrows_DisposesTheLoggingScopeOnceAndReportsTheLogFailureAfterTheJoin(String failingMessage)
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        var publisherCancelled = CreateSignal();
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var scopesBegun = 0;
+        var scopesDisposed = 0;
+        var failuresLeft = 1;
+        var logger = new RecordingLogger<OutboxProcessor>
+        {
+            OnBeginScope = () =>
+            {
+                Interlocked.Increment(ref scopesBegun);
+                return new ActionDisposable(() => Interlocked.Increment(ref scopesDisposed));
+            },
+            OnLog = entry =>
+            {
+                if (entry.Message.StartsWith(failingMessage, StringComparison.Ordinal) && Interlocked.Decrement(ref failuresLeft) >= 0)
+                {
+                    throw new InvalidOperationException("logger failed");
+                }
+            }
+        };
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            token.Register(() => publisherCancelled.TrySetResult(true));
+            publishing.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+
+        var act = async () => await sut.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("logger failed");
+        await WaitForSignalAsync(publisherCancelled);
+        scopesBegun.Should().BeGreaterThanOrEqualTo(2, "the start and the stop each begin a scope");
+        scopesDisposed.Should().Be(scopesBegun, "every logging scope is disposed exactly once, also on the error path");
+    }
+
+    [Test]
+    public async Task StopAsync_StoppingLogBlocked_ReturnsTheFirstCallerWhoseTokenEndedAndKeepsTheStopSharedWithTheOverlappingCaller()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var stoppingLogEntered = CreateSignal();
+        var releaseStoppingLog = CreateSignal();
+        var logger = new RecordingLogger<OutboxProcessor>
+        {
+            OnLog = entry =>
+            {
+                if (entry.Message.StartsWith("Stopping outbox processor", StringComparison.Ordinal))
+                {
+                    stoppingLogEntered.TrySetResult(true);
+                    releaseStoppingLog.Task.Wait(TimeSpan.FromSeconds(10));
+                }
+            }
+        };
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            publishing.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        using var firstCallerTimeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        Task first;
+        Task second;
+
+        try
+        {
+            // The log is provider code that blocks. It runs for every stop, always off the caller's stack, so the first
+            // caller returns once its own token ended, however long the provider holds the log.
+            first = sut.StopAsync(firstCallerTimeout.Token);
+            await stoppingLogEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+            second = sut.StopAsync();
+            await sut.StartAsync();
+
+            (await Task.WhenAny(second, Task.Delay(TimeSpan.FromMilliseconds(200))) == second).Should()
+                                                                                              .BeFalse("the stop is still pending, so the overlapping caller waits for it");
+            logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("is already running"));
+        }
+        finally
+        {
+            releaseStoppingLog.TrySetResult(true);
+        }
+
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StartAsync();
+        await sut.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task StopAsync_FinalLogBlocked_KeepsAnOverlappingStopAndAStartWaitingForTheFirstStopsResult(Boolean firstCallerExpires)
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        var publishCalls = 0;
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var finalLogEntered = CreateSignal();
+        var releaseFinalLog = CreateSignal();
+        var failuresLeft = 1;
+        var logger = new RecordingLogger<OutboxProcessor>
+        {
+            OnLog = entry =>
+            {
+                if (entry.Message.StartsWith("Outbox processor stopped", StringComparison.Ordinal) && Interlocked.Decrement(ref failuresLeft) >= 0)
+                {
+                    finalLogEntered.TrySetResult(true);
+                    releaseFinalLog.Task.Wait(TimeSpan.FromSeconds(10));
+                    throw new InvalidOperationException("logger failed");
+                }
+            }
+        };
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            Interlocked.Increment(ref publishCalls);
+            publishing.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut(logger);
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        Task first;
+        Task second;
+        using var firstCallerTimeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            // The log is provider code that blocks. It must not run on the first caller's stack, so the call returns
+            // while the log is held: when its own token ends the wait, and otherwise only when the stop settles.
+            first = sut.StopAsync(firstCallerExpires ? firstCallerTimeout.Token : CancellationToken.None);
+            await finalLogEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            second = sut.StopAsync();
+            await sut.StartAsync();
+
+            (await Task.WhenAny(second, Task.Delay(TimeSpan.FromMilliseconds(200))) == second).Should()
+                                                                                              .BeFalse("the first stop is still pending, so an overlapping stop must wait for it");
+            (await Task.WhenAny(first, Task.Delay(TimeSpan.FromMilliseconds(500))) == first).Should()
+                                                                                            .Be(firstCallerExpires,
+                                                                                                "only a caller whose token ended returns while the stop is pending");
+            publishCalls.Should().Be(1, "a start while the stop is pending must not admit a second run");
+            logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("is already running"));
+        }
+        finally
+        {
+            releaseFinalLog.TrySetResult(true);
+        }
+
+        // The stops that waited for the operation observe its one result; a caller that gave up on waiting does not.
+        if (firstCallerExpires)
+        {
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        else
+        {
+            await first.Invoking(task => task.WaitAsync(TimeSpan.FromSeconds(5))).Should().ThrowAsync<InvalidOperationException>().WithMessage("logger failed");
+        }
+
+        await second.Invoking(task => task.WaitAsync(TimeSpan.FromSeconds(5))).Should().ThrowAsync<InvalidOperationException>().WithMessage("logger failed");
+        await sut.StartAsync();
+        await sut.StopAsync();
+    }
+
+    [Test]
+    public async Task StopAsync_OverlappingStopWithCancelledToken_DoesNotDropCallbacksOrThrow()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        var barrier = new CancellationCallbackBarrier();
+        UsePublisher(new DelegatePublisher((_, token) =>
+        {
+            barrier.RegisterOn(token);
+            publishing.TrySetResult(true);
+            return Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        var sut = CreateSut();
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        try
+        {
+            var first = sut.StopAsync();
+            await barrier.BlockerEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = sut.StopAsync(cancelled.Token);
+
+            await second.WaitAsync(TimeSpan.FromSeconds(5));
+            first.IsCompleted.Should().BeFalse("the first stop is held by its callback");
+            barrier.Release();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            await barrier.MarkerRan.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            barrier.Release();
+        }
+
+        await sut.StartAsync();
+        await sut.StopAsync();
+    }
+
+    [Test]
+    public async Task StopAsync_StartedAgainAfterSynchronouslyCompletedStop_StopsTheNewRun()
+    {
+        SetupFindReturnsEmpty();
+        var sut = CreateSut();
+
+        // A loop that never runs and a source that is already cancelled let the first stop complete synchronously.
+        using var cancelledAtStart = new CancellationTokenSource();
+        await cancelledAtStart.CancelAsync();
+        await sut.StartAsync(cancelledAtStart.Token);
+        await sut.StopAsync();
+        _collectionMock.Invocations.Clear();
+        await sut.StartAsync();
+        SpinWait.SpinUntil(() => _collectionMock.Invocations.Count > 0, TimeSpan.FromSeconds(5)).Should().BeTrue("the second run polls");
+
+        await sut.StopAsync();
+        _collectionMock.Invocations.Clear();
+        _timeProvider.Advance(_options.PollingInterval * 2);
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+
+        _collectionMock.Invocations.Should().BeEmpty("the stop of the second run must stop its loop instead of reusing the first run's completed stop");
+    }
+
+    [Test]
+    public async Task StopAsync_TimedOutStopWhilePublisherIgnoresCancellation_KeepsTheProcessorStoppingUntilTheLoopEnds()
+    {
+        var message = CreatePendingMessage();
+        var publishing = CreateSignal();
+        var releasePublisher = CreateSignal();
+        var markerRan = CreateSignal();
+        var publishCalls = 0;
+        SetupFindReturns(message);
+        SetupClaimReturns(message);
+        SetupUpdateOneResult(1);
+        UsePublisher(new DelegatePublisher(async (_, token) =>
+        {
+            Interlocked.Increment(ref publishCalls);
+            token.Register(() => markerRan.TrySetResult(true));
+            publishing.TrySetResult(true);
+            await releasePublisher.Task;
+        }));
+        var sut = CreateSut();
+        await sut.StartAsync();
+        await WaitForSignalAsync(publishing);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        Task uncancelledStop;
+
+        try
+        {
+            var timedOutStop = sut.StopAsync(cancelled.Token);
+            await timedOutStop.WaitAsync(TimeSpan.FromSeconds(5));
+            await markerRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await sut.StartAsync();
+            uncancelledStop = sut.StopAsync();
+            var stillPending = await Task.WhenAny(uncancelledStop, Task.Delay(TimeSpan.FromMilliseconds(200))) != uncancelledStop;
+
+            stillPending.Should().BeTrue("the loop is still running, so the processor is still stopping");
+            publishCalls.Should().Be(1, "a start during the stop must not run a second loop beside the old one");
+            VerifyLoggedWarning("is already running");
+        }
+        finally
+        {
+            releasePublisher.TrySetResult(true);
+        }
+
+        await uncancelledStop.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StartAsync();
+        await sut.StopAsync();
+    }
+
+    [Test]
     public async Task TryReleaseLock_WhenUpdateThrows_SwallowsExceptionAndLogsWarning()
     {
         var message = CreatePendingMessage();
@@ -642,14 +1094,25 @@ public class OutboxProcessorTests
     private static async Task WaitForSignalAsync(TaskCompletionSource<Boolean> signal)
         => await signal.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-    private OutboxProcessor CreateSut()
+    private OutboxProcessor CreateSut(ILogger<OutboxProcessor>? logger = null)
     {
         return new OutboxProcessor(
             _mongoHelperMock.Object,
             _options,
-            _scopeFactoryMock.Object,
+            _handCraftedScopeFactory ?? _scopeFactoryMock.Object,
             _timeProvider,
-            _loggerMock.Object);
+            logger ?? _loggerMock.Object);
+    }
+
+    /// <summary>
+    /// Replaces the fixture's mocked publisher with a hand-crafted one behind a real scope factory, for tests that need to control the publisher's
+    /// reaction to its cancellation token.
+    /// </summary>
+    private void UsePublisher(IOutboxPublisher publisher)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(publisher);
+        _handCraftedScopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 
     private void SetupClaimReturns(OutboxMessage? result, Action? callback = null)
@@ -725,4 +1188,37 @@ public class OutboxProcessorTests
                 It.IsAny<Func<It.IsAnyType, Exception?, String>>()),
             Times.AtLeastOnce);
     }
+}
+
+/// <summary>
+/// A disposable that runs an action, for a logging scope whose disposal a test counts.
+/// </summary>
+public sealed class ActionDisposable : IDisposable
+{
+    private readonly Action _dispose;
+
+    public ActionDisposable(Action dispose)
+    {
+        ArgumentNullException.ThrowIfNull(dispose);
+        _dispose = dispose;
+    }
+
+    public void Dispose() => _dispose();
+}
+
+/// <summary>
+/// A publisher whose behavior is a delegate, so a test controls how it reacts to the processor's cancellation token.
+/// </summary>
+public sealed class DelegatePublisher : IOutboxPublisher
+{
+    private readonly Func<OutboxMessage, CancellationToken, Task> _publish;
+
+    public DelegatePublisher(Func<OutboxMessage, CancellationToken, Task> publish)
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+        _publish = publish;
+    }
+
+    public Task PublishAsync(OutboxMessage message, CancellationToken cancellationToken = default)
+        => _publish(message, cancellationToken);
 }
