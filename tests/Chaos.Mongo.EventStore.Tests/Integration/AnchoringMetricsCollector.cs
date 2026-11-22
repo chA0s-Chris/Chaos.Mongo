@@ -5,6 +5,7 @@ namespace Chaos.Mongo.EventStore.Tests.Integration;
 using Chaos.Mongo.EventStore.Integrity;
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using System.Globalization;
 
 /// <summary>
 /// Collects the measurements of the anchoring meter.
@@ -38,7 +39,7 @@ internal sealed class AnchoringMetricsCollector : IDisposable
             tagDictionary[tag.Key] = tag.Value?.ToString();
         }
 
-        Measurements.Enqueue((instrument.Name, Convert.ToDouble(measurement), instrument.Unit, tagDictionary));
+        Measurements.Enqueue((instrument.Name, Convert.ToDouble(measurement, CultureInfo.InvariantCulture), instrument.Unit, tagDictionary));
     }
 
     public void Dispose() => _listener.Dispose();
