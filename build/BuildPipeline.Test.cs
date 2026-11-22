@@ -57,7 +57,12 @@ internal partial class BuildPipeline
                       var batch = frameworkRuns.ToList();
 
                       if (UseLatestTestedMongoDriver)
-                          VerifyTestedDriver(batch.Select(run => (run.Project, run.Framework)).ToList());
+                      {
+                          // BuildPipeline.Tests has no reference to the driver; see tests/Directory.Build.props.
+                          VerifyTestedDriver(batch.Where(run => Path.GetFileNameWithoutExtension(run.Project) != "BuildPipeline.Tests")
+                                                  .Select(run => (run.Project, run.Framework))
+                                                  .ToList());
+                      }
 
                       DotNetTest(s => s
                                       .SetConfiguration(TargetBuildConfiguration)
@@ -83,10 +88,7 @@ internal partial class BuildPipeline
               });
 
     private static String GetMsBuildProperty(AbsolutePath project, String property)
-    {
-        var output = DotNet($"msbuild \"{project}\" -nologo -getProperty:{property}", logOutput: false, logInvocation: false);
-        return String.Join(String.Empty, output.Where(o => o.Type == OutputType.Std).Select(o => o.Text)).Trim();
-    }
+        => JoinStandardOutput(DotNet($"msbuild \"{project}\" -nologo -getProperty:{property}", logOutput: false, logInvocation: false));
 
     /// <summary>
     /// Reads the target frameworks of a project from MSBuild, so the test runs follow the project files rather than a
@@ -100,6 +102,22 @@ internal partial class BuildPipeline
             Assert.Fail($"{project} does not declare TargetFrameworks, so no test run can be derived from it.");
 
         return frameworks;
+    }
+
+    private static String JoinStandardOutput(IEnumerable<Output> output)
+        => String.Join(String.Empty, output.Where(o => o.Type == OutputType.Std).Select(o => o.Text)).Trim();
+
+    /// <summary>
+    /// Reads the directory the test host runs from, with the same properties as the test invocation, so that a changed
+    /// output path is followed.
+    /// </summary>
+    private AbsolutePath GetTestOutputDirectory(AbsolutePath project, String framework)
+    {
+        var properties = $"-property:Configuration={TargetBuildConfiguration} " +
+                         $"-property:TargetFramework={framework} " +
+                         $"-property:{UseLatestTestedMongoDriverProperty}=true";
+
+        return JoinStandardOutput(DotNet($"msbuild \"{project}\" -nologo -getProperty:TargetDir {properties:nq}", logOutput: false, logInvocation: false));
     }
 
     private void ReportTestCountAndCoverage(IReadOnlyCollection<AbsolutePath> expectedResultFiles)
@@ -188,14 +206,14 @@ internal partial class BuildPipeline
     /// </summary>
     private void VerifyTestedDriver(IReadOnlyCollection<(AbsolutePath Project, String Framework)> runs)
     {
-        var expectedVersion = GetMsBuildProperty(runs.First().Project, "LatestTestedMongoDriverVersion");
+        var expectedVersion = GetMsBuildProperty(RootDirectory / "Directory.Packages.props", "LatestTestedMongoDriverVersion");
 
         if (String.IsNullOrEmpty(expectedVersion))
             Assert.Fail("Directory.Packages.props does not declare LatestTestedMongoDriverVersion.");
 
         var outputs = runs.Select(run =>
         {
-            var driver = run.Project.Parent / "bin" / TargetBuildConfiguration / run.Framework / "MongoDB.Driver.dll";
+            var driver = GetTestOutputDirectory(run.Project, run.Framework) / "MongoDB.Driver.dll";
             var version = driver.FileExists() ? FileVersionInfo.GetVersionInfo(driver).ProductVersion ?? String.Empty : null;
 
             return new TestedDriver($"{Path.GetFileNameWithoutExtension(run.Project)} ({run.Framework})", version);

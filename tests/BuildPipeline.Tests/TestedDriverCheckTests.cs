@@ -14,7 +14,7 @@ public class TestedDriverCheckTests
     [TestCase($"{Expected}+abc1234")]
     public void GetFailures_WithExpectedVersion_ReturnsNoFailures(String productVersion)
     {
-        TestedDriver[] outputs = [new("Chaos.Mongo.Tests (net10.0)", productVersion), new("BuildPipeline.Tests (net10.0)", null)];
+        TestedDriver[] outputs = [new("Chaos.Mongo.Tests (net10.0)", productVersion)];
 
         TestedDriverCheck.GetFailures(Expected, outputs).Should().BeEmpty();
     }
@@ -47,12 +47,22 @@ public class TestedDriverCheckTests
     }
 
     [Test]
-    public void GetFailures_WithoutDriverInAnyOutput_ReturnsFailure()
+    public void GetFailures_WithDriverMissingFromOneOutput_ReturnsFailureNamingThatRun()
     {
-        TestedDriver[] outputs = [new("BuildPipeline.Tests (net10.0)", null)];
+        TestedDriver[] outputs =
+        [
+            new("Chaos.Mongo.Tests (net10.0)", $"{Expected}+abc1234"),
+            new("Chaos.Mongo.Outbox.Tests (net10.0)", null)
+        ];
 
-        TestedDriverCheck.GetFailures(Expected, outputs).Should().Equal("No test output contains the driver.");
-        TestedDriverCheck.GetFailures(Expected, []).Should().Equal("No test output contains the driver.");
+        TestedDriverCheck.GetFailures(Expected, outputs).Should().Equal(
+            "Chaos.Mongo.Outbox.Tests (net10.0): does not contain the driver.");
+    }
+
+    [Test]
+    public void GetFailures_WithoutAnyOutput_ReturnsFailure()
+    {
+        TestedDriverCheck.GetFailures(Expected, []).Should().Equal("There is no test output to check.");
     }
 
     [TestCase(null)]
@@ -66,7 +76,7 @@ public class TestedDriverCheckTests
     }
 
     [Test]
-    public void GetFailures_WithoutOutputs_Throws()
+    public void GetFailures_WithNullOutputs_Throws()
     {
         var act = () => TestedDriverCheck.GetFailures(Expected, null!);
 

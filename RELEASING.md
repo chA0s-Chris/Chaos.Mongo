@@ -31,18 +31,21 @@ notes to `CHANGELOG.md`; review and merge it.
 
 ## Update the package validation baseline
 
-Package validation compares each package with the version in `PackageValidationBaselineVersion` in
-`src/Directory.Build.props`. After a stable release is published to nuget.org, set the property to that version, so
-the next release is checked against it. Package validation downloads the baseline package, so the version must be on
-nuget.org first.
+With `PackageValidationBaselineVersion` set in `src/Directory.Build.props`, package validation compares each package
+with that version. The property is not set before 1.0.0;
+[#307](https://github.com/chA0s-Chris/Chaos.Mongo/issues/307) adds it. After every stable release is published to
+nuget.org, set it to that version, so the next release is checked against it. Package validation downloads the baseline
+package, so the version must be on nuget.org first.
 
 Package validation then fails `Pack` and `PackCheck` on any breaking change against the baseline. When a new major
 version breaks API on purpose, record those breaks in the project's `CompatibilitySuppressions.xml`, which
-`dotnet pack -p:GenerateCompatibilitySuppressionFile=true` generates.
+`dotnet pack -p:ApiCompatGenerateSuppressionFile=true` generates. When the baseline moves to that major version, delete
+the file or generate it again, because its entries no longer apply.
 
 ## Release 1.0
 
-1. Release `1.0.0-rc.2` once the code issues of the 1.0 milestone are closed. Its API files are already folded.
+1. Release `1.0.0-rc.2` once the code issues of the 1.0 milestone are closed. Fold the public API again
+   first if any `PublicAPI.Unshipped.txt` has gained entries.
 2. Fix what rc.2 turns up. New or removed API goes into `PublicAPI.Unshipped.txt` as usual; fold it again before
    1.0.0.
 3. Release `1.0.0`.

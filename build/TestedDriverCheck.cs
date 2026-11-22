@@ -13,21 +13,21 @@ internal static class TestedDriverCheck
     /// Returns why the test outputs do not all use the expected driver, or an empty list if they do.
     /// </summary>
     /// <param name="expectedVersion">The driver version the run was requested to test.</param>
-    /// <param name="outputs">The outputs of all test runs, including those without the driver.</param>
-    /// <returns>One failure per output with another version, or one failure when no output contains the driver.</returns>
+    /// <param name="outputs">The outputs of all test runs that use the driver.</param>
+    /// <returns>One failure per output without the driver or with another version, or one failure without any output.</returns>
     public static IReadOnlyList<String> GetFailures(String expectedVersion, IReadOnlyCollection<TestedDriver> outputs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedVersion);
         ArgumentNullException.ThrowIfNull(outputs);
 
-        var drivers = outputs.Where(output => output.ProductVersion is not null).ToList();
+        // Without this, a run without any output to check would always pass.
+        if (outputs.Count == 0)
+            return ["There is no test output to check."];
 
-        // Without this, a changed output layout would leave nothing to check, and the check would always pass.
-        if (drivers.Count == 0)
-            return ["No test output contains the driver."];
-
-        return drivers.Where(driver => RemoveBuildMetadata(driver.ProductVersion) != expectedVersion)
-                      .Select(driver => $"{driver.TestRun}: found '{driver.ProductVersion}' instead of '{expectedVersion}'.")
+        return outputs.Where(output => RemoveBuildMetadata(output.ProductVersion) != expectedVersion)
+                      .Select(output => output.ProductVersion is null
+                                  ? $"{output.TestRun}: does not contain the driver."
+                                  : $"{output.TestRun}: found '{output.ProductVersion}' instead of '{expectedVersion}'.")
                       .ToList();
     }
 

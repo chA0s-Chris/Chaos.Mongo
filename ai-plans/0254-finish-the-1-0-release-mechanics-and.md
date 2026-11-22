@@ -40,10 +40,6 @@ release candidate before 1.0.
   this milestone. `CONTRIBUTING.md` links to it.
 - [x] A follow-up issue tracks setting `PackageValidationBaselineVersion` to `1.0.0` once 1.0.0 is published.
 
-### After merge (maintainer)
-
-- [ ] `v1.0.0-rc.2` is released through the Release workflow, and that run's `pack-check` job passes.
-
 ## Technical Details
 
 ### Driver override
@@ -66,10 +62,14 @@ An opt-in override applies the pinned version only when a boolean MSBuild proper
 
 The Nuke `Test` pipeline gets a new boolean switch that sets that property, so CI and local runs read the same pin.
 It must reach `Restore`, `BuildTests` and `Test` consistently, since `BuildTests` and `Test` run with
-`--no-restore`. `Pack`, `PackCheck` and `Build` never set it. The new CI job reuses the `ci` job's steps (Docker Hub
-login, both SDKs) with `CHAOSMONGO_MONGODB_IMAGE=Primary` and a framework matrix kept in sync with `MainTargets`.
-`release.yml` reuses `ci.yml`, so the new job also gates every release. Because the version is pinned, that gate is
-deterministic.
+`--no-restore`. `Pack`, `PackCheck` and `Build` refuse to run with the switch. The new CI job reuses the `ci` job's
+steps (Docker Hub login, both SDKs) with `CHAOSMONGO_MONGODB_IMAGE=Primary` and a framework matrix kept in sync with
+`MainTargets`. `release.yml` reuses `ci.yml`, so the new job also gates every release. Because the version is pinned,
+that gate is deterministic.
+
+With the switch, `Test` compares the `MongoDB.Driver` assemblies in the test outputs with the pin before any test
+starts and fails on a mismatch. Another process can restore the minimum again between `Restore` and `BuildTests`, and
+the run would then pass without testing the pinned driver.
 
 ### API fold
 
@@ -81,7 +81,8 @@ Put the fold logic in a new pure static class under `build/`, called by a new Nu
 - Shipped entries are written in ordinal order, so the output is deterministic. The first fold therefore also
   reorders the currently unsorted shipped files once.
 - Unshipped is reset to the header only.
-- If any removed entry is missing from Shipped, the target fails before writing anything.
+- If any removed entry is missing from Shipped, an added entry is already shipped, or a file does not start with the
+  header, the target fails before writing anything. An entry listed twice counts once.
 
 ### Release document and baseline
 
@@ -90,7 +91,12 @@ for the baseline: after a stable release is published to nuget.org, set `Package
 `src/Directory.Build.props` to that version. Package validation needs that version on nuget.org first, so the 1.0.0
 baseline cannot be set in this change. The follow-up issue gets no milestone.
 
-Tagging rc.2 is the last step of the milestone. It happens after this change is merged, by dispatching `release.yml`
-with `1.0.0-rc.2`, which runs `ci.yml`, including `pack-check`, before packing. The fold is done in this change so
-that rc.2 ships the frozen 1.0 surface. Any API added between rc.2 and 1.0.0 goes into `PublicAPI.Unshipped.txt` and is
-folded again at 1.0.0. #209 (net11.0) is already closed, so nothing waits on it.
+Releasing rc.2 is the last step of the milestone. It happens after this change is merged, so #254 stays open and
+tracks it. It is done by dispatching `release.yml` with `1.0.0-rc.2`, which runs `ci.yml`, including `pack-check`,
+before packing. The fold is done in this change so that rc.2 ships the frozen 1.0 surface. API that changes afterwards
+goes into `PublicAPI.Unshipped.txt` and is folded again before the next release, rc.2 included. #209 (net11.0) is
+already closed, so nothing waits on it.
+
+PR/MR description must include:
+
+- `Refs #254` without a closing keyword, and a note that #254 stays open until `v1.0.0-rc.2` is released.

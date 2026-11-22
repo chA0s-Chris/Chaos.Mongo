@@ -72,8 +72,9 @@ internal partial class BuildPipeline
 
     /// <summary>
     /// Restores, builds and tests against the <c>LatestTestedMongoDriverVersion</c> pinned in Directory.Packages.props
-    /// instead of the packages' minimum <c>MongoDB.Driver</c>. Only for the test targets: Build, Pack and PackCheck refuse
-    /// to run with it, so no build output or package depends on a driver newer than the declared minimum.
+    /// instead of the packages' minimum <c>MongoDB.Driver</c>. Only for the test targets, which then compile the src/
+    /// projects against the newer driver as well. Build, Pack and PackCheck refuse to run with it, so no package depends
+    /// on a driver newer than the declared minimum.
     /// </summary>
     [Parameter("Restores, builds and tests against the latest tested MongoDB.Driver instead of the minimum")]
     private Boolean UseLatestTestedMongoDriver { get; set; }

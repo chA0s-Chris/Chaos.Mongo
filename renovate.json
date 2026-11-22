@@ -17,7 +17,7 @@
     },
     {
       "customType": "regex",
-      "description": "Pick up the latest tested MongoDB.Driver version that the latest-driver CI job tests against. The nuget manager cannot see an MSBuild property, and the src dependency minimums rule matches the nuget manager only, so minor and patch updates of this pin open pull requests directly. Major updates wait for Dependency Dashboard approval through the repo-baseline preset.",
+      "description": "Pick up the latest tested MongoDB.Driver version that the latest-driver CI job tests against. The nuget manager resolves MSBuild properties only from the first PropertyGroup of a file, so it skips this pin, which is in a later one. The src dependency minimums rule matches the nuget manager only, so minor and patch updates of this pin open pull requests directly. Major updates wait for Dependency Dashboard approval through the repo-baseline preset.",
       "managerFilePatterns": [
         "/^Directory\\.Packages\\.props$/"
       ],

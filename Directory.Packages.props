@@ -45,7 +45,13 @@
        UseLatestTestedMongoDriver=true (the Nuke switch use-latest-tested-mongo-driver does it for
        Restore, BuildTests and Test) resolves this version instead of the minimum. Pack and PackCheck
        never set it, so the packed minimum stays the version above. Renovate updates the pin through a
-       custom manager in renovate.json; major updates wait for Dependency Dashboard approval. -->
+       custom manager in renovate.json; major updates wait for Dependency Dashboard approval. Keep the
+       pin out of the first PropertyGroup: Renovate's nuget manager would resolve it there and hold its
+       updates like those of the minimums.
+
+       The override applies to every project, so src/ is compiled against this version as well. Packages
+       are compiled against the minimum, so a driver change that breaks only already compiled assemblies
+       is not covered. -->
   <PropertyGroup>
     <!-- renovate: datasource=nuget depName=MongoDB.Driver-latest-tested packageName=MongoDB.Driver -->
     <LatestTestedMongoDriverVersion>3.14.0</LatestTestedMongoDriverVersion>
