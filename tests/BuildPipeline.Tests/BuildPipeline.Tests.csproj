@@ -8,5 +8,6 @@
     <Compile Include="../../build/TestResultFiles.cs" Link="TestResultFiles.cs" />
     <Compile Include="../../build/TestFrameworkSelection.cs" Link="TestFrameworkSelection.cs" />
     <Compile Include="../../build/PublicApiFold.cs" Link="PublicApiFold.cs" />
+    <Compile Include="../../build/TestedDriverCheck.cs" Link="TestedDriverCheck.cs" />
   </ItemGroup>
 </Project>
