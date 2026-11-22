@@ -67,6 +67,12 @@ Then run the pipeline, which writes `artifacts/test-coverage/coverage.cobertura.
 bash ./build.sh Test
 ```
 
+CI also runs the suite with the latest tested `MongoDB.Driver`. To reproduce that job:
+
+```bash
+bash ./build.sh Test --use-latest-tested-mongo-driver
+```
+
 ## Rules
 
 These documents hold the full rules:
@@ -79,11 +85,11 @@ These documents hold the full rules:
 For pull requests, these matter most:
 
 - Write commit messages in the [Conventional Commits](https://www.conventionalcommits.org/) format.
-- Add new public API to the project's `PublicAPI.Unshipped.txt`. Every public API is a compatibility commitment, so keep implementation details non-public.
+- Add new public API to the project's `PublicAPI.Unshipped.txt`, and mark removed API there with `*REMOVED*` if it is in `PublicAPI.Shipped.txt`. Every public API is a compatibility commitment, so keep implementation details non-public.
 - Follow the [Compatibility Policy](docs/compatibility-policy.md) for anything that affects the public API, stored data, default names or metrics.
 - Update the documentation in [`docs/`](docs/) when behavior changes.
 
-The `ai-plans/` folder is part of the maintainer's workflow. You don't need to write a plan to contribute.
+The `ai-plans/` folder is part of the maintainer's workflow. You don't need to write a plan to contribute. The maintainer cuts releases as described in [`RELEASING.md`](RELEASING.md).
 
 ## AI-assisted contributions
 

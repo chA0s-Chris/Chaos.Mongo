@@ -7,6 +7,8 @@ using Nuke.Common.IO;
 using Nuke.Common.Tooling;
 using Nuke.Common.Tools.DotNet;
 using Nuke.Common.Utilities.Collections;
+using Serilog;
+using System.Diagnostics;
 using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
@@ -25,6 +27,8 @@ internal partial class BuildPipeline
                                    .SetConfiguration(TargetBuildConfiguration)
                                    .SetFramework(TestFramework)
                                    .SetProcessAdditionalArguments("/nowarn:CS1591;CS1998;CS4014")
+                                   .When(_ => UseLatestTestedMongoDriver,
+                                         t => t.AddProperty(UseLatestTestedMongoDriverProperty, "true"))
                                    .EnableNoRestore());
               });
 
@@ -48,9 +52,18 @@ internal partial class BuildPipeline
                               let resultFile = ArtifactsDirectory / TestResultFiles.GetFileName(projectName, framework)
                               select (Project: project, Framework: framework, ResultFile: resultFile)).ToList();
 
+                  if (UseLatestTestedMongoDriver)
+                  {
+                      // BuildPipeline.Tests has no reference to the driver; see tests/Directory.Build.props.
+                      VerifyTestedDriver(runs.Where(run => Path.GetFileNameWithoutExtension(run.Project) != "BuildPipeline.Tests")
+                                             .Select(run => (run.Project, run.Framework))
+                                             .ToList());
+                  }
+
                   foreach (var frameworkRuns in runs.GroupBy(run => run.Framework))
                   {
                       var batch = frameworkRuns.ToList();
+
                       DotNetTest(s => s
                                       .SetConfiguration(TargetBuildConfiguration)
                                       .EnableNoBuild()
@@ -58,6 +71,8 @@ internal partial class BuildPipeline
                                       .SetDataCollector("XPlat Code Coverage")
                                       .SetSettingsFile(RootDirectory / "coverlet.xml")
                                       .SetResultsDirectory(CoverageDirectory)
+                                      .When(_ => UseLatestTestedMongoDriver,
+                                            t => t.AddProperty(UseLatestTestedMongoDriverProperty, "true"))
                                       .CombineWith(
                                           batch,
                                           (settings, run) => settings.SetProjectFile(run.Project)
@@ -72,19 +87,37 @@ internal partial class BuildPipeline
                   ReportTestCountAndCoverage(runs.Select(run => run.ResultFile).ToList());
               });
 
+    private static String GetMsBuildProperty(AbsolutePath project, String property)
+        => JoinStandardOutput(DotNet($"msbuild \"{project}\" -nologo -getProperty:{property}", logOutput: false, logInvocation: false));
+
     /// <summary>
     /// Reads the target frameworks of a project from MSBuild, so the test runs follow the project files rather than a
     /// second list of frameworks.
     /// </summary>
     private static IReadOnlyList<String> GetTargetFrameworks(AbsolutePath project)
     {
-        var output = DotNet($"msbuild \"{project}\" -nologo -getProperty:TargetFrameworks", logOutput: false, logInvocation: false);
-        var frameworks = TestResultFiles.ParseFrameworks(String.Join(String.Empty, output.Where(o => o.Type == OutputType.Std).Select(o => o.Text)));
+        var frameworks = TestResultFiles.ParseFrameworks(GetMsBuildProperty(project, "TargetFrameworks"));
 
         if (frameworks.Count == 0)
             Assert.Fail($"{project} does not declare TargetFrameworks, so no test run can be derived from it.");
 
         return frameworks;
+    }
+
+    private static String JoinStandardOutput(IEnumerable<Output> output)
+        => String.Join(String.Empty, output.Where(o => o.Type == OutputType.Std).Select(o => o.Text)).Trim();
+
+    /// <summary>
+    /// Reads the directory the test host runs from, with the same properties as the test invocation, so that a changed
+    /// output path is followed.
+    /// </summary>
+    private AbsolutePath GetTestOutputDirectory(AbsolutePath project, String framework)
+    {
+        var properties = $"-property:Configuration={TargetBuildConfiguration} " +
+                         $"-property:TargetFramework={framework} " +
+                         $"-property:{UseLatestTestedMongoDriverProperty}=true";
+
+        return JoinStandardOutput(DotNet($"msbuild \"{project}\" -nologo -getProperty:TargetDir {properties:nq}", logOutput: false, logInvocation: false));
     }
 
     private void ReportTestCountAndCoverage(IReadOnlyCollection<AbsolutePath> expectedResultFiles)
@@ -165,5 +198,35 @@ internal partial class BuildPipeline
             if (violations.Count > 0)
                 Assert.Fail(String.Join(Environment.NewLine, violations));
         }
+    }
+
+    /// <summary>
+    /// Fails unless the test outputs contain the pinned latest tested <c>MongoDB.Driver</c>. Reads the assemblies the test
+    /// hosts load rather than the restore result, which another process can change without affecting the run.
+    /// </summary>
+    private void VerifyTestedDriver(IReadOnlyCollection<(AbsolutePath Project, String Framework)> runs)
+    {
+        var expectedVersion = GetMsBuildProperty(RootDirectory / "Directory.Packages.props", "LatestTestedMongoDriverVersion");
+
+        if (String.IsNullOrEmpty(expectedVersion))
+            Assert.Fail("Directory.Packages.props does not declare LatestTestedMongoDriverVersion.");
+
+        var outputs = runs.Select(run =>
+        {
+            var driver = GetTestOutputDirectory(run.Project, run.Framework) / "MongoDB.Driver.dll";
+            var version = driver.FileExists() ? FileVersionInfo.GetVersionInfo(driver).ProductVersion ?? String.Empty : null;
+
+            return new TestedDriver($"{Path.GetFileNameWithoutExtension(run.Project)} ({run.Framework})", version);
+        }).ToList();
+
+        var failures = TestedDriverCheck.GetFailures(expectedVersion, outputs);
+
+        if (failures.Count > 0)
+        {
+            Assert.Fail($"The tests would not run against MongoDB.Driver {expectedVersion}." +
+                        Environment.NewLine + String.Join(Environment.NewLine, failures));
+        }
+
+        Log.Information("Testing against MongoDB.Driver {Version}", expectedVersion);
     }
 }

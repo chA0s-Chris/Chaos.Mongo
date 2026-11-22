@@ -11,6 +11,11 @@ using Nuke.Common.Tools.DotNet;
 
 internal partial class BuildPipeline
 {
+    /// <summary>
+    /// The MSBuild property that makes Directory.Packages.props resolve <c>LatestTestedMongoDriverVersion</c>.
+    /// </summary>
+    private const String UseLatestTestedMongoDriverProperty = "UseLatestTestedMongoDriver";
+
     [Parameter]
     public String ReleaseVersion { get; set; } = "0.1.0-dev";
 
@@ -64,4 +69,13 @@ internal partial class BuildPipeline
     private AbsolutePath TestsDirectory => RootDirectory / "tests";
 
     private AbsolutePath TestsSolutionFilter => TestsDirectory / "Tests.slnf";
+
+    /// <summary>
+    /// Restores, builds and tests against the <c>LatestTestedMongoDriverVersion</c> pinned in Directory.Packages.props
+    /// instead of the packages' minimum <c>MongoDB.Driver</c>. Only for the test targets, which then compile the src/
+    /// projects against the newer driver as well. Build, Pack and PackCheck refuse to run with it, so no package depends
+    /// on a driver newer than the declared minimum.
+    /// </summary>
+    [Parameter("Restores, builds and tests against the latest tested MongoDB.Driver instead of the minimum")]
+    private Boolean UseLatestTestedMongoDriver { get; set; }
 }
