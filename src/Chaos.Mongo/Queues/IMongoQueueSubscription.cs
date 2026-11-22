@@ -18,7 +18,9 @@ internal interface IMongoQueueSubscription<TPayload> : IAsyncDisposable
     /// Starts the queue subscription by initializing indexes and launching background tasks for monitoring and processing.
     /// </summary>
     /// <remarks>
-    /// This method is idempotent - calling it multiple times has no effect if already started.
+    /// This method is idempotent - calling it multiple times has no effect if already started. It also has no effect while a
+    /// stop is in progress, because the stopping token of a subscription cannot be reset. Once the subscription is disposed,
+    /// it throws an <see cref="InvalidOperationException"/>.
     /// Two background tasks are launched:
     /// <list type="bullet">
     ///     <item>Change stream monitor for real-time notifications</item>
@@ -36,7 +38,8 @@ internal interface IMongoQueueSubscription<TPayload> : IAsyncDisposable
     /// <remarks>
     /// If the cancellation token is triggered before background tasks complete, a warning is logged
     /// and the method returns, but background tasks may still be running.
-    /// This method is idempotent and safe to call multiple times.
+    /// This method is idempotent and safe to call multiple times. Concurrent calls, and a concurrent
+    /// <see cref="IAsyncDisposable.DisposeAsync"/>, share one stop; each caller's token bounds only its own wait.
     /// </remarks>
     /// <param name="cancellationToken">The cancellation token representing the caller's shutdown timeout.</param>
     /// <returns>A task that completes when the subscription has stopped or the timeout expires.</returns>

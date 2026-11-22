@@ -15,6 +15,7 @@ using MongoDB.Driver;
 internal sealed class OutboxProcessor : IOutboxProcessor
 {
     private static readonly TimeSpan FinalizationTimeout = TimeSpan.FromSeconds(3);
+    private readonly Object _gate = new();
     private readonly ILogger<OutboxProcessor> _logger;
     private readonly IMongoHelper _mongoHelper;
     private readonly OutboxOptions _options;
@@ -23,6 +24,7 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     private readonly TimeProvider _timeProvider;
     private CancellationTokenSource? _cancellationTokenSource;
     private Task _processingTask = Task.CompletedTask;
+    private Task? _stopOperation;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OutboxProcessor"/> class.
@@ -57,11 +59,65 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         _publisherKey = publisherKey;
     }
 
+    private static Exception? Capture(Action action)
+    {
+        try
+        {
+            action();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>
+    /// Rolls back a run whose start failed before its loop began. The loop is settled without ever running, which ends the
+    /// wait of a stop that was admitted in the meantime; that stop then releases the run. Without such a stop the run is
+    /// released here, so a later start succeeds.
+    /// </summary>
+    private void AbandonStart(TaskCompletionSource loopCompletion)
+    {
+        CancellationTokenSource? abandoned = null;
+        lock (_gate)
+        {
+            if (_stopOperation is null && ReferenceEquals(_processingTask, loopCompletion.Task))
+            {
+                abandoned = _cancellationTokenSource;
+                _cancellationTokenSource = null;
+                _processingTask = Task.CompletedTask;
+            }
+        }
+
+        abandoned?.Dispose();
+        loopCompletion.SetResult();
+    }
+
     private IDisposable? BeginScope() => _logger.BeginScope(new Dictionary<String, Object>
     {
         ["OutboxIdentity"] = _options.Identity,
         ["CollectionName"] = _options.CollectionName
     });
+
+    /// <summary>
+    /// Cancels <paramref name="source"/>. A cancellation callback that throws, for example one a publisher registered
+    /// on its token, faults <see cref="CancellationTokenSource.CancelAsync"/> after every callback has run; the failure
+    /// is logged instead of failing the stop.
+    /// </summary>
+    private async Task CancelLoggingFailuresAsync(CancellationTokenSource source)
+    {
+        try
+        {
+            await source.CancelAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                               "A cancellation callback failed while stopping outbox processor '{OutboxIdentity}' for collection '{CollectionName}'",
+                               _options.Identity, _options.CollectionName);
+        }
+    }
 
     private DateTime ComputeNextAttemptUtc(Int64 attemptCount)
     {
@@ -522,6 +578,92 @@ internal sealed class OutboxProcessor : IOutboxProcessor
         await MarkProcessedAsync(collection, claimed, lockId, publishDuration, cancellationToken);
     }
 
+    /// <summary>
+    /// The one stop operation of a run, shared by every overlapping <see cref="StopAsync"/>: it cancels the loop's token,
+    /// joins the loop, and only then disposes the token source and clears the state, whatever happens to its callers'
+    /// own waits. Disposing the source earlier would drop cancellation callbacks that have not run yet.
+    /// </summary>
+    private async Task RunStopAsync(TaskCompletionSource operation, CancellationTokenSource source, Task loop)
+    {
+        // The operation always cancels, joins, cleans up and settles, however diagnostic logging behaves. A logging
+        // failure surfaces as the failure of the operation after the cleanup instead of stranding the callers.
+        Exception? failure = null;
+        IDisposable? scope = null;
+        failure ??= Capture(() =>
+        {
+            scope = BeginScope();
+            _logger.LogInformation("Stopping outbox processor for collection '{CollectionName}'", _options.CollectionName);
+        });
+
+        try
+        {
+            await CancelLoggingFailuresAsync(source);
+        }
+        catch (Exception ex)
+        {
+            failure ??= ex;
+        }
+
+        try
+        {
+            await loop;
+        }
+        catch (Exception ex)
+        {
+            failure ??= ex;
+        }
+
+        // The source is released while the stop is still published: an overlapping stop keeps waiting for this operation and
+        // a start still sees the run as stopping, until the operation is settled together with the state below.
+        source.Dispose();
+
+        // Each cleanup runs whatever an earlier step captured; the first failure alone becomes the operation's failure.
+        var stoppedFailure = Capture(() => _logger.LogInformation("Outbox processor stopped for collection '{CollectionName}'", _options.CollectionName));
+        var scopeFailure = Capture(() => scope?.Dispose());
+        failure ??= stoppedFailure ?? scopeFailure;
+
+        // Only the state of the run this operation stops is cleared; a later run has its own source. Clearing and
+        // settling are one transition, so no caller or start can observe the run as stopped before the operation ends.
+        lock (_gate)
+        {
+            if (ReferenceEquals(_cancellationTokenSource, source))
+            {
+                _cancellationTokenSource = null;
+                _processingTask = Task.CompletedTask;
+                _stopOperation = null;
+            }
+
+            if (failure is null)
+            {
+                operation.SetResult();
+            }
+            else
+            {
+                operation.SetException(failure);
+            }
+        }
+
+        // Every caller may have abandoned its wait, so the operation observes its own fault.
+        _ = operation.Task.Exception;
+    }
+
+    /// <summary>
+    /// Runs the polling loop and mirrors its outcome into <paramref name="completion"/>, which a stop awaits. The loop
+    /// starts synchronously on the caller's thread, outside the gate.
+    /// </summary>
+    private async Task TrackLoopAsync(CancellationToken cancellationToken, TaskCompletionSource completion)
+    {
+        try
+        {
+            await ProcessLoopAsync(cancellationToken);
+            completion.SetResult();
+        }
+        catch (Exception ex)
+        {
+            completion.SetException(ex);
+        }
+    }
+
     private async Task TryReleaseLockAsync(IMongoCollection<OutboxMessage> collection,
                                            ObjectId messageId,
                                            String lockId)
@@ -551,52 +693,90 @@ internal sealed class OutboxProcessor : IOutboxProcessor
     /// <inheritdoc/>
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        using (BeginScope())
+        TaskCompletionSource? loopCompletion = null;
+        CancellationToken loopToken = default;
+        lock (_gate)
         {
-            if (_cancellationTokenSource is not null)
+            if (_cancellationTokenSource is null)
             {
-                _logger.LogWarning(
-                    "Outbox processor '{OutboxIdentity}' for collection '{CollectionName}' is already running; " +
-                    "it is likely being started both automatically (WithAutoStartProcessor) and manually (StartAsync)",
-                    _options.Identity, _options.CollectionName);
-                return Task.CompletedTask;
+                _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                loopCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _processingTask = loopCompletion.Task;
+                loopToken = _cancellationTokenSource.Token;
             }
-
-            _logger.LogInformation("Starting outbox processor for collection '{CollectionName}'", _options.CollectionName);
         }
 
-        _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _processingTask = ProcessLoopAsync(_cancellationTokenSource.Token);
+        try
+        {
+            using (BeginScope())
+            {
+                if (loopCompletion is null)
+                {
+                    _logger.LogWarning(
+                        "Outbox processor '{OutboxIdentity}' for collection '{CollectionName}' is already running; " +
+                        "it is likely being started both automatically (WithAutoStartProcessor) and manually (StartAsync)",
+                        _options.Identity, _options.CollectionName);
+                    return Task.CompletedTask;
+                }
+
+                _logger.LogInformation("Starting outbox processor for collection '{CollectionName}'", _options.CollectionName);
+            }
+        }
+        catch
+        {
+            // A start that fails never reaches the publisher. The run published above is rolled back instead.
+            if (loopCompletion is not null)
+            {
+                AbandonStart(loopCompletion);
+            }
+
+            throw;
+        }
+
+        _ = TrackLoopAsync(loopToken, loopCompletion);
         return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        using var logScope = BeginScope();
-        if (_cancellationTokenSource is null)
+        TaskCompletionSource? created = null;
+        Task operation;
+        CancellationTokenSource source;
+        Task loop;
+        lock (_gate)
         {
-            return;
+            if (_cancellationTokenSource is null)
+            {
+                return;
+            }
+
+            if (_stopOperation is null)
+            {
+                created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _stopOperation = created.Task;
+            }
+
+            operation = _stopOperation;
+            source = _cancellationTokenSource;
+            loop = _processingTask;
         }
 
-        _logger.LogInformation("Stopping outbox processor for collection '{CollectionName}'", _options.CollectionName);
-
-        await _cancellationTokenSource.CancelAsync();
+        // The operation is published above, so its work starts only now. It runs off this caller's stack: its diagnostic
+        // logging and scope calls are provider code that may block, and they must not keep this caller, whose own token
+        // limits its wait, from returning.
+        if (created is not null)
+        {
+            _ = Task.Run(() => RunStopAsync(created, source, loop), CancellationToken.None);
+        }
 
         try
         {
-            await _processingTask.WaitAsync(cancellationToken);
+            await operation.WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            // Expected during shutdown
+            // Expected during shutdown.
         }
-        finally
-        {
-            _cancellationTokenSource.Dispose();
-            _cancellationTokenSource = null;
-        }
-
-        _logger.LogInformation("Outbox processor stopped for collection '{CollectionName}'", _options.CollectionName);
     }
 }

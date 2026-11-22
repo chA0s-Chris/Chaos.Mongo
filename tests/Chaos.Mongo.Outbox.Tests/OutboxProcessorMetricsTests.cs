@@ -222,7 +222,15 @@ public class OutboxProcessorMetricsTests
         var stopping = fixture.Processor.StopAsync();
         release.SetResult();
         await fixture.Collection.UpdateStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        fixture.Time.Advance(TimeSpan.FromSeconds(4));
+
+        // The stop arms the grace period from a cancellation callback that runs off the caller's stack, so advance in steps
+        // until the stop has settled instead of racing a single advance against the registration.
+        for (var i = 0; i < 100 && !stopping.IsCompleted; i++)
+        {
+            await Task.Delay(10);
+            fixture.Time.Advance(TimeSpan.FromSeconds(1));
+        }
+
         await stopping.WaitAsync(TimeSpan.FromSeconds(10));
 
         fixture.Collection.UpdateCalls.Should().Be(2, "the timed-out finalization is followed by a lock release");

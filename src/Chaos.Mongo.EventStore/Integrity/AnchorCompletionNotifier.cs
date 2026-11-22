@@ -91,6 +91,30 @@ internal sealed class AnchorCompletionNotifier
     }
 
     /// <summary>
+    /// Cancels the hook. A cancellation callback the hook registered that throws is logged as its own failure, so it
+    /// neither replaces the lock loss nor is reported as one.
+    /// </summary>
+    private Task CancelHookLoggingFailuresAsync(CancellationTokenSource hookCancellation)
+        => CancelWithoutEclipsingAsync(hookCancellation, "cancelling a completion hook after the anchoring lock was lost");
+
+    /// <summary>
+    /// Cancels <paramref name="source"/> and logs a callback that failed. A failing logging provider is ignored: the
+    /// diagnostic must not replace the outcome of the hook or the caller's cancellation, nor keep the lease check from
+    /// being joined, and the cancellation has been requested either way.
+    /// </summary>
+    private async Task CancelWithoutEclipsingAsync(CancellationTokenSource source, String operation)
+    {
+        try
+        {
+            await source.CancelLoggingFailuresAsync(_logger, operation);
+        }
+        catch (Exception)
+        {
+            // Nothing is left to report a failing logger to.
+        }
+    }
+
+    /// <summary>
     /// Calls the hook for one anchor while keeping the lock alive; the hook is cancelled when the lease cannot be
     /// extended.
     /// </summary>
@@ -136,7 +160,8 @@ internal sealed class AnchorCompletionNotifier
         }
         finally
         {
-            await hookCompleted.CancelAsync();
+            // Cancelling hookCompleted must not replace the outcome the hook or the caller's cancellation determined.
+            await CancelWithoutEclipsingAsync(hookCompleted, "completing the hook of an anchor");
             await keepAlive;
         }
     }
@@ -156,7 +181,7 @@ internal sealed class AnchorCompletionNotifier
                 await Task.Delay(LeaseCheckInterval, _timeProvider, hookCompleted);
                 if (!await ensureLockAsync(hookCompleted))
                 {
-                    await hookCancellation.CancelAsync();
+                    await CancelHookLoggingFailuresAsync(hookCancellation);
                     return;
                 }
             }
@@ -169,7 +194,7 @@ internal sealed class AnchorCompletionNotifier
         {
             // The lease may have expired, so the hook must not continue as if the lock were held.
             _logger.LogWarning(ex, "The anchoring lock could not be extended while a completion hook was running");
-            await hookCancellation.CancelAsync();
+            await CancelHookLoggingFailuresAsync(hookCancellation);
         }
     }
 

@@ -472,6 +472,97 @@ public class MongoQueueTests
         mockSubscription.Verify(x => x.DisposeAsync(), Times.Once);
     }
 
+    [Test]
+    public async Task StopSubscriptionAsync_TokenAlreadyCancelledOnEntry_ThrowsWithoutTouchingTheSubscription()
+    {
+        var subscription = new ShuttingDownQueueSubscription();
+        var factory = new RecordingQueueSubscriptionFactory(subscription);
+        var queue = new MongoQueue<TestPayload>(CreateQueueDefinition(), factory, new ThrowingQueuePublisher());
+        await queue.StartSubscriptionAsync();
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        var cancelledToken = cancelled.Token;
+
+        var act = () => queue.StopSubscriptionAsync(cancelledToken);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        subscription.StopCalls.Should().Be(0);
+        subscription.DisposeCalls.Should().Be(0);
+        subscription.FinishShutdown();
+        await queue.StopSubscriptionAsync();
+        subscription.DisposeCalls.Should().Be(1);
+    }
+
+    [Test]
+    public async Task StopSubscriptionAsync_TokenExpiresWhileAnotherStopHoldsTheQueue_ThrowsAndLeavesTheShutdownInFlight()
+    {
+        var subscription = new ShuttingDownQueueSubscription
+        {
+            HoldStop = true
+        };
+        var factory = new RecordingQueueSubscriptionFactory(subscription);
+        var queue = new MongoQueue<TestPayload>(CreateQueueDefinition(), factory, new ThrowingQueuePublisher());
+        await queue.StartSubscriptionAsync();
+        var inFlight = queue.StopSubscriptionAsync();
+        await subscription.StopEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        using var expiring = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var expiringToken = expiring.Token;
+
+        try
+        {
+            var act = () => queue.StopSubscriptionAsync(expiringToken);
+
+            await act.Should().ThrowAsync<OperationCanceledException>();
+            subscription.DisposeCalls.Should().Be(0, "the second call never got past the acquisition of the queue");
+        }
+        finally
+        {
+            subscription.ReleaseStop();
+            subscription.FinishShutdown();
+        }
+
+        await inFlight.WaitAsync(TimeSpan.FromSeconds(5));
+        subscription.DisposeCalls.Should().Be(1);
+    }
+
+    [Test]
+    public async Task StopSubscriptionAsync_TokenExpiresWhileTheHandlerIgnoresCancellation_ReturnsAndKeepsTheSubscriptionShuttingDown()
+    {
+        var subscription = new ShuttingDownQueueSubscription();
+        var factory = new RecordingQueueSubscriptionFactory(subscription);
+        var queue = new MongoQueue<TestPayload>(CreateQueueDefinition(), factory, new ThrowingQueuePublisher());
+        await queue.StartSubscriptionAsync();
+        using var timeout = new CancellationTokenSource();
+
+        try
+        {
+            var stopping = queue.StopSubscriptionAsync(timeout.Token);
+            await subscription.DisposeStarted.WaitAsync(TimeSpan.FromSeconds(5));
+            await timeout.CancelAsync();
+
+            await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            queue.IsRunning.Should().BeFalse();
+            subscription.IsReleased.Should().BeFalse("the handler is still running");
+
+            using var shortStart = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var shortStartToken = shortStart.Token;
+            var start = () => queue.StartSubscriptionAsync(shortStartToken);
+            await start.Should().ThrowAsync<OperationCanceledException>();
+            factory.CreateAndRunCallCount.Should().Be(1, "no replacement subscription may start beside the one that is still shutting down");
+        }
+        finally
+        {
+            subscription.FinishShutdown();
+        }
+
+        await queue.StopSubscriptionAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        subscription.IsReleased.Should().BeTrue();
+        var disposeCallsAfterStop = subscription.DisposeCalls;
+        await queue.StartSubscriptionAsync();
+        factory.CreateAndRunCallCount.Should().Be(2);
+        subscription.DisposeCalls.Should().Be(disposeCallsAfterStop, "the completed disposal cleared the subscription, so the start has nothing to dispose");
+    }
+
     private static MongoQueueDefinition CreateQueueDefinition()
         => new()
         {
@@ -526,6 +617,62 @@ public class MongoQueueTests
             Interlocked.Increment(ref _stopCalls);
             _stopEntered.TrySetResult();
             await _releaseGate.Task;
+        }
+    }
+
+    /// <summary>
+    /// Hand-crafted double for a subscription whose disposal waits for a handler that ignores cancellation: every
+    /// <see cref="DisposeAsync"/> returns the one shared disposal, which ends only when the test calls
+    /// <see cref="FinishShutdown"/>. Like the real subscription it is inactive as soon as it is stopped or disposed.
+    /// </summary>
+    private sealed class ShuttingDownQueueSubscription : IMongoQueueSubscription<TestPayload>
+    {
+        private readonly TaskCompletionSource _disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _disposeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _stopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _stopGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Int32 _disposeCalls;
+        private volatile Boolean _inactive;
+        private Int32 _stopCalls;
+
+        public Int32 DisposeCalls => Volatile.Read(ref _disposeCalls);
+
+        public Task DisposeStarted => _disposeStarted.Task;
+
+        public Boolean HoldStop { get; init; }
+
+        public Boolean IsReleased => _disposal.Task.IsCompleted;
+
+        public Int32 StopCalls => Volatile.Read(ref _stopCalls);
+
+        public Task StopEntered => _stopEntered.Task;
+
+        public Boolean IsActive => !_inactive;
+
+        public void FinishShutdown() => _disposal.TrySetResult();
+
+        public void ReleaseStop() => _stopGate.TrySetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref _disposeCalls);
+            _inactive = true;
+            _disposeStarted.TrySetResult();
+            return new ValueTask(_disposal.Task);
+        }
+
+        public Task StartAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _stopCalls);
+            _stopEntered.TrySetResult();
+            if (HoldStop)
+            {
+                await _stopGate.Task;
+            }
+
+            _inactive = true;
         }
     }
 

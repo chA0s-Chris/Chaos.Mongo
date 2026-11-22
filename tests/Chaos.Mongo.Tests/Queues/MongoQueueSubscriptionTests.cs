@@ -21,7 +21,7 @@ using System.Net;
 using System.Reflection;
 using System.Threading.Channels;
 
-public class MongoQueueSubscriptionTests
+public partial class MongoQueueSubscriptionTests
 {
     [Test]
     public void CreateAvailableQueueItemFilter_TreatsMissingIsTerminalAsNonTerminal()

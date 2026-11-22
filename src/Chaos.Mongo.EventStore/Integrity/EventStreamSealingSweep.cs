@@ -26,12 +26,11 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     internal const Int32 MaxConcurrencyRetries = 10;
 
     private readonly ILogger _logger;
+    private readonly StoppableLoop _loop;
     private readonly IMongoHelper _mongoHelper;
     private readonly MongoEventStoreOptions<TAggregate> _options;
     private readonly EventStreamSealer<TAggregate> _sealer;
     private readonly TimeProvider _timeProvider;
-    private CancellationTokenSource? _cancellationTokenSource;
-    private Task _sweepLoop = Task.CompletedTask;
 
     public EventStreamSealingSweep(IMongoHelper mongoHelper,
                                    MongoEventStoreOptions<TAggregate> options,
@@ -47,6 +46,7 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
         _timeProvider = timeProvider;
         _logger = logger;
         _sealer = new EventStreamSealer<TAggregate>(mongoHelper, options);
+        _loop = new StoppableLoop(logger, "stopping the integrity sealing sweep");
     }
 
     /// <summary>
@@ -144,43 +144,18 @@ internal sealed class EventStreamSealingSweep<TAggregate> where TAggregate : cla
     /// <returns>A completed task; the loop runs in the background.</returns>
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (_cancellationTokenSource is not null)
-        {
-            return Task.CompletedTask;
-        }
-
-        _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _sweepLoop = RunLoopAsync(_cancellationTokenSource.Token);
+        _loop.TryStart(RunLoopAsync, cancellationToken);
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Stops the background loop and waits for the current pass to observe cancellation.
+    /// Stops the background loop and waits for the current pass to observe cancellation. Overlapping stops share one
+    /// stop operation.
     /// </summary>
-    /// <param name="cancellationToken">A cancellation token that limits the wait.</param>
-    /// <returns>A task that completes when the loop has stopped.</returns>
-    public async Task StopAsync(CancellationToken cancellationToken = default)
-    {
-        if (_cancellationTokenSource is null)
-        {
-            return;
-        }
-
-        await _cancellationTokenSource.CancelAsync();
-        try
-        {
-            await _sweepLoop.WaitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown.
-        }
-        finally
-        {
-            _cancellationTokenSource.Dispose();
-            _cancellationTokenSource = null;
-        }
-    }
+    /// <param name="cancellationToken">A cancellation token that limits this caller's wait; the stop itself continues.</param>
+    /// <returns>A task that completes when the loop has stopped or the token ended the wait.</returns>
+    public Task StopAsync(CancellationToken cancellationToken = default)
+        => _loop.StopAsync(cancellationToken);
 
     /// <summary>
     /// Chooses the delay before the next pass. A pass that failed (<c>null</c>) or lost its lock is incomplete
