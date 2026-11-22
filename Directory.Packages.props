@@ -54,7 +54,7 @@
        is not covered. -->
   <PropertyGroup>
     <!-- renovate: datasource=nuget depName=MongoDB.Driver-latest-tested packageName=MongoDB.Driver versioning=semver -->
-    <LatestTestedMongoDriverVersion>3.14.0</LatestTestedMongoDriverVersion>
+    <LatestTestedMongoDriverVersion>3.14.1</LatestTestedMongoDriverVersion>
   </PropertyGroup>
   <ItemGroup Condition="'$(UseLatestTestedMongoDriver)' == 'true'">
     <PackageVersion Update="MongoDB.Driver" Version="$(LatestTestedMongoDriverVersion)" />
