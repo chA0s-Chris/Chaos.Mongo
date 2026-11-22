@@ -3,7 +3,6 @@
 namespace BuildPipeline;
 
 using Nuke.Common;
-using Nuke.Common.Git;
 using Nuke.Common.IO;
 using Nuke.Common.ProjectModel;
 using Nuke.Common.Tooling;
@@ -38,9 +37,6 @@ internal partial class BuildPipeline
               });
 
     private AbsolutePath CoverageDirectory => ArtifactsDirectory / "test-coverage";
-
-    [GitRepository]
-    private GitRepository GitRepository { get; init; } = null!;
 
     private AbsolutePath MergedCoverageResultsFile => CoverageDirectory / "coverage.cobertura.merged.xml";
 

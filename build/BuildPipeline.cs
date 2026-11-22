@@ -27,8 +27,6 @@ internal partial class BuildPipeline : NukeBuild
 
     protected override void OnBuildInitialized()
     {
-        Log.Information("Repository      : {HttpsUrl}", GitRepository.HttpsUrl);
-        Log.Information("Branch          : {Branch}", GitRepository.Branch);
         Log.Information("Configuration   : {Configuration}", TargetBuildConfiguration);
         Log.Information("Version         : {SemVer}", SemanticVersion);
         Log.Information("Assembly version: {SemVer}", AssemblyVersion);
