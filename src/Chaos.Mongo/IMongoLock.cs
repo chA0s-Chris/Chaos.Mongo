@@ -6,9 +6,18 @@ namespace Chaos.Mongo;
 /// Represents a distributed lock in MongoDB.
 /// </summary>
 /// <remarks>
-/// Dispose the lock to release it. If not disposed, the lock will automatically expire after the lease time.
-/// Disposal waits for an in-flight <see cref="TryExtendAsync"/> call to complete, so the release uses the expiry
-/// that extension stored.
+///     <para>
+///     Dispose the lock to release it. If not disposed, the lock will automatically expire after the lease time.
+///     Disposal waits for an in-flight <see cref="TryExtendAsync"/> call to complete before releasing. The release is keyed
+///     on the lock name, the holder and the per-acquisition token, not on the expiry.
+///     </para>
+///     <para>
+///     The lock is a lease without fencing, so it coordinates work but does not guarantee mutual exclusion. A holder that
+///     stalls past its lease, for example through a long pause, a slow call or clock skew, can lose the lock without noticing
+///     before its next write and then write while another instance holds the lock. Checking <see cref="IsValid"/> only narrows
+///     that window, because a pause between the check and the write leaves the same race. Writes that must not happen twice
+///     need to be safe to repeat or conditioned on the data.
+///     </para>
 /// </remarks>
 public interface IMongoLock : IAsyncDisposable
 {

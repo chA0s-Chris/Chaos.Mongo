@@ -1,6 +1,6 @@
 # Database Migrations
 
-Migrations provide ordered, version-controlled changes to a MongoDB database. Chaos.Mongo records applied migrations and coordinates execution across application instances with a distributed lock.
+Migrations provide ordered, version-controlled changes to a MongoDB database. Chaos.Mongo records applied migrations and coordinates runs across application instances with a distributed lock.
 
 ## Creating a migration
 
@@ -106,7 +106,12 @@ public sealed class MigrationService(IMongoMigrationRunner migrationRunner)
 - Applied migrations are recorded in the configured migration history collection, `_migrations` by default.
 - During hosted startup, migrations run before configurators, so a configurator cannot create an index before a
   migration that cleans up the data it depends on. See [Configurators](configurators.md#startup-execution).
-- A distributed lock ensures only one application instance runs migrations at a time. By default,
+- A distributed lock coordinates runs across application instances. Normally one instance runs migrations at a time,
+  but the lock is a lease without fencing: an instance that stalls past its lease can overlap with the next holder.
+  That is why migrations must be idempotent and safe to retry (see [Recommendations](#recommendations)). Transactional
+  migrations get an additional server-side ownership check, described below and introduced by
+  [#317](https://github.com/chA0s-Chris/Chaos.Mongo/issues/317); see
+  [Guarding writes](distributed-locking.md#guarding-writes) for the general patterns. By default,
   `RunMigrationsAsync` waits for the lock instead of skipping immediately, bounded by
   `MigrationLockWaitTimeout` (30 minutes by default). Set it to `TimeSpan.Zero` to make a single attempt and
   report a skipped run immediately when the lock is held, or to `null` to wait indefinitely.
@@ -120,13 +125,17 @@ public sealed class MigrationService(IMongoMigrationRunner migrationRunner)
   elapsed, so a migration (or a batch of migrations) that takes longer than `MigrationLockLeaseTime` keeps the lock
   instead of losing it, except while a migration transaction is open (see below). If the lease cannot be renewed —
   because another holder has taken over, or renewal otherwise fails — the in-progress migration is signaled for
-  cancellation. When the loss is detected before the commit is sent, the migration is not recorded as applied and its
-  transaction (if any) is aborted; once the commit is already in flight, its outcome is decided by MongoDB (see the
-  transaction paragraph below). A migration that observes its cancellation token stops promptly; one that does not
-  cannot be forcibly interrupted, and any non-transactional effects it already performed cannot be rolled back. A
-  renewal already in flight when the run ends is allowed to finish first, so the lock is released using the renewed
-  expiry; cancelling the token passed to `RunMigrationsAsync` skips that wait, in which case the lock may stay held
-  until its lease expires.
+  cancellation. The runner also checks that it still holds the lock before it inserts the history entry and before it
+  sends the transaction commit. Loss detected by one of these checks stops the run before the entry is inserted or the
+  commit is sent, and the runner attempts to abort the transaction if one is still active. Renewal and cancellation
+  alone give no guarantee about work already sent: a stalled runner can pass its last check and then still insert the
+  history entry in a run without a transaction, or still commit in a run without the server-side check described
+  below, after another holder took over. Once a commit is in flight, MongoDB decides its outcome. A migration that observes its cancellation token stops
+  promptly; one that does not cannot be forcibly interrupted, and any non-transactional effects it already performed
+  cannot be rolled back. A renewal already in flight when the run ends is allowed to finish before the lock is
+  released, bounded by the lease it was extending; cancelling the token passed to `RunMigrationsAsync` asks it to stop
+  instead. The release does not depend on that renewal, and the lock stays held only if the release itself fails, in
+  which case it expires with its lease.
 - Migrations use transactions when available unless `UseTransactionsForMigrationsIfAvailable` is disabled.
 - A migration that runs in a transaction gets a server-side ownership check. Before `ApplyAsync`, the runner writes to
   the lock document inside the transaction, filtered on this acquisition's token and an unexpired lease. If nothing
