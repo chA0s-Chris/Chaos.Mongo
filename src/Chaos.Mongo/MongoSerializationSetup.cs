@@ -73,6 +73,7 @@ internal static class MongoSerializationSetup
         {
             cm.AutoMap();
             cm.GetMemberMap(d => d.AcquisitionToken).SetElementName(nameof(MongoLockDocument.AcquisitionToken));
+            cm.GetMemberMap(d => d.FenceCounter).SetElementName(nameof(MongoLockDocument.FenceCounter));
             cm.GetMemberMap(d => d.Holder).SetElementName(nameof(MongoLockDocument.Holder));
             cm.GetMemberMap(d => d.LeaseUntilUtc).SetElementName(nameof(MongoLockDocument.LeaseUntilUtc));
         });

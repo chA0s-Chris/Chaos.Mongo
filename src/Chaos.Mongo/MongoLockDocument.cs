@@ -19,6 +19,15 @@ internal class MongoLockDocument
     public String? AcquisitionToken { get; internal set; }
 
     /// <summary>
+    /// Gets or sets a counter the holder increments inside its migration transaction to check, on the server and
+    /// atomically with the commit, that it still owns the lock. The write has to change the document, because a
+    /// write that changes nothing does not conflict with a concurrent change. Only the holder's check writes it;
+    /// extension, release and takeover leave it alone. <c>0</c> when the document was written by a version
+    /// without this field or the holder has not run the check yet.
+    /// </summary>
+    public Int64 FenceCounter { get; internal set; }
+
+    /// <summary>
     /// Gets or sets the holder ID that currently owns the lock.
     /// </summary>
     public String? Holder { get; internal set; }

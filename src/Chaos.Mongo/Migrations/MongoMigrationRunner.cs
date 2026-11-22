@@ -205,6 +205,16 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
             // catch block abort that transaction.
             await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
 
+            if (session is not null && mongoLock is ITransactionFencedLock fencedLock)
+            {
+                await EnsureLockOwnedInTransactionAsync(fencedLock, session, lockLostCts, protectedCancellationToken);
+
+                // The lease predicate of the write was built before its round trip, so the reply can arrive after the
+                // lease has expired locally. Repeat the client-side guard right before the migration's own code runs,
+                // which may have effects outside the session that a rollback cannot undo.
+                await EnsureLockStillValidAsync(mongoLock, lockLostCts, protectedCancellationToken);
+            }
+
             var stopWatch = Stopwatch.StartNew();
             await migration.ApplyAsync(_mongoHelper, session, protectedCancellationToken);
 
@@ -261,6 +271,40 @@ internal class MongoMigrationRunner : IMongoMigrationRunner
         {
             session?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Checks on the server, as the first operation of the migration transaction, that <paramref name="fencedLock"/>
+    /// is still held.
+    /// </summary>
+    /// <remarks>
+    /// The write to the lock document joins the transaction, so MongoDB orders every competing change of the lock
+    /// against it: a takeover committed after the transaction's snapshot makes the write fail, and one attempted after
+    /// the write waits until the transaction ends. Unlike <see cref="EnsureLockStillValidAsync"/> this is not a
+    /// client-side comparison, so it also holds when the runner stalls after its last check. A lost lock ends the run
+    /// the same way as any other lock loss; any other failure of the write fails the migration.
+    /// </remarks>
+    /// <exception cref="OperationCanceledException">Thrown when the lock is no longer held.</exception>
+    private async Task EnsureLockOwnedInTransactionAsync(ITransactionFencedLock fencedLock,
+                                                         IClientSessionHandle session,
+                                                         CancellationTokenSource lockLostCts,
+                                                         CancellationToken protectedCancellationToken)
+    {
+        if (await fencedLock.TryEnsureHeldAsync(session, protectedCancellationToken))
+        {
+            return;
+        }
+
+        _logger.LogWarning("Migration lock {LockName} is no longer held by this instance; stopping in-progress migration work",
+                           _options.MigrationLockName);
+
+        if (!lockLostCts.IsCancellationRequested)
+        {
+            await SignalLockLostAsync(lockLostCts);
+        }
+
+        throw new OperationCanceledException($"Migration lock '{_options.MigrationLockName}' is no longer held; stopping in-progress migration work.",
+                                             protectedCancellationToken);
     }
 
     /// <summary>

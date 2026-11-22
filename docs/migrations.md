@@ -118,13 +118,40 @@ public sealed class MigrationService(IMongoMigrationRunner migrationRunner)
   configurators and the rest of the host against a schema another instance may still be migrating.
 - While a migration runs, the lock's lease is renewed in the background once half of its remaining lifetime has
   elapsed, so a migration (or a batch of migrations) that takes longer than `MigrationLockLeaseTime` keeps the lock
-  instead of losing it. If the lease cannot be renewed — because another holder has taken over, or renewal otherwise fails —
-  the in-progress migration is signaled for cancellation, is not recorded as applied, and its transaction (if any)
-  is aborted. A migration that observes its cancellation token stops promptly; one that does not cannot be forcibly
-  interrupted, and any non-transactional effects it already performed cannot be rolled back. A renewal already in
-  flight when the run ends is allowed to finish first, so the lock is released using the renewed expiry; cancelling
-  the token passed to `RunMigrationsAsync` skips that wait, in which case the lock may stay held until its lease expires.
+  instead of losing it, except while a migration transaction is open (see below). If the lease cannot be renewed —
+  because another holder has taken over, or renewal otherwise fails — the in-progress migration is signaled for
+  cancellation. When the loss is detected before the commit is sent, the migration is not recorded as applied and its
+  transaction (if any) is aborted; once the commit is already in flight, its outcome is decided by MongoDB (see the
+  transaction paragraph below). A migration that observes its cancellation token stops promptly; one that does not
+  cannot be forcibly interrupted, and any non-transactional effects it already performed cannot be rolled back. A
+  renewal already in flight when the run ends is allowed to finish first, so the lock is released using the renewed
+  expiry; cancelling the token passed to `RunMigrationsAsync` skips that wait, in which case the lock may stay held
+  until its lease expires.
 - Migrations use transactions when available unless `UseTransactionsForMigrationsIfAvailable` is disabled.
+- A migration that runs in a transaction gets a server-side ownership check. Before `ApplyAsync`, the runner writes to
+  the lock document inside the transaction, filtered on this acquisition's token and an unexpired lease. If nothing
+  matches, or the write conflicts with a change committed after the transaction's snapshot, the lock was lost: the
+  transaction is aborted, the migration is not applied and not recorded, and the run stops like any other lock loss.
+  Otherwise MongoDB orders every later takeover after the transaction, so a runner that stalls after its last
+  client-side check can no longer commit a migration that another instance has started in the meantime. A takeover
+  attempted while the transaction is open waits until it ends; when the transaction commits, the instance that
+  took over then finds the history entry and applies nothing. Only transactional runs get this guarantee. Runs without
+  a transaction (`UseTransactionsForMigrationsIfAvailable` disabled, or a server without transaction support) keep the
+  client-side checks described above, as does a custom `IMongoLock`. Effects a migration performs outside the supplied
+  session, such as writes that do not use it, cannot be guarded by the lock.
+- The transaction holds the lock document from that write until it ends, so the lease is not renewed meanwhile: a
+  renewal waits for the transaction and completes afterwards. The lease remaining when a transaction starts therefore
+  has to cover that transaction, including the commit, with margin for the time earlier steps of the run have used
+  (one lease spans the history read and every migration). Size `MigrationLockLeaseTime` against the longest
+  transaction and the server's transaction time limit (`transactionLifetimeLimitSeconds`, 60 seconds by default). If
+  the lease runs out first, the run stops as a lock loss: expiry detected before the commit is sent rolls the transaction
+  back and records nothing, whereas expiry while the commit is already in flight leaves the outcome to the commit,
+  which MongoDB either completes or does not. In no case can a takeover interleave with the commit.
+- On a sharded cluster the lock document can live on another shard than a migration's data or the history collection,
+  and MongoDB does not create a collection inside a transaction that spans shards. Pre-create the collections a
+  migration writes, including the history collection, or disable `UseTransactionsForMigrationsIfAvailable`. Migration
+  transactions were only tested against a replica set.
+- Older library versions do not run this check; see the [compatibility policy](compatibility-policy.md).
 
 ## Recommendations
 

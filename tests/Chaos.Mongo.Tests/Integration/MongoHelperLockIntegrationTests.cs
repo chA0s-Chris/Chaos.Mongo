@@ -769,6 +769,147 @@ public class MongoHelperLockIntegrationTests
         lockDocument.LeaseUntilUtc.Should().Be(expectedExpiry);
     }
 
+    [Test]
+    public async Task TryEnsureHeldAsync_WithHeldLock_IncrementsFenceCounterWhenTransactionCommits()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var mongoHelper = CreateMongoHelper(url, TestDatabases.NewName("LockTestDb"), "holder-1", TimeProvider.System);
+        var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
+        var acquired = await mongoHelper.TryAcquireLockAsync("fenced-lock", TimeSpan.FromMinutes(1));
+        await using var fencedLock = (ITransactionFencedLock)acquired!;
+        using var session = await mongoHelper.Client.StartSessionAsync();
+        session.StartTransaction();
+
+        // Act
+        var held = await fencedLock.TryEnsureHeldAsync(session);
+        var counterWhileOpen = (await lockCollection.Find(x => x.Id == "fenced-lock").SingleAsync()).FenceCounter;
+        await session.CommitTransactionAsync();
+
+        // Assert
+        held.Should().BeTrue();
+        counterWhileOpen.Should().Be(0, "the write is part of the transaction until it commits");
+        var lockDocument = await lockCollection.Find(x => x.Id == "fenced-lock").SingleAsync();
+        lockDocument.FenceCounter.Should().Be(1);
+        lockDocument.Holder.Should().Be("holder-1");
+        fencedLock.IsValid.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task TryEnsureHeldAsync_WithLockTakenOver_ReportsLostWithoutChangingTheDocument()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var databaseName = TestDatabases.NewName("LockTestDb");
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var helper1 = CreateMongoHelper(url, databaseName, "holder-1", timeProvider);
+        var helper2 = CreateMongoHelper(url, databaseName, "holder-2", timeProvider);
+        var lockCollection = helper1.Database.GetCollection<MongoLockDocument>("_locks");
+        await using var staleLock = (ITransactionFencedLock)(await helper1.TryAcquireLockAsync("taken-over-lock", TimeSpan.FromMinutes(1)))!;
+        timeProvider.Advance(TimeSpan.FromMinutes(1));
+        await using var successorLock = await helper2.TryAcquireLockAsync("taken-over-lock", TimeSpan.FromMinutes(5));
+        successorLock.Should().NotBeNull();
+        using var session = await helper1.Client.StartSessionAsync();
+        session.StartTransaction();
+
+        // Act
+        var held = await staleLock.TryEnsureHeldAsync(session);
+        await session.AbortTransactionAsync();
+
+        // Assert
+        held.Should().BeFalse();
+        staleLock.IsValid.Should().BeFalse();
+        var lockDocument = await lockCollection.Find(x => x.Id == "taken-over-lock").SingleAsync();
+        lockDocument.Holder.Should().Be("holder-2");
+        lockDocument.FenceCounter.Should().Be(0);
+    }
+
+    [Test]
+    public async Task TryEnsureHeldAsync_WithLeaseExpiredOnTheLocksClock_ReportsLostWhileHolderAndTokenStillMatch()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var mongoHelper = CreateMongoHelper(url, TestDatabases.NewName("LockTestDb"), "holder-1", timeProvider);
+        var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
+        await using var heldLock = (ITransactionFencedLock)(await mongoHelper.TryAcquireLockAsync("expired-lock", TimeSpan.FromMinutes(1)))!;
+
+        // Positive control: with an unexpired lease the very same lock, holder and token are confirmed. Only the lease
+        // differs between this call and the one below.
+        using var controlSession = await mongoHelper.Client.StartSessionAsync();
+        controlSession.StartTransaction();
+        var heldBeforeExpiry = await heldLock.TryEnsureHeldAsync(controlSession);
+        await controlSession.AbortTransactionAsync();
+
+        // The stored lease ends exactly at the lock's own clock now. The document keeps the holder and the acquisition
+        // token, so the lease filter is the only predicate that can refuse the write; a local validity check does not
+        // take part in the call.
+        timeProvider.Advance(TimeSpan.FromMinutes(1));
+        var documentBefore = await lockCollection.Find(x => x.Id == "expired-lock").SingleAsync();
+        using var session = await mongoHelper.Client.StartSessionAsync();
+        session.StartTransaction();
+
+        // Act
+        var heldAfterExpiry = await heldLock.TryEnsureHeldAsync(session);
+        await session.AbortTransactionAsync();
+
+        // Assert
+        heldBeforeExpiry.Should().BeTrue();
+        heldAfterExpiry.Should().BeFalse("the lease has run out on the lock's clock although holder and token still match");
+        documentBefore.Holder.Should().Be("holder-1");
+        documentBefore.LeaseUntilUtc.Should().BeOnOrBefore(timeProvider.GetUtcNow().UtcDateTime);
+        var documentAfter = await lockCollection.Find(x => x.Id == "expired-lock").SingleAsync();
+        documentAfter.Holder.Should().Be("holder-1");
+        documentAfter.AcquisitionToken.Should().Be(documentBefore.AcquisitionToken);
+        documentAfter.FenceCounter.Should().Be(0);
+    }
+
+    [Test]
+    public async Task FenceLockAsync_WithWrongAcquisitionTokenAndUnexpiredLease_DoesNotMatch()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var mongoHelper = CreateMongoHelper(url, TestDatabases.NewName("LockTestDb"), "holder-1", TimeProvider.System);
+        var lockCollection = mongoHelper.Database.GetCollection<MongoLockDocument>("_locks");
+        await using var heldLock = await mongoHelper.TryAcquireLockAsync("token-lock", TimeSpan.FromMinutes(1));
+        heldLock.Should().NotBeNull();
+        var document = await lockCollection.Find(x => x.Id == "token-lock").SingleAsync();
+        using var session = await mongoHelper.Client.StartSessionAsync();
+        session.StartTransaction();
+
+        // Act
+        var heldWithWrongToken = await mongoHelper.FenceLockAsync(session, "token-lock", "holder-1", "not-the-token");
+        var heldWithRealToken = await mongoHelper.FenceLockAsync(session, "token-lock", "holder-1", document.AcquisitionToken!);
+        await session.AbortTransactionAsync();
+
+        // Assert
+        heldWithWrongToken.Should().BeFalse();
+        heldWithRealToken.Should().BeTrue("the same call matches with the real token, so the token alone decided the first result");
+    }
+
+    [Test]
+    public async Task TryEnsureHeldAsync_WithRenewalCommittedAfterTheTransactionsSnapshot_ReportsLostAsWriteConflict()
+    {
+        // Arrange
+        var url = MongoUrl.Create(_container.GetConnectionString());
+        var mongoHelper = CreateMongoHelper(url, TestDatabases.NewName("LockTestDb"), "holder-1", TimeProvider.System);
+        await using var fencedLock = (ITransactionFencedLock)(await mongoHelper.TryAcquireLockAsync("conflicting-lock", TimeSpan.FromMinutes(1)))!;
+        using var session = await mongoHelper.Client.StartSessionAsync();
+        session.StartTransaction();
+
+        // The first operation of the transaction fixes its snapshot; the renewal then commits after it.
+        await mongoHelper.Database.GetCollection<BsonDocument>("snapshot-anchor").InsertOneAsync(session, new BsonDocument("anchor", 1));
+        (await fencedLock.TryExtendAsync(TimeSpan.FromMinutes(2))).Should().BeTrue();
+
+        // Act
+        var held = await fencedLock.TryEnsureHeldAsync(session);
+        await session.AbortTransactionAsync();
+
+        // Assert
+        held.Should().BeFalse("a change of the lock document after the snapshot means the check cannot prove ownership");
+        fencedLock.IsValid.Should().BeFalse();
+    }
+
     private static MongoHelper CreateMongoHelper(MongoUrl url,
                                                  String databaseName,
                                                  String holderId,

@@ -51,6 +51,29 @@ internal sealed class MongoHelper : IMongoHelper
     public IMongoDatabase Database { get; }
 
     /// <summary>
+    /// Determines whether <paramref name="exception"/> is the write conflict MongoDB reports when a transaction's write
+    /// meets a change committed after the transaction's snapshot.
+    /// </summary>
+    /// <remarks>
+    /// Only a <c>WriteConflict</c> (code 112) carrying the <c>TransientTransactionError</c> label counts. Other
+    /// transient errors, such as a primary step-down, say nothing about who owns the lock.
+    /// </remarks>
+    internal static Boolean IsTransactionWriteConflict(Exception exception)
+    {
+        const Int32 writeConflictCode = 112;
+        const String transientTransactionErrorLabel = "TransientTransactionError";
+
+        return exception switch
+        {
+            MongoCommandException commandException => commandException.Code == writeConflictCode &&
+                                                      commandException.HasErrorLabel(transientTransactionErrorLabel),
+            MongoWriteException writeException => writeException.WriteError.Code == writeConflictCode &&
+                                                  writeException.HasErrorLabel(transientTransactionErrorLabel),
+            _ => false
+        };
+    }
+
+    /// <summary>
     /// Extends a MongoDB distributed lock if it is still held and unexpired.
     /// </summary>
     /// <remarks>
@@ -86,6 +109,42 @@ internal sealed class MongoHelper : IMongoHelper
 
         var lockDocument = await lockCollection.FindOneAndUpdateAsync(filter, update, options, cancellationToken);
         return lockDocument?.LeaseUntilUtc;
+    }
+
+    /// <summary>
+    /// Writes to a MongoDB distributed lock's document inside the transaction of <paramref name="session"/>, if the
+    /// lock is still held and unexpired.
+    /// </summary>
+    /// <remarks>
+    /// The write increments <see cref="MongoLockDocument.FenceCounter"/>. It has to change the document: a write that
+    /// changes nothing neither conflicts with a concurrent change nor holds the document. A takeover, extension or
+    /// release that touches the document after the transaction's snapshot makes this write fail with a write conflict;
+    /// one that arrives after this write waits until the transaction ends.
+    /// </remarks>
+    /// <param name="session">The session with the started transaction the write joins.</param>
+    /// <param name="lockName">The name of the lock.</param>
+    /// <param name="holder">The holder ID that currently owns the lock.</param>
+    /// <param name="acquisitionToken">The per-acquisition token owned by the lock instance.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns><see langword="true"/> when the lock is held; otherwise, <see langword="false"/>.</returns>
+    internal async Task<Boolean> FenceLockAsync(IClientSessionHandle session,
+                                                String lockName,
+                                                String holder,
+                                                String acquisitionToken,
+                                                CancellationToken cancellationToken = default)
+    {
+        var lockCollection = Database.GetCollection<MongoLockDocument>(_lockCollectionName);
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+        var filter = Builders<MongoLockDocument>.Filter.Eq(x => x.Id, lockName) &
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.Holder, holder) &
+                     Builders<MongoLockDocument>.Filter.Eq(x => x.AcquisitionToken, acquisitionToken) &
+                     Builders<MongoLockDocument>.Filter.Gt(x => x.LeaseUntilUtc, now);
+
+        var update = Builders<MongoLockDocument>.Update.Inc(x => x.FenceCounter, 1L);
+
+        var result = await lockCollection.UpdateOneAsync(session, filter, update, cancellationToken: cancellationToken);
+        return result.MatchedCount > 0;
     }
 
     /// <summary>
@@ -160,7 +219,8 @@ internal sealed class MongoHelper : IMongoHelper
                                      _timeProvider,
                                      () => ReleaseLockAsync(lockName, _holderId, acquisitionToken),
                                      (extensionLeaseTime, token) =>
-                                         ExtendLockAsync(lockName, _holderId, acquisitionToken, extensionLeaseTime, token));
+                                         ExtendLockAsync(lockName, _holderId, acquisitionToken, extensionLeaseTime, token),
+                                     (session, token) => FenceLockAsync(session, lockName, _holderId, acquisitionToken, token));
             }
 
             return null;

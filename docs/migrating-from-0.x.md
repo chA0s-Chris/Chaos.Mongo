@@ -366,9 +366,15 @@ unless `MigrationLockWaitTimeout` is `TimeSpan.Zero`.
 
 The lock's lease is now renewed automatically while migrations run, so a migration (or a batch of migrations) that
 runs longer than `MigrationLockLeaseTime` no longer loses the lock on its own; a renewal that is refused or fails
-instead signals the in-progress migration for cancellation, leaves it unrecorded, and aborts its transaction, if
-any. A migration that observes its cancellation token stops promptly; one that does not cannot be forcibly
-interrupted, and any non-transactional effects it already performed cannot be rolled back.
+instead signals the in-progress migration for cancellation. When the loss is detected before the commit is sent, the
+migration is left unrecorded and its transaction, if any, is aborted; once the commit is already in flight, MongoDB
+decides its outcome. A migration that observes its cancellation token stops promptly; one that does not cannot be
+forcibly interrupted, and any non-transactional effects it already performed cannot be rolled back.
+
+One exception to the renewal: while a migration transaction is open, the transaction holds the lock document for a
+server-side ownership check, so the lease is not renewed until the transaction ends. See
+[Migrations](migrations.md#behavior) for what that means for `MigrationLockLeaseTime` and for the outcome of a
+commit already in flight.
 
 The `MongoMigrationRunner` constructor now throws `ArgumentException` when two or more registered migrations share
 the same `Id`, naming the duplicate ID(s), instead of silently applying only one of them.

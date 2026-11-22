@@ -43,6 +43,10 @@ API: a breaking change to a public type or member ships only in a major release.
   `HolderId` runs an older, pre-token release concurrently against the same lock; see
   [Migrating from 0.x](migrating-from-0.x.md#distributed-locking-per-acquisition-token) for the rolling-upgrade
   boundary this implies.
+- The lock document's `FenceCounter` field is likewise an internal implementation detail. The migration runner
+  increments it inside a migration transaction to check ownership on the server; documents without it stay valid,
+  and extension, release and takeover leave it alone. Older instances ignore it and do not run that check, so
+  transactional migrations are only fenced against a takeover while every instance runs a release that has it.
 
 ## Metrics
 
