@@ -2,15 +2,18 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace Chaos.Mongo;
 
+using MongoDB.Driver;
+
 /// <summary>
 /// Default implementation of <see cref="IMongoLock"/> representing a distributed lock in MongoDB.
 /// </summary>
-internal class MongoLock : IMongoLock
+internal class MongoLock : ITransactionFencedLock
 {
     private readonly Func<TimeSpan, CancellationToken, Task<DateTime?>> _extendAction;
+    private readonly Func<IClientSessionHandle, CancellationToken, Task<Boolean>>? _fenceAction;
     private readonly TimeSpan _leaseTime;
 
-    // Serializes extension against disposal. Deliberately never disposed: an extension arriving after disposal must
+    // Serializes extension, the transactional ownership check and disposal. Deliberately never disposed: an extension arriving after disposal must
     // observe the disposed flag and return false, not throw ObjectDisposedException out of WaitAsync.
     private readonly SemaphoreSlim _operationSemaphore = new(1, 1);
     private readonly Func<Task> _releaseAction;
@@ -29,6 +32,10 @@ internal class MongoLock : IMongoLock
     /// <param name="timeProvider">The time provider for getting current time.</param>
     /// <param name="releaseAction">The action to execute when the lock is released.</param>
     /// <param name="extendAction">The action to execute when the lock lease is extended.</param>
+    /// <param name="fenceAction">
+    /// The action that writes to the lock document inside a transaction and reports whether the lock is still held.
+    /// Without it, <see cref="TryEnsureHeldAsync"/> performs no server operation.
+    /// </param>
     /// <exception cref="ArgumentException">Thrown when <paramref name="id"/> is null or whitespace.</exception>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="timeProvider"/>, <paramref name="releaseAction"/>,
@@ -40,7 +47,8 @@ internal class MongoLock : IMongoLock
                      TimeSpan leaseTime,
                      TimeProvider timeProvider,
                      Func<Task> releaseAction,
-                     Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction)
+                     Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction,
+                     Func<IClientSessionHandle, CancellationToken, Task<Boolean>>? fenceAction = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -54,6 +62,7 @@ internal class MongoLock : IMongoLock
         _timeProvider = timeProvider;
         _releaseAction = releaseAction;
         _extendAction = extendAction;
+        _fenceAction = fenceAction;
     }
 
     /// <inheritdoc/>
@@ -147,6 +156,50 @@ internal class MongoLock : IMongoLock
                 _validUntilUtc = extendedUntilUtc.Value;
                 return true;
             }
+        }
+        finally
+        {
+            _operationSemaphore.Release();
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<Boolean> TryEnsureHeldAsync(IClientSessionHandle session, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        await _operationSemaphore.WaitAsync(cancellationToken);
+
+        try
+        {
+            lock (_stateLock)
+            {
+                if (_disposed || _lost)
+                    return false;
+            }
+
+            if (_fenceAction is null)
+                return true;
+
+            Boolean held;
+            try
+            {
+                held = await _fenceAction(session, cancellationToken);
+            }
+            catch (Exception ex) when (MongoHelper.IsTransactionWriteConflict(ex))
+            {
+                // A change of the lock document committed after the transaction's snapshot: the lock changed hands
+                // or was renewed behind the transaction's back. Either way this holder cannot prove ownership.
+                held = false;
+            }
+
+            if (!held)
+            {
+                lock (_stateLock)
+                    _lost = true;
+            }
+
+            return held;
         }
         finally
         {

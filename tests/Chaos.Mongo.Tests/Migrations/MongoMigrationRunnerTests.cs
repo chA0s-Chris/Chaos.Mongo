@@ -13,9 +13,12 @@ using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Bindings;
 using MongoDB.Driver.Core.Clusters;
+using MongoDB.Driver.Core.Connections;
+using MongoDB.Driver.Core.Servers;
 using MongoDB.Driver.Search;
 using Moq;
 using NUnit.Framework;
+using System.Net;
 
 public class MongoMigrationRunnerTests
 {
@@ -1261,6 +1264,321 @@ public class MongoMigrationRunnerTests
         result.AppliedMigrationIds.Should().Equal("001_LongRunning");
     }
 
+    [Test]
+    public async Task RunMigrationsAsync_WithTransaction_ChecksOwnershipOnTheMigrationSessionBeforeApplyingAndCommitting()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var events = new List<String>();
+        IClientSessionHandle? fencedSession = null;
+        var mongoLock = CreateFencedMongoLock(timeProvider,
+                                              leaseTime,
+                                              (session, _) =>
+                                              {
+                                                  events.Add("fence");
+                                                  fencedSession = session;
+                                                  return Task.FromResult(true);
+                                              });
+        var client = new FakeMongoClient();
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var migration = new FakeMigration("001_Fenced",
+                                          (_, session, _) =>
+                                          {
+                                              events.Add("apply");
+                                              session.Should().BeSameAs(fencedSession);
+                                              return Task.CompletedTask;
+                                          });
+        var sut = new MongoMigrationRunner([migration], helper, options, new NUnitTestLogger<MongoMigrationRunner>(), timeProvider);
+
+        // Act
+        var result = await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        result.AppliedMigrationIds.Should().Equal("001_Fenced");
+        events.Should().Equal("fence", "apply");
+        var session = client.Sessions.Should().ContainSingle().Subject;
+        fencedSession.Should().BeSameAs(session);
+        session.CommitCount.Should().Be(1);
+        session.AbortCount.Should().Be(0);
+        historyCollection.InsertedItems.Should().ContainSingle();
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithOwnershipCheckFindingNoMatch_StopsAsLockLossWithoutApplyingOrRecording()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+
+        // The lease is still valid on the client, which is exactly the stalled runner's view of the world.
+        var mongoLock = CreateFencedMongoLock(timeProvider, leaseTime, (_, _) => Task.FromResult(false));
+        var client = new FakeMongoClient();
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>(captureMessages: true);
+        var migration = new FakeMigration("001_NeverReached");
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(0);
+        historyCollection.InsertedItems.Should().BeEmpty();
+        var session = client.Sessions.Should().ContainSingle().Subject;
+        session.AbortCount.Should().Be(1);
+        session.CommitCount.Should().Be(0);
+        logger.LogMessages.Should().Contain(message => message.LogLevel == LogLevel.Warning && message.Message.Contains("no longer held"));
+        logger.LogMessages.Should().NotContain(message => message.LogLevel == LogLevel.Error);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithOwnershipCheckSucceedingAfterLeaseExpiry_StopsAsLockLossWithoutApplyingOrRecording()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+
+        // The write matched on the server while the lease was live, but its reply arrives after the lease has expired
+        // locally. The fence runs while the lock holds its extension semaphore, so no extension can complete in the
+        // meantime and only the client-side guard right after the write can detect the loss.
+        var mongoLock = new MongoLock("migration-lock",
+                                      timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime,
+                                      leaseTime,
+                                      timeProvider,
+                                      () => Task.CompletedTask,
+                                      (_, _) => throw new InvalidOperationException("No extension should complete after the lease expired."),
+                                      (_, _) =>
+                                      {
+                                          timeProvider.Advance(leaseTime);
+                                          return Task.FromResult(true);
+                                      });
+        var client = new FakeMongoClient();
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>(captureMessages: true);
+        var migration = new FakeMigration("001_NeverReached");
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        migration.ApplyCallCount.Should().Be(0);
+        historyCollection.InsertedItems.Should().BeEmpty();
+        var session = client.Sessions.Should().ContainSingle().Subject;
+        session.AbortCount.Should().Be(1);
+        session.CommitCount.Should().Be(0);
+        logger.LogMessages.Should().Contain(message => message.LogLevel == LogLevel.Warning && message.Message.Contains("is no longer valid"));
+        logger.LogMessages.Should().NotContain(message => message.LogLevel == LogLevel.Error);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithOwnershipCheckFailingWithWriteConflict_StopsAsLockLossAndDoesNotRetry()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var fenceCallCount = 0;
+        var mongoLock = CreateFencedMongoLock(timeProvider,
+                                              leaseTime,
+                                              (_, _) =>
+                                              {
+                                                  fenceCallCount++;
+                                                  throw CreateWriteConflict();
+                                              });
+        var client = new FakeMongoClient();
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>(captureMessages: true);
+        var migration = new FakeMigration("001_NeverReached");
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        fenceCallCount.Should().Be(1);
+        migration.ApplyCallCount.Should().Be(0);
+        historyCollection.InsertedItems.Should().BeEmpty();
+        client.Sessions.Should().ContainSingle().Which.AbortCount.Should().Be(1);
+        logger.LogMessages.Should().Contain(message => message.LogLevel == LogLevel.Warning);
+        logger.LogMessages.Should().NotContain(message => message.LogLevel == LogLevel.Error);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithOwnershipCheckFailingWithOtherException_FailsMigrationWithoutReportingLockLoss()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var failure = new InvalidOperationException("The server is not available.");
+        var mongoLock = CreateFencedMongoLock(timeProvider, leaseTime, (_, _) => throw failure);
+        var client = new FakeMongoClient();
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var logger = new NUnitTestLogger<MongoMigrationRunner>(captureMessages: true);
+        var migration = new FakeMigration("001_NeverReached");
+        var sut = new MongoMigrationRunner([migration], helper, options, logger, timeProvider);
+
+        // Act
+        var act = async () => await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Should().BeSameAs(failure);
+        migration.ApplyCallCount.Should().Be(0);
+        historyCollection.InsertedItems.Should().BeEmpty();
+        client.Sessions.Should().ContainSingle().Which.AbortCount.Should().Be(1);
+        logger.LogMessages.Should().NotContain(message => message.LogLevel == LogLevel.Warning && message.Message.Contains("lock"));
+        logger.LogMessages.Should().Contain(message => message.LogLevel == LogLevel.Error);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithoutTransactions_DoesNotCheckOwnershipOnTheServer()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var fenceCallCount = 0;
+        var mongoLock = CreateFencedMongoLock(timeProvider,
+                                              leaseTime,
+                                              (_, _) =>
+                                              {
+                                                  fenceCallCount++;
+                                                  return Task.FromResult(false);
+                                              });
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = false
+        });
+        var sut = new MongoMigrationRunner([new FakeMigration("001_Plain")], helper, options, new NUnitTestLogger<MongoMigrationRunner>(), timeProvider);
+
+        // Act
+        var result = await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        result.AppliedMigrationIds.Should().Equal("001_Plain");
+        fenceCallCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithServerWithoutTransactionSupport_DoesNotCheckOwnershipOnTheServer()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var fenceCallCount = 0;
+        var mongoLock = CreateFencedMongoLock(timeProvider,
+                                              leaseTime,
+                                              (_, _) =>
+                                              {
+                                                  fenceCallCount++;
+                                                  return Task.FromResult(false);
+                                              });
+        // Sessions are not supported, so TryStartTransactionAsync reports no transaction.
+        var client = new FakeMongoClient(() => throw new MongoClientException("Sessions are not supported."));
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var sut = new MongoMigrationRunner([new FakeMigration("001_Plain")], helper, options, new NUnitTestLogger<MongoMigrationRunner>(), timeProvider);
+
+        // Act
+        var result = await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        result.AppliedMigrationIds.Should().Equal("001_Plain");
+        fenceCallCount.Should().Be(0);
+        client.Sessions.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task RunMigrationsAsync_WithLockWithoutOwnershipCheckInTransaction_AppliesAndCommitsAsBefore()
+    {
+        // Arrange
+        var timeProvider = new FakeTimeProvider();
+        var leaseTime = TimeSpan.FromMinutes(10);
+        var mongoLock = new PlainLock(timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime);
+        var client = new FakeMongoClient();
+        var historyCollection = new FakeHistoryCollection();
+        var helper = new FakeMongoHelper((_, _, _) => Task.FromResult<IMongoLock?>(mongoLock), historyCollection, client);
+        var options = Options.Create(new MongoOptions
+        {
+            MigrationLockLeaseTime = leaseTime,
+            UseTransactionsForMigrationsIfAvailable = true
+        });
+        var sut = new MongoMigrationRunner([new FakeMigration("001_Custom")], helper, options, new NUnitTestLogger<MongoMigrationRunner>(), timeProvider);
+
+        // Act
+        var result = await sut.RunMigrationsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Assert
+        result.AppliedMigrationIds.Should().Equal("001_Custom");
+        client.Sessions.Should().ContainSingle().Which.CommitCount.Should().Be(1);
+    }
+
+    private static MongoLock CreateFencedMongoLock(TimeProvider timeProvider,
+                                                   TimeSpan leaseTime,
+                                                   Func<IClientSessionHandle, CancellationToken, Task<Boolean>> fenceAction) =>
+        new("migration-lock",
+            timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime,
+            leaseTime,
+            timeProvider,
+            () => Task.CompletedTask,
+            (_, _) => Task.FromResult<DateTime?>(timeProvider.GetUtcNow().Add(leaseTime).UtcDateTime),
+            fenceAction);
+
+    private static MongoCommandException CreateWriteConflict()
+    {
+        var exception = new MongoCommandException(new ConnectionId(new ServerId(new ClusterId(), new DnsEndPoint("localhost", 27017))),
+                                                  "WriteConflict",
+                                                  new BsonDocument("find", "lock"),
+                                                  new BsonDocument
+                                                  {
+                                                      { "ok", 0 },
+                                                      { "code", 112 },
+                                                      { "codeName", "WriteConflict" }
+                                                  });
+        exception.AddErrorLabel("TransientTransactionError");
+        return exception;
+    }
+
     private static MongoLock CreateMongoLock(TimeProvider timeProvider,
                                              TimeSpan leaseTime,
                                              Func<TimeSpan, CancellationToken, Task<DateTime?>> extendAction,
@@ -2138,5 +2456,25 @@ public class MongoMigrationRunnerTests
 
         public Task<IMongoLock?> TryAcquireLockAsync(String lockName, TimeSpan? leaseTime = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Hand-crafted <see cref="IMongoLock"/> that does not support the transactional ownership check, like a custom
+    /// implementation of the public interface.
+    /// </summary>
+    private sealed class PlainLock : IMongoLock
+    {
+        public PlainLock(DateTime validUntilUtc)
+        {
+            ValidUntilUtc = validUntilUtc;
+        }
+
+        public String Id => "migration-lock";
+        public Boolean IsValid => true;
+        public DateTime ValidUntilUtc { get; }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task<Boolean> TryExtendAsync(TimeSpan? leaseTime = null, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 }

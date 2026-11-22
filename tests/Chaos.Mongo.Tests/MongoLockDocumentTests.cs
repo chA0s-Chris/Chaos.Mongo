@@ -36,6 +36,26 @@ public class MongoLockDocumentTests
     }
 
     [Test]
+    public void Deserialize_DocumentWithFenceCounter_RestoresValue()
+    {
+        // Arrange: the shape a holder leaves behind after checking its ownership inside a migration transaction.
+        var document = new BsonDocument
+        {
+            { "_id", "lock-name" },
+            { "Holder", "holder-id" },
+            { "LeaseUntilUtc", new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc) },
+            { "AcquisitionToken", "token-value" },
+            { "FenceCounter", 2L }
+        };
+
+        // Act
+        var result = BsonSerializer.Deserialize<MongoLockDocument>(document);
+
+        // Assert
+        result.FenceCounter.Should().Be(2);
+    }
+
+    [Test]
     public void Deserialize_DocumentWithUnrecognizedElement_DeserializesSuccessfully()
     {
         // Arrange
@@ -75,6 +95,7 @@ public class MongoLockDocumentTests
         result.Holder.Should().Be("holder-id");
         result.LeaseUntilUtc.Should().Be(leaseUntilUtc);
         result.AcquisitionToken.Should().BeNull();
+        result.FenceCounter.Should().Be(0, "documents written before the field existed stay valid");
     }
 
     [Test]
@@ -98,7 +119,8 @@ public class MongoLockDocumentTests
             Id = "lock-name",
             Holder = "holder-id",
             LeaseUntilUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc),
-            AcquisitionToken = "token-value"
+            AcquisitionToken = "token-value",
+            FenceCounter = 3
         };
 
         // Act
@@ -107,6 +129,7 @@ public class MongoLockDocumentTests
         // Assert
         bsonDocument.Names.Should().Contain([
             nameof(MongoLockDocument.AcquisitionToken),
+            nameof(MongoLockDocument.FenceCounter),
             nameof(MongoLockDocument.Holder),
             nameof(MongoLockDocument.LeaseUntilUtc)
         ]);
@@ -142,7 +165,8 @@ public class MongoLockDocumentTests
             Id = "lock-name",
             Holder = "holder-id",
             LeaseUntilUtc = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc),
-            AcquisitionToken = "token-value"
+            AcquisitionToken = "token-value",
+            FenceCounter = 3
         };
 
         // Act
@@ -151,6 +175,7 @@ public class MongoLockDocumentTests
         // Assert
         bsonDocument.Names.Should().Contain([
             nameof(MongoLockDocument.AcquisitionToken),
+            nameof(MongoLockDocument.FenceCounter),
             nameof(MongoLockDocument.Holder),
             nameof(MongoLockDocument.LeaseUntilUtc)
         ]);

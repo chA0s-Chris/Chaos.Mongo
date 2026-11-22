@@ -90,6 +90,12 @@ public sealed class MongoOptions
     ///     duration does not lose the lock. A shorter value still bounds how long a crashed holder's lock stays
     ///     unclaimable, so do not set this to the longest possible migration duration.
     ///     </para>
+    ///     <para>
+    ///     A migration that runs in a transaction is the exception: the transaction holds the lock document from its
+    ///     first operation until it ends, so a renewal waits for it and the lease is not extended meanwhile. The
+    ///     lease remaining when such a transaction starts has to cover it, including the commit. Expiry that is
+    ///     detected before the commit is sent stops the run and rolls the transaction back.
+    ///     </para>
     /// </remarks>
     public TimeSpan MigrationLockLeaseTime { get; set; } = MongoDefaults.MigrationLockLeaseTime;
 
