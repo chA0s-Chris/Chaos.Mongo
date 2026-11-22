@@ -8,9 +8,9 @@
 
 ## Acceptance Criteria
 
-- [ ] `bash ./build.sh Test` runs to completion in a linked git worktree outside the clone's directory tree and writes the merged coverage file.
-- [ ] The build prints no `Could not inject value for BuildPipeline.GitRepository` warning in such a worktree.
-- [ ] `bash ./build.sh Test` and `bash ./build.sh PackCheck` succeed in an ordinary clone whose `origin` is the GitHub repository, and the only change to their behavior is that the `Repository` and `Branch` log lines are gone.
+- [x] `bash ./build.sh Test` runs to completion in a linked git worktree outside the clone's directory tree and writes the merged coverage file.
+- [x] The build prints no `Could not inject value for BuildPipeline.GitRepository` warning in such a worktree.
+- [x] `bash ./build.sh Test` and `bash ./build.sh PackCheck` succeed in an ordinary clone whose `origin` is the GitHub repository, and the only change to their behavior is that the `Repository` and `Branch` log lines are gone.
 
 ## Technical Details
 
