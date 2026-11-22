@@ -52,17 +52,17 @@ internal partial class BuildPipeline
                               let resultFile = ArtifactsDirectory / TestResultFiles.GetFileName(projectName, framework)
                               select (Project: project, Framework: framework, ResultFile: resultFile)).ToList();
 
+                  if (UseLatestTestedMongoDriver)
+                  {
+                      // BuildPipeline.Tests has no reference to the driver; see tests/Directory.Build.props.
+                      VerifyTestedDriver(runs.Where(run => Path.GetFileNameWithoutExtension(run.Project) != "BuildPipeline.Tests")
+                                             .Select(run => (run.Project, run.Framework))
+                                             .ToList());
+                  }
+
                   foreach (var frameworkRuns in runs.GroupBy(run => run.Framework))
                   {
                       var batch = frameworkRuns.ToList();
-
-                      if (UseLatestTestedMongoDriver)
-                      {
-                          // BuildPipeline.Tests has no reference to the driver; see tests/Directory.Build.props.
-                          VerifyTestedDriver(batch.Where(run => Path.GetFileNameWithoutExtension(run.Project) != "BuildPipeline.Tests")
-                                                  .Select(run => (run.Project, run.Framework))
-                                                  .ToList());
-                      }
 
                       DotNetTest(s => s
                                       .SetConfiguration(TargetBuildConfiguration)

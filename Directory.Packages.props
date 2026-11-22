@@ -53,7 +53,7 @@
        are compiled against the minimum, so a driver change that breaks only already compiled assemblies
        is not covered. -->
   <PropertyGroup>
-    <!-- renovate: datasource=nuget depName=MongoDB.Driver-latest-tested packageName=MongoDB.Driver -->
+    <!-- renovate: datasource=nuget depName=MongoDB.Driver-latest-tested packageName=MongoDB.Driver versioning=semver -->
     <LatestTestedMongoDriverVersion>3.14.0</LatestTestedMongoDriverVersion>
   </PropertyGroup>
   <ItemGroup Condition="'$(UseLatestTestedMongoDriver)' == 'true'">

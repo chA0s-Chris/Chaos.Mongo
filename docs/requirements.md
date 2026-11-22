@@ -34,7 +34,7 @@ does not independently raise this floor.
 
 CI runs the complete test suite against both this minimum and the latest tested `MongoDB.Driver` release, which
 automated dependency updates keep current within the 3.x line. The latest tested driver runs against the 8.0.x server
-line.
+line, with Chaos.Mongo compiled against that driver instead of the minimum the published packages are compiled against.
 
 ## Tested server versions
 

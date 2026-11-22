@@ -65,7 +65,7 @@ internal static class PublicApiFold
 
     private static IReadOnlyList<String> ReadEntries(String projectName, String fileName, String content)
     {
-        var lines = content.Split('\n').Select(line => line.TrimEnd('\r').Trim()).ToList();
+        var lines = content.Split('\n').Select(line => line.Trim()).ToList();
 
         if (lines[0] != Header)
             throw new InvalidOperationException($"{projectName}: {fileName} does not start with \"{Header}\".");

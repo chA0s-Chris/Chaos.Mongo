@@ -22,8 +22,8 @@ release candidate before 1.0.
 - [x] The latest-tested driver version is pinned in exactly one place in the repository. Renovate proposes minor and
   patch updates to it without Dependency Dashboard approval. Major updates stay held for approval by the
   repo-baseline preset, so moving the job to a new driver major is a deliberate decision.
-- [x] The new Renovate custom regex manager matches the pin line. This is checked locally, for example with
-  `renovate-config-validator` and a regex test against the file.
+- [x] The new Renovate custom regex manager proposes updates of the pin. This is checked with a local Renovate dry run:
+  an older pin gets a minor or patch update and a separate major update.
 - [x] Packages produced by `Pack` and `PackCheck` still declare `MongoDB.Driver` `>= 3.9.0`.
 - [x] `docs/requirements.md` states that CI tests both the minimum and the latest-tested driver.
 
@@ -50,7 +50,8 @@ packed floor and stays under the existing "src dependency minimums" Renovate rul
 The pinned latest-tested version (currently 3.14.0) is a new MSBuild property in `Directory.Packages.props`, next to
 the minimum and its comment. A Renovate custom regex manager updates it, following the pattern used for
 `tests/MongoDbTestImages.cs`. Because that manager is not `nuget`, the dependency-dashboard hold on the minimum does
-not apply to it. The repo-baseline preset's `major.dependencyDashboardApproval` still does.
+not apply to it. The repo-baseline preset's `major.dependencyDashboardApproval` still does. The pin sets
+`versioning=semver`: the nuget versioning reads a bare version as a minimum, so Renovate would propose no update.
 
 An opt-in override applies the pinned version only when a boolean MSBuild property is set, for example
 (illustrative):
@@ -89,7 +90,9 @@ Put the fold logic in a new pure static class under `build/`, called by a new Nu
 The new release document sits beside `CONTRIBUTING.md`, which links to it, and is written for the maintainer. Its rule
 for the baseline: after a stable release is published to nuget.org, set `PackageValidationBaselineVersion` in
 `src/Directory.Build.props` to that version. Package validation needs that version on nuget.org first, so the 1.0.0
-baseline cannot be set in this change. The follow-up issue gets no milestone.
+baseline cannot be set in this change. [#307](https://github.com/chA0s-Chris/Chaos.Mongo/issues/307) tracks it as a
+follow-up without a milestone. `PackCheck` runs without a release version, so it packs with a high assembly version;
+otherwise package validation would reject the version as lower than the baseline's.
 
 Releasing rc.2 is the last step of the milestone. It happens after this change is merged, so #254 stays open and
 tracks it. It is done by dispatching `release.yml` with `1.0.0-rc.2`, which runs `ci.yml`, including `pack-check`,
@@ -100,3 +103,8 @@ already closed, so nothing waits on it.
 PR/MR description must include:
 
 - `Refs #254` without a closing keyword, and a note that #254 stays open until `v1.0.0-rc.2` is released.
+
+Verified by PR/MR checks:
+
+- Both `latest-driver` legs (`net10.0` and `net11.0`) pass within the job timeout and log that they test against the
+  pinned `MongoDB.Driver` version.

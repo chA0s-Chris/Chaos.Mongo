@@ -12,6 +12,12 @@ using static Nuke.Common.Tools.DotNet.DotNetTasks;
 
 internal partial class BuildPipeline
 {
+    /// <summary>
+    /// Package validation fails when an assembly version is lower than the baseline's (CP0003), and
+    /// <see cref="PackCheck"/> runs without a release version. <see cref="Pack"/> validates the real version.
+    /// </summary>
+    private const String PackCheckAssemblyVersion = "65534.0.0.0";
+
     [Parameter("NuGet API key", Name = "NUGET_APIKEY")]
     public String NuGetApiKey { get; init; } = String.Empty;
 
@@ -91,6 +97,7 @@ internal partial class BuildPipeline
                                        .DisablePackageRequireLicenseAcceptance()
                                        .EnableContinuousIntegrationBuild()
                                        .SetVersion(SemanticVersion)
+                                       .AddProperty("AssemblyVersion", PackCheckAssemblyVersion)
                                        .When(!String.IsNullOrEmpty(ReleaseNotes),
                                              t => t.SetPackageReleaseNotes(EscapeStringForMsBuild(ReleaseNotes))));
 

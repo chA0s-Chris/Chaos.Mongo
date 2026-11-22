@@ -5,8 +5,9 @@ This guide is for the maintainer. It covers the steps of a release that the Rele
 ## Ship the public API
 
 Each `src/` project declares its public API in `PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt`. Pull requests
-add new API to the unshipped file and mark removed API there with `*REMOVED*`. When a release ships that API, fold the
-unshipped file into the shipped one:
+add new API to the unshipped file. Removed API is marked there with `*REMOVED*` if it is in the shipped file; an entry
+that is only in the unshipped file is deleted. When a release ships that API, fold the unshipped file into the shipped
+one:
 
 ```bash
 bash build.sh FoldPublicApi
@@ -25,9 +26,12 @@ Dispatch the **Release** workflow from `main` in GitHub Actions and enter the ve
 example `1.2.3` or `1.2.3-rc.1`. A version with a prerelease part is published as a prerelease.
 
 The workflow checks the version and existing tags and packages, runs the complete CI workflow including `pack-check`,
-packs and signs the packages, pushes them to nuget.org and creates the tag and the GitHub release. A rerun after an
-interruption completes the missing steps. For a stable release, it also opens a pull request that adds the release
-notes to `CHANGELOG.md`; review and merge it.
+packs and signs the packages, pushes them to nuget.org and creates the tag and the GitHub release. For a stable
+release, it also opens a pull request that adds the release notes to `CHANGELOG.md`; review and merge it.
+
+After an interruption, use "Re-run failed jobs" on the same run, which completes the missing steps at the same commit.
+Once the `publish` job has started, do not dispatch the version again, because `main` may have moved. If the run failed
+before that and the commit needs a fix, merge the fix and dispatch the version again.
 
 ## Update the package validation baseline
 
@@ -39,8 +43,10 @@ package, so the version must be on nuget.org first.
 
 Package validation then fails `Pack` and `PackCheck` on any breaking change against the baseline. When a new major
 version breaks API on purpose, record those breaks in the project's `CompatibilitySuppressions.xml`, which
-`dotnet pack -p:ApiCompatGenerateSuppressionFile=true` generates. When the baseline moves to that major version, delete
-the file or generate it again, because its entries no longer apply.
+`dotnet pack -p:Version=<new version> -p:ApiCompatGenerateSuppressionFile=true` generates. Without the version, the
+file can also record an assembly version lower than the baseline's, and `Pack` then fails on that unnecessary entry.
+When the baseline moves to that major version, delete the file or generate it again, because its entries no longer
+apply.
 
 ## Release 1.0
 

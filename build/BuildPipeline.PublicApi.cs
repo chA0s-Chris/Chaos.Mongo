@@ -11,14 +11,14 @@ internal partial class BuildPipeline
 {
     /// <summary>
     /// Folds every src/ project's PublicAPI.Unshipped.txt into its PublicAPI.Shipped.txt. Run it before a release that
-    /// ships new API; RELEASING.md says when. Every project is folded in memory first, so a failure in one project
-    /// leaves all files untouched.
+    /// ships new API; RELEASING.md says when. Every project is folded in memory first, so invalid API files in one project
+    /// leave all files untouched.
     /// </summary>
     [UsedImplicitly]
     private Target FoldPublicApi => target =>
         target.Executes(() =>
         {
-            var folds = (from shippedFile in SourceDirectory.GlobFiles("*/PublicAPI.Shipped.txt")
+            var folds = (from shippedFile in SourceDirectory.GlobFiles("**/PublicAPI.Shipped.txt")
                          let projectDirectory = shippedFile.Parent
                          let unshippedFile = projectDirectory / "PublicAPI.Unshipped.txt"
                          let result = PublicApiFold.Fold(projectDirectory.Name, File.ReadAllText(shippedFile), File.ReadAllText(unshippedFile))
