@@ -8,7 +8,7 @@ using System.Security.Cryptography;
 
 /// <summary>
 /// Checks an assembly's public-key token without needing the private signing key, so a secret-less CI
-/// run can still detect a package built with the wrong key. Has no dependency on Nuke, so it can be
+/// run can still detect a package built with the wrong key. Has no dependency on Fallout, so it can be
 /// linked into a test project and exercised without running a pack.
 /// </summary>
 internal static class PublicKeyTokenCheck

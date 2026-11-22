@@ -4,7 +4,7 @@ namespace BuildPipeline;
 
 /// <summary>
 /// The merged-coverage gate: 95% aggregate line coverage, 90% for each individual package. Has no
-/// dependency on Nuke or the cobertura file format, so it can be linked into a test project and exercised
+/// dependency on Fallout or the cobertura file format, so it can be linked into a test project and exercised
 /// with synthetic values instead of a real coverage run.
 /// </summary>
 internal static class CoverageThresholds

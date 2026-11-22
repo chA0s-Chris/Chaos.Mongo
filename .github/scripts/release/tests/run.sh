@@ -160,7 +160,7 @@ asset_names() {
     done
 }
 
-# Stands in for the Nuke Pack target: one package and one symbol package per project.
+# Stands in for the Fallout Pack target: one package and one symbol package per project.
 pack() {
     local id
     [[ -f $NOTES_DIR/ReleaseNotes.md ]] || { printf 'pack: ReleaseNotes.md is missing\n' >&2; return 1; }

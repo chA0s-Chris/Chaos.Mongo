@@ -1,4 +1,5 @@
 {
   "$schema": "build.schema.json",
+  "BuildProjectFile": "build/Build.csproj",
   "Solution": "Chaos.Mongo.slnx"
 }

@@ -2,12 +2,12 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace BuildPipeline;
 
-using Nuke.Common;
-using Nuke.Common.CI.GitLab;
-using Nuke.Common.IO;
+using Fallout.Common;
+using Fallout.Common.CI.GitLab;
+using Fallout.Common.IO;
 using Serilog;
 
-internal partial class BuildPipeline : NukeBuild
+internal partial class BuildPipeline : FalloutBuild
 {
     public static Int32 Main() => Execute<BuildPipeline>(x => x.Build);
 

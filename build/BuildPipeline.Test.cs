@@ -2,17 +2,17 @@
 // This file is licensed under the MIT license. See LICENSE in the project root for more information.
 namespace BuildPipeline;
 
-using Nuke.Common;
-using Nuke.Common.IO;
-using Nuke.Common.Tooling;
-using Nuke.Common.Tools.DotNet;
-using Nuke.Common.Utilities.Collections;
+using Fallout.Common;
+using Fallout.Common.IO;
+using Fallout.Common.Tooling;
+using Fallout.Common.Tools.DotNet;
+using Fallout.Common.Utilities.Collections;
 using Serilog;
 using System.Diagnostics;
 using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
-using static Nuke.Common.Tools.DotNet.DotNetTasks;
+using static Fallout.Common.Tools.DotNet.DotNetTasks;
 
 internal partial class BuildPipeline
 {

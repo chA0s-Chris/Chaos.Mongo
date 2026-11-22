@@ -21,13 +21,13 @@ Run these commands from the repository root. The coverage tooling, the code-styl
 | Tests excluding integration and end-to-end tests | `dotnet test Chaos.Mongo.slnx --filter "TestCategory!=Integration&TestCategory!=E2E"` |
 | One test project | `dotnet test <path-to-test-project.csproj>` |
 | Release build | `dotnet build -c Release Chaos.Mongo.slnx` |
-| Validate the Nuke test pipeline and collect merged coverage | `bash ./build.sh Test` |
+| Validate the Fallout test pipeline and collect merged coverage | `bash ./build.sh Test` |
 | Check the content synced from repo-baseline | `dotnet repo-baseline check .` |
 | Sync the pinned repo-baseline release, for example on the branch of a Renovate profile update | `dotnet repo-baseline sync .` |
 
 The complete suite includes Testcontainers-based MongoDB integration tests and needs Docker. Integration tests carry the `Integration` test category, so the category filter above excludes them. The test projects target multiple frameworks; install the SDK selected by `global.json` and the runtimes required by `Directory.Build.props` and any directory-specific props files.
 
-Prefer direct `dotnet` commands for normal development. Use `bash ./build.sh Test` when changing `build/` or other Nuke pipeline behavior, or when measuring the merged coverage required by `tests/AGENTS.md`. It runs the test projects with XPlat Code Coverage and writes `artifacts/test-coverage/coverage.cobertura.merged.xml`. Remove `artifacts/test-coverage` before requesting a fresh coverage measurement so the merge does not include previous results.
+Prefer direct `dotnet` commands for normal development. Use `bash ./build.sh Test` when changing `build/` or other Fallout pipeline behavior, or when measuring the merged coverage required by `tests/AGENTS.md`. It runs the test projects with XPlat Code Coverage and writes `artifacts/test-coverage/coverage.cobertura.merged.xml`. Remove `artifacts/test-coverage` before requesting a fresh coverage measurement so the merge does not include previous results.
 
 ## Production Code Rules
 

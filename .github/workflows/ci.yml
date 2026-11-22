@@ -59,7 +59,7 @@ jobs:
             10.0.x
             11.0.x
 
-      - name: Run NUKE pipeline
+      - name: Run Fallout pipeline
         run: bash build.sh Test --test-framework "$TEST_FRAMEWORK"
         env:
           TEST_FRAMEWORK: ${{ matrix.framework }}
@@ -103,7 +103,7 @@ jobs:
             10.0.x
             11.0.x
 
-      - name: Run NUKE pipeline
+      - name: Run Fallout pipeline
         run: bash build.sh Test --test-framework "$TEST_FRAMEWORK" --use-latest-tested-mongo-driver
         env:
           TEST_FRAMEWORK: ${{ matrix.framework }}
@@ -128,7 +128,7 @@ jobs:
 
       # No Docker Hub login and no CHAOSMONGO_SNK: packs with the public key already committed and checks the
       # result, so this also runs for fork PRs.
-      - name: Run NUKE pipeline
+      - name: Run Fallout pipeline
         run: bash build.sh PackCheck
 
   release-scripts:

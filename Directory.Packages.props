@@ -42,7 +42,7 @@
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
   </ItemGroup>
   <!-- The latest MongoDB.Driver release CI tests against, besides the minimum above. Setting
-       UseLatestTestedMongoDriver=true (the Nuke switch use-latest-tested-mongo-driver does it for
+       UseLatestTestedMongoDriver=true (the Fallout switch use-latest-tested-mongo-driver does it for
        Restore, BuildTests and Test) resolves this version instead of the minimum. Pack and PackCheck
        never set it, so the packed minimum stays the version above. Renovate updates the pin through a
        custom manager in renovate.json; major updates wait for Dependency Dashboard approval. Keep the
@@ -62,8 +62,10 @@
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="Chaos.Testing" Version="0.1.0" />
+    <PackageVersion Include="Fallout.Common" Version="10.5.0" />
     <PackageVersion Include="FluentAssertions" Version="[7.2.2]" />
     <PackageVersion Include="JUnitTestLogger" Version="1.1.0" />
+    <PackageVersion Include="JetBrains.Annotations" Version="2026.2.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.15" />
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
@@ -75,11 +77,7 @@
     <PackageVersion Include="NUnit" Version="5.0.0" />
     <PackageVersion Include="NUnit.Analyzers" Version="4.15.0" />
     <PackageVersion Include="NUnit3TestAdapter" Version="6.3.1" />
-    <PackageVersion Include="NuGet.Frameworks" Version="7.9.0" />
-    <PackageVersion Include="NuGet.Packaging" Version="6.14.3" />
-    <PackageVersion Include="Nuke.Common" Version="10.1.0" />
     <PackageVersion Include="SemanticVersioning" Version="3.0.0" />
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.15" />
     <PackageVersion Include="Testcontainers.MongoDb" Version="4.17.0" />
     <PackageVersion Include="coverlet.collector" Version="10.1.1" />
   </ItemGroup>
